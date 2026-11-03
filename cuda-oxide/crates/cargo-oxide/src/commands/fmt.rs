@@ -28,11 +28,11 @@ use super::*;
 pub fn format_all(ctx: &Context, check: bool) {
     let mode = if check { "Checking" } else { "Formatting" };
     let mut failed = false;
+    let oxide_root = ctx.oxide_workspace_root();
 
     // In the merged repository, shared host crates live in the stable parent
     // workspace. Standalone cuda-oxide checkouts have no such parent manifest.
-    if let Some(shared_root) = ctx
-        .workspace_root
+    if let Some(shared_root) = oxide_root
         .parent()
         .filter(|root| root.join("Cargo.toml").is_file() && root.join("cuda-core").is_dir())
     {
@@ -43,7 +43,7 @@ pub fn format_all(ctx: &Context, check: bool) {
     }
 
     println!("📦 {} CUDA Oxide workspace...", mode);
-    if !run_cargo_fmt(&ctx.workspace_root, check) {
+    if !run_cargo_fmt(oxide_root, check) {
         failed = true;
     }
 
@@ -74,13 +74,15 @@ pub fn format_all(ctx: &Context, check: bool) {
     //   * `--all` also formats an example's path dependencies, which means
     //     re-formatting the large shared workspaces once per example.
     let mut manifests = Vec::new();
-    collect_example_manifests(&ctx.examples_dir, &mut manifests);
+    for root in example_roots(ctx) {
+        collect_example_manifests(&root, &mut manifests);
+    }
     manifests.sort();
 
     for manifest in &manifests {
         let label = manifest
             .parent()
-            .and_then(|dir| dir.strip_prefix(&ctx.examples_dir).ok())
+            .and_then(|dir| dir.strip_prefix(oxide_root).ok())
             .unwrap_or(Path::new("."))
             .display()
             .to_string();
@@ -142,6 +144,7 @@ fn run_cargo_fmt_manifest(manifest: &Path, check: bool) -> bool {
 }
 
 fn run_fmt_command(mut cmd: Command) -> bool {
+    cmd.env("RUSTC_BOOTSTRAP", "1");
     match cmd.status() {
         Ok(status) => status.success(),
         Err(e) => {

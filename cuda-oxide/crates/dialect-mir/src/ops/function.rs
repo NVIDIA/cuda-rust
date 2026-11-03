@@ -43,15 +43,23 @@ use pliron::{
 use pliron_derive::pliron_op;
 
 use crate::{
-    attributes::ReferenceParamValidityAttr,
+    attributes::{InlineIntentAttr, ReferenceParamValidityAttr},
     types::{MirPtrType, MirSliceType},
 };
 
 const REFERENCE_PARAM_VALIDITY_ATTR_PREFIX: &str = "reference_param_validity_";
 
+/// Operation attribute key carrying a `mir.func`'s [`InlineIntentAttr`].
+pub const INLINE_INTENT_ATTR_KEY: &str = "inline_intent";
+
 fn reference_param_validity_key(index: usize) -> Identifier {
     Identifier::try_new(format!("{REFERENCE_PARAM_VALIDITY_ATTR_PREFIX}{index}"))
         .expect("reference parameter validity attribute name is valid")
+}
+
+fn inline_intent_key() -> Identifier {
+    Identifier::try_new(INLINE_INTENT_ATTR_KEY.to_string())
+        .expect("inline intent attribute name is valid")
 }
 
 /// MIR function operation.
@@ -66,6 +74,7 @@ fn reference_param_validity_key(index: usize) -> Identifier {
 /// | `sym_name`     | StringAttr| Function name (from SymbolOpInterface) |
 /// | `mir_func_type`| TypeAttr  | Function type (mir.func_type)      |
 /// | `reference_param_validity_N` | ReferenceParamValidityAttr | Proven reference facts for source argument `N` on a kernel entry |
+/// | `inline_intent` | InlineIntentAttr | The source function's `#[inline]` request; never on a kernel entry |
 /// ```
 ///
 /// # Verification
@@ -141,6 +150,24 @@ impl MirFuncOp {
             .deref(ctx)
             .attributes
             .get::<ReferenceParamValidityAttr>(&reference_param_validity_key(index))
+            .copied()
+    }
+
+    /// Record the source function's `#[inline]` request. `mir-lower` turns it
+    /// into the LLVM function attribute; kernels must carry none (verified).
+    pub fn set_inline_intent(&self, ctx: &mut Context, intent: InlineIntentAttr) {
+        self.get_operation()
+            .deref_mut(ctx)
+            .attributes
+            .set(inline_intent_key(), intent);
+    }
+
+    /// The recorded `#[inline]` request; `None` when the source had none.
+    pub fn inline_intent(&self, ctx: &Context) -> Option<InlineIntentAttr> {
+        self.get_operation()
+            .deref(ctx)
+            .attributes
+            .get::<InlineIntentAttr>(&inline_intent_key())
             .copied()
     }
 }
@@ -254,6 +281,31 @@ impl Verify for MirFuncOp {
         let kernel_key: Identifier = "gpu_kernel".try_into().unwrap();
         let is_kernel = op.attributes.get::<StringAttr>(&kernel_key).is_some();
         let inputs = interface.arg_types();
+
+        // An inline request only applies to callees. A kernel `.entry` is
+        // never called, so there is no call to inline and a request on it
+        // means nothing; LLVM itself accepts the keywords on a `ptx_kernel`.
+        // The key must also hold the dialect's own attribute type, so a
+        // request can never be read back as "none" by mistake.
+        let inline_intent_key = inline_intent_key();
+        if op.attributes.0.contains_key(&inline_intent_key)
+            && op
+                .attributes
+                .get::<InlineIntentAttr>(&inline_intent_key)
+                .is_none()
+        {
+            return verify_err!(
+                op.loc(),
+                "MirFuncOp inline intent attribute has the wrong attribute type"
+            );
+        }
+        if is_kernel && let Some(intent) = self.inline_intent(ctx) {
+            return verify_err!(
+                op.loc(),
+                "MirFuncOp inline intent {:?} is not valid on a kernel entry",
+                intent
+            );
+        }
 
         for (key, _) in &op.attributes.0 {
             let key_text = key.to_string();

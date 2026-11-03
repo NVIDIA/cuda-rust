@@ -1,0 +1,16 @@
+error[E0061]: this function takes 0 arguments but 1 argument was supplied
+ --> tests/compile_fail/primitives_bulk_wait_runtime.rs:8:19
+  |
+8 | fn wrong(n:u32) { cp_async_bulk_wait_group_read(n); }
+  |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ - unexpected argument of type `u32`
+  |
+note: function defined here
+ --> src/tma.rs
+  |
+  | pub fn cp_async_bulk_wait_group_read<const N: u32>()
+  |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: remove the extra argument
+  |
+8 - fn wrong(n:u32) { cp_async_bulk_wait_group_read(n); }
+8 + fn wrong(n:u32) { cp_async_bulk_wait_group_read(); }
+  |

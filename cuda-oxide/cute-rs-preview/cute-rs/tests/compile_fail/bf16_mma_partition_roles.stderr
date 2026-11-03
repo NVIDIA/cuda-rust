@@ -1,0 +1,18 @@
+error[E0308]: arguments to this method are incorrect
+  --> tests/compile_fail/bf16_mma_partition_roles.rs:13:26
+   |
+13 |     let _ = unsafe { mma.mma_atom_call(FragmentC::ZERO, b, a) };
+   |                          ^^^^^^^^^^^^^                  -  - expected `cute_rs::mma::bf16::FragmentB`, found `cute_rs::mma::bf16::FragmentA`
+   |                                                         |
+   |                                                         expected `cute_rs::mma::bf16::FragmentA`, found `cute_rs::mma::bf16::FragmentB`
+   |
+note: method defined here
+  --> src/mma/bf16.rs
+   |
+   |     pub unsafe fn mma_atom_call(self, c: FragmentC, a: FragmentA, b: FragmentB) -> FragmentC {
+   |                   ^^^^^^^^^^^^^
+help: swap these arguments
+   |
+13 -     let _ = unsafe { mma.mma_atom_call(FragmentC::ZERO, b, a) };
+13 +     let _ = unsafe { mma.mma_atom_call(FragmentC::ZERO, a, b) };
+   |

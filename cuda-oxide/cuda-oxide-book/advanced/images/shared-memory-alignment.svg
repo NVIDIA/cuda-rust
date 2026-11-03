@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 736" width="1240" height="736" role="img" aria-label="Shared memory alignment: on main a shared array's PTX alignment came from the programmer's request alone or from an exporter guess, never from the element type, and nobody checked the request; a u64 array at ALIGN 1 and a repr(C, align(16)) struct at natural alignment faulted with CUDA error 716 when ptxas packed them behind a smaller array, and ALIGN 3 died in llc. After PR 1345 the MIR verifier rejects an alignment that is not a non-zero power of two at the use site, and mir-lower declares every static array and the dynamic pool at the larger of the request and the element's ABI alignment, computed by required_storage_align from the Rust ABI raise and the LLVM natural layout">
+<style>
+  :root, svg {
+  --bg: #f4f6f8; --fg: #1a232e; --muted: #5d6b7a; --line: #9aa7b4; --panel: #ffffff;
+  --meta: #0e7c72; --meta-fill: #d9f3ef; --code: #b4560a; --code-fill: #fdebd2;
+  --rust: #7a3fb3; --rust-fill: #efe4fb;
+  --sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+ }
+  @media (prefers-color-scheme: dark) { :root, svg {
+  --bg: #1b1d23; --fg: #f2f4f7; --muted: #bcc4d0; --line: #5c6475; --panel: #282c36;
+  --meta: #7ed8bb; --meta-fill: #346357; --code: #f4c474; --code-fill: #735a3c;
+  --rust: #d8d4fb; --rust-fill: #524e7d;
+ } }
+</style>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" style="fill: var(--fg)"/></marker></defs>
+
+<rect x="0" y="0" width="1240" height="736" style="fill: var(--bg)"/>
+<text x="40" y="34" text-anchor="start" xml:space="preserve" style="font: 600 17px var(--sans); fill: var(--fg); white-space: pre">Shared memory alignment: the request is checked, storage is declared at max(ALIGN, abi_align(T))</text>
+<text x="40" y="56" text-anchor="start" xml:space="preserve" style="font: 400 12.5px var(--sans); fill: var(--muted); white-space: pre">Before, a shared array's PTX .align came from the request alone or from an exporter guess (8 for every aggregate); the element type's own alignment never entered, and nobody checked the request.</text>
+<text x="40" y="92" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--muted); white-space: pre">THE REQUEST  (Rust)</text>
+<text x="378" y="92" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--muted); white-space: pre">ON MAIN  (the request or an exporter guess, unchecked)</text>
+<text x="804" y="92" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--muted); white-space: pre">AFTER #1345  (verified request, typed storage)</text>
+<rect x="40" y="108" width="312" height="90" rx="6" style="fill: var(--rust-fill); stroke: var(--rust); stroke-width: 1.2"/>
+<text x="52" y="128" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--rust); white-space: pre">u64 at ALIGN 1</text>
+<text x="52" y="148" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">static mut DATA: SharedArray&lt;u64, 2, 1&gt;</text>
+<text x="52" y="164" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">touched before a SharedArray&lt;u8, 33&gt; pad</text>
+<rect x="378" y="108" width="400" height="90" rx="6" style="fill: var(--code-fill); stroke: var(--code); stroke-width: 1.2"/>
+<text x="390" y="128" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--fg); white-space: pre">declared at the request</text>
+<text x="390" y="148" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">.shared .align 1 .b8 __shared_mem_&lt;hash&gt;_5[16]</text>
+<text x="390" y="164" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">st.shared.b64 [%rd4], %rd3</text>
+<text x="390" y="180" text-anchor="start" xml:space="preserve" style="font: 600 10.2px var(--mono); fill: var(--code); white-space: pre">DriverError(716, "misaligned address")</text>
+<rect x="804" y="108" width="396" height="90" rx="6" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="816" y="128" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--meta); white-space: pre">raised to align_of::&lt;u64&gt;()</text>
+<text x="816" y="148" text-anchor="start" xml:space="preserve" style="font: 600 10.2px var(--mono); fill: var(--meta); white-space: pre">.shared .align 8 .b8 __shared_mem_&lt;hash&gt;_5[16]</text>
+<text x="816" y="164" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">values read back intact; memcheck and synccheck clean</text>
+<rect x="40" y="208" width="312" height="90" rx="6" style="fill: var(--rust-fill); stroke: var(--rust); stroke-width: 1.2"/>
+<text x="52" y="228" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--rust); white-space: pre">align(16) element, natural ALIGN</text>
+<text x="52" y="248" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">#[repr(C, align(16))] struct V4([f32; 4]);</text>
+<text x="52" y="264" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">static mut VS: SharedArray&lt;V4, 4&gt;</text>
+<text x="52" y="280" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">ALIGN 0; the raise lives on the Rust type</text>
+<rect x="378" y="208" width="400" height="90" rx="6" style="fill: var(--code-fill); stroke: var(--code); stroke-width: 1.2"/>
+<text x="390" y="228" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--fg); white-space: pre">declared at the exporter's guess</text>
+<text x="390" y="248" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">.shared .align 8 .b8 __shared_mem_&lt;hash&gt;_2[64]</text>
+<text x="390" y="264" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">st.shared.v4.b32 [%rd3], {%r2, %r4, %r3, %r1}</text>
+<text x="390" y="280" text-anchor="start" xml:space="preserve" style="font: 600 10.2px var(--mono); fill: var(--code); white-space: pre">DriverError(716, "misaligned address")</text>
+<rect x="804" y="208" width="396" height="90" rx="6" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="816" y="228" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--meta); white-space: pre">raised to the Rust ABI alignment</text>
+<text x="816" y="248" text-anchor="start" xml:space="preserve" style="font: 600 10.2px var(--mono); fill: var(--meta); white-space: pre">.shared .align 16 .b8 __shared_mem_&lt;hash&gt;_2[64]</text>
+<text x="816" y="264" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">mir_type_abi_align carries the repr(align(16)) raise</text>
+<rect x="40" y="308" width="312" height="74" rx="6" style="fill: var(--rust-fill); stroke: var(--rust); stroke-width: 1.2"/>
+<text x="52" y="328" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--rust); white-space: pre">dynamic pool at ALIGN 1</text>
+<text x="52" y="348" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">DynamicSharedArray::&lt;u64, 1&gt;::get()</text>
+<text x="52" y="364" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">one pool per kernel, declared once for every use</text>
+<rect x="378" y="308" width="400" height="74" rx="6" style="fill: var(--code-fill); stroke: var(--code); stroke-width: 1.2"/>
+<text x="390" y="328" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--fg); white-space: pre">pool declared at the request</text>
+<text x="390" y="348" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">.extern .shared .align 1 .b8 __dynamic_smem_&lt;hash&gt;_&lt;fn&gt;[]</text>
+<text x="390" y="364" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">weaker than the st.shared.b64 through it</text>
+<rect x="804" y="308" width="396" height="74" rx="6" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="816" y="328" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--meta); white-space: pre">pool at its strongest typed use</text>
+<text x="816" y="348" text-anchor="start" xml:space="preserve" style="font: 600 10.2px var(--mono); fill: var(--meta); white-space: pre">.extern .shared .align 8 .b8 __dynamic_smem_&lt;hash&gt;_&lt;fn&gt;[]</text>
+<text x="816" y="364" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">max over get, get_raw and offset uses, then the launch contract</text>
+<rect x="40" y="392" width="312" height="90" rx="6" style="fill: var(--rust-fill); stroke: var(--rust); stroke-width: 1.2"/>
+<text x="52" y="412" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--rust); white-space: pre">ALIGN 3</text>
+<text x="52" y="432" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">static mut BAD: SharedArray&lt;u64, 4, 3&gt;</text>
+<text x="52" y="448" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">not a power of two; nobody checked it</text>
+<rect x="378" y="392" width="400" height="90" rx="6" style="fill: var(--code-fill); stroke: var(--code); stroke-width: 1.2"/>
+<text x="390" y="412" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--fg); white-space: pre">reached LLVM; no PTX, no source position</text>
+<text x="390" y="432" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">@__shared_mem_&lt;hash&gt;_0 = addrspace(3) global</text>
+<text x="390" y="448" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">    [4 x i64] zeroinitializer, align 3</text>
+<text x="390" y="464" text-anchor="start" xml:space="preserve" style="font: 600 10.2px var(--mono); fill: var(--code); white-space: pre">llc: error: alignment is not a power of two</text>
+<rect x="804" y="392" width="396" height="90" rx="6" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="816" y="412" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--meta); white-space: pre">rejected by the MIR verifier at the use site</text>
+<text x="816" y="432" text-anchor="start" xml:space="preserve" style="font: 600 10.2px var(--mono); fill: var(--meta); white-space: pre">["src/main.rs": line: 20, column: 13]</text>
+<text x="816" y="448" text-anchor="start" xml:space="preserve" style="font: 600 10.2px var(--mono); fill: var(--meta); white-space: pre">MirSharedAllocOp alignment must be a</text>
+<text x="816" y="464" text-anchor="start" xml:space="preserve" style="font: 600 10.2px var(--mono); fill: var(--meta); white-space: pre">non-zero power of two, found 3</text>
+<line x1="365" y1="100" x2="365" y2="482" style="stroke: var(--line); stroke-width: 1"/>
+<line x1="791" y1="100" x2="791" y2="482" style="stroke: var(--line); stroke-width: 1"/>
+<rect x="40" y="496" width="738" height="138" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="52" y="516" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--fg); white-space: pre">Why main declared too little, and why it faulted</text>
+<text x="52" y="536" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">ALIGN &gt; 0 reached the global unchecked. ALIGN 0 left the global with no alignment, and the exporter guessed one:</text>
+<text x="52" y="552" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">the integer width in bytes, 4 for f32, 8 for every other element, and 0 for bool (which llc rejected).</text>
+<text x="52" y="568" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">The element type's ABI alignment never entered, so the declared .align could be weaker than the kernel's own stores.</text>
+<text x="52" y="584" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">Shared globals are inserted at the module front, so the first array a kernel touches lands last in the PTX, right</text>
+<text x="52" y="600" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">behind the pad. ptxas packed DATA and VS at offsets their st.shared.b64 and st.shared.v4.b32 could not use, and</text>
+<text x="52" y="616" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">the launch failed with CUDA error 716, misaligned address (reproduced on sm_120a for three kernels).</text>
+<rect x="804" y="496" width="396" height="138" rx="6" style="fill: var(--rust-fill); stroke: var(--rust); stroke-width: 1.2"/>
+<text x="816" y="516" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--rust); white-space: pre">Where the alignment comes from now  (mir-lower)</text>
+<text x="816" y="536" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">required_storage_align(ctx, mir_ty, llvm_ty) =</text>
+<text x="816" y="552" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">    max(mir_type_abi_align(ctx, mir_ty),      // Rust raise</text>
+<text x="816" y="568" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">        llvm_type_size_align(ctx, llvm_ty).1) // LLVM layout</text>
+<text x="816" y="584" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">Both helpers already serve alloca, load, store and parameters.</text>
+<text x="816" y="600" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">The second sees LLVM leaves the MIR layout cannot, such as the</text>
+<text x="816" y="616" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">[16 x i64] TmaDescriptor lowers to: it still compiles, align 8.</text>
+<rect x="40" y="648" width="1160" height="66" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="54" y="670" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--fg); white-space: pre">The contract</text>
+<text x="54" y="690" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">ALIGN is 0 (natural) or a non-zero power of two for SharedArray, and a non-zero power of two for DynamicSharedArray; anything else is a compile error that names the use site.</text>
+<text x="54" y="707" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">Storage is never declared below align_of::&lt;T&gt;(): a smaller request is raised silently, a larger one is honored. The dynamic pool takes its strongest typed use plus the launch contract.</text>
+</svg>

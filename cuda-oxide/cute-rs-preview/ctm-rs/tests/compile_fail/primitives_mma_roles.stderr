@@ -1,0 +1,25 @@
+error[E0308]: arguments to this function are incorrect
+  --> tests/compile_fail/primitives_mma_roles.rs:14:11
+   |
+14 |  unsafe { mma::<L,collector_a::Discard>(d,a,b,&InstructionDescriptor::new(),false) };
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: expected `&SmemOperand<'_, OperandA, _>`, found `&SmemOperand<'_, OperandB, _>`
+  --> tests/compile_fail/primitives_mma_roles.rs:14:43
+   |
+14 |  unsafe { mma::<L,collector_a::Discard>(d,a,b,&InstructionDescriptor::new(),false) };
+   |                                           ^
+   = note: expected reference `&SmemOperand<'_, ctm_rs::tcgen05::descriptors::OperandA, Swizzled2D<128, 64, Swizzle128>>`
+              found reference `&SmemOperand<'_, ctm_rs::tcgen05::descriptors::OperandB, Swizzled2D<128, 64, Swizzle128>>`
+note: expected `&SmemOperand<'_, OperandB, _>`, found `&SmemOperand<'_, OperandA, _>`
+  --> tests/compile_fail/primitives_mma_roles.rs:14:45
+   |
+14 |  unsafe { mma::<L,collector_a::Discard>(d,a,b,&InstructionDescriptor::new(),false) };
+   |                                             ^
+   = note: expected reference `&SmemOperand<'_, ctm_rs::tcgen05::descriptors::OperandB, Swizzled2D<96, 64, Swizzle128>>`
+              found reference `&SmemOperand<'_, ctm_rs::tcgen05::descriptors::OperandA, Swizzled2D<96, 64, Swizzle128>>`
+note: function defined here
+  --> src/tcgen05/mma.rs
+   |
+   | pub unsafe fn mma<S, U>(
+   |               ^^^

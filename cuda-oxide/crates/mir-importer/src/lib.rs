@@ -86,6 +86,7 @@ extern crate rustc_middle;
 extern crate rustc_public;
 extern crate rustc_public_bridge;
 extern crate rustc_span;
+extern crate rustc_target;
 
 /// Value used for every rustc `Operand::RuntimeChecks` query in device MIR.
 ///
@@ -101,14 +102,16 @@ pub mod pipeline;
 // under it, since every item in it would count as reachable API.
 pub(crate) mod translator;
 
+pub use cuda_oxide_codegen::__private::{CutlassBackendConfig, DeviceBackend};
 pub use error::{TranslationErr, TranslationResult};
 pub use pipeline::{
     CollectedFunction, CompilationArtifactKind, CompilationResult, DebugGlobalVariableIdentity,
-    DeviceExternAttrs, DeviceExternDecl, DeviceExternType, KernelLaunchBounds, PipelineConfig,
-    PipelineError, StatementDebugInfo, StatementDebugInfoBlock, StatementDebugInfoMap,
-    build_debug_global_variable_info, build_debug_shared_array_variable_info,
-    device_static_global_key, run_pipeline,
+    DeviceExternAttrs, DeviceExternDecl, DeviceExternType, HintLocation, HintWarning,
+    KernelLaunchBounds, PipelineConfig, PipelineError, StatementDebugInfo, StatementDebugInfoBlock,
+    StatementDebugInfoMap, build_debug_global_variable_info,
+    build_debug_shared_array_variable_info, device_static_global_key, run_pipeline,
 };
+pub use translator::cute::is_cute_compiler_hook_path;
 pub use translator::facts::KnownDefs;
 pub use translator::terminator::drop_glue::{drop_glue_is_noop, drop_instance_is_noop};
 pub use translator::terminator::is_panic_entry_path;

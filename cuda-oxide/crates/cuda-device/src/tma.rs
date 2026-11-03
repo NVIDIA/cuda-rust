@@ -126,8 +126,10 @@ use crate::barrier::Barrier;
 ///
 /// # Size
 ///
-/// - CUDA 12.0-12.x: 128 bytes, 64-byte aligned
-/// - CUDA 13.0+: 128 bytes, 128-byte aligned
+/// The kernel parameter representation is 128 bytes, 64-byte aligned.
+/// The CUDA driver binding's `CUtensorMap` output type may require stronger
+/// alignment (128 bytes in CUDA 13). Encode into that type, then copy its
+/// opaque words here; do not cast this storage to the driver output type.
 ///
 /// # Safety
 ///
@@ -142,6 +144,14 @@ pub struct TmaDescriptor {
 }
 
 impl TmaDescriptor {
+    /// Adopt the words of a successfully encoded CUDA tensor map.
+    ///
+    /// # Safety
+    /// `words` must come from the CUDA driver encoder. This method does not
+    /// validate descriptor contents or the referenced allocation's lifetime.
+    pub const unsafe fn from_raw_words(words: [u64; 16]) -> Self {
+        Self { _opaque: words }
+    }
     /// Create an uninitialized descriptor.
     ///
     /// # Safety

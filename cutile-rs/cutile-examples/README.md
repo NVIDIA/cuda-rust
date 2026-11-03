@@ -7,6 +7,7 @@ This crate contains runnable examples for the user-facing API and kernel DSL.
 - Start with `cargo run -p cutile-examples --example hello_world` to verify the toolchain.
 - Run `cargo run -p cutile-examples --example saxpy` for a small kernel launch example.
 - Run `cargo run -p cutile-examples --example nvfp4` for a CUDA 13.3 NVFP4 linear-tile example with output checking on native NVFP4 targets.
+- Run `cargo run --release -p cutile-examples --example nvfp4_moe` for an NVFP4 mixture of experts benchmark with device routing, activation quantization, fused FC1/ReLU-squared/requantization, FC2, and weighted finalization. It checks outputs and reports CUDA graph latency per batch size.
 - Run `cargo run -p cutile-examples --example pdl` for a CUDA 13.4 programmatic dependent launch example: a producer/consumer kernel pair with output checking and a stream-order vs PDL timing comparison (sm_90 or newer).
 - Run `cargo run -p cutile-examples --example async_gemm` for a larger async example.
 
@@ -20,12 +21,20 @@ Tool discovery, compilation, execution and validation errors still fail.
 | Examples | Minimum requirements |
 | --- | --- |
 | All except those listed below | Tile IR 13.2 and a supported SM80+ target |
-| `nvfp4`, `mxfp8` | Tile IR 13.3 and SM100+ (including SM120/121) |
+| `nvfp4`, `nvfp4_moe`, `mxfp8` | Tile IR 13.3 and SM100+ (including SM120/121) |
 | `pdl` | Tile IR 13.4 and SM90+; the driver must support the extended launch API |
 
 The compiler's target rules also apply: SM90 requires Tile IR 13.3 and SM107
 requires 13.4. These checks live in `src/requirements.rs`; they are not Cargo
 features and do not change which APIs are compiled.
+
+`nvfp4_moe` measures the full pipeline's CUDA graph replay latency for batch
+sizes 1, 2, 4, 8, 16, 32, 64, 128, and 256. Each batch uses 20 samples of
+1,000 replays, with 50 warmup replays per sample. CUDA events time GPU execution;
+compilation, allocation, and output validation are outside the timed region.
+The synthetic workload uses H=I=1024, eight allocated experts, four active
+experts, and top-k=4, with direct launches and graph replay checked against a
+deterministic reference. Performance will be optimized in a future version.
 
 To check compatibility, select the actual older assembler:
 

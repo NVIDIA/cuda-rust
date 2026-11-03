@@ -1,0 +1,5 @@
+error: #[tile_export] functions cannot be generic: lifetime, type, and const parameters are not accepted because a static tile library needs one concrete symbol per export
+ --> tests/compile_fail/tile_export_generic.rs:7:12
+  |
+7 | pub fn relu<T: Copy>(x: T) -> T {
+  |            ^^^^^^^^^

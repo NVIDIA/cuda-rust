@@ -4,6 +4,7 @@
  */
 
 use crate::backend;
+use crate::cutlass_toolchain;
 use std::path::Path;
 use std::process::Command;
 
@@ -20,11 +21,11 @@ pub(super) const ENCODED_RUSTFLAGS_SEPARATOR: char = '\u{1f}';
 pub(super) const FULL_DEBUG_GET_MUT_OUTLINE_CFG: &str =
     "cuda_oxide_internal_outline_disjoint_get_mut_v1";
 
-/// Profile-related rustc flags owned by cuda-oxide.
+/// Profile-related codegen settings owned by cuda-oxide.
 ///
 /// Backend selection and MIR/symbol invariants are always applied separately.
-/// `CargoSelected` deliberately adds no optimization, assertion, or debug-info
-/// flags so Cargo's chosen profile remains authoritative.
+/// `CargoSelected` deliberately pins no optimization, assertion, or debug-info
+/// setting so Cargo's chosen profile remains authoritative.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum CodegenProfilePolicy {
     CargoSelected,
@@ -41,6 +42,197 @@ impl CodegenProfilePolicy {
             Self::ReleaseLike
         }
     }
+
+    /// The codegen options this policy pins, in rustc flag order.
+    pub(super) fn pinned_options(self) -> &'static [PinnedOption] {
+        const OPT_LEVEL: PinnedOption = PinnedOption::new("opt-level", "3", "opt-level", "3");
+        const NO_ASSERTIONS: PinnedOption =
+            PinnedOption::new("debug-assertions", "off", "debug-assertions", "false");
+        const ASSERTIONS: PinnedOption =
+            PinnedOption::new("debug-assertions", "on", "debug-assertions", "true");
+        // Overflow-check MIR changes code shape enough to break pattern-sensitive
+        // device lowerings, so it is off in every release-like policy. Pinned
+        // explicitly: rustc derives it from debug assertions, and Cargo's dev
+        // profile (passthrough builds without `--release`) would turn it on.
+        const NO_OVERFLOW_CHECKS: PinnedOption =
+            PinnedOption::new("overflow-checks", "off", "overflow-checks", "false");
+        const DEBUGINFO: PinnedOption = PinnedOption::new("debuginfo", "2", "debug", "2");
+        match self {
+            Self::CargoSelected => &[],
+            Self::ReleaseLike => &[OPT_LEVEL, NO_ASSERTIONS, NO_OVERFLOW_CHECKS],
+            Self::ReleaseLikeWithDebugAssertions => &[OPT_LEVEL, ASSERTIONS, NO_OVERFLOW_CHECKS],
+            Self::ReleaseLikeWithDebugInfo => {
+                &[OPT_LEVEL, NO_ASSERTIONS, NO_OVERFLOW_CHECKS, DEBUGINFO]
+            }
+        }
+    }
+}
+
+/// One rustc codegen option a release-like policy requires, with its Cargo
+/// profile key.
+///
+/// The Cargo profile is the primary carrier: Cargo fingerprints resolved
+/// profile values, not where they came from, so a release-like `build` whose
+/// pins equal the release defaults shares every artifact with a plain
+/// `cargo test --release`. A `-C` flag in RUSTFLAGS would change every crate's
+/// cache key and rebuild the whole graph between the two. The rustc flag is
+/// emitted only when incoming rustflags set the same option, since rustflags
+/// follow profile flags on the rustc command line and would otherwise win.
+///
+/// Two carriers deliver the pins. The base profiles `release` and `dev` take
+/// them from the environment (`CARGO_PROFILE_RELEASE_*` and
+/// `CARGO_PROFILE_DEV_*`, see [`apply_profile_pins`]). Any other profile
+/// selected with `--profile` takes them as
+/// `--config profile.<name>.<key>=<value>` arguments (see
+/// [`profile_config_args`]), because the environment key for such a name can
+/// collide with a base profile's table: Cargo reads
+/// `CARGO_PROFILE_RELEASE_LTO_OPT_LEVEL` as `profile.release.lto` and rejects
+/// it.
+///
+/// Limits of the profile route: `[profile.<name>.package.<pkg>]` overrides,
+/// `--config profile.*` arguments and manifest `[profile.<name>.rustflags]` or
+/// `[profile.<name>.package.<pkg>.rustflags]` lists outrank the pins. The
+/// trailing `-C` flag covers RUSTFLAGS, `CARGO_ENCODED_RUSTFLAGS` and the
+/// project's `extra-rustflags` only; cargo-oxide never sees manifest
+/// rustflags. Host units (build scripts, proc-macros) follow Cargo's
+/// `build-override` defaults.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct PinnedOption {
+    /// rustc `-C` option name.
+    name: &'static str,
+    /// Value in rustc's `-C name=value` form.
+    rustc_value: &'static str,
+    /// Cargo profile key as a manifest writes it (`opt-level`, `debug`).
+    cargo_key: &'static str,
+    /// Value in Cargo's profile form.
+    cargo_value: &'static str,
+}
+
+impl PinnedOption {
+    const fn new(
+        name: &'static str,
+        rustc_value: &'static str,
+        cargo_key: &'static str,
+        cargo_value: &'static str,
+    ) -> Self {
+        Self {
+            name,
+            rustc_value,
+            cargo_key,
+            cargo_value,
+        }
+    }
+
+    pub(super) fn rustc_flag(self) -> String {
+        format!("-C{}={}", self.name, self.rustc_value)
+    }
+
+    /// `CARGO_PROFILE_<PROFILE>_<KEY>`. Cargo derives the environment key from
+    /// the manifest key by uppercasing it and replacing `-` with `_`.
+    fn cargo_env_key(self, profile: &str) -> String {
+        format!(
+            "CARGO_PROFILE_{}_{}",
+            profile.to_uppercase(),
+            self.cargo_key.to_uppercase().replace('-', "_")
+        )
+    }
+
+    /// `profile.<name>.<key>=<value>`, the value of one `--config` argument.
+    fn cargo_config_entry(self, profile: &str) -> String {
+        format!("profile.{profile}.{}={}", self.cargo_key, self.cargo_value)
+    }
+}
+
+/// Base Cargo profiles that take the pins from the environment: release-like
+/// routes run `--release`, passthrough builds without `--release` run `dev`,
+/// and every other profile inherits the keys it does not set from one of the
+/// two.
+const BASE_CARGO_PROFILES: [&str; 2] = ["release", "dev"];
+
+fn is_base_cargo_profile(name: &str) -> bool {
+    BASE_CARGO_PROFILES.contains(&name)
+}
+
+/// Set the policy's pins on the base Cargo profiles through the environment.
+///
+/// Only the base profiles can use this carrier. A custom name becomes part of
+/// the key as well, and Cargo reads `CARGO_PROFILE_RELEASE_LTO_OPT_LEVEL` as
+/// `profile.release.lto`, an error it reports before compiling anything. The
+/// profile `--profile` selects gets its pins from [`profile_config_args`].
+pub(super) fn apply_profile_pins(cmd: &mut Command, profile: CodegenProfilePolicy) {
+    for option in profile.pinned_options() {
+        for name in BASE_CARGO_PROFILES {
+            cmd.env(option.cargo_env_key(name), option.cargo_value);
+        }
+    }
+}
+
+/// The profile a Cargo argument list selects with `--profile`, as written.
+///
+/// Both `--profile <name>` and `--profile=<name>` are read; the last one
+/// counts. Arguments after `--` belong to the program. `--release` and the
+/// default select base profiles, which need no lookup.
+pub(super) fn selected_cargo_profile(cargo_args: &[String]) -> Option<&str> {
+    let mut args = cargo_args
+        .iter()
+        .map(String::as_str)
+        .take_while(|arg| *arg != "--");
+    let mut selected = None;
+    while let Some(arg) = args.next() {
+        if arg == "--profile" {
+            selected = args.next();
+        } else if let Some(name) = arg.strip_prefix("--profile=") {
+            selected = Some(name);
+        }
+    }
+    selected
+}
+
+/// `--config profile.<name>.<key>=<value>` argument pairs that carry the
+/// policy's pins to the profile `--profile` selects.
+///
+/// Empty for a base profile, which the environment already covers, for a
+/// policy without pins, and for a name outside the TOML bare-key alphabet
+/// (ASCII letters, digits, `-` and `_`), which cannot be written as an
+/// unquoted config key; such a profile keeps the base pins it inherits. The
+/// pairs belong right after the subcommand: a later user `--config` for the
+/// same key still wins, and `cargo test` never sees them after its `--`.
+pub(super) fn profile_config_args(policy: CodegenProfilePolicy, profile: &str) -> Vec<String> {
+    let bare_key = !profile.is_empty()
+        && profile
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_');
+    if is_base_cargo_profile(profile) || !bare_key {
+        return Vec::new();
+    }
+    policy
+        .pinned_options()
+        .iter()
+        .flat_map(|option| ["--config".to_string(), option.cargo_config_entry(profile)])
+        .collect()
+}
+
+/// Names of the `-C` options a rustflags list sets, normalized to rustc's
+/// dashed spelling, including the `-O` (`opt-level`) and `-g` (`debuginfo`)
+/// shorthands.
+pub(super) fn codegen_option_names(flags: &[String]) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut tokens = flags.iter().map(String::as_str);
+    while let Some(token) = tokens.next() {
+        let setting = match token {
+            "-O" => Some("opt-level"),
+            "-g" => Some("debuginfo"),
+            "-C" | "--codegen" => tokens.next(),
+            _ => token
+                .strip_prefix("--codegen=")
+                .or_else(|| token.strip_prefix("-C")),
+        };
+        if let Some(setting) = setting {
+            let name = setting.split_once('=').map_or(setting, |(name, _)| name);
+            names.push(name.replace('_', "-"));
+        }
+    }
+    names
 }
 
 /// Construct boundary-preserving rustc flags for Cargo.
@@ -97,26 +289,17 @@ pub(super) fn build_encoded_rustflags_with_existing(
     }
     flags.extend(explicit_rustflags.iter().cloned());
     strip_wrapper_owned_codegen_cfgs(&mut flags);
+    // Pins travel in the Cargo profile (`apply_profile_pins`); a rustc flag is
+    // needed only to beat an incoming flag for the same option.
+    let overridden = codegen_option_names(&flags);
+    let pin_flags: Vec<String> = profile
+        .pinned_options()
+        .iter()
+        .filter(|option| overridden.iter().any(|name| name == option.name))
+        .map(|option| option.rustc_flag())
+        .collect();
     flags.push(format!("-Zcodegen-backend={}", backend_so.display()));
-    if matches!(
-        profile,
-        CodegenProfilePolicy::ReleaseLike
-            | CodegenProfilePolicy::ReleaseLikeWithDebugAssertions
-            | CodegenProfilePolicy::ReleaseLikeWithDebugInfo
-    ) {
-        flags.push("-Copt-level=3".to_string());
-        if profile == CodegenProfilePolicy::ReleaseLikeWithDebugAssertions {
-            // rustc normally enables overflow checks together with debug
-            // assertions. Keep them independent: overflow-check MIR changes
-            // code shape enough to break pattern-sensitive device lowerings.
-            flags.extend([
-                "-Cdebug-assertions=on".to_string(),
-                "-Coverflow-checks=off".to_string(),
-            ]);
-        } else {
-            flags.push("-Cdebug-assertions=off".to_string());
-        }
-    }
+    flags.extend(pin_flags);
     flags.extend([
         "-Zmir-enable-passes=-JumpThreading".to_string(),
         // Device codegen is whole-program: `collector` walks the call graph from
@@ -134,9 +317,6 @@ pub(super) fn build_encoded_rustflags_with_existing(
         "-Zalways-encode-mir".to_string(),
         "-Csymbol-mangling-version=v0".to_string(),
     ]);
-    if profile == CodegenProfilePolicy::ReleaseLikeWithDebugInfo {
-        flags.push("-Cdebuginfo=2".to_string());
-    }
     flags.join(&ENCODED_RUSTFLAGS_SEPARATOR.to_string())
 }
 
@@ -286,7 +466,9 @@ fn apply_codegen_rustflags(
     append_full_debug_rustflags(&mut encoded, cmd, inherited_debug.as_deref());
 
     cmd.env("CARGO_ENCODED_RUSTFLAGS", encoded)
+        .env("RUSTC_BOOTSTRAP", "1")
         .env_remove("RUSTFLAGS");
+    apply_profile_pins(cmd, profile);
 }
 
 /// Apply the two deliberately different Cargo cache boundaries:
@@ -372,6 +554,7 @@ pub fn has_configured_arch(ctx: &Context, cli_arch: Option<&str>) -> bool {
 }
 
 pub(super) fn apply_config_env(cmd: &mut Command, ctx: &Context) {
+    cmd.env("RUSTC_BOOTSTRAP", "1");
     for (key, value) in &ctx.config.env {
         if matches!(key.as_str(), "RUSTFLAGS" | "CARGO_ENCODED_RUSTFLAGS") {
             continue;
@@ -382,6 +565,61 @@ pub(super) fn apply_config_env(cmd: &mut Command, ctx: &Context) {
         if std::env::var_os(key).is_none() {
             cmd.env(key, value);
         }
+    }
+    apply_managed_cutlass_compiler(cmd, ctx);
+}
+
+fn apply_managed_cutlass_compiler(cmd: &mut Command, ctx: &Context) {
+    let backend = std::env::var_os(DEVICE_BACKEND_ENV)
+        .map(|value| value.as_encoded_bytes().to_vec())
+        .or_else(|| {
+            project_config_env(ctx, DEVICE_BACKEND_ENV).map(|value| value.as_bytes().to_vec())
+        });
+    if !backend.as_deref().is_some_and(selector_is_cutlass_mlir) {
+        return;
+    }
+
+    let explicitly_configured = std::env::var_os(cutlass_toolchain::CUTLASS_COMPILER_ENV).is_some()
+        || project_config_env(ctx, cutlass_toolchain::CUTLASS_COMPILER_ENV).is_some();
+    if explicitly_configured {
+        return;
+    }
+
+    match cutlass_toolchain::resolve_official() {
+        Ok(Some(paths)) => apply_resolved_cutlass_compiler(cmd, Some(&paths), false),
+        Ok(None) => {
+            eprintln!(
+                "Error: CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir needs the managed CUTLASS compiler"
+            );
+            eprintln!("Install the pinned official release with:");
+            eprintln!("  cargo oxide toolchain install cutlass");
+            eprintln!(
+                "Or explicitly set {}.",
+                cutlass_toolchain::CUTLASS_COMPILER_ENV
+            );
+            std::process::exit(2);
+        }
+        Err(error) => {
+            eprintln!("Error: managed CUTLASS compiler installation is invalid: {error}");
+            eprintln!("Repair it with `cargo oxide toolchain install cutlass`.");
+            std::process::exit(2);
+        }
+    }
+}
+
+pub(super) fn apply_resolved_cutlass_compiler(
+    cmd: &mut Command,
+    resolved: Option<&cutlass_toolchain::ResolvedCutlass>,
+    explicitly_configured: bool,
+) {
+    if explicitly_configured {
+        return;
+    }
+    if let Some(paths) = resolved {
+        cmd.env(
+            cutlass_toolchain::CUTLASS_COMPILER_ENV,
+            &paths.compiler_library,
+        );
     }
 }
 

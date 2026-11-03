@@ -1,0 +1,155 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 748" width="1240" height="748" role="img" aria-label="Drop no-op proof and termination: the Rust probe writes a value, drops a type whose destructor loops forever, then writes a second value. Main erased the destructor call, so the PTX stored the second value and returned. The PR keeps the call: the PTX stores the first value and spins. A strip explains the three proof states Unseen, InProgress and Proven on a looping destructor and on a diamond that joins back.">
+<style>
+  :root, svg {
+  --bg: #f4f6f8; --fg: #1a232e; --muted: #5d6b7a; --line: #9aa7b4; --panel: #ffffff;
+  --meta: #0e7c72; --meta-fill: #d9f3ef; --code: #b4560a; --code-fill: #fdebd2;
+  --rust: #7a3fb3; --rust-fill: #efe4fb;
+  --sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+ }
+  @media (prefers-color-scheme: dark) { :root, svg {
+  --bg: #1b1d23; --fg: #f2f4f7; --muted: #bcc4d0; --line: #5c6475; --panel: #282c36;
+  --meta: #7ed8bb; --meta-fill: #346357; --code: #f4c474; --code-fill: #735a3c;
+  --rust: #d8d4fb; --rust-fill: #524e7d;
+ } }
+</style>
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" style="fill: var(--fg)"/></marker>
+<marker id="arrow-code" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" style="fill: var(--code)"/></marker>
+<marker id="arrow-meta" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" style="fill: var(--meta)"/></marker>
+</defs>
+
+<rect x="0" y="0" width="1240" height="748" style="fill: var(--bg)"/>
+<text x="40" y="34" text-anchor="start" xml:space="preserve" style="font: 600 17px var(--sans); fill: var(--fg); white-space: pre">A destructor that never returns is not a no-op</text>
+<text x="40" y="56" text-anchor="start" xml:space="preserve" style="font: 400 12.5px var(--sans); fill: var(--muted); white-space: pre">cuda-oxide erases a destructor call when a proof says it does nothing visible. The proof now also demands that the destructor returns.</text>
+<text x="40" y="92" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--muted); white-space: pre">RUST SOURCE  (examples/drop_glue, a compile-only probe)</text>
+<text x="490" y="92" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--muted); white-space: pre">MAIN  (the bug: the call was erased)</text>
+<text x="870" y="92" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--muted); white-space: pre">PR #1361  (the fix: the call is kept)</text>
+<rect x="40" y="108" width="430" height="406" rx="6" style="fill: var(--rust-fill); stroke: var(--rust); stroke-width: 1.2"/>
+<text x="52" y="128" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--mono); fill: var(--rust); white-space: pre">examples/drop_glue/src/main.rs</text>
+<text x="52" y="148" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">struct LoopingDrop(u8);</text>
+<text x="52" y="161" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre"></text>
+<text x="52" y="174" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">impl Drop for LoopingDrop {</text>
+<text x="52" y="187" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">    #[inline(never)]</text>
+<text x="52" y="200" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">    #[allow(clippy::empty_loop)]</text>
+<text x="52" y="213" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">    fn drop(&amp;mut self) {</text>
+<text x="52" y="226" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">        loop {}</text>
+<text x="52" y="239" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">    }</text>
+<text x="52" y="252" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">}</text>
+<text x="52" y="265" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre"></text>
+<text x="52" y="278" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">#[kernel]</text>
+<text x="52" y="291" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">pub fn diverging_cfg_drop_probe(mut out: DisjointSlice&lt;u32&gt;) {</text>
+<text x="52" y="304" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">    if thread::index_1d().get() != 0 {</text>
+<text x="52" y="317" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">        return;</text>
+<text x="52" y="330" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">    }</text>
+<text x="52" y="343" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre"></text>
+<text x="52" y="356" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">    unsafe {</text>
+<text x="52" y="369" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">        let slot = out.as_mut_ptr();</text>
+<text x="52" y="382" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">        slot.write(0x1111_1111);</text>
+<text x="314" y="382" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--sans); fill: var(--muted); white-space: pre">store A</text>
+<text x="52" y="395" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre"></text>
+<text x="52" y="408" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">        {</text>
+<text x="52" y="421" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">            let _guard = LoopingDrop(0);</text>
+<text x="314" y="421" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--sans); fill: var(--code); white-space: pre">drop: never returns</text>
+<text x="52" y="434" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">        }</text>
+<text x="52" y="447" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre"></text>
+<text x="52" y="460" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--muted); white-space: pre">        // Semantically unreachable.</text>
+<text x="52" y="473" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">        slot.write(0x2222_2222);</text>
+<text x="314" y="473" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--sans); fill: var(--muted); white-space: pre">store B: must never run</text>
+<text x="52" y="486" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">    }</text>
+<text x="52" y="499" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">}</text>
+<rect x="490" y="108" width="360" height="182" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="502" y="128" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--fg); white-space: pre">What the old proof checked</text>
+<text x="502" y="148" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">It walks the destructor's blocks and looks for</text>
+<text x="502" y="166" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">visible effects: writes through pointers, asserts,</text>
+<text x="502" y="184" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">inline asm. loop {} has none, so the verdict was</text>
+<text x="502" y="202" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">harmless: erase the call, lower the drop to a branch.</text>
+<text x="502" y="220" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">It never asked whether the destructor returns.</text>
+<text x="502" y="238" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">A block seen twice was skipped (a loop looked like</text>
+<text x="502" y="256" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">a join), and a call back into a destructor already</text>
+<text x="502" y="274" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">under proof was accepted as harmless.</text>
+<line x1="530" y1="290" x2="530" y2="320" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
+<text x="544" y="310" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">verdict: no-op. The kernel IR has 0 destructor calls.</text>
+<rect x="490" y="322" width="360" height="106" rx="6" style="fill: var(--code-fill); stroke: var(--code); stroke-width: 1.2"/>
+<text x="502" y="342" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--mono); fill: var(--fg); white-space: pre">drop_glue.ptx  (main backend), thread 0</text>
+<text x="502" y="362" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">$L__BB4_1:                  // %bb3</text>
+<text x="502" y="378" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">    st.global.b32   [%rd1], 572662306;</text>
+<text x="502" y="394" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">$L__BB4_2:                  // %bb5</text>
+<text x="502" y="410" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">    ret;</text>
+<text x="490" y="446" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--sans); fill: var(--fg); white-space: pre">572662306 is 0x22222222: store B ran.</text>
+<text x="490" y="462" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--sans); fill: var(--fg); white-space: pre">Store A is gone too: once the call between them was</text>
+<text x="490" y="478" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--sans); fill: var(--fg); white-space: pre">erased, B overwrote A at once and LLVM deleted A.</text>
+<text x="490" y="494" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--sans); fill: var(--fg); white-space: pre">No loop. The thread returns.</text>
+<rect x="870" y="108" width="330" height="182" rx="6" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="882" y="128" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--meta); white-space: pre">What the new proof checks</text>
+<text x="882" y="148" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">The same walk, depth first, with three states</text>
+<text x="882" y="166" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">per block: Unseen, InProgress, Proven.</text>
+<text x="882" y="184" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">A successor that is still InProgress is a</text>
+<text x="882" y="202" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">cycle: the proof fails and the call is kept.</text>
+<text x="882" y="220" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">A Proven successor is a join: skip it, go on.</text>
+<text x="882" y="238" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">A call into a destructor that is already</text>
+<text x="882" y="256" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">under proof fails the same way.</text>
+<text x="882" y="274" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">loop {} fails: bb1 branches back to bb1.</text>
+<line x1="910" y1="290" x2="910" y2="320" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
+<text x="924" y="310" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">not proven: the kernel IR keeps the call.</text>
+<rect x="870" y="322" width="330" height="106" rx="6" style="fill: var(--code-fill); stroke: var(--code); stroke-width: 1.2"/>
+<text x="882" y="342" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--mono); fill: var(--fg); white-space: pre">drop_glue.ptx  (PR backend), thread 0</text>
+<text x="882" y="362" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">$L__BB4_1:                  // %bb3</text>
+<text x="882" y="378" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">    st.global.b32   [%rd1], 286331153;</text>
+<text x="882" y="394" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">$L__BB4_2:                  // %bb1.i.i</text>
+<text x="882" y="410" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">    bra.uni         $L__BB4_2;</text>
+<text x="870" y="446" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--sans); fill: var(--fg); white-space: pre">286331153 is 0x11111111: store A ran.</text>
+<text x="870" y="462" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--sans); fill: var(--fg); white-space: pre">Then bra.uni to its own label: the thread</text>
+<text x="870" y="478" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--sans); fill: var(--fg); white-space: pre">spins in the destructor's loop {}, inlined.</text>
+<text x="870" y="494" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--sans); fill: var(--fg); white-space: pre">Store B is gone, as in the Rust source.</text>
+<line x1="480" y1="100" x2="480" y2="526" style="stroke: var(--line); stroke-width: 1"/>
+<line x1="860" y1="100" x2="860" y2="526" style="stroke: var(--line); stroke-width: 1"/>
+<rect x="40" y="542" width="1160" height="182" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="54" y="564" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--fg); white-space: pre">The three states, on two destructors from the example</text>
+<text x="54" y="582" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">Depth-first walk from the entry block. A block turns Proven only after every successor is Proven.</text>
+<rect x="54" y="594" width="12" height="12" rx="2" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="74" y="604" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--fg); white-space: pre">Unseen</text>
+<text x="150" y="604" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">not reached yet</text>
+<rect x="54" y="618" width="12" height="12" rx="2" style="fill: var(--code-fill); stroke: var(--code); stroke-width: 1.2"/>
+<text x="74" y="628" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--fg); white-space: pre">InProgress</text>
+<text x="150" y="628" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">on the current path; its exits are not yet proven</text>
+<rect x="54" y="642" width="12" height="12" rx="2" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="74" y="652" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--fg); white-space: pre">Proven</text>
+<text x="150" y="652" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">every exit returns and does nothing visible</text>
+<text x="54" y="692" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">Fails: an InProgress block met again, or a call into</text>
+<text x="54" y="708" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">a destructor already under proof. Verdict: keep the call.</text>
+<text x="460" y="604" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--mono); fill: var(--fg); white-space: pre">LoopingDrop::drop</text>
+<text x="588" y="604" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--muted); white-space: pre">bb0: goto bb1;  bb1: goto bb1;</text>
+<rect x="470" y="618" width="52" height="22" rx="6" style="fill: var(--code-fill); stroke: var(--code); stroke-width: 1.2"/>
+<text x="496.0" y="633.0" text-anchor="middle" xml:space="preserve" style="font: 600 10.5px var(--mono); fill: var(--fg); white-space: pre">bb0</text>
+<rect x="560" y="618" width="52" height="22" rx="6" style="fill: var(--code-fill); stroke: var(--code); stroke-width: 1.2"/>
+<text x="586.0" y="633.0" text-anchor="middle" xml:space="preserve" style="font: 600 10.5px var(--mono); fill: var(--fg); white-space: pre">bb1</text>
+<line x1="522" y1="629" x2="560" y2="629" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
+<path d="M 612 623 C 656 595, 656 663, 612 635" marker-end="url(#arrow-code)" style="fill: none; stroke: var(--code); stroke-width: 1.4"/>
+<text x="662" y="625" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--sans); fill: var(--code); white-space: pre">goto bb1 again:</text>
+<text x="662" y="639" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--code); white-space: pre">still InProgress, a cycle</text>
+<text x="460" y="668" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--fg); white-space: pre">bb1 is met again before it is Proven. The proof fails,</text>
+<text x="460" y="684" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--fg); white-space: pre">the destructor call stays, the PTX spins after store A.</text>
+<text x="460" y="700" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">RecursiveDrop: the callee is already under proof, same</text>
+<text x="460" y="716" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">verdict (858993459 = 0x33333333, then a self-loop).</text>
+<text x="800" y="604" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--mono); fill: var(--fg); white-space: pre">DiamondDrop::drop</text>
+<text x="928" y="604" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">an if/else that joins back; every exit returns</text>
+<rect x="806" y="622" width="54" height="20" rx="6" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="833.0" y="636.0" text-anchor="middle" xml:space="preserve" style="font: 600 10.5px var(--mono); fill: var(--fg); white-space: pre">test</text>
+<rect x="906" y="607" width="82" height="20" rx="6" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="947.0" y="621.0" text-anchor="middle" xml:space="preserve" style="font: 600 10.5px var(--mono); fill: var(--fg); white-space: pre">left_noop</text>
+<rect x="906" y="637" width="82" height="20" rx="6" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="947.0" y="651.0" text-anchor="middle" xml:space="preserve" style="font: 600 10.5px var(--mono); fill: var(--fg); white-space: pre">right_noop</text>
+<rect x="1036" y="622" width="60" height="20" rx="6" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="1066.0" y="636.0" text-anchor="middle" xml:space="preserve" style="font: 600 10.5px var(--mono); fill: var(--fg); white-space: pre">return</text>
+<line x1="860" y1="632" x2="906" y2="617" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
+<line x1="860" y1="632" x2="906" y2="647" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
+<line x1="988" y1="617" x2="1036" y2="632" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
+<line x1="988" y1="647" x2="1036" y2="632" marker-end="url(#arrow-meta)" style="stroke: var(--meta); stroke-width: 1.4"/>
+<text x="1106" y="624" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--sans); fill: var(--meta); white-space: pre">second visit:</text>
+<text x="1106" y="638" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--meta); white-space: pre">Proven, a join</text>
+<text x="800" y="668" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--muted); white-space: pre">if self.0 == 0 { left_noop() } else { right_noop() }</text>
+<text x="800" y="684" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--fg); white-space: pre">return is reached twice; the second visit finds it Proven: a join.</text>
+<text x="800" y="700" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--fg); white-space: pre">Every path returns and writes nothing, so the drop is still erased.</text>
+<text x="800" y="716" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">PTX: two stores (0x55555555, 0x66666666) and ret, on both backends.</text>
+</svg>

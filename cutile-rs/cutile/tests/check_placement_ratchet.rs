@@ -23,6 +23,7 @@
 //! test. New behavior gets new tests elsewhere.
 
 use cutile_compiler::compiler::utils::CompileOptions;
+use cutile_compiler::hints::DebugInfoLevel;
 
 mod common;
 
@@ -157,7 +158,7 @@ mod access_counts {
         .generics(generics)
         .strides(&strides)
         // Optimized-mode pins; debug-mode expectations are tested below.
-        .options(CompileOptions::default().device_debug(false));
+        .options(CompileOptions::default().debug_info(DebugInfoLevel::None));
         if let Some(grid) = p.grid {
             compiler = compiler.grid(grid);
         }
@@ -287,7 +288,7 @@ fn debug_counts(
     .target("sm_120")
     .generics(generics)
     .strides(&strides)
-    .options(CompileOptions::new().device_debug(true));
+    .options(CompileOptions::new().debug_info(DebugInfoLevel::Full));
     if let Some(grid) = grid {
         compiler = compiler.grid(grid);
     }

@@ -7,11 +7,10 @@
 
 use dialect_mir::types::MirUnionType;
 use llvm_export::types as llvm_types;
-use pliron::builtin::types::{IntegerType, Signedness};
 use pliron::context::Context;
 use pliron::r#type::TypeHandle;
 
-use super::layout::make_padding_type;
+use super::layout::{alignment_anchor_type, make_padding_type};
 use super::pointer_storage::llvm_type_contains_pointer;
 use super::{convert_type, llvm_type_is_byte_faithful, llvm_type_size_align};
 use crate::convert::target_stable_storage::{StorageRewriteOptions, target_stable_storage_type};
@@ -61,8 +60,9 @@ pub(crate) fn union_field_storage_type(
 /// alignment without consuming storage. Pointer-bearing fields are preferred
 /// so an ordinary union copy keeps LLVM pointer provenance.
 ///
-/// NVPTX gives scalar integers natural alignments up to 16 bytes. Stronger
-/// Rust alignment is carried explicitly on memory operations because LLVM
+/// The anchor comes from [`alignment_anchor_type`], which caps it at
+/// `MAX_NATURAL_ALIGN` (16 bytes) for the reasons given there. Stronger Rust
+/// alignment is carried explicitly on memory operations because LLVM
 /// aggregate types cannot encode over-alignment; the storage type still keeps
 /// the union's exact size and therefore its array stride.
 pub(crate) fn build_union_storage_type(
@@ -144,9 +144,7 @@ pub(crate) fn build_union_storage_type(
         fields.push((storage_field_ty, field_size, field_align, contains_pointer));
     }
 
-    let storage_align = align.min(16);
-    let anchor_int = IntegerType::get(ctx, (storage_align * 8) as u32, Signedness::Signless);
-    let anchor: TypeHandle = llvm_types::ArrayType::get(ctx, anchor_int.into(), 0).into();
+    let anchor = alignment_anchor_type(ctx, align);
     let mut storage_fields = vec![anchor];
     if size > 0 {
         let representative = fields

@@ -19,7 +19,7 @@
   "fixtures": [
     {
       "id": "ampere_dense_float_mma_all",
-      "coverage_count": 5,
+      "coverage_count": 3,
       "stages": [
         {
           "targets": ["compute_80", "ptx93"],
@@ -54,6 +54,44 @@
           "tool_sha256": "3ba1e744347cd68617b862eccfd98b125482e882b7a6319f42abc9a768513db8"
         }
       ]
+    },
+    {
+      "id": "turing_dense_f16_mma_m16n8k8",
+      "coverage_count": 2,
+      "stages": [
+        {
+          "targets": ["compute_75", "ptx93"],
+          "representation": "two convergent side-effecting register-only inline PTX calls",
+          "stage": "backend_codegen",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "detail": "CUDA 13.3 libNVVM compiled the 2131-byte typed-pointer IR fixture with SHA-256 9894bea9e6f999978fe093f8534c3d149a0eb22c0d98e70210c09c1963de3c9e for compute_75. It emitted both FP16 m16n8k8 forms once in 1718-byte PTX with SHA-256 ece5ab9797d9a63d44022f7552d0a36bd548cd1a295cbf75677643f898cdc2f8 and 2296-byte LTOIR with SHA-256 ef73a3460da139697a0fe2c694086baf843390de3b42f7e8a71010d709d7b6ae."
+        },
+        {
+          "targets": ["sm_75", "ptx93"],
+          "representation": "libNVVM Turing FP16 MMA PTX",
+          "stage": "ptx_assembly",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "CUDA 13.3 ptxas produced a 3496-byte cubin with SHA-256 a2b9a624a0c882c9d2e3d52a5e6dfdcef52c8e4022fbcfd9af92a443ad645b72.",
+          "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+          "tool_version": "CUDA 13.3 V13.3.33 build cuda_13.3.r13.3/compiler.37862127_0",
+          "tool_sha256": "7fdd01a4cf50e30746da98989c9272a907f491e6fd7fecfda14642e4375f88fb"
+        },
+        {
+          "targets": ["sm_75", "ptx93"],
+          "representation": "libNVVM LTOIR retaining both FP16 MMA forms",
+          "stage": "device_link",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "nvJitLink produced a 3496-byte cubin with SHA-256 9186009b65f7b3eebca713be6e4d36a1d47e2b6b29d11e7f16f703f696833a12. Its cd6155aec2e5e1b42255777d11f9cea3a49c8d2bd037ab213e8f3bad7277268b SASS dump contains exactly HMMA.1688.F16 and HMMA.1688.F32.",
+          "tool_path": "/usr/local/cuda-13.3/lib64/libnvJitLink.so.13.3.33",
+          "tool_version": "V13.3.33",
+          "tool_sha256": "3ba1e744347cd68617b862eccfd98b125482e882b7a6319f42abc9a768513db8"
+        }
+      ]
     }
   ],
   "matrices": [
@@ -81,7 +119,7 @@
     {
       "axes": [{"name": "variant", "values": ["mma_m16n8k8_f16_f16"]}],
       "product_count": 1,
-      "fixtures": ["ampere_dense_float_mma_all"],
+      "fixtures": ["turing_dense_f16_mma_m16n8k8"],
       "template": {
         "id": "${variant}",
         "source_record": "int_nvvm_mma_m16n8k8_row_col_f16_f16",
@@ -92,6 +130,8 @@
           "operands": [{"kind": "register_list", "length": 2}, {"kind": "register_list", "length": 2}, {"kind": "register_list", "length": 1}, {"kind": "register_list", "length": 2}]
         },
         "facts": {
+          "gpu_target": "compute_75",
+          "ptx_feature": "PTX ISA 6.5 minimum; CUDA 13.3 emits PTX 9.3",
           "llvm_arguments": ["v2f16", "v2f16", "v2f16", "v2f16", "v2f16"],
           "llvm_results": ["v2f16", "v2f16"],
           "concrete_llvm_arguments": ["v2f16", "v2f16", "v2f16", "v2f16", "v2f16"],
@@ -123,7 +163,7 @@
     {
       "axes": [{"name": "variant", "values": ["mma_m16n8k8_f32_f16"]}],
       "product_count": 1,
-      "fixtures": ["ampere_dense_float_mma_all"],
+      "fixtures": ["turing_dense_f16_mma_m16n8k8"],
       "template": {
         "id": "${variant}",
         "source_record": "int_nvvm_mma_m16n8k8_row_col_f32_f32",
@@ -134,6 +174,8 @@
           "operands": [{"kind": "register_list", "length": 4}, {"kind": "register_list", "length": 2}, {"kind": "register_list", "length": 1}, {"kind": "register_list", "length": 4}]
         },
         "facts": {
+          "gpu_target": "compute_75",
+          "ptx_feature": "PTX ISA 6.5 minimum; CUDA 13.3 emits PTX 9.3",
           "llvm_arguments": ["v2f16", "v2f16", "v2f16", "f32", "f32", "f32", "f32"],
           "llvm_results": ["f32", "f32", "f32", "f32"],
           "concrete_llvm_arguments": ["v2f16", "v2f16", "v2f16", "f32", "f32", "f32", "f32"],

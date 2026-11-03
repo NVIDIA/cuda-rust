@@ -33,6 +33,7 @@ repr_c_enum   [0, 1, 2, 3]   PASS
 sparse_enum   [0, 1000000, 1000000, 0]   PASS
 neg_enum      [-1, 0, -1, 0]   PASS
 usize_enum    [0, 1, 2, 3]   PASS
+align32_enum  [0, 1, 1, 0]   PASS
 RESULT: PASS - every enum shape strides and sign-extends correctly.
 ```
 
@@ -58,10 +59,16 @@ shape with one mechanism, which is why this example also tests:
 | `sparse_enum` | default repr, `B = 1_000_000`     | u32 tag, stride 4     |
 | `neg_enum`    | default repr, `N = -1`            | SIGNED i8 tag, `sext` |
 | `usize_enum`  | `#[repr(usize)]`, 4 unit variants | stride 8              |
+| `align32_enum` | `#[repr(align(32))]`, 2 unit variants | u8 tag, stride 32, `align 32` on the load |
 
 `neg_enum` is the signedness half of the bug: the old model hardcoded an
 unsigned tag, so a memory-loaded `e as i32` zero-extended the `0xFF` byte to
 `255` instead of sign-extending it to `-1`.
+
+`align32_enum` is the over-aligned shape: rustc pads the one-byte tag to 32
+bytes, and the LLVM storage type's zero-length alignment anchor is capped at
+16 bytes, so both the stride and the `align 32` on the tag load must come
+from rustc's layout rather than from the LLVM type.
 
 Niched enums (for example `Option<&T>`) use a different rustc layout path:
 their otherwise-invalid payload value is recorded as the physical carrier,

@@ -23,7 +23,7 @@ use crate::translator::values::{ValueMap, establish_declared_pointer_type};
 use crate::translator::{payload_store, rvalue};
 use dialect_mir::{
     attributes::MirPointerKindAuthorityAttr,
-    ops::{MirCallOp, MirConstructArrayOp, MirGotoOp},
+    ops::{MirCallOp, MirConstantOp, MirConstructArrayOp, MirGotoOp},
     types::{MirArrayType, MirPtrType},
 };
 use pliron::basic_block::BasicBlock;
@@ -316,10 +316,10 @@ pub fn bundle_generated_u32_results_as_array(
 /// 1. Translate all MIR arguments to Pliron IR values
 /// 2. At a foreign ABI boundary, adapt pointer address spaces to the exact
 ///    declared parameter types without changing pointer kind or mutability
-/// 3. Prepare the call destination using the current projection state
+/// 3. For returning calls, prepare the destination using the current projection state
 /// 4. Create a `mir.call` operation carrying the callee's name attribute
-/// 5. Store the result through the prepared destination
-/// 6. Emit a zero-operand goto to the call's success target
+/// 5. For returning calls, store the result and goto the success target
+/// 6. For diverging calls, emit `mir.unreachable` after the call
 ///
 /// Reference arguments (`&mut local`) are handed the local's alloca slot
 /// pointer directly, so callee writes through the reference are observed by
@@ -369,7 +369,7 @@ pub fn emit_function_call(
         // arity is invalid and must remain visible to MirCallOp verification.
         if arg_values.len() == expected_arguments.len() {
             for (argument, expected) in arg_values.iter_mut().zip(expected_arguments) {
-                let (normalized, normalized_last_op) = normalize_foreign_pointer_argument(
+                let (normalized, normalized_last_op) = normalize_call_pointer_argument(
                     ctx,
                     *argument,
                     expected,
@@ -383,16 +383,60 @@ pub fn emit_function_call(
         }
     }
 
-    let (prepared_destination, prepared_last_op) = prepare_destination_write(
-        ctx,
-        body,
-        destination,
-        value_map,
-        block_ptr,
-        last_op,
-        loc.clone(),
-    )?;
-    last_op = prepared_last_op;
+    // Ordinary Rust helper signatures also expose generic pointers. Resolve
+    // the monomorphized operand type (not an unresolved trait signature), and
+    // adapt only address space. All other type/provenance mismatches still
+    // reach the independently typed callee's verifier unchanged.
+    if external_callee_type.is_none() {
+        for (argument, operand) in arg_values.iter_mut().zip(args) {
+            if argument
+                .get_type(ctx)
+                .deref(ctx)
+                .downcast_ref::<MirPtrType>()
+                .is_none()
+            {
+                continue;
+            }
+            let rust_type = match operand.ty(body.locals()) {
+                Ok(ty) => ty,
+                Err(error) => {
+                    return input_err!(
+                        loc.clone(),
+                        TranslationErr::unsupported(format!(
+                            "failed to resolve Rust call argument type: {error:?}"
+                        ))
+                    );
+                }
+            };
+            let declared = crate::translator::types::translate_type(ctx, &rust_type)?;
+            let (normalized, tail) = normalize_call_pointer_argument(
+                ctx,
+                *argument,
+                declared,
+                block_ptr,
+                last_op,
+                loc.clone(),
+            );
+            *argument = normalized;
+            last_op = tail;
+        }
+    }
+
+    let prepared_destination = if target.is_some() {
+        let (prepared, prepared_last_op) = prepare_destination_write(
+            ctx,
+            body,
+            destination,
+            value_map,
+            block_ptr,
+            last_op,
+            loc.clone(),
+        )?;
+        last_op = prepared_last_op;
+        Some(prepared)
+    } else {
+        None
+    };
 
     use pliron::builtin::attributes::StringAttr;
 
@@ -423,11 +467,20 @@ pub fn emit_function_call(
         call_op
     };
 
+    if target.is_none() {
+        return Ok(super::emit_unreachable_after(
+            ctx,
+            block_ptr,
+            Some(call_op),
+            loc,
+        ));
+    }
+
     let result_value = call_op.deref(ctx).get_result(0);
 
     let goto_prev = finish_destination_write(
         ctx,
-        prepared_destination,
+        prepared_destination.expect("returning call prepared its destination"),
         result_value,
         value_map,
         block_ptr,
@@ -435,19 +488,18 @@ pub fn emit_function_call(
         loc.clone(),
     )?;
 
-    if let Some(target_idx) = target {
-        Ok(emit_goto(ctx, *target_idx, goto_prev, block_map, loc))
-    } else {
-        input_err!(
-            loc.clone(),
-            TranslationErr::unsupported("Call terminator without target not supported".to_string(),)
-        )
-    }
+    Ok(emit_goto(
+        ctx,
+        target.expect("returning call has a success target"),
+        goto_prev,
+        block_map,
+        loc,
+    ))
 }
 
-/// Adapt a foreign-call pointer argument only when the address space is the
+/// Adapt a call pointer argument only when the address space is the
 /// sole difference from its declared ABI parameter type.
-fn normalize_foreign_pointer_argument(
+fn normalize_call_pointer_argument(
     ctx: &mut Context,
     value: Value,
     declared_type: TypeHandle,
@@ -683,6 +735,73 @@ pub fn emit_unit_noop_intrinsic(
     )
 }
 
+/// Emits a `bool`-returning intrinsic whose result is a fixed constant.
+///
+/// Used for `core::intrinsics::is_val_statically_known`, which may return
+/// `false` for any argument. The argument is a MIR operand with no side
+/// effects, so it is not evaluated.
+#[allow(clippy::too_many_arguments)]
+pub fn emit_bool_constant_intrinsic(
+    ctx: &mut Context,
+    body: &mir::Body,
+    destination: &mir::Place,
+    target: &Option<usize>,
+    block_ptr: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    value_map: &mut ValueMap,
+    block_map: &[Ptr<BasicBlock>],
+    loc: Location,
+    intrinsic_name: &str,
+    value: bool,
+) -> TranslationResult<Ptr<Operation>> {
+    use pliron::builtin::attributes::IntegerAttr;
+    use pliron::utils::apint::APInt;
+
+    let (prepared_destination, prepared_last_op) = prepare_destination_write(
+        ctx,
+        body,
+        destination,
+        value_map,
+        block_ptr,
+        prev_op,
+        loc.clone(),
+    )?;
+
+    let bool_ty = IntegerType::get(ctx, 1, Signedness::Signless);
+    let const_op = Operation::new(
+        ctx,
+        MirConstantOp::get_concrete_op_info(),
+        vec![bool_ty.into()],
+        vec![],
+        vec![],
+        0,
+    );
+    const_op.deref_mut(ctx).set_loc(loc.clone());
+    MirConstantOp::new(const_op).set_attr_value(
+        ctx,
+        IntegerAttr::new(
+            bool_ty,
+            APInt::from_u64(u64::from(value), std::num::NonZeroUsize::new(1).unwrap()),
+        ),
+    );
+    insert_op(ctx, const_op, block_ptr, prepared_last_op);
+
+    let const_val = const_op.deref(ctx).get_result(0);
+    let no_target_msg = format!("{} call without target not supported", intrinsic_name);
+    emit_prepared_result_and_goto(
+        ctx,
+        prepared_destination,
+        const_val,
+        target,
+        block_ptr,
+        const_op,
+        value_map,
+        block_map,
+        loc,
+        &no_target_msg,
+    )
+}
+
 #[cfg(test)]
 // Tests build kinded fixture types directly; production code mints via facts::PointerOrigin.
 #[allow(clippy::disallowed_methods)]
@@ -859,7 +978,7 @@ mod tests {
         let block = BasicBlock::new(&mut ctx, None, vec![shared_raw_mut]);
         let argument = block.deref(&ctx).get_argument(0);
 
-        let (normalized, cast_op) = normalize_foreign_pointer_argument(
+        let (normalized, cast_op) = normalize_call_pointer_argument(
             &mut ctx,
             argument,
             abi_raw_mut,
@@ -900,7 +1019,7 @@ mod tests {
         let block = BasicBlock::new(&mut ctx, None, vec![shared_raw_mut]);
         let argument = block.deref(&ctx).get_argument(0);
 
-        let (unchanged, cast_op) = normalize_foreign_pointer_argument(
+        let (unchanged, cast_op) = normalize_call_pointer_argument(
             &mut ctx,
             argument,
             abi_unique_ref,
@@ -928,7 +1047,7 @@ mod tests {
         let block = BasicBlock::new(&mut ctx, None, vec![abi_raw_mut]);
         let argument = block.deref(&ctx).get_argument(0);
 
-        let (unchanged, cast_op) = normalize_foreign_pointer_argument(
+        let (unchanged, cast_op) = normalize_call_pointer_argument(
             &mut ctx,
             argument,
             abi_raw_mut,
@@ -961,7 +1080,7 @@ mod tests {
         let block = BasicBlock::new(&mut ctx, None, vec![shared_raw_mut]);
         let argument = block.deref(&ctx).get_argument(0);
 
-        let (unchanged, cast_op) = normalize_foreign_pointer_argument(
+        let (unchanged, cast_op) = normalize_call_pointer_argument(
             &mut ctx,
             argument,
             wrong_pointee,
@@ -991,7 +1110,7 @@ mod tests {
         let erased_block = BasicBlock::new(&mut ctx, None, vec![mutable_erased]);
         let erased_argument = erased_block.deref(&ctx).get_argument(0);
 
-        let (unchanged, cast_op) = normalize_foreign_pointer_argument(
+        let (unchanged, cast_op) = normalize_call_pointer_argument(
             &mut ctx,
             erased_argument,
             immutable_erased,

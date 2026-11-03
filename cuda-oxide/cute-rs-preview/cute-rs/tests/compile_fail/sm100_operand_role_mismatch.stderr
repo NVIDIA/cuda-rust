@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/compile_fail/sm100_operand_role_mismatch.rs:19:21
+   |
+19 |         mma.gemm(0, &a, &b0, &b1, false);
+   |             ----    ^^ expected `OperandA`, found `OperandB`
+   |             |
+   |             arguments to this method are incorrect
+   |
+   = note: expected reference `&Sm100SharedTile<ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<128, 64>>, OperandA>`
+              found reference `&Sm100SharedTile<ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<128, 64>>, OperandB>`
+note: method defined here
+  --> src/sm100/mma.rs
+   |
+   |     pub unsafe fn gemm(
+   |                   ^^^^

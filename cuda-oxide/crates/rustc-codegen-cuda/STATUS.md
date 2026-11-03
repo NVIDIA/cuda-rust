@@ -39,9 +39,10 @@ other device function; see the `drop_glue` example. This covers direct
 `impl Drop` types reachable from kernels. The shim and every
 `Drop::drop` body it reaches go through the same device pipeline, so
 drop glue whose MIR uses constructs the pipeline cannot yet translate
-(e.g. slice/`Vec` element drops, panic formatting) still fails
+(e.g. `Vec` element drops, panic formatting) still fails
 compilation with a diagnostic. Destructors are never silently skipped:
-a drop is either proven unobservable or its call is emitted.
+a drop is either proven unobservable and terminating, or its call is
+emitted.
 
 The remaining enum storage fixtures deliberately fail closed. Pointer and
 integer payloads cannot share one lowered slot without erasing LLVM pointer

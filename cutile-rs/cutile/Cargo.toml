@@ -24,7 +24,8 @@ num-traits = { workspace = true }
 half = { workspace = true }
 anyhow = { workspace = true }
 cuda-core = { workspace = true }
-cuda-async = { workspace = true }
+# Explicit path lets trybuild normalize diagnostics from this external workspace.
+cuda-async = { path = "../../cuda-async", version = "=0.5.0" }
 cutile-compiler = { workspace = true }
 cutile-macro = { workspace = true }
 cutile-ir = { workspace = true }

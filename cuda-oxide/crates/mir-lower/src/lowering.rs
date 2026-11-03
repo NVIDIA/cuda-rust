@@ -30,11 +30,12 @@
 use crate::context::{DynamicSmemAlignmentMap, SharedGlobalsMap};
 use crate::convert::types::{
     StructLayoutInfo, build_struct_slot_map, convert_function_type, convert_type, is_kernel_func,
-    is_zero_sized_type, llvm_type_size_align, mir_type_abi_align, transparent_scalar_field,
+    is_zero_sized_type, llvm_type_size_align, mir_type_abi_align, required_storage_align,
+    transparent_scalar_field,
 };
 
 use dialect_mir::ops::MirFuncOp;
-use dialect_mir::types::{MirDisjointSliceType, MirSliceType, MirStructType};
+use dialect_mir::types::{MirDisjointSliceType, MirPtrType, MirSliceType, MirStructType};
 use llvm_export::ops as llvm;
 use pliron::{
     basic_block::BasicBlock,
@@ -46,10 +47,11 @@ use pliron::{
         rewriter::Rewriter,
     },
     linked_list::ContainsLinkedList,
+    location::Location,
     op::Op,
     operation::Operation,
     result::Result,
-    r#type::TypeHandle,
+    r#type::{TypeHandle, Typed},
     value::Value,
 };
 use reserved_oxide_symbols::{
@@ -303,7 +305,7 @@ pub fn convert_func(
     }
     propagate_return_abi_alignment(ctx, &llvm_func, return_abi_alignment);
 
-    propagate_alwaysinline_attr(ctx, op, &llvm_func);
+    lower_inline_intent_attr(ctx, &mir_func, &llvm_func);
 
     let llvm_entry = llvm_func.get_or_create_entry_block(ctx);
 
@@ -314,7 +316,7 @@ pub fn convert_func(
         // Pre-scan MIR blocks for max dynamic shared memory alignment.
         // Must happen BEFORE inline_region empties the MIR region.
         let mir_blocks: Vec<_> = mir_region.deref(ctx).iter(ctx).collect();
-        let body_max_align = compute_max_dynamic_smem_alignment(ctx, &mir_blocks);
+        let body_max_align = compute_max_dynamic_smem_alignment(ctx, &mir_blocks)?;
         let contract_min_align = dynamic_shared_alignment_attr(ctx, op);
         let max_align = match (body_max_align, contract_min_align) {
             (Some(body), Some(contract)) => Some(body.max(contract)),
@@ -874,33 +876,34 @@ fn propagate_return_abi_alignment(
         .set(key, IntegerAttr::new(u64_ty, value));
 }
 
-/// Propagate the `alwaysinline` attribute from MIR func to LLVM func.
+/// Lower the MIR func's `#[inline]` request (`MirFuncOp::inline_intent`) to
+/// its LLVM function attribute in the LLVM func's `llvm_func_attrs`, which
+/// `llvm-export` renders like any other. The mapping is rustc's own:
+/// `#[inline]` is `inlinehint`, `#[inline(always)]` is `alwaysinline` and
+/// `#[inline(never)]` is `noinline`. This is the only place that names the
+/// LLVM keywords; the dialect records the request, not the LLVM attribute.
 ///
-/// Set on the MIR func op by `mir-importer` when the source Rust function
-/// carries `#[inline(always)]`. The LLVM exporter then emits the
-/// `alwaysinline` keyword on the `define` line. Existing `opt -O2` runs can
-/// honor that attribute before `llc`, but this propagation is not a mandatory
-/// always-inline pass. The goal is to preserve Rust's inline intent for device
-/// helpers rather than leaving helper boundaries solely to optimizer
+/// `opt -O2` honors the keyword before `llc`; this adds no inliner pass. The
+/// goal is to preserve Rust's inline intent for device helpers in both
+/// directions, rather than leaving helper boundaries solely to optimizer
 /// heuristics.
-fn propagate_alwaysinline_attr(
-    ctx: &mut Context,
-    mir_op: Ptr<Operation>,
-    llvm_func: &llvm::FuncOp,
-) {
-    let key: pliron::identifier::Identifier = "alwaysinline".try_into().unwrap();
-    let attr_opt = mir_op
-        .deref(ctx)
-        .attributes
-        .get::<pliron::builtin::attributes::StringAttr>(&key)
-        .cloned();
-    if let Some(attr) = attr_opt {
-        llvm_func
-            .get_operation()
-            .deref_mut(ctx)
-            .attributes
-            .set(key, attr);
-    }
+fn lower_inline_intent_attr(ctx: &mut Context, mir_func: &MirFuncOp, llvm_func: &llvm::FuncOp) {
+    use dialect_mir::attributes::InlineIntentAttr;
+
+    let Some(intent) = mir_func.inline_intent(ctx) else {
+        return;
+    };
+    let keyword = match intent {
+        InlineIntentAttr::Hint => "inlinehint",
+        InlineIntentAttr::Always => "alwaysinline",
+        InlineIntentAttr::Never => "noinline",
+    };
+    let mut attrs = llvm_func
+        .get_attr_llvm_func_attrs(ctx)
+        .map(|attrs| (*attrs).clone())
+        .unwrap_or_default();
+    attrs.set(keyword, llvm::LlvmAttrValue::Unit);
+    llvm_func.set_attr_llvm_func_attrs(ctx, attrs);
 }
 
 // =====================================================================
@@ -1267,32 +1270,67 @@ fn insert_op_sequentially(
 /// Compute the maximum dynamic shared memory alignment across all
 /// `MirExternSharedOp` operations in a function.
 ///
+/// Each reference is first raised to the storage alignment of its pointee
+/// type, so the one pool satisfies its strongest typed use; the caller
+/// folds in the launch contract. The verifier has already rejected a
+/// requested alignment that is not a non-zero power of two.
+///
 /// This pre-pass must run BEFORE `inline_region` moves the blocks, since
 /// it iterates the MIR blocks directly. The result is stored in
 /// [`DynamicSmemAlignmentMap`] so that later per-op converters can
 /// create the global with the correct alignment.
 fn compute_max_dynamic_smem_alignment(
-    ctx: &Context,
+    ctx: &mut Context,
     mir_blocks: &[Ptr<BasicBlock>],
-) -> Option<u64> {
-    let mut max_alignment: Option<u64> = None;
-
+) -> Result<Option<u64>> {
+    // Collect first: converting a pointee type needs the context mutably,
+    // which the block iteration cannot hold.
+    let mut references: Vec<(u64, TypeHandle, Location)> = Vec::new();
     for mir_block in mir_blocks {
         for op in mir_block.deref(ctx).iter(ctx) {
             let op_id = Operation::get_opid(op, ctx);
-            if op_id == dialect_mir::ops::MirExternSharedOp::get_opid_static() {
-                let extern_shared = dialect_mir::ops::MirExternSharedOp::new(op);
-                let alignment = extern_shared.get_alignment_value(ctx);
-
-                max_alignment = Some(match max_alignment {
-                    Some(current_max) => current_max.max(alignment),
-                    None => alignment,
-                });
+            if op_id != dialect_mir::ops::MirExternSharedOp::get_opid_static() {
+                continue;
             }
+            let extern_shared = dialect_mir::ops::MirExternSharedOp::new(op);
+            let requested_alignment = extern_shared.get_alignment_value(ctx);
+            let op_ref = op.deref(ctx);
+            let result_ty = op_ref.get_result(0).get_type(ctx);
+            let pointee = result_ty
+                .deref(ctx)
+                .downcast_ref::<MirPtrType>()
+                .map(|ptr_ty| ptr_ty.pointee)
+                .ok_or_else(|| {
+                    pliron::create_error!(
+                        op_ref.loc(),
+                        pliron::result::ErrorKind::VerificationFailed,
+                        "mir.extern_shared result is not a MIR pointer"
+                    )
+                })?;
+            references.push((requested_alignment, pointee, op_ref.loc().clone()));
         }
     }
 
-    max_alignment
+    let mut max_alignment: Option<u64> = None;
+    for (requested_alignment, pointee, loc) in references {
+        let llvm_pointee = convert_type(ctx, pointee).map_err(|e| {
+            pliron::create_error!(&loc, pliron::result::ErrorKind::VerificationFailed, "{e}")
+        })?;
+        let required_alignment =
+            required_storage_align(ctx, pointee, llvm_pointee).ok_or_else(|| {
+                let pointee_display = pointee.deref(ctx).disp(ctx).to_string();
+                pliron::create_error!(
+                    &loc,
+                    pliron::result::ErrorKind::VerificationFailed,
+                    "mir.extern_shared pointee type `{pointee_display}` has no known ABI \
+                     alignment; refusing to guess the pool alignment"
+                )
+            })?;
+        let alignment = requested_alignment.max(required_alignment);
+        max_alignment = Some(max_alignment.map_or(alignment, |current| current.max(alignment)));
+    }
+
+    Ok(max_alignment)
 }
 
 // =====================================================================

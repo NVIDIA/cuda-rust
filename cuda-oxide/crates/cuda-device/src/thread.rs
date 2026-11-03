@@ -1404,16 +1404,77 @@ pub fn __unroll_config<const FACTOR: u32>() {
     // No runtime code is generated.
 }
 
+/// Internal sentinel factor for `#[unroll(never)]`.
+#[doc(hidden)]
+pub const UNROLL_NEVER: u32 = u32::MAX - 1;
+
 const fn validate_unroll_factor(factor: u32) {
+    if factor == UNROLL_NEVER {
+        return;
+    }
     assert!(
         factor == 0 || (factor >= 2 && factor <= 1024),
         "partial unroll factor must be in 2..=1024, or 0 for full unrolling"
     );
 }
 
+/// Compile-time "keep this loop rolled" marker (internal, do not call directly).
+///
+/// The `#[kernel]` and `#[device]` macros insert this marker at the start of a
+/// loop body annotated with `#[nounroll]`. The MIR importer turns it into a
+/// `mir.nounroll_hint` operation. Just before lowering, the hint marks the
+/// loop's latch with `llvm.loop.unroll.disable` metadata. LLVM and libNVVM then
+/// leave the loop rolled, and the NVPTX backend emits `.pragma "nounroll";` at
+/// the loop header so ptxas keeps it rolled too. It generates no runtime code.
+///
+/// # Usage
+///
+/// Put the annotation directly on the loop:
+///
+/// ```rust,ignore
+/// #[kernel]
+/// pub fn my_kernel(mut output: DisjointSlice<f32>) {
+///     let mut acc = 0.0;
+///     let mut tap = 0;
+///     #[nounroll]
+///     while tap < 4 {
+///         acc += tap as f32;
+///         tap += 1;
+///     }
+///     // ...
+/// }
+/// ```
+///
+/// The marker applies to the loop that carries the annotation, not to loops
+/// nested in its body. A `#[nounroll]` loop inside a loop that `#[unroll]`
+/// unrolls is copied into each unrolled body, and every copy stays rolled.
+#[inline(never)]
+pub fn __nounroll_config() {
+    // This function is detected at compile time and removed.
+    // No runtime code is generated.
+}
+
 #[cfg(test)]
 mod tests {
     use super::block_linear_thread_id;
+
+    /// Number of threads in a `(dx, dy, dz)` block whose block-linear id is
+    /// `selected`. `ManagedBarrier::init_by` and `inval_by` make this
+    /// comparison on the device, one thread at a time.
+    fn threads_selected_by(block_dim: (u32, u32, u32), selected: u32) -> u32 {
+        let (dx, dy, dz) = block_dim;
+        let mut hits = 0;
+        for tz in 0..dz {
+            for ty in 0..dy {
+                for tx in 0..dx {
+                    if block_linear_thread_id(tx, ty, tz, dx, dy) == selected {
+                        hits += 1;
+                    }
+                }
+            }
+        }
+        hits
+    }
 
     #[test]
     fn a_1d_block_numbers_threads_by_x() {
@@ -1451,5 +1512,23 @@ mod tests {
         assert_eq!(expected, dx * dy * dz);
         // One step along z skips a whole x-y plane.
         assert_eq!(block_linear_thread_id(0, 0, 1, dx, dy), dx * dy);
+    }
+
+    #[test]
+    fn every_in_range_id_selects_one_thread() {
+        for block_dim in [(64, 1, 1), (32, 4, 1), (8, 4, 2), (16, 2, 2), (24, 3, 1)] {
+            let (dx, dy, dz) = block_dim;
+            let threads = dx * dy * dz;
+            for selected in 0..threads {
+                assert_eq!(
+                    threads_selected_by(block_dim, selected),
+                    1,
+                    "block {block_dim:?} id {selected}"
+                );
+            }
+            // An id at or past the thread count selects nobody, which is why
+            // init_by and inval_by require the selector to be in range.
+            assert_eq!(threads_selected_by(block_dim, threads), 0);
+        }
     }
 }

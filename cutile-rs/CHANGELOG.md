@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - Preserve peer-pointer classification through reshape and broadcast; reject
   IR shape/offset operations that silently drop the classification.
+- Tile IR 13.5 `select` and `if` are written without a hints field, as the
+  13.5 format defines them. A flags varint added for likelihood hints made
+  `tileiras` 13.5 reject every kernel with a runtime `if` or a `select`;
+  likelihood hints on them are no longer serialized.
 
 ### Changed
 

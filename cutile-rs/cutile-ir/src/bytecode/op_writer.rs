@@ -85,9 +85,11 @@ pub(super) fn write_op_body(
             write_operands(op, w, ctx, false)?;
         }
 
+        // Tile IR 13.5 encodes no optimization hints on `select` or `if`
+        // (`encode_SelectOp` / `encode_IfOp` in cuTile Python): a likelihood
+        // hint stays in the IR and is not serialized.
         Select => {
             write_result_types(op, w, ctx)?;
-            write_control_flow_hints(op, w, ctx)?;
             write_operands(op, w, ctx, false)?;
         }
 
@@ -427,7 +429,6 @@ pub(super) fn write_op_body(
         If => {
             w.write_varint(op.result_types.len() as u64);
             write_result_types(op, w, ctx)?;
-            write_control_flow_hints(op, w, ctx)?;
             write_operands(op, w, ctx, false)?;
             write_regions(op, w, ctx)?;
         }
@@ -1004,21 +1005,6 @@ fn write_inbounds(
     Ok(())
 }
 
-fn write_control_flow_hints(
-    op: &Operation,
-    w: &mut EncodingWriter,
-    ctx: &mut WriterCtx,
-) -> Result<()> {
-    if ctx.version >= BytecodeVersion::V13_5 {
-        let flags = flag_if_present(op, "optimization_hints", 0);
-        w.write_varint(flags);
-        if flags != 0 {
-            write_inline_attr(op, "optimization_hints", w, ctx)?;
-        }
-    }
-    Ok(())
-}
-
 fn find_op_attr<'a>(op: &'a Operation, name: &str) -> Option<&'a Attribute> {
     op.attributes
         .iter()
@@ -1165,22 +1151,41 @@ mod tests {
         }
     }
 
+    /// Tile IR 13.5 adds no field to `select`, with or without a likelihood
+    /// hint: the hint is not serialized (cuTile Python's `encode_SelectOp`
+    /// is result type, then the three operands). `if` is the same: result
+    /// types, the condition, then the regions (`bytecode_validate` checks it
+    /// against the assembler).
     #[test]
-    fn select_flags_start_in_13_5_even_without_hints() {
-        let mut module = Module::new("select");
-        let (_, _, args) = build_single_block_region(&mut module, &vec![tile_f32(); 3]);
-        let (op, _) = OpBuilder::new(Opcode::Select, Location::Unknown)
-            .operands(args.iter().copied())
-            .result(tile_f32())
-            .build(&mut module);
-        assert_eq!(
-            op_body_bytes_version(&module, &args, op, BytecodeVersion::V13_4).unwrap(),
-            [1, 0, 1, 2]
-        );
-        assert_eq!(
-            op_body_bytes_version(&module, &args, op, BytecodeVersion::V13_5).unwrap(),
-            [1, 0, 0, 1, 2]
-        );
+    fn select_has_the_same_layout_in_13_5_with_or_without_hints() {
+        for (version, hinted) in [
+            (BytecodeVersion::V13_4, false),
+            (BytecodeVersion::V13_5, false),
+            (BytecodeVersion::V13_5, true),
+        ] {
+            let mut module = Module::new("select");
+            let (_, _, args) = build_single_block_region(&mut module, &vec![tile_f32(); 3]);
+            let mut builder = OpBuilder::new(Opcode::Select, Location::Unknown)
+                .operands(args.iter().copied())
+                .result(tile_f32());
+            if hinted {
+                builder = builder.attr("optimization_hints", condition_hint());
+            }
+            let (op, _) = builder.build(&mut module);
+            let bytes = op_body_bytes_version(&module, &args, op, version).unwrap();
+            assert_eq!(bytes, [1, 0, 1, 2], "{version}, hinted: {hinted}");
+            compare_python("Select", version, hinted, &bytes);
+        }
+    }
+
+    /// A likelihood hint as the frontend attaches it to `select` and `if`.
+    fn condition_hint() -> Attribute {
+        Attribute::OptimizationHints(crate::ir::OptimizationHints {
+            entries: vec![(
+                "sm_100".into(),
+                vec![("expected".into(), Attribute::Bool(true))],
+            )],
+        })
     }
 
     fn compare_python(operation: &str, version: BytecodeVersion, option: bool, actual: &[u8]) {

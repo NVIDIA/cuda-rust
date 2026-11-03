@@ -927,19 +927,24 @@ pub mod ops {
     // Exclude unsupported intrinsics before MIR and feature detection run.
     macro_rules! redux_full_warp {
         ($ty:ty, |$mask:ident, $value:ident| $call:expr) => {
-            const HAS_FULL_WARP_FORM: bool = cfg!(cuda_oxide_sm_at_least = "80");
+            const HAS_FULL_WARP_FORM: bool = true;
 
-            // Keep the intrinsic call as the return expression for device lowering.
-            #[cfg(cuda_oxide_sm_at_least = "80")]
+            // Keep the intrinsic call as the return expression of the fast arm
+            // and fall back to the shuffle butterfly when the resolved target
+            // floor is below sm_80.
             #[inline(always)]
             fn reduce_full_warp($mask: u32, $value: $ty) -> $ty {
-                $call
-            }
-
-            #[cfg(not(cuda_oxide_sm_at_least = "80"))]
-            #[inline(always)]
-            fn reduce_full_warp(_mask: u32, value: $ty) -> $ty {
-                value
+                if crate::warp::__target_has_integer_redux_sync() {
+                    return $call;
+                }
+                let mut acc = $value;
+                let mut delta: u32 = 16;
+                while delta > 0 {
+                    let other = crate::warp::shuffle_xor_sync($mask, acc as u32, delta) as $ty;
+                    acc = <Self as ReduceOp<$ty>>::combine(acc, other);
+                    delta >>= 1;
+                }
+                acc
             }
         };
     }
@@ -1842,21 +1847,10 @@ mod tests {
     ];
 
     /// All nine are wired, not just the one that happened to get tested.
-    #[cfg(cuda_oxide_sm_at_least = "80")]
     #[test]
     fn every_integer_reduction_has_the_single_instruction_form_at_the_ampere_floor() {
         for (name, wired) in INTEGER_PAIRS {
             assert!(wired, "{name} lost its redux.sync form");
-        }
-    }
-
-    /// Below the floor every one of them goes dark, so nothing can emit
-    /// `redux.sync` into a module that cannot assemble it.
-    #[cfg(not(cuda_oxide_sm_at_least = "80"))]
-    #[test]
-    fn no_integer_reduction_claims_the_form_below_the_ampere_floor() {
-        for (name, wired) in INTEGER_PAIRS {
-            assert!(!wired, "{name} claims redux.sync below sm_80");
         }
     }
 
@@ -1879,27 +1873,5 @@ mod tests {
     #[test]
     fn the_default_hook_is_the_identity_on_its_input() {
         assert_eq!(<Sum as ReduceOp<f32>>::reduce_full_warp(u32::MAX, 3.5), 3.5);
-    }
-
-    /// The build script sets every rung at or below the resolved capability,
-    /// and device code relies on that: an `sm_86` build must still answer yes
-    /// to "at least sm_80".
-    #[test]
-    fn the_floor_ladder_reaching_this_crate_is_cumulative() {
-        let rungs = [
-            cfg!(cuda_oxide_sm_at_least = "70"),
-            cfg!(cuda_oxide_sm_at_least = "75"),
-            cfg!(cuda_oxide_sm_at_least = "80"),
-            cfg!(cuda_oxide_sm_at_least = "86"),
-            cfg!(cuda_oxide_sm_at_least = "90"),
-            cfg!(cuda_oxide_sm_at_least = "100"),
-            cfg!(cuda_oxide_sm_at_least = "120"),
-        ];
-        // Once false, every higher rung is false: no gaps in the ladder.
-        let first_unset = rungs.iter().position(|set| !set).unwrap_or(rungs.len());
-        assert!(
-            rungs[first_unset..].iter().all(|set| !set),
-            "floor ladder has a gap: {rungs:?}"
-        );
     }
 }

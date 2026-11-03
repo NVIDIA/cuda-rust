@@ -35,7 +35,7 @@ pub mod kernels {
         if row < rows && col < cols {
             unsafe {
                 cute_rs::tensor::partition::StridedTensor::from_slice(data)
-                    .get_unchecked(row * stride + col)
+                    .get_unchecked(cute_rs::crd2idx_row_major_2d(row, col, stride))
             }
         } else {
             BFloat16::from_bits(0)
@@ -110,7 +110,10 @@ pub mod kernels {
                 // SAFETY: C's bijective layout and the checked grid give each lane
                 // disjoint initialized output coordinates, with one BF16 rounding.
                 unsafe {
-                    output.store_at(row * outputs + n + col, BFloat16::from_f32(value));
+                    output.store_at(
+                        cute_rs::crd2idx_row_major_2d(row, n + col, outputs),
+                        BFloat16::from_f32(value),
+                    );
                 }
             });
     }
@@ -143,13 +146,19 @@ pub mod kernels {
         input_stride: usize,
         weight_stride: usize,
     ) {
-        let tid = thread::threadIdx_x() as usize;
-        let lane = tid % 32;
-        let tile = thread::blockIdx_x() as usize * WARPS_PER_BLOCK + tid / 32;
+        let tid = thread::threadIdx_x();
+        let (lane, warp_id) = cute_rs::idx2crd_col_major_2d(tid, 32);
+        let lane = lane as usize;
+        let tile = cute_rs::crd2idx_row_major_2d(
+            thread::blockIdx_x() as usize,
+            warp_id as usize,
+            WARPS_PER_BLOCK,
+        );
         let columns = outputs.div_ceil(8);
         if tile < rows.div_ceil(16) * columns {
-            let m = tile / columns * 16;
-            let n = tile % columns * 8;
+            let (m_tile, n_tile) = cute_rs::idx2crd_row_major_2d(tile as u32, columns as u32);
+            let m = (m_tile as usize) * 16;
+            let n = (n_tile as usize) * 8;
             let mma = Bf16Mma16x8x16::get_slice(lane);
             let load_a = |k| {
                 mma.partition_a()
@@ -229,7 +238,10 @@ pub mod kernels {
                     // SAFETY: C's bijective layout and the host-checked tile grid
                     // give disjoint output writes within the validated extent.
                     unsafe {
-                        output.store_at((m + r) * outputs + n + c, BFloat16::from_f32(value));
+                        output.store_at(
+                            cute_rs::crd2idx_row_major_2d(m + r, n + c, outputs),
+                            BFloat16::from_f32(value),
+                        );
                     }
                 }
             });

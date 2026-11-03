@@ -615,7 +615,7 @@ only) > backend feature-based default. `cargo oxide build` and
 usable for cross-compilation. Without an explicit target, a feature-based
 choice below the device-code floor -- `sm_80`, or the detected GPU if that is
 older -- is raised to it, so the module never targets less than
-`cuda-device`'s `cuda_oxide_sm_at_least` cfg assumed.
+the floor `cuda-device` primitives were lowered for.
 
 If the lowered module calls CUDA libdevice, cuda-oxide switches from `llc` to
 the NVVM path automatically. It resolves the target with the same precedence

@@ -163,14 +163,14 @@ Three constraints:
 
 `warp_reduce` selects this form for you, for integer element types on a full
 32-lane tile, whenever the build's compute-capability floor is `sm_80` or
-newer. That floor comes from the `cuda_oxide_sm_at_least` cfg, which
-`cuda-device`'s build script derives with the same rule the backend uses to
+newer. The compiler resolves that floor with the same rule the backend uses to
 choose a target. An explicit target (`--arch` or `CUDA_OXIDE_TARGET`) sets the
 floor. Without one it is `sm_80`, or the detected GPU
 (`CUDA_OXIDE_DEVICE_ARCH`) if that is older: a newer GPU never raises it,
 because the backend may still build for an older architecture the kernel
-needs. A cfg is resolved before rustc runs, so a build below the floor drops
-the branch entirely and never emits an instruction it cannot assemble.
+needs. The branch is folded during MIR import before feature detection runs,
+so a build below the floor drops the `redux.sync` arm entirely and never emits
+an instruction it cannot assemble.
 
 Calling `redux_sync_add` and friends directly is still the right move when you
 want the single instruction regardless of the surrounding generic code, and it

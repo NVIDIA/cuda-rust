@@ -26,8 +26,8 @@
 
 use cuda_core::CudaContext;
 use cuda_core::IntoResult;
-use cuda_core::simt::LaunchConfig;
-use cuda_core::simt::vmm;
+use cuda_core::LaunchConfig;
+use cuda_core::vmm;
 use cuda_device::{cuda_module, kernel, ptx_asm};
 use std::mem::MaybeUninit;
 use std::sync::Arc;
@@ -149,7 +149,7 @@ fn main() {
         let input: Vec<f32> = (0..ELEMS).map(|i| input_value(g, i)).collect();
         let stream = ctx.default_stream();
         unsafe {
-            cuda_core::simt::memory::memcpy_htod_async(
+            cuda_core::memory::memcpy_htod_async(
                 views[g].0.base(),
                 input.as_ptr(),
                 bytes,
@@ -197,7 +197,7 @@ fn main() {
         let mut result = vec![0f32; ELEMS];
         let stream = ctx.default_stream();
         unsafe {
-            cuda_core::simt::memory::memcpy_dtoh_async(
+            cuda_core::memory::memcpy_dtoh_async(
                 result.as_mut_ptr(),
                 views[g].0.base(),
                 bytes,

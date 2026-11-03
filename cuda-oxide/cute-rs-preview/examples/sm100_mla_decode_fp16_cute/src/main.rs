@@ -235,8 +235,8 @@ fn main() -> Result<()> {
         batch * pages,
     )?;
     let context = CudaContext::new(0)?;
-    if context.compute_capability()? != (10, 0) {
-        return Err("this example requires B200/SM100".into());
+    if !matches!(context.compute_capability()?, (10, 0) | (10, 3)) {
+        return Err("this example requires SM100 or SM103".into());
     }
     let stream = context.new_stream()?;
     let dq = DeviceBuffer::from_host(&stream, &q)?;
@@ -379,8 +379,10 @@ fn main() -> Result<()> {
                 run(&mut dout, &mut dlse, &mut dpartial_out, &mut dpartial_lse)?;
             }
             stream.synchronize()?;
-            let start = context.new_event(Some(sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
-            let end = context.new_event(Some(sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+            let start =
+                context.new_event_with_flags(Some(sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+            let end =
+                context.new_event_with_flags(Some(sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
             start.record(&stream)?;
             for _ in 0..args.iterations {
                 run(&mut dout, &mut dlse, &mut dpartial_out, &mut dpartial_lse)?;

@@ -111,8 +111,14 @@ impl<T, Layout> Clone for SmemTile<T, Layout> {
 /// This view contains coordinates and a borrow, not loaded values. Reductions
 /// can consume one element at a time without retaining a full register tile.
 pub struct SharedRow<'a, T: Copy, Layout, const N: usize> {
+    /// Borrowed shared-memory tile holding the row's physical elements.
+    /// Retains the tile's swizzled `Layout` for element-by-element reads.
     tile: &'a SmemTile<T, Layout>,
+    /// Zero-based logical row coordinate within `tile`.
+    /// Fixed when the `SharedRow` view is constructed.
     row: usize,
+    /// Starting logical column coordinate of the `N`-element row segment.
+    /// Advances by `1` for each logical element visited by [`Self::zip_fold`].
     column: usize,
 }
 
@@ -322,36 +328,7 @@ impl<T: Copy, Layout: crate::markers::ReifySmem2D> SmemTile<T, Layout> {
     /// synchronization performed; no active write may conflict with this read.
     #[inline(always)]
     pub unsafe fn get(self, row: usize, column: usize) -> T {
-        let (stride_r, stride_c, offset, y_mask, right_shift, left_shift) = const {
-            let _ = crate::static_layout::max_offset_2d::<Layout>();
-            let mask = ((1usize << Layout::NUM_BITS) - 1)
-                << (Layout::NUM_BASE as i32
-                    + if Layout::NUM_SHIFT > 0 {
-                        Layout::NUM_SHIFT
-                    } else {
-                        0
-                    }) as u32;
-            let r_shift = if Layout::NUM_SHIFT >= 0 {
-                Layout::NUM_SHIFT as u32
-            } else {
-                0
-            };
-            let l_shift = if Layout::NUM_SHIFT < 0 {
-                (-Layout::NUM_SHIFT) as u32
-            } else {
-                0
-            };
-            (
-                Layout::STRIDE.0 as usize,
-                Layout::STRIDE.1 as usize,
-                Layout::OFFSET as usize,
-                mask,
-                r_shift,
-                l_shift,
-            )
-        };
-        let plain = row * stride_r + column * stride_c + offset;
-        let idx = plain ^ (((plain & y_mask) >> right_shift) << left_shift);
+        let idx = crate::static_layout::crd2idx_2d::<Layout>(row, column);
         unsafe { self.base.add(idx).read() }
     }
 

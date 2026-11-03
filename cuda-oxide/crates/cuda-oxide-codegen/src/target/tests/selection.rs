@@ -464,6 +464,28 @@ fn valid_device_hints_and_explicit_compute_targets_preserve_selection() {
                 .unwrap();
         assert_eq!(nvvm.sm(), expected);
     }
+
+    // R100 (`sm_107a`) is supported by libNVVM/nvJitLink, while the pinned LLVM
+    // 23 `llc` backend has no `-mcpu=sm_107a` entry and must fall back to the
+    // feature floor when given `sm_107a` as an advisory device hint.
+    let r100_hint = "sm_107a".parse::<cuda_target_spec::DeviceArch>().unwrap();
+    let (ptx_on_r100, ptx_provenance) = resolve_ptx_target(
+        None,
+        "test override",
+        Some(&r100_hint),
+        DetectedFeatures::Basic,
+    )
+    .unwrap();
+    assert_eq!(ptx_on_r100.sm(), "sm_80");
+    assert_eq!(ptx_provenance, "feature requirement");
+    let nvvm_on_r100 =
+        crate::export::resolve_nvvm_target(None, Some(&r100_hint), Some(DetectedFeatures::Basic))
+            .unwrap();
+    assert_eq!(nvvm_on_r100.sm(), "sm_107a");
+    let explicit_nvvm_r100 =
+        crate::export::resolve_nvvm_target(Some("sm_107"), None, Some(DetectedFeatures::Sm80))
+            .unwrap();
+    assert_eq!(explicit_nvvm_r100.sm(), "sm_107");
 }
 
 #[test]

@@ -134,6 +134,17 @@ pub mod __private {
     #[doc(hidden)]
     pub use llvm_export::export::DeviceExternType;
 
+    /// Whether the resolved target floor supports Ampere integer `redux.sync` (`sm_80+`).
+    #[doc(hidden)]
+    pub fn target_has_integer_redux_sync(
+        target_arch: Option<&str>,
+        device_arch_hint: Option<&DeviceArchHint>,
+    ) -> bool {
+        let device_arch = device_arch_hint.and_then(|hint| hint.as_device_arch().ok());
+        cuda_target_spec::resolve_sm_floor(target_arch, device_arch.map(AsRef::as_ref))
+            .is_ok_and(|floor| floor >= 80)
+    }
+
     /// Compiler-only attribute used to carry the Rust generated-intrinsic ABI marker.
     #[doc(hidden)]
     pub const GENERATED_INTRINSIC_MARKER_ATTR: &str =

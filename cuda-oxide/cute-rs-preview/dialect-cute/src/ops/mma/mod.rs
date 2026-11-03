@@ -242,7 +242,7 @@ mod load;
 mod tensor;
 
 pub use fragment::{CuteFragmentFillOp, CuteFragmentSliceKOp};
-pub use gemm::CuteTiledGemmOp;
+pub use gemm::{CuteNvfp4MmaAtomOp, CuteTiledGemmOp};
 pub use ldmatrix::CuteLdmatrixOp;
 pub use load::{CuteMmaLoadAOp, CuteMmaLoadScalesOp, CuteMmaPartitionBOp};
 pub use tensor::{CuteSmemTensorOverlayOp, CuteTiledMmaSliceOp};

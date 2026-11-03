@@ -136,6 +136,45 @@ pub enum DescriptorError {
     AddressOutOfRange,
 }
 #[inline(always)]
+/// Pack a 16-byte-aligned shared offset into a no-swizzle K-major descriptor (`Tcgen05SwizzleMode::None`).
+/// Encodes `address >> 4`, `leading_dim_bytes >> 4`, and `stride_bytes >> 4` with the canonical
+/// bit-46 descriptor flag for `tcgen05.mma` and `tcgen05.cp`.
+#[must_use]
+pub const fn encode_no_swizzle_smem_desc(
+    address: u64,
+    leading_dim_bytes: u32,
+    stride_bytes: u32,
+) -> u64 {
+    Tcgen05SmemDescriptor::builder()
+        .address(address)
+        .leading_dim_bytes(leading_dim_bytes)
+        .stride_bytes(stride_bytes)
+        .swizzle(Tcgen05SwizzleMode::None)
+        .build()
+        .raw()
+}
+
+#[inline(always)]
+/// Encode a group-one dense FP16 instruction descriptor (`Tcgen05InstructionDescriptor`).
+/// Configures `M = m` and `N = n` with FP16 inputs and FP32 TMEM accumulation.
+#[must_use]
+pub const fn encode_cg1_f16_idesc(m: u32, n: u32) -> u32 {
+    Tcgen05InstructionDescriptor::builder()
+        .m(m)
+        .n(n)
+        .build()
+        .raw()
+}
+
+#[inline(always)]
+/// Encode a group-one NVFP4 (`mxf4nvf4.block_scale.block16`, `E2M1 × E2M1` with `E4M3` scales)
+/// instruction descriptor (`Tcgen05InstructionDescriptor`) for tile dimensions `(m, n)`.
+#[must_use]
+pub const fn encode_cg1_mxf4nvf4_block16_idesc(m: u32, n: u32) -> u32 {
+    0x0000_0480u32 | ((n >> 3) << 17) | ((m >> 4) << 24)
+}
+
+#[inline(always)]
 /// Pack a 16-byte-aligned shared offset into the fixed B128 K-major descriptor.
 fn encode_smem_offset(offset: ByteOffset) -> Result<Tcgen05SmemDescriptor, DescriptorError> {
     if !offset.bytes().is_multiple_of(16) {

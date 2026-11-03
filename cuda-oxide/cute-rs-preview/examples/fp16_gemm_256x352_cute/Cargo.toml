@@ -12,5 +12,5 @@ ctm-rs = { path = "../../ctm-rs" }
 cute-rs = { path = "../../cute-rs", features = ["host"] }
 cuda-device = { path = "../../../crates/cuda-device" }
 cuda-host = { path = "../../../crates/cuda-host" }
-cuda-core = { path = "../../../../cuda-core" }
+cuda-core = { path = "../../../../cuda-core", features = ["f16"] }
 serde_json = "1"

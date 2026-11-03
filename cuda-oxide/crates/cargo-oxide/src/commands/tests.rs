@@ -194,19 +194,36 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
     std::env::temp_dir().join(format!("{}_{}_{}", prefix, std::process::id(), unique))
 }
 
+/// Writes `script` to `path` as an executable that tests can run at once.
+///
+/// A test that writes the tool itself holds a writable handle to it for a
+/// moment. Another test that spawns a process in that moment hands its child
+/// a copy of the handle, and the kernel refuses to execute a file with a
+/// writer (ETXTBSY, "Text file busy") until that child execs or exits. Here
+/// `cp` creates the tool, so the only process that ever opens it for writing
+/// has exited before this returns
 #[cfg(unix)]
-fn doctor_clang_fixture(root: &Path, name: &str, resource_response: &str) -> String {
+fn write_tool(path: &Path, script: &str) {
     use std::os::unix::fs::PermissionsExt;
 
+    let staging = path.with_added_extension("staging");
+    fs::write(&staging, script).unwrap();
+    let status = Command::new("cp").arg(&staging).arg(path).status().unwrap();
+    assert!(status.success(), "cp {} failed: {status}", path.display());
+    fs::remove_file(staging).unwrap();
+    // cp masks the mode with the umask; chmod opens no writable handle
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[cfg(unix)]
+fn doctor_clang_fixture(root: &Path, name: &str, resource_response: &str) -> String {
     let path = root.join(name);
-    fs::write(
+    write_tool(
         &path,
-        format!(
+        &format!(
             "#!/bin/sh\ncase \"$1\" in\n--version) echo clang; exit 0;;\n-print-resource-dir) {resource_response};;\nesac\nexit 1\n"
         ),
-    )
-    .unwrap();
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    );
     path.to_string_lossy().into_owned()
 }
 
@@ -5648,16 +5665,15 @@ fn scaffold_async_template_keeps_async_deps_and_docs() {
     assert!(files.main_rs.contains("vecadd_async"));
     assert!(files.main_rs.contains("use cuda_host::cuda_module;"));
     assert!(!files.main_rs.contains("use cuda_device::{cuda_module"));
-    // Shared host runtime from the same git source as cuda-host; the SIMT
-    // surface lives under simt::.
+    // Shared host runtime from the same git source as cuda-host.
     assert!(files.cargo_toml.contains("cuda-async = { git = \""));
     assert!(!files.cargo_toml.contains("cuda-async = \""));
     assert!(!files.cargo_toml.contains("cuda-bindings"));
-    assert!(files.main_rs.contains("use cuda_core::simt::LaunchConfig;"));
+    assert!(files.main_rs.contains("use cuda_core::LaunchConfig;"));
     assert!(
         files
             .main_rs
-            .contains("use cuda_async::simt::device_operation::DeviceOperation;")
+            .contains("use cuda_async::device_operation::DeviceOperation;")
     );
 }
 
@@ -6509,14 +6525,12 @@ fn implementation_symbols_are_checked_against_the_abi_table() {
 fn tileiras_capability_follows_the_listed_bytecode_versions() {
     use super::tilelib::list_bytecode_versions;
     use oxide_tilebc::BytecodeVersion;
-    use std::os::unix::fs::PermissionsExt;
 
     let root = unique_temp_dir("cargo_oxide_tileiras");
     fs::create_dir_all(&root).unwrap();
     let stand_in = |name: &str, body: &str| -> PathBuf {
         let path = root.join(name);
-        fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        write_tool(&path, &format!("#!/bin/sh\n{body}\n"));
         path
     };
 

@@ -80,7 +80,8 @@ use crate::{
     },
     ops::mma::{
         CuteFragmentFillOp, CuteFragmentSliceKOp, CuteMmaLoadAOp, CuteMmaLoadScalesOp,
-        CuteMmaPartitionBOp, CuteSmemTensorOverlayOp, CuteTiledGemmOp, CuteTiledMmaSliceOp,
+        CuteMmaPartitionBOp, CuteNvfp4MmaAtomOp, CuteSmemTensorOverlayOp, CuteTiledGemmOp,
+        CuteTiledMmaSliceOp,
     },
     ops::pipeline::{
         CutePipelineConsumerReleaseOp, CutePipelineConsumerWaitOp, CutePipelineProducerAcquireOp,
@@ -239,6 +240,8 @@ fn verify_local_op(ctx: &Context, operation: Ptr<Operation>) -> Result {
         Some(verify_as!(CuteMmaPartitionBOp))
     } else if opid == CuteTiledGemmOp::get_opid_static() {
         Some(verify_as!(CuteTiledGemmOp))
+    } else if opid == CuteNvfp4MmaAtomOp::get_opid_static() {
+        Some(verify_as!(CuteNvfp4MmaAtomOp))
     } else if opid == CuteEpilogueSmemOverlayOp::get_opid_static() {
         Some(verify_as!(CuteEpilogueSmemOverlayOp))
     } else if opid == CuteEpilogueWarpSliceOp::get_opid_static() {

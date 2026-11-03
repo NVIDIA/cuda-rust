@@ -17,7 +17,7 @@ use crate::nvfp4::Nvfp4Projection;
 use crate::operator::Result;
 use ctm_rs::memory::DisjointSlice;
 use ctm_rs::{cuda_module, kernel, thread};
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaStream, DeviceBuffer};
 use cute_rs::BFloat16;
 use cute_rs::decoder::{

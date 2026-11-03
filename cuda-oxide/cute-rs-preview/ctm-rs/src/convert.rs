@@ -30,3 +30,13 @@ pub fn f32_to_bf16_rne(value: f32) -> u16 {
 pub fn bf16_to_f32(bits: u16) -> f32 {
     cuda_device::convert::bf16_to_f32(bits)
 }
+
+/// Convert two FP32 values to packed FP8 E4M3 (`e4m3x2`) with nearest-even finite saturation.
+///
+/// `lo` occupies bits `0..8` (low byte), and `hi` occupies bits `8..16` (high byte).
+/// Preserves the argument order of `cuda_device::convert::cvt_rn_satfinite_e4m3x2_f32`.
+#[must_use]
+#[inline(always)]
+pub fn cvt_rn_satfinite_e4m3x2_f32(lo: f32, hi: f32) -> u16 {
+    cuda_device::convert::cvt_rn_satfinite_e4m3x2_f32(lo, hi)
+}

@@ -1,7 +1,7 @@
 # nvls_all_reduce
 
 Single-process NVLS (NVLink SHARP) all-reduce across every multicast-capable
-GPU in the machine, built on the `cuda_core::simt::vmm` multicast wrappers
+GPU in the machine, built on the `cuda_core::vmm` multicast wrappers
 (`MulticastObject`, `Mapping::new_multicast`).
 
 ## What it demonstrates
@@ -54,7 +54,7 @@ integers, so the sums are exact and order-independent).
 
 ## See also
 
-- `cuda-core/tests/simt_vmm_multicast.rs` in cutile-rs: host-side team plumbing test
+- `cuda-core/tests/vmm_multicast.rs` in cutile-rs: host-side team plumbing test
   (bind/map/unbind lifecycle) that runs without issuing `multimem`.
 - PTX ISA section 9.7.13.4 (`multimem.ld_reduce`, `multimem.st`,
   `multimem.red`).

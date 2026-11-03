@@ -232,11 +232,12 @@ impl<F: Fn() -> crate::ast::Module> KernelCompiler<F> {
     /// The returned string is the same 64-character lowercase SHA-256 key that
     /// the runtime's L2 cache lookup would use for this specialization.
     pub fn l2_cache_key(self) -> Result<String, JITError> {
-        let gpu_name = self.gpu_name.clone();
+        let resolved = self.with_jit_env_overrides()?;
+        let gpu_name = resolved.gpu_name.clone();
         let tileiras_opts = crate::cuda_tile_runtime_utils::TileirasOptions::from_compile_options(
-            &self.compile_options,
+            &resolved.compile_options,
         );
-        let artifacts = self.compile()?;
+        let artifacts = resolved.compile_resolved()?;
         if let Some(version) = artifacts.bytecode_version {
             let bytes = artifacts.bytecode()?;
             Ok(crate::cuda_tile_runtime_utils::current_l2_key_for_bytecode(
@@ -255,6 +256,15 @@ impl<F: Fn() -> crate::ast::Module> KernelCompiler<F> {
     ///
     /// This is a pure compilation step — no GPU or CUDA driver is needed.
     pub fn compile(self) -> Result<CompileArtifacts, JITError> {
+        self.with_jit_env_overrides()?.compile_resolved()
+    }
+
+    fn with_jit_env_overrides(mut self) -> Result<Self, JITError> {
+        self.compile_options = self.compile_options.with_jit_env_overrides()?;
+        Ok(self)
+    }
+
+    fn compile_resolved(self) -> Result<CompileArtifacts, JITError> {
         let module_ast = (self.module_ast_fn)();
         let modules = CUDATileModules::from_kernel(module_ast)?;
 

@@ -1523,11 +1523,19 @@ mod tests {
         );
 
         // The exposed integer is a generic address, so re-entering the shared
-        // space must go inttoptr → generic, then addrspacecast → shared. A
-        // bare inttoptr into addrspace(3) would reinterpret the generic
-        // address as a space-local offset.
-        assert_cast_lowered_to::<llvm::AddrSpaceCastOp>(&ctx, module, "llvm.addrspacecast");
+        // space must go inttoptr -> generic, then addrspacecast -> shared,
+        // followed by the .func return-boundary addrspacecast back to generic.
         let body = kernel_blocks(&ctx, module);
+        assert_eq!(
+            count_ops::<llvm::AddrSpaceCastOp>(&ctx, &body),
+            2,
+            "expected cast addrspacecast plus .func return-boundary addrspacecast"
+        );
+        assert_eq!(
+            count_ops::<mir::MirCastOp>(&ctx, &body),
+            0,
+            "mir.cast must be replaced during lowering"
+        );
         let int_to_ptrs = find_all::<llvm::IntToPtrOp>(&ctx, &body);
         let [int_to_ptr] = int_to_ptrs.as_slice() else {
             panic!("integer-to-shared transmute must lower to exactly one llvm.inttoptr");
@@ -1564,8 +1572,14 @@ mod tests {
             let module =
                 lower_single_cast(&mut ctx, source, destination, MirCastKindAttr::Transmute);
 
-            assert_cast_lowered_to::<llvm::AddrSpaceCastOp>(&ctx, module, "llvm.addrspacecast");
             let body = kernel_blocks(&ctx, module);
+            let expected_casts = if shared_is_source { 1 } else { 2 };
+            assert_eq!(
+                count_ops::<llvm::AddrSpaceCastOp>(&ctx, &body),
+                expected_casts,
+                "expected cast addrspacecast (plus return-boundary cast when returning shared)"
+            );
+            assert_eq!(count_ops::<mir::MirCastOp>(&ctx, &body), 0);
             assert_eq!(
                 count_ops::<llvm::AllocaOp>(&ctx, &body),
                 0,
@@ -1946,17 +1960,28 @@ mod tests {
 
             // The exposed integer is a generic address, so re-entry must be
             // inttoptr-to-generic followed by addrspacecast into the space,
-            // mirroring the PointerExposeAddress direction.
-            assert_cast_lowered_to::<llvm::AddrSpaceCastOp>(&ctx, module_ptr, "llvm.addrspacecast");
+            // mirroring the PointerExposeAddress direction. When returning an
+            // addrspace(3) pointer, the .func return boundary adds a second
+            // addrspacecast back to generic.
+            let body = kernel_blocks(&ctx, module_ptr);
+            let expected_casts = if address_space == llvm_export::types::address_space::SHARED {
+                2
+            } else {
+                1
+            };
             assert_eq!(
-                count_ops::<llvm::IntToPtrOp>(&ctx, &kernel_blocks(&ctx, module_ptr)),
+                count_ops::<llvm::AddrSpaceCastOp>(&ctx, &body),
+                expected_casts,
+                "expected cast addrspacecast (plus return-boundary cast for shared)"
+            );
+            assert_eq!(count_ops::<mir::MirCastOp>(&ctx, &body), 0);
+            assert_eq!(
+                count_ops::<llvm::IntToPtrOp>(&ctx, &body),
                 1,
                 "address space {address_space} must re-enter through a generic inttoptr"
             );
-            let casts = find_all::<llvm::AddrSpaceCastOp>(&ctx, &kernel_blocks(&ctx, module_ptr));
-            let [cast] = casts.as_slice() else {
-                panic!("expected exactly one llvm.addrspacecast");
-            };
+            let casts = find_all::<llvm::AddrSpaceCastOp>(&ctx, &body);
+            let cast = &casts[0];
             let result_ty = cast
                 .get_operation()
                 .deref(&ctx)
@@ -1984,12 +2009,16 @@ mod tests {
             MirCastKindAttr::PtrToPtr,
         );
 
-        assert_cast_lowered_to::<llvm::AddrSpaceCastOp>(&ctx, module_ptr, "llvm.addrspacecast");
+        let body = kernel_blocks(&ctx, module_ptr);
+        assert_eq!(
+            count_ops::<llvm::AddrSpaceCastOp>(&ctx, &body),
+            2,
+            "ptr -> shared cast plus .func return-boundary cast must emit two llvm.addrspacecast ops"
+        );
+        assert_eq!(count_ops::<mir::MirCastOp>(&ctx, &body), 0);
 
-        let casts = find_all::<llvm::AddrSpaceCastOp>(&ctx, &kernel_blocks(&ctx, module_ptr));
-        let [cast] = casts.as_slice() else {
-            panic!("ptr -> ptr addrspace cast must lower to exactly one llvm.addrspacecast");
-        };
+        let casts = find_all::<llvm::AddrSpaceCastOp>(&ctx, &body);
+        let cast = &casts[0];
         let result_ty = cast
             .get_operation()
             .deref(&ctx)

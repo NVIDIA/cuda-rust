@@ -255,33 +255,34 @@ impl OperationTranslation for EpilogueStoreTranslation {
             return Err("cute.epilogue_store_fragment needs 64 f32 leaves".into());
         }
 
-        let three = emit_i64_constant(session, &mut operations, 3, &input.location)?;
+        let warp_i32 = cast_int(
+            session,
+            &mut operations,
+            input.operands[1].clone(),
+            MlirType::Integer(32),
+            "arith.trunci",
+            &input.location,
+        )?;
+        let three = emit_i32_constant(session, &mut operations, 3, &input.location)?;
         let warp_m = emit_binary(
             session,
             &mut operations,
             "arith.andi",
-            input.operands[1].clone(),
+            warp_i32.clone(),
             three,
             &input.location,
         )?;
-        let two = emit_i64_constant(session, &mut operations, 2, &input.location)?;
+        let two = emit_i32_constant(session, &mut operations, 2, &input.location)?;
         let warp_n = emit_binary(
             session,
             &mut operations,
             "arith.shrui",
-            input.operands[1].clone(),
+            warp_i32,
             two,
             &input.location,
         )?;
-        let lane = cast_int(
-            session,
-            &mut operations,
-            input.operands[2].clone(),
-            MlirType::Integer(64),
-            "arith.extui",
-            &input.location,
-        )?;
-        let fifteen = emit_i64_constant(session, &mut operations, 15, &input.location)?;
+        let lane = input.operands[2].clone();
+        let fifteen = emit_i32_constant(session, &mut operations, 15, &input.location)?;
         let lane15 = emit_binary(
             session,
             &mut operations,
@@ -290,7 +291,7 @@ impl OperationTranslation for EpilogueStoreTranslation {
             fifteen,
             &input.location,
         )?;
-        let warp_row_stride = emit_i64_constant(session, &mut operations, 1024, &input.location)?;
+        let warp_row_stride = emit_i32_constant(session, &mut operations, 1024, &input.location)?;
         let warp_rows = emit_binary(
             session,
             &mut operations,
@@ -299,7 +300,7 @@ impl OperationTranslation for EpilogueStoreTranslation {
             warp_row_stride,
             &input.location,
         )?;
-        let lane_row_stride = emit_i64_constant(session, &mut operations, 64, &input.location)?;
+        let lane_row_stride = emit_i32_constant(session, &mut operations, 64, &input.location)?;
         let lane_rows = emit_binary(
             session,
             &mut operations,
@@ -316,7 +317,7 @@ impl OperationTranslation for EpilogueStoreTranslation {
             lane_rows,
             &input.location,
         )?;
-        let band_stride = emit_i64_constant(session, &mut operations, 4096, &input.location)?;
+        let band_stride = emit_i32_constant(session, &mut operations, 4096, &input.location)?;
         let row_one = emit_binary(
             session,
             &mut operations,
@@ -325,7 +326,7 @@ impl OperationTranslation for EpilogueStoreTranslation {
             band_stride,
             &input.location,
         )?;
-        let columns_per_warp = emit_i64_constant(session, &mut operations, 16, &input.location)?;
+        let columns_per_warp = emit_i32_constant(session, &mut operations, 16, &input.location)?;
         let column_base = emit_binary(
             session,
             &mut operations,
@@ -334,7 +335,7 @@ impl OperationTranslation for EpilogueStoreTranslation {
             columns_per_warp,
             &input.location,
         )?;
-        let seven = emit_i64_constant(session, &mut operations, 7, &input.location)?;
+        let seven = emit_i32_constant(session, &mut operations, 7, &input.location)?;
         let lane7 = emit_binary(
             session,
             &mut operations,
@@ -343,7 +344,7 @@ impl OperationTranslation for EpilogueStoreTranslation {
             seven,
             &input.location,
         )?;
-        let eight = emit_i64_constant(session, &mut operations, 8, &input.location)?;
+        let eight = emit_i32_constant(session, &mut operations, 8, &input.location)?;
         let swizzle = emit_binary(
             session,
             &mut operations,
@@ -352,14 +353,14 @@ impl OperationTranslation for EpilogueStoreTranslation {
             eight,
             &input.location,
         )?;
-        let half_stride = emit_i64_constant(session, &mut operations, 8192, &input.location)?;
+        let half_stride = emit_i32_constant(session, &mut operations, 8192, &input.location)?;
 
         /// Logical column offsets for the eight accumulator slots within each M band.
-        const N_OFFSETS: [u64; 8] = [0, 8, 32, 40, 64, 72, 96, 104];
+        const N_OFFSETS: [i128; 8] = [0, 8, 32, 40, 64, 72, 96, 104];
         for m_band in 0..2_usize {
             for (n_slot, n_offset) in N_OFFSETS.into_iter().enumerate() {
                 let local =
-                    emit_i64_constant(session, &mut operations, n_offset % 64, &input.location)?;
+                    emit_i32_constant(session, &mut operations, n_offset % 64, &input.location)?;
                 let column = emit_binary(
                     session,
                     &mut operations,

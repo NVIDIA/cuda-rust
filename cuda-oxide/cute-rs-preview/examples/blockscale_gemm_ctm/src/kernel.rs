@@ -154,69 +154,71 @@ pub mod kernels {
         #[grid_constant] sb_map: &TensorMap<u16, Mxf4ScaleTile>,
         #[grid_constant] c_map: &TensorMap<f16, F16Tile128>,
     ) {
-        let tid = thread::threadIdx_x() as usize;
-        let warp = tid / 32;
-        let lane = tid % 32;
+        let tid = thread::threadIdx_x();
+        let warp = (tid / 32) as usize;
+        let lane = (tid % 32) as usize;
         let base = DynamicSharedArray::<u8, 1024>::get_raw();
         unsafe {
             let full = base.add(BARRIERS).cast::<Barrier>();
             let empty = full.add(STAGES);
             if tid == 0 {
-                let mut s = 0;
-                while s < STAGES {
-                    ManagedBarrier::<Uninit, TmaBarrier>::from_static(full.add(s))
+                let mut s = 0u32;
+                while s < STAGES as u32 {
+                    ManagedBarrier::<Uninit, TmaBarrier>::from_static(full.add(s as usize))
                         .init_instruction(1);
-                    ManagedBarrier::<Uninit, GeneralBarrier>::from_static(empty.add(s))
+                    ManagedBarrier::<Uninit, GeneralBarrier>::from_static(empty.add(s as usize))
                         .init_instruction(8);
                     s += 1;
                 }
             }
             fence::fence_mbarrier_init();
             barrier::barrier_cta_sync(0, THREADS as u32);
-            let mut tile = thread::blockIdx_x() as usize;
-            let stride = thread::gridDim_x() as usize;
-            let mut slot = 0usize;
+            let mut tile = thread::blockIdx_x();
+            let stride = thread::gridDim_x();
+            let mut slot = 0u32;
             if warp < 8 {
                 let wm = warp % 4;
                 let wn = warp / 4;
                 let mut phase = 0u32;
-                while tile < TOTAL_TILES {
-                    let tile_m = tile % (M / 128);
-                    let tile_n = tile / (M / 128);
+                while tile < TOTAL_TILES as u32 {
+                    let tile_m = tile % (M / 128) as u32;
+                    let tile_n = tile / (M / 128) as u32;
                     let mut accumulators = AccumulatorTile16x8::<2, 8>::zero();
-                    let mut stage = 0;
-                    while stage < K_STAGES {
+                    let mut stage = 0u32;
+                    while stage < K_STAGES as u32 {
+                        let slot_idx = slot as usize;
                         let ready =
-                            ManagedBarrier::<Ready, TmaBarrier>::adopt_ready(full.add(slot));
+                            ManagedBarrier::<Ready, TmaBarrier>::adopt_ready(full.add(slot_idx));
                         wait(&ready, phase);
-                        let a = base.add(slot * DATA_BYTES);
-                        let b = base.add(B_OFFSET + slot * DATA_BYTES);
-                        let sa = base.add(SFA_OFFSET + slot * SCALE_BYTES).cast::<u32>();
-                        let sb = base.add(SFB_OFFSET + slot * SCALE_BYTES).cast::<u32>();
+                        let a = base.add(slot_idx * DATA_BYTES);
+                        let b = base.add(B_OFFSET + slot_idx * DATA_BYTES);
+                        let sa = base.add(SFA_OFFSET + slot_idx * SCALE_BYTES).cast::<u32>();
+                        let sb = base.add(SFB_OFFSET + slot_idx * SCALE_BYTES).cast::<u32>();
                         let a_provider = lane / 4 + 8 * (lane & 1);
                         let sa0 = *sa.add(physical::scale_word(16 * wm + a_provider));
                         let sa1 = *sa.add(physical::scale_word(16 * wm + a_provider + 64));
                         let scales_b = BScaleFragments::load(sb, wn, lane);
-                        let mut half = 0;
+                        let mut half = 0u32;
                         while half < 2 {
+                            let half_idx = half as usize;
                             let a0 = mma::load_mxf4_a(SharedAddress::from_raw(
-                                a.add(physical::matrix_row(wm, half, lane)).cast(),
+                                a.add(physical::matrix_row(wm, half_idx, lane)).cast(),
                             ));
                             let a1 = mma::load_mxf4_a(SharedAddress::from_raw(
-                                a.add(physical::matrix_row(wm + 4, half, lane)).cast(),
+                                a.add(physical::matrix_row(wm + 4, half_idx, lane)).cast(),
                             ));
                             let scale_a0 = ScalePairA::from_bits((sa0 >> (16 * half)) as u16);
                             let scale_a1 = ScalePairA::from_bits((sa1 >> (16 * half)) as u16);
                             // Finish all four MMAs before loading the next B pair.
                             mma::static_for!(PAIR in [0, 1, 2, 3] {
                                 let (b0, b1) = mma::load_mxf4_b_pair(SharedAddress::from_raw(
-                                    b.add(physical::matrix_row(wn + 2 * PAIR, half, lane)).cast(),
+                                    b.add(physical::matrix_row(wn + 2 * PAIR, half_idx, lane)).cast(),
                                 ));
                                 accumulators.mma_mxf4_pair::<PAIR>(
                                     [a0, a1],
                                     [b0, b1],
                                     [scale_a0, scale_a1],
-                                    scales_b.pair::<PAIR>(half),
+                                    scales_b.pair::<PAIR>(half_idx),
                                 );
                             });
                             half += 1;
@@ -224,12 +226,12 @@ pub mod kernels {
                         if lane == 0 {
                             mbarrier::arrive(
                                 &ManagedBarrier::<Ready, GeneralBarrier>::adopt_ready(
-                                    empty.add(slot),
+                                    empty.add(slot_idx),
                                 ),
                             );
                         }
                         slot += 1;
-                        if slot == STAGES {
+                        if slot == STAGES as u32 {
                             slot = 0;
                             phase ^= 1;
                         }
@@ -272,22 +274,27 @@ pub mod kernels {
                 }
             } else if lane == 0 {
                 let mut phase = 1u32;
-                while tile < TOTAL_TILES {
-                    let tile_m = tile % (M / 128);
-                    let tile_n = tile / (M / 128);
-                    let mut stage = 0;
-                    while stage < K_STAGES {
+                while tile < TOTAL_TILES as u32 {
+                    let tile_m = tile % (M / 128) as u32;
+                    let tile_n = tile / (M / 128) as u32;
+                    let mut stage = 0u32;
+                    while stage < K_STAGES as u32 {
+                        let slot_idx = slot as usize;
                         wait(
-                            &ManagedBarrier::<Ready, GeneralBarrier>::adopt_ready(empty.add(slot)),
+                            &ManagedBarrier::<Ready, GeneralBarrier>::adopt_ready(
+                                empty.add(slot_idx),
+                            ),
                             phase,
                         );
                         let ready =
-                            ManagedBarrier::<Ready, TmaBarrier>::adopt_ready(full.add(slot));
+                            ManagedBarrier::<Ready, TmaBarrier>::adopt_ready(full.add(slot_idx));
                         mbarrier::arrive_expect_tx(&ready, TX_BYTES);
-                        let a = region::<Mxf4Tile128>(base.add(slot * DATA_BYTES));
-                        let b = region::<Mxf4Tile128>(base.add(B_OFFSET + slot * DATA_BYTES));
-                        let sa = region::<Mxf4ScaleTile>(base.add(SFA_OFFSET + slot * SCALE_BYTES));
-                        let sb = region::<Mxf4ScaleTile>(base.add(SFB_OFFSET + slot * SCALE_BYTES));
+                        let a = region::<Mxf4Tile128>(base.add(slot_idx * DATA_BYTES));
+                        let b = region::<Mxf4Tile128>(base.add(B_OFFSET + slot_idx * DATA_BYTES));
+                        let sa =
+                            region::<Mxf4ScaleTile>(base.add(SFA_OFFSET + slot_idx * SCALE_BYTES));
+                        let sb =
+                            region::<Mxf4ScaleTile>(base.add(SFB_OFFSET + slot_idx * SCALE_BYTES));
                         tma::cp_async_bulk_tensor_shared_cta_global(
                             &a,
                             a_map,
@@ -303,17 +310,17 @@ pub mod kernels {
                         tma::cp_async_bulk_tensor_shared_cta_global(
                             &sa,
                             sa_map,
-                            Coordinates2D::new(0, (tile_m * K_STAGES + stage) as i32),
+                            Coordinates2D::new(0, (tile_m * K_STAGES as u32 + stage) as i32),
                             ready.shared_address(),
                         );
                         tma::cp_async_bulk_tensor_shared_cta_global(
                             &sb,
                             sb_map,
-                            Coordinates2D::new(0, (tile_n * K_STAGES + stage) as i32),
+                            Coordinates2D::new(0, (tile_n * K_STAGES as u32 + stage) as i32),
                             ready.shared_address(),
                         );
                         slot += 1;
-                        if slot == STAGES {
+                        if slot == STAGES as u32 {
                             slot = 0;
                             phase ^= 1;
                         }
@@ -321,14 +328,16 @@ pub mod kernels {
                     }
                     tile += stride;
                 }
-                let mut tail = 0;
-                while tail < STAGES {
+                let mut tail = 0u32;
+                while tail < STAGES as u32 {
                     wait(
-                        &ManagedBarrier::<Ready, GeneralBarrier>::adopt_ready(empty.add(slot)),
+                        &ManagedBarrier::<Ready, GeneralBarrier>::adopt_ready(
+                            empty.add(slot as usize),
+                        ),
                         phase,
                     );
                     slot += 1;
-                    if slot == STAGES {
+                    if slot == STAGES as u32 {
                         slot = 0;
                         phase ^= 1;
                     }

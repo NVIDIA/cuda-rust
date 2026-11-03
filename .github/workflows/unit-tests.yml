@@ -1,28 +1,35 @@
 ---
 name: unit-tests
 
-# Runs as a job of the top-level CI workflow (.github/workflows/ci.yml),
-# which is the single push/pull_request entry point. Concurrency is governed
-# by CI's own group, so this workflow declares none of its own.
+# Runs as a job of the top-level CI workflow (.github/workflows/ci.yml).
+# Concurrency is governed by CI's own group, so this workflow declares none
+# of its own.
 on:
   workflow_call:
 
 permissions:
   contents: read
 
+# A container job's default shell is dash, which rejects `set -o pipefail`.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   rust-unit-tests:
     name: cargo test -p ${{ matrix.package }}
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
+    container:
+      image: rust:1.98.0-bookworm
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        # Each entry must be runnable on a stock `ubuntu-latest` runner — i.e.
-        # no live GPU. `needs_cuda: true` installs the CUDA toolkit for build-
-        # time bindgen (every crate that transitively depends on
-        # `cuda-bindings` needs `cuda.h` to compile). `test_args` overrides
-        # the default `--all-targets` where a crate needs a narrower set.
+        # Each entry must be runnable on a driverless runner — no live GPU,
+        # and this image has no CUDA toolkit. `cargo-oxide` doctor asserts
+        # that absence. Crates that bindgen against cuda.h run in
+        # `rust-unit-tests-cuda`. `test_args` overrides the default
+        # `--all-targets` where a crate needs a narrower set.
         #
         # Crates intentionally not in this matrix:
         #   * `fuzzer` — differential-testing infra with no unit tests.
@@ -56,20 +63,11 @@ jobs:
           - package: dialect-nvvm
           - package: mir-importer
           # CuTe types, semantic IR, and MLIR export need no CUDA toolkit.
-          # Facade macro tests also compile host metadata via cuda-host.
+          # cute-rs and ctm-rs compile host metadata through cuda-host, so
+          # they run in rust-unit-tests-cuda.
           - package: cute-layout
-          - package: cute-rs
-            needs_cuda: true
-          - package: ctm-rs
-            needs_cuda: true
-          - package: ctm-rs
-            test_args: --all-targets --features host
-            needs_cuda: true
           - package: dialect-cute
           - package: cuda-oxide-mlir-export
-          # Includes a real llc -> ptxas spine-kernel validation.
-          - package: cuda-oxide-codegen
-            needs_cuda: true
           - package: mir-lower
           - package: mir-transforms
           - package: nvvm-transforms
@@ -86,10 +84,6 @@ jobs:
           # The Tile IR bytecode writer for those descriptions. Pure Rust.
           - package: oxide-tilebc
           - package: reserved-oxide-symbols
-          # launch_requires_unsafe trybuild fixture dev-depends on
-          # cuda-host/cuda-core, which transitively pull cuda-bindings
-          - package: cuda-macros
-            needs_cuda: true
           # trybuild compile-fail suite for ThreadIndex / DisjointSlice safety
           - package: cuda-device
           # Runtime CUDA compiler/linker discovery and file-identity checks;
@@ -100,9 +94,6 @@ jobs:
           # pure and validates options, provenance, and cubin structure; the
           # live-toolkit smoke test remains explicitly ignored.
           - package: cuda-artifact-finalizer
-          # pure-Rust kernel-launch helpers + tcgen05 tiling tables
-          - package: cuda-host
-            needs_cuda: true
           # cargo subcommand wrapper; pure Rust, no CUDA toolkit required.
           # Running it on a runner with NO toolkit installed is the
           # regression gate for issue #87.
@@ -112,19 +103,10 @@ jobs:
       - name: Clone repository
         uses: actions/checkout@v4
 
-      - name: Install CUDA toolkit
-        if: matrix.needs_cuda
-        uses: Jimver/cuda-toolkit@0ca15bb027fc96f7f61ddbb9c5221d699da06bdb  # v0.2.36
-        id: cuda-toolkit
-        with:
-          cuda: "13.3.1"
-          method: network
-          sub-packages: '["nvcc", "cudart-dev"]'
-          non-cuda-sub-packages: '["libcurand-dev"]'
+      - name: Mark the workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Run crate unit tests
-        env:
-          CUDA_TOOLKIT_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
         working-directory: cuda-oxide
         run: |
           sysroot="$(rustc --print sysroot)"
@@ -150,13 +132,78 @@ jobs:
           printf '%s\n' "${out}"
           printf '%s\n' "${out}" | grep -q "CUDA headers (cuda.h)"
 
+  # cuda.h crates. A container is chosen per job, so these cannot share the
+  # rust image above without also handing cargo-oxide a toolkit.
+  rust-unit-tests-cuda:
+    name: cargo test -p ${{ matrix.package }}
+    runs-on: linux-amd64-cpu4
+    container:
+      image: nvidia/cuda:13.3.1-devel-ubuntu24.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
+    env:
+      CUDA_TOOLKIT_PATH: /usr/local/cuda
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Includes a real llc -> ptxas spine-kernel validation.
+          - package: cuda-oxide-codegen
+          # Facade macro tests compile host metadata through cuda-host.
+          - package: cute-rs
+          - package: ctm-rs
+          - package: ctm-rs
+            test_args: --all-targets --features host
+          # launch_requires_unsafe trybuild fixture dev-depends on
+          # cuda-host/cuda-core, which transitively pull cuda-bindings.
+          - package: cuda-macros
+          # pure-Rust kernel-launch helpers + tcgen05 tiling tables.
+          # bindgen still needs cuda.h.
+          - package: cuda-host
+    steps:
+      # $/ installs git before checkout. The CUDA image has no git; without
+      # it checkout stores a tarball.
+      - uses: $/.github/actions/setup-cuda-container
+
+      - name: Clone repository
+        uses: actions/checkout@v4
+
+      - name: Install LLVM 21 (llc/opt for the NVPTX backend)
+        if: matrix.package == 'cuda-oxide-codegen'
+        run: |
+          set -euo pipefail
+          source /etc/os-release
+          install -d -m 0755 /etc/apt/keyrings
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | tee /etc/apt/keyrings/apt-llvm-org.asc >/dev/null
+          echo "deb [signed-by=/etc/apt/keyrings/apt-llvm-org.asc] https://apt.llvm.org/${VERSION_CODENAME}/ llvm-toolchain-${VERSION_CODENAME}-21 main" \
+            | tee /etc/apt/sources.list.d/llvm-21.list
+          apt-get update
+          apt-get install -y --no-install-recommends llvm-21
+          llc-21 --version | head -2
+          opt-21 --version | head -2
+
+      - name: Run crate unit tests
+        working-directory: cuda-oxide
+        run: |
+          sysroot="$(rustc --print sysroot)"
+          export LIBRARY_PATH="${sysroot}/lib:${LIBRARY_PATH:-}"
+          export LD_LIBRARY_PATH="${sysroot}/lib:${LD_LIBRARY_PATH:-}"
+          cargo test -p ${{ matrix.package }} ${{ matrix.test_args || '--all-targets' }}
+
   rustc-codegen-cuda-unit-tests:
     name: cargo test --lib (rustc-codegen-cuda)
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
+    container:
+      image: rust:1.98.0-bookworm
     timeout-minutes: 30
     steps:
       - name: Clone repository
         uses: actions/checkout@v4
+
+      - name: Mark the workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       # This standalone workspace uses rustc-private APIs, so run its tests
       # directly rather than pretending the root package matrix covers them.
@@ -172,13 +219,18 @@ jobs:
 
   generated-intrinsics:
     name: generated intrinsics are current and ABI-compatible
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
+    container:
+      image: rust:1.98.0-bookworm
     timeout-minutes: 30
     steps:
       - name: Clone repository with ABI history
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Mark the workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       # cuda-intrinsics-gen shells out to rustfmt when it writes generated
       # sources; it comes from rust-toolchain.toml's component list.
@@ -198,9 +250,22 @@ jobs:
       - name: Check append-only intrinsic ABI ledger
         working-directory: cuda-oxide
         run: |
+          base_ref=""
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             base_ref="${{ github.event.pull_request.base.sha }}"
           else
+            case "${GITHUB_REF_NAME}" in
+              pull-request/[0-9]*)
+                # copy-pr-bot mirror branch. On the first push `before` is all
+                # zeros and HEAD^ would check only the last commit, so a
+                # breaking ledger change in an earlier commit of a multi-commit
+                # pull request would pass. Compare against where the pull
+                # request forked from main instead.
+                base_ref="$(git merge-base HEAD origin/main || true)"
+                ;;
+            esac
+          fi
+          if [ -z "${base_ref}" ]; then
             before="${{ github.event.before }}"
             zero="0000000000000000000000000000000000000000"
             if [ -n "${before}" ] && [ "${before}" != "${zero}" ] && git cat-file -e "${before}^{commit}"; then
@@ -211,4 +276,5 @@ jobs:
               base_ref="HEAD"
             fi
           fi
+          echo "ABI history base: ${base_ref}"
           cargo run -p cuda-intrinsics-gen -- check-abi-history --base-ref "${base_ref}"

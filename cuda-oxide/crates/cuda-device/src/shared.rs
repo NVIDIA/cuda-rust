@@ -248,7 +248,8 @@ impl<T, const N: usize, const ALIGN: usize> Index<usize> for SharedArray<T, N, A
     /// # Panics (in device code)
     ///
     /// Traps if `idx >= N`, like indexing a Rust array.
-    /// `#[kernel(unchecked_indexing)]` removes this check.
+    /// `#[kernel(unchecked_indexing)]` removes this check in the kernel body,
+    /// making an out-of-bounds index undefined behavior.
     ///
     /// # Safety (in device code)
     ///
@@ -277,7 +278,8 @@ impl<T, const N: usize, const ALIGN: usize> IndexMut<usize> for SharedArray<T, N
     /// # Panics (in device code)
     ///
     /// Traps if `idx >= N`, like indexing a Rust array.
-    /// `#[kernel(unchecked_indexing)]` removes this check.
+    /// `#[kernel(unchecked_indexing)]` removes this check in the kernel body,
+    /// making an out-of-bounds index undefined behavior.
     ///
     /// # Safety (in device code)
     ///

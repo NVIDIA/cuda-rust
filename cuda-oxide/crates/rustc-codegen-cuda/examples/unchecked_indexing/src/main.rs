@@ -30,6 +30,10 @@
 //! for it. The assertion here pins the fix: the caller's entry keeps its
 //! traps.
 //!
+//! A fourth pair (`shared_swap_checked` and `shared_swap_unchecked`) verifies
+//! that `SharedArray` indexing (`Index` and `IndexMut`) emits bounds-check
+//! traps by default and elides them under `#[kernel(unchecked_indexing)]`.
+//!
 //! The host runs the kernels, asserts identical results against a CPU
 //! reference, and then inspects the generated PTX: traps present in the
 //! checked entry and in the non-opted caller entry, zero traps in both
@@ -117,16 +121,17 @@ mod kernels {
     }
 
     /// `SharedArray` indexing is bounds-checked like a normal array.
-    /// `threadIdx_x` is not known to be below 256, so the check stays.
+    /// Neither `tid` nor `(tid + step) ^ 1` is statically known to be below
+    /// 256, so both the `IndexMut` write and the `Index` read keep their checks.
     #[kernel]
-    pub fn shared_swap_checked(mut out: DisjointSlice<u32>) {
+    pub fn shared_swap_checked(step: u32, mut out: DisjointSlice<u32>) {
         static mut TILE: SharedArray<u32, 256> = SharedArray::UNINIT;
         let tid = thread::threadIdx_x() as usize;
         // SAFETY: each thread writes only its own slot and reads its
-        // neighbor's after the barrier.
+        // neighbor's after the barrier (`step == 0` at launch).
         unsafe { TILE[tid] = tid as u32 };
         thread::sync_threads();
-        let value = unsafe { TILE[tid ^ 1] };
+        let value = unsafe { TILE[(tid + step as usize) ^ 1] };
         if let Some(slot) = out.get_mut(thread::index_1d()) {
             *slot = value;
         }
@@ -134,14 +139,14 @@ mod kernels {
 
     /// Same body with `unchecked_indexing`: no `SharedArray` checks.
     #[kernel(unchecked_indexing)]
-    pub fn shared_swap_unchecked(mut out: DisjointSlice<u32>) {
+    pub fn shared_swap_unchecked(step: u32, mut out: DisjointSlice<u32>) {
         static mut TILE: SharedArray<u32, 256> = SharedArray::UNINIT;
         let tid = thread::threadIdx_x() as usize;
-        // SAFETY: as above; the launch uses 256-thread blocks, so every
-        // index is in bounds.
+        // SAFETY: as above; the launch uses 256-thread blocks and `step == 0`,
+        // so every index is in bounds.
         unsafe { TILE[tid] = tid as u32 };
         thread::sync_threads();
-        let value = unsafe { TILE[tid ^ 1] };
+        let value = unsafe { TILE[(tid + step as usize) ^ 1] };
         if let Some(slot) = out.get_mut(thread::index_1d()) {
             *slot = value;
         }
@@ -232,12 +237,14 @@ fn main() {
     let mut shared_checked_dev = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
     let mut shared_unchecked_dev = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
 
-    // SAFETY: `for_num_elems` uses 256-thread blocks, so `threadIdx_x ^ 1`
-    // stays below the 256-element tile, as the unchecked kernel requires.
+    // SAFETY: `for_num_elems` uses 256-thread blocks and `step == 0`, so
+    // `(threadIdx_x + step) ^ 1` stays below the 256-element tile, as the
+    // unchecked kernel requires.
     unsafe {
         module.shared_swap_checked(
             &stream,
             LaunchConfig::for_num_elems(N as u32),
+            0,
             &mut shared_checked_dev,
         )
     }
@@ -247,6 +254,7 @@ fn main() {
         module.shared_swap_unchecked(
             &stream,
             LaunchConfig::for_num_elems(N as u32),
+            0,
             &mut shared_unchecked_dev,
         )
     }
@@ -403,13 +411,17 @@ fn verify_ptx() -> Result<(), Box<dyn std::error::Error>> {
         return Err("gather_then_check entry has no guarded `bra` for its bounds checks".into());
     }
 
-    // SharedArray indexing follows the same policy as slice indexing.
+    // SharedArray indexing follows the same policy as slice indexing: both the
+    // IndexMut write and the Index read must keep their traps in the checked
+    // kernel, and both must be elided in the opted-in kernel.
     let shared_checked = entry(&document, "shared_swap_checked")?;
     let shared_checked_traps = count_traps(shared_checked);
-    if shared_checked_traps == 0 {
-        return Err(
-            "shared_swap_checked has no `trap;`, SharedArray bounds checks are missing".into(),
-        );
+    if shared_checked_traps < 2 {
+        return Err(format!(
+            "shared_swap_checked has {shared_checked_traps} `trap;` instruction(s); \
+             expected at least 2 (write + read SharedArray bounds checks)"
+        )
+        .into());
     }
     let shared_unchecked = entry(&document, "shared_swap_unchecked")?;
     let shared_unchecked_traps = count_traps(shared_unchecked);

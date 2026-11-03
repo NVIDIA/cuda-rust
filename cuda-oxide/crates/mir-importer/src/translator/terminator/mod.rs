@@ -362,7 +362,8 @@ fn translate_goto(
 /// When the body's unchecked-indexing policy is set (per-kernel
 /// `#[kernel(unchecked_indexing)]` marker or the whole-build
 /// `CUDA_OXIDE_UNCHECKED_INDEXING=1` switch), asserts whose message is
-/// `AssertMessage::BoundsCheck` are elided: control flows unconditionally to
+/// `AssertMessage::BoundsCheck` are elided (along with `SharedArray` index
+/// bounds checks in `emit_shared_array_index`): control flows unconditionally to
 /// the success target and the condition is never materialized. This is legal
 /// because the success edge carries no block arguments. An out-of-bounds
 /// index then is undefined behavior, exactly like `get_unchecked`. Every

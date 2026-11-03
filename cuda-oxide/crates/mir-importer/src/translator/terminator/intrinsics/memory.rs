@@ -708,6 +708,10 @@ fn emit_pointer_expose_address(
     cast_op
 }
 
+/// Materializes an integer constant `value` of type `ty` as a [`MirConstantOp`]
+/// inserted immediately after `insert_after`.
+///
+/// Fails closed if `value` does not fit in a signed 64-bit integer.
 fn emit_integer_constant(
     ctx: &mut Context,
     ty: pliron::r#type::TypedHandle<IntegerType>,
@@ -740,19 +744,18 @@ fn emit_integer_constant(
     Ok(const_op)
 }
 
-/// Emits `SharedArray::index()`: Compute pointer to element in shared memory.
-///
-/// Computes `base_ptr + index` to get a pointer to the indexed element.
-/// The result is a shared memory pointer (address space 3).
+/// Emits `SharedArray::index()` / `IndexMut::index_mut()`: bounds-checks
+/// `index < N` (unless `value_map.unchecked_indexing()` is set) and computes
+/// `base_ptr + index` in shared memory (`addrspace(3)`).
 ///
 /// # Arguments
 ///
-/// - `args[0]`: `&mut SharedArray<T, N>` - Reference to the shared array
-/// - `args[1]`: `usize` - Index into the array
+/// - `args[0]`: `&SharedArray<T, N>`, `&mut SharedArray<T, N>`, or `*mut SharedArray<T, N>`
+/// - `args[1]`: `usize` - Element index into the shared array
 ///
 /// # Returns
 ///
-/// `*mut T` (addrspace=3) - Pointer to the element in shared memory
+/// `*mut T` (`addrspace(3)`) - Pointer to the indexed element in shared memory.
 pub fn emit_shared_array_index(
     ctx: &mut Context,
     body: &mir::Body,
@@ -868,13 +871,17 @@ pub fn emit_shared_array_index(
     )
 }
 
-/// Element count `N` of the `SharedArray<T, N, ALIGN>` that `operand` points to.
+/// Extracts the compile-time element count `N` from a `SharedArray<T, N, ALIGN>`
+/// receiver operand (`&SharedArray`, `&mut SharedArray`, or `*mut SharedArray`).
+///
+/// Fails closed if `operand` does not point to `cuda_device::SharedArray` or if
+/// the `N` const generic cannot be evaluated to a target `usize`.
 fn shared_array_len(
     body: &mir::Body,
     operand: &mir::Operand,
     loc: Location,
 ) -> TranslationResult<u64> {
-    use rustc_public::ty::{GenericArgKind, RigidTy, TyConstKind, TyKind};
+    use rustc_public::ty::{GenericArgKind, RigidTy, TyKind};
 
     let operand_ty = match operand {
         mir::Operand::Copy(place) | mir::Operand::Move(place) => place.ty(body.locals()).ok(),
@@ -893,19 +900,21 @@ fn shared_array_len(
             );
         }
     };
-    let len = match array_ty.kind() {
-        TyKind::RigidTy(RigidTy::Adt(_, args)) => match args.0.get(1) {
-            Some(GenericArgKind::Const(len)) => match len.kind() {
-                TyConstKind::Value(_, alloc) => alloc.read_uint().ok().map(|v| v as u64),
-                _ => len.eval_target_usize().ok(),
-            },
-            _ => None,
-        },
-        _ => None,
-    };
-    match len {
-        Some(len) => Ok(len),
-        None => input_err!(
+    match array_ty.kind() {
+        TyKind::RigidTy(RigidTy::Adt(adt_def, args))
+            if types::is_cuda_device_adt(&adt_def, "SharedArray") =>
+        {
+            let Some(GenericArgKind::Const(len_const)) = args.0.get(1) else {
+                return input_err!(
+                    loc,
+                    TranslationErr::unsupported(format!(
+                        "SharedArray::index: cannot determine the array length of {array_ty:?}"
+                    ))
+                );
+            };
+            facts::eval_usize_const(len_const, "SharedArray N", Some(&loc))
+        }
+        _ => input_err!(
             loc,
             TranslationErr::unsupported(format!(
                 "SharedArray::index: cannot determine the array length of {array_ty:?}"
@@ -914,7 +923,11 @@ fn shared_array_len(
     }
 }
 
-/// Emits `assert(index < len)` after `prev_op` and returns the assert op.
+/// Emits an unsigned bounds check `assert(index < len)` after `prev_op` and
+/// returns the inserted [`MirAssertOp`].
+///
+/// Lowers to the same `MirConstantOp(len)` + `MirLtOp` + `MirAssertOp` sequence
+/// that `translate_assert` produces for slice and array bounds checks.
 fn emit_index_bounds_check(
     ctx: &mut Context,
     index: Value,
@@ -932,6 +945,7 @@ fn emit_index_bounds_check(
             TranslationErr::type_error("SharedArray::index expects a usize index")
         );
     }
+    let usize_bits = usize_ty.deref(ctx).width() as usize;
     let len_op = Operation::new(
         ctx,
         MirConstantOp::get_concrete_op_info(),
@@ -943,7 +957,7 @@ fn emit_index_bounds_check(
     len_op.deref_mut(ctx).set_loc(loc.clone());
     let len_attr = IntegerAttr::new(
         usize_ty,
-        APInt::from_u64(len, NonZeroUsize::new(64).unwrap()),
+        APInt::from_u64(len, NonZeroUsize::new(usize_bits).unwrap()),
     );
     MirConstantOp::new(len_op).set_attr_value(ctx, len_attr);
     helpers::insert_op(ctx, len_op, block_ptr, prev_op);

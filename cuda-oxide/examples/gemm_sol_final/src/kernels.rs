@@ -132,7 +132,7 @@ mod kernels {
         clippy::collapsible_if,
         reason = "keep warp-uniform branch separate from lane-0 elect to avoid MIR short-circuit join block and preserve 65-register PTX"
     )]
-    #[kernel]
+    #[kernel(unchecked_indexing)]
     #[cluster_launch(2, 1, 1)]
     pub unsafe fn gemm_sol_clc_multicast_4_stage_pipeline(
         a_tma: *const TmaDescriptor,
@@ -764,7 +764,7 @@ mod kernels {
         clippy::collapsible_if,
         reason = "keep warp-uniform branch separate from lane-0 elect to avoid MIR short-circuit join block and preserve 65-register PTX"
     )]
-    #[kernel]
+    #[kernel(unchecked_indexing)]
     #[cluster_launch(2, 1, 1)]
     pub unsafe fn gemm_sol_clc_multicast_4_stage_pipeline_large(
         a_tma: *const TmaDescriptor,

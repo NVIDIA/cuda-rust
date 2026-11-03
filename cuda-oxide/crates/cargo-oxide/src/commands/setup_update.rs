@@ -201,9 +201,11 @@ fn refresh_from_dependency(project_dir: &Path) {
 ///
 /// Inside the cuda-oxide workspace the authoritative backend is the local
 /// source tree, so the default path points at `cargo oxide setup`. Outside
-/// the workspace, the shared `~/.cargo/cuda-oxide/` cache is cleared and
-/// rebuilt from the commit the project's cuda-oxide dependency resolves to
-/// (or from a fresh `main` clone when the project has no such dependency).
+/// the workspace, the backend is rebuilt from the commit the project's
+/// cuda-oxide dependency resolves to (see [`backend::refresh_cached_backend`]):
+/// a path dependency builds in place and leaves the shared
+/// `~/.cargo/cuda-oxide/` cache alone; otherwise the cache is cleared and
+/// rebuilt, from a fresh `main` clone when the project has no such dependency.
 pub fn update(ctx: &Context, force: bool) {
     if let Some(refusal) = pin_refusal("update", ctx) {
         eprintln!("Error: {refusal}");

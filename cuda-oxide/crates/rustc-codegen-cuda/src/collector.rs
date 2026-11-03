@@ -819,8 +819,9 @@ fn is_ptx_asm_marker_path(fn_path: &str) -> bool {
         || has_arity_suffix(fn_path, "cuda_device::ptx::__ptx_asm_void_")
 }
 
-/// Returns true for the hidden `__unroll_config::<FACTOR>` and
-/// `__nounroll_config` marker functions.
+/// Returns true for the hidden `__unroll_config::<FACTOR>`,
+/// `__unroll_max_ops_config::<FACTOR, MAX_OPS>` and `__nounroll_config`
+/// marker functions.
 ///
 /// `#[unroll]` / `#[unroll(N)]` / `#[nounroll]` on a loop makes the `#[kernel]`
 /// or `#[device]` macro plant a call to one of these markers at the top of the
@@ -837,7 +838,10 @@ fn is_unroll_marker_path(fn_path: &str) -> bool {
     };
     let name = path.strip_prefix("thread::").unwrap_or(path);
     let name = name.split_once("::<").map_or(name, |(name, _)| name);
-    matches!(name, "__unroll_config" | "__nounroll_config")
+    matches!(
+        name,
+        "__unroll_config" | "__unroll_max_ops_config" | "__nounroll_config"
+    )
 }
 
 /// Returns true for zero-cost compile-time configuration markers planted by
@@ -3269,6 +3273,7 @@ mod tests {
         for path in [
             "cuda_device::__unroll_config::<4>",
             "cuda_device::thread::__unroll_config::<0>",
+            "cuda_device::thread::__unroll_max_ops_config::<0, 200000>",
             "cuda_device::__nounroll_config",
             "cuda_device::thread::__nounroll_config",
         ] {

@@ -25,7 +25,9 @@ ptx = re.sub(r"/\*.*?\*/|//[^\n]*", "", ptx, flags=re.S)
 # carries a `_TID_<hash>` suffix.
 names = ("nested_lane_range", "isize_range_for", "const_generic_bound")
 local_memory = re.compile(r"(?m)(?:^|\s)\.local\b|ld\.local|st\.local")
-for name in names:
+
+
+def entry_body(name):
     header = re.search(r"\.entry\s+" + re.escape(name) + r"(?:_TID_\w+)?\s*\(", ptx)
     if header is None:
         sys.exit(f"error: missing PTX entry {name} in {ptx_path}")
@@ -39,9 +41,21 @@ for name in names:
         end += 1
     if depth:
         sys.exit(f"error: unterminated PTX entry {name}")
-    body = ptx[brace + 1 : end - 1]
-    if local_memory.search(body):
+    return ptx[brace + 1 : end - 1]
+
+
+for name in names:
+    if local_memory.search(entry_body(name)):
         sys.exit(f"error: {name} uses local memory in {ptx_path}")
     print(f"{name}: no local memory PASS")
+
+# A partial `#[unroll(N)]` marks both its main and its remainder loop
+# `nounroll`. `max_ops = 8` is too small for four copies, so the unroller
+# must not split `partial_low_budget`; LLVM may still split it once on its
+# own and mark only its remainder loop
+pragmas = entry_body("partial_low_budget").count('.pragma "nounroll";')
+if pragmas >= 2:
+    sys.exit(f"error: partial_low_budget has {pragmas} nounroll loops; max_ops = 8 was ignored")
+print("partial_low_budget: budget respected PASS")
 print("unroll_smoke PTX shape: PASS")
 PY

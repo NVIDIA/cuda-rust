@@ -1386,8 +1386,10 @@ pub fn __unchecked_indexing_config<const ENABLED: bool>() {
 /// are not unrolled.
 ///
 /// One annotation may create at most 1,024 body copies, 8,192 cloned basic
-/// blocks, and 65,536 cloned operations. A partial factor above 1,024 is
-/// rejected; other unsupported loop shapes warn and are not unrolled.
+/// blocks, and 65,536 cloned operations. `#[unroll(max_ops = M)]` sets the
+/// operation budget for one loop; see [`__unroll_max_ops_config`]. A partial
+/// factor above 1,024 is rejected; other unsupported loop shapes warn and are
+/// not unrolled.
 ///
 /// # Parameters
 ///
@@ -1402,6 +1404,50 @@ pub fn __unroll_config<const FACTOR: u32>() {
     // This function is detected at compile time and removed.
     // The const generic FACTOR is extracted to set the loop-unroll request.
     // No runtime code is generated.
+}
+
+/// Compile-time loop-unroll request with a raised operation budget (internal,
+/// do not call directly).
+///
+/// The `#[kernel]` and `#[device]` macros insert this marker instead of
+/// [`__unroll_config`] when the annotation sets `max_ops`:
+///
+/// ```rust,ignore
+/// #[unroll(max_ops = 200_000)]
+/// while t < 32 {
+///     // a body that already holds several fully unrolled inner loops
+///     t += 1;
+/// }
+///
+/// #[unroll(4, max_ops = 100_000)]
+/// while i < n {
+///     i += 1;
+/// }
+/// ```
+///
+/// One unroll normally clones at most 65,536 operations, counted after inner
+/// annotated loops have been expanded, so an outer loop over a large unrolled
+/// body can exceed it. When it does, the loop stays rolled, and any local
+/// array it indexes by its counter usually moves to `.local` memory.
+/// `MAX_OPS` replaces that operation budget for this loop only. The limits of
+/// 1,024 body copies and 8,192 cloned basic blocks still apply.
+///
+/// # Parameters
+///
+/// - `FACTOR` is the same as for [`__unroll_config`].
+/// - `MAX_OPS >= 1` is the most operations this unroll may clone.
+#[inline(never)]
+pub fn __unroll_max_ops_config<const FACTOR: u32, const MAX_OPS: u32>() {
+    const {
+        assert!(
+            FACTOR != UNROLL_NEVER,
+            "#[unroll(never)] does not take max_ops"
+        );
+        validate_unroll_factor(FACTOR);
+        assert!(MAX_OPS > 0, "max_ops must be greater than zero");
+    }
+    // Detected and removed at compile time like `__unroll_config`; the const
+    // generics carry the request and no runtime code is generated
 }
 
 /// Internal sentinel factor for `#[unroll(never)]`.

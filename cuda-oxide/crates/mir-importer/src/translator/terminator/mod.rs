@@ -1118,15 +1118,33 @@ fn translate_call(
     // Match both the full path (`cuda_device::thread::__unroll_config`) and the
     // re-exported short path (`cuda_device::__unroll_config`), mirroring the
     // robust suffix match in `body::detect_unroll_config`.
-    if is_cuda_device_const_marker(func, "__unroll_config") {
-        let Some(factor) = extract_unroll_factor(func) else {
+    // `#[unroll(.., max_ops = M)]` uses `__unroll_max_ops_config::<FACTOR, M>()`
+    // so the budget travels with the factor in one marker.
+    let with_max_ops = is_cuda_device_const_marker(func, "__unroll_max_ops_config");
+    if with_max_ops || is_cuda_device_const_marker(func, "__unroll_config") {
+        let (marker, arity) = if with_max_ops {
+            ("__unroll_max_ops_config", 2)
+        } else {
+            ("__unroll_config", 1)
+        };
+        let Some(args) = extract_unroll_args(func, marker, arity) else {
             return input_err!(
                 loc,
                 TranslationErr::invalid_op(
-                    "could not read the const-generic factor from an unroll marker",
+                    "could not read the const-generic arguments from an unroll marker",
                 )
             );
         };
+        let factor = args[0];
+        let max_ops = args.get(1).copied();
+        if max_ops == Some(0) || (max_ops.is_some() && factor == u32::MAX - 1) {
+            return input_err!(
+                loc,
+                TranslationErr::invalid_op(
+                    "max_ops must be greater than zero and needs an unroll request",
+                )
+            );
+        }
         if factor == 1 || (factor > 1024 && factor != u32::MAX - 1) {
             return input_err!(
                 loc,
@@ -1141,10 +1159,10 @@ fn translate_call(
                 TranslationErr::invalid_op("an unroll marker call has no return target")
             );
         };
-        let hint = if factor == u32::MAX - 1 {
-            MirNoUnrollHintOp::new(ctx).get_operation()
-        } else {
-            MirUnrollHintOp::new(ctx, factor).get_operation()
+        let hint = match max_ops {
+            _ if factor == u32::MAX - 1 => MirNoUnrollHintOp::new(ctx).get_operation(),
+            Some(max_ops) => MirUnrollHintOp::with_max_ops(ctx, factor, max_ops).get_operation(),
+            None => MirUnrollHintOp::new(ctx, factor).get_operation(),
         };
         hint.deref_mut(ctx).set_loc(loc);
         match prev_op {
@@ -2322,12 +2340,13 @@ fn extract_closure_body_target(
     })
 }
 
-/// Read the const-generic `FACTOR` from a `__unroll_config::<FACTOR>()` callee
-/// (`0` = full unroll).
+/// Read the const-generic arguments of an unroll marker callee:
+/// `[FACTOR]` from `__unroll_config::<FACTOR>()` (`0` = full unroll), or
+/// `[FACTOR, MAX_OPS]` from `__unroll_max_ops_config::<FACTOR, MAX_OPS>()`.
 ///
 /// Returns `None` when the callee is malformed instead of silently turning the
 /// request into a full unroll.
-fn extract_unroll_factor(func: &mir::Operand) -> Option<u32> {
+fn extract_unroll_args(func: &mir::Operand, marker: &str, arity: usize) -> Option<Vec<u32>> {
     use rustc_public::ty::{RigidTy, TyConstKind, TyKind};
     let mir::Operand::Constant(constant) = func else {
         return None;
@@ -2337,25 +2356,28 @@ fn extract_unroll_factor(func: &mir::Operand) -> Option<u32> {
     };
     let definition_name = definition.name();
     if definition.krate().name.as_str() != "cuda_device"
-        || (definition_name != "__unroll_config" && !definition_name.ends_with("::__unroll_config"))
-        || args.0.len() != 1
+        || (definition_name != marker && !definition_name.ends_with(&format!("::{marker}")))
+        || args.0.len() != arity
     {
         return None;
     }
-    if let Some(arg) = args.0.first()
-        && let rustc_public::ty::GenericArgKind::Const(c) = arg
-    {
-        return match c.kind() {
-            TyConstKind::Value(_, alloc) => {
-                alloc.read_uint().ok().and_then(|v| u32::try_from(v).ok())
+    args.0
+        .iter()
+        .map(|arg| {
+            let rustc_public::ty::GenericArgKind::Const(c) = arg else {
+                return None;
+            };
+            match c.kind() {
+                TyConstKind::Value(_, alloc) => {
+                    alloc.read_uint().ok().and_then(|v| u32::try_from(v).ok())
+                }
+                _ => c
+                    .eval_target_usize()
+                    .ok()
+                    .and_then(|v| u32::try_from(v).ok()),
             }
-            _ => c
-                .eval_target_usize()
-                .ok()
-                .and_then(|v| u32::try_from(v).ok()),
-        };
-    }
-    None
+        })
+        .collect()
 }
 
 /// Match a compiler marker by its resolved definition, not by a debug string.

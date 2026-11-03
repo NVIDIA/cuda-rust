@@ -154,6 +154,16 @@ pub struct VariantIndexAttr(pub u32);
 #[derive(PartialEq, Eq, Clone, Debug, Hash)]
 pub struct UnrollAttr(pub u32);
 
+/// The cloned-operation budget carried by a
+/// [`MirUnrollHintOp`](crate::ops::MirUnrollHintOp) written as
+/// `#[unroll(max_ops = M)]` or `#[unroll(N, max_ops = M)]`.
+///
+/// The loop-unroll pass uses `M` instead of its default operation budget for
+/// that one loop. A hint without this attribute uses the default.
+#[pliron_attr(name = "mir.unroll_max_ops", format = "$0", verifier = "succ")]
+#[derive(PartialEq, Eq, Clone, Debug, Hash)]
+pub struct UnrollMaxOpsAttr(pub u32);
+
 /// Marks an aggregate that exists only to adapt one compiler-owned
 /// multi-result operation to a Rust aggregate return ABI.
 ///
@@ -236,6 +246,7 @@ pub fn register(ctx: &mut Context) {
     FieldIndexAttr::register(ctx);
     VariantIndexAttr::register(ctx);
     UnrollAttr::register(ctx);
+    UnrollMaxOpsAttr::register(ctx);
     CompilerResultBundleAttr::register(ctx);
     MirFP16Attr::register(ctx);
 }

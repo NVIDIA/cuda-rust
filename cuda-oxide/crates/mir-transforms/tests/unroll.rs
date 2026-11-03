@@ -602,6 +602,69 @@ fn huge_partial_unroll_factor_is_skipped_before_cloning() {
     assert_eq!(hint_count(&ctx, lp.region), 0, "the request was consumed");
 }
 
+/// Add `extra` constants to `lp`'s latch before its branch, so one body copy
+/// clones that many more operations
+fn pad_latch(ctx: &mut Context, lp: &common::CountedLoop, extra: i64) {
+    let goto = lp
+        .latch
+        .deref(ctx)
+        .get_terminator(ctx)
+        .expect("latch ends in a goto");
+    let u32 = u32t(ctx);
+    for value in 0..extra {
+        let constant = common::iconst(ctx, lp.latch, u32, value)
+            .defining_op()
+            .expect("a constant has a defining op");
+        constant.unlink(ctx);
+        constant.insert_before(ctx, goto);
+    }
+}
+
+/// Run the pass on a padded 1,024-trip loop under one hint, and return how many
+/// loops are left
+fn unroll_padded_loop(factor: u32, max_ops: Option<u32>) -> usize {
+    let mut ctx = mir_ctx();
+    let lp = counted_loop(&mut ctx, 1_024);
+    // 1,024 copies of a body of 64 constants plus the loop's own operations
+    // exceed the default budget of 65,536 cloned operations
+    pad_latch(&mut ctx, &lp, 64);
+    let hint = match max_ops {
+        Some(max_ops) => MirUnrollHintOp::with_max_ops(&mut ctx, factor, max_ops),
+        None => MirUnrollHintOp::new(&mut ctx, factor),
+    };
+    hint.get_operation().insert_at_front(lp.latch, &ctx);
+
+    let mut analyses = AnalysisManager::default();
+    unroll_annotated_loops(lp.module, &mut ctx, &mut analyses).expect("unroll pass succeeds");
+    pliron::operation::verify_operation(lp.module, &ctx).expect("result stays valid");
+    assert_eq!(hint_count(&ctx, lp.region), 0, "the request was consumed");
+    loop_count(&ctx, lp.region)
+}
+
+#[test]
+fn max_ops_replaces_the_clone_budget_for_its_loop() {
+    assert_eq!(
+        unroll_padded_loop(0, None),
+        1,
+        "over the default budget, full unroll is skipped"
+    );
+    assert_eq!(
+        unroll_padded_loop(0, Some(1 << 20)),
+        0,
+        "a raised budget lets the same loop unroll fully"
+    );
+    assert_eq!(
+        unroll_padded_loop(4, None),
+        2,
+        "partial unroll by 4 fits the default budget"
+    );
+    assert_eq!(
+        unroll_padded_loop(4, Some(64)),
+        1,
+        "a lower max_ops also applies to partial unroll"
+    );
+}
+
 fn op_count<T: Op>(ctx: &Context, region: Ptr<Region>) -> usize {
     operations(ctx, region)
         .into_iter()

@@ -32,7 +32,7 @@ use pliron::{
 use pliron_derive::pliron_op;
 
 use super::function::MirFuncOp;
-use crate::attributes::UnrollAttr;
+use crate::attributes::{UnrollAttr, UnrollMaxOpsAttr};
 
 // ============================================================================
 // MirReturnOp
@@ -483,8 +483,10 @@ impl Verify for MirUnreachableOp {
 /// the op physically sits inside the loop, the unroll pass can map it back to the
 /// exact loop it belongs to (no fragile source-location matching). The pass reads
 /// the factor, unrolls that loop, and deletes the hint, so it never reaches
-/// lowering. It has no operands or results: it carries only the `factor`
-/// attribute (`0` = full unroll, `n >= 2` = unroll by `n`).
+/// lowering. It has no operands or results: it carries the `factor` attribute
+/// (`0` = full unroll, `n >= 2` = unroll by `n`) and, when the annotation sets
+/// `max_ops`, a `max_ops` attribute that replaces the pass's default budget of
+/// cloned operations for this loop.
 #[pliron_op(
     name = "mir.unroll_hint",
     format,
@@ -492,7 +494,7 @@ impl Verify for MirUnreachableOp {
         pliron::builtin::op_interfaces::NOpdsInterface<0>,
         pliron::builtin::op_interfaces::NResultsInterface<0>,
     ],
-    attributes = (factor: UnrollAttr)
+    attributes = (factor: UnrollAttr, max_ops: UnrollMaxOpsAttr)
 )]
 pub struct MirUnrollHintOp;
 
@@ -505,9 +507,22 @@ impl MirUnrollHintOp {
         hint
     }
 
+    /// Create a hint requesting unroll `factor` that may clone up to `max_ops`
+    /// operations.
+    pub fn with_max_ops(ctx: &mut Context, factor: u32, max_ops: u32) -> Self {
+        let hint = Self::new(ctx, factor);
+        hint.set_attr_max_ops(ctx, UnrollMaxOpsAttr(max_ops));
+        hint
+    }
+
     /// The requested unroll factor (`0` = full unroll).
     pub fn factor(&self, ctx: &Context) -> u32 {
         self.get_attr_factor(ctx).map(|a| a.0).unwrap_or(0)
+    }
+
+    /// The operation budget set with `max_ops`, or `None` for the default.
+    pub fn max_ops(&self, ctx: &Context) -> Option<u32> {
+        self.get_attr_max_ops(ctx).map(|a| a.0)
     }
 }
 

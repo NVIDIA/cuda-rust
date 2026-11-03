@@ -5,8 +5,8 @@ pure-Rust textual LLVM IR (`.ll`) exporter, targeting the NVPTX backend.
 
 The LLVM dialect *modeling* (ops like `llvm.add`, types like `llvm.ptr`,
 attributes, and op-interfaces) lives upstream in the `pliron-llvm` crate.
-cuda-oxide consumes it as a git dependency and no longer models the LLVM
-dialect locally. This crate re-exports `pliron-llvm` so existing
+cuda-oxide consumes it as a published crates.io release and no longer models
+the LLVM dialect locally. This crate re-exports `pliron-llvm` so existing
 `llvm_export::{ops,types,attributes,op_interfaces}` paths keep resolving, adds
 a few GPU-specific extensions pliron-llvm lacks, and keeps the textual `.ll`
 exporter local (pliron-llvm only emits real `.ll` via an `llvm-sys` bridge,

@@ -54,8 +54,8 @@ cd "$(dirname "$0")/.."
 
 BOOK=cuda-oxide-book
 DEVICE=crates/cuda-device/src
-# Host crates live in the nested cutile-rs import; SIMT crates live here.
-CRATE_ROOTS=(../cutile-rs/cuda-core ../cutile-rs/cuda-bindings ../cutile-rs/cuda-async crates)
+# Host crates live at the git root; SIMT crates live here.
+CRATE_ROOTS=(../cuda-core ../cuda-bindings ../cuda-async crates)
 
 if ! command -v python3 >/dev/null 2>&1; then
     echo "error: python3 is required to verify the docs' API names" >&2

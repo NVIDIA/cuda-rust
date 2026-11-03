@@ -18,11 +18,11 @@ The schedule campaign is implemented in Rust and runs the existing examples.
 It builds one example, discovers its generated PTX and host executable,
 inserts deterministic `nanosleep.u32` delays at structural synchronization
 sites, patches a copy of the executable's embedded artifact, and runs each
-variant behind a watchdog:
+variant behind a watchdog. From the repository root:
 
 ```bash
-nix develop --command cargo oxide fuzz-schedule mcast_barrier_test \
-  --seeds 0..100 --confirm-runs 3
+(cd cuda-oxide && nix develop --command cargo oxide fuzz-schedule mcast_barrier_test \
+  --seeds 0..100 --confirm-runs 3)
 ```
 
 `0..100` is half-open, so this runs seeds 0 through 99. Useful controls are

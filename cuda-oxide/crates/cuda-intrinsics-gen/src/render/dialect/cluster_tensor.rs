@@ -28,7 +28,6 @@ use pliron::{
     builtin::op_interfaces::{NOpdsInterface, NResultsInterface},
     common_traits::Verify,
     context::{Context, Ptr},
-    location::Located,
     op::Op,
     operation::Operation,
     result::Error,
@@ -124,7 +123,6 @@ use pliron::{
     },
     common_traits::Verify,
     context::{Context, Ptr},
-    location::Located,
     op::Op,
     operation::Operation,
     result::Error,
@@ -300,7 +298,6 @@ use pliron::{
     builtin::{op_interfaces::{NOpdsInterface, NResultsInterface}, types::IntegerType},
     common_traits::Verify,
     context::{Context, Ptr},
-    location::Located,
     op::Op,
     operation::Operation,
     result::Error,
@@ -407,7 +404,6 @@ pub(in crate::render) fn render_dialect_debug_control(catalog: &CatalogFile, has
              common_traits::Verify,\n\
              context::{Context, Ptr},\n\
              identifier::Identifier,\n\
-             location::Located,\n\
              op::Op,\n\
              operation::Operation,\n\
              result::Error,\n\
@@ -501,7 +497,7 @@ pub(in crate::render) fn render_dialect_clc(catalog: &CatalogFile, hash: &str) -
     assert_eq!(clc_intrinsics(catalog).count(), 6);
     let mut output = rust_header(catalog, hash);
     output.push_str(
-        "//! Generated Cluster Launch Control operations.\n\nuse pliron::{\n    builtin::{\n        op_interfaces::{NOpdsInterface, NResultsInterface},\n        types::IntegerType,\n    },\n    common_traits::Verify,\n    context::{Context, Ptr},\n    location::Located,\n    op::Op,\n    operation::Operation,\n    result::Error,\n    r#type::{TypeHandle, Typed},\n    verify_err,\n};\nuse pliron_derive::pliron_op;\n\n",
+        "//! Generated Cluster Launch Control operations.\n\nuse pliron::{\n    builtin::{\n        op_interfaces::{NOpdsInterface, NResultsInterface},\n        types::IntegerType,\n    },\n    common_traits::Verify,\n    context::{Context, Ptr},\n    op::Op,\n    operation::Operation,\n    result::Error,\n    r#type::{TypeHandle, Typed},\n    verify_err,\n};\nuse pliron_derive::pliron_op;\n\n",
     );
     for record in clc_intrinsics(catalog) {
         let result_count = record.dialect.results.len();
@@ -547,7 +543,7 @@ pub(in crate::render) fn render_dialect_execution_control(
     assert_eq!(execution_controls(catalog).count(), 8);
     let mut output = rust_header(catalog, hash);
     output.push_str(
-        "//! Generated counted-barrier, grid-dependency, and register-control operations.\n\nuse pliron::{\n    builtin::{attributes::IntegerAttr, op_interfaces::{NOpdsInterface, NResultsInterface}, types::{IntegerType, Signedness}},\n    common_traits::Verify,\n    context::{Context, Ptr},\n    identifier::Identifier,\n    location::Located,\n    op::Op,\n    operation::Operation,\n    result::Error,\n    verify_err,\n};\nuse pliron::utils::apint::APInt;\nuse pliron_derive::pliron_op;\nuse std::num::NonZeroUsize;\n\n",
+        "//! Generated counted-barrier, grid-dependency, and register-control operations.\n\nuse pliron::{\n    builtin::{attributes::IntegerAttr, op_interfaces::{NOpdsInterface, NResultsInterface}, types::{IntegerType, Signedness}},\n    common_traits::Verify,\n    context::{Context, Ptr},\n    identifier::Identifier,\n    op::Op,\n    operation::Operation,\n    result::Error,\n    verify_err,\n};\nuse pliron::utils::apint::APInt;\nuse pliron_derive::pliron_op;\nuse std::num::NonZeroUsize;\n\n",
     );
     for record in execution_controls(catalog).filter(|record| record.family != "register_control") {
         let operand_count = record.dialect.operands.len();
@@ -615,7 +611,7 @@ pub(in crate::render) fn render_dialect_tma(catalog: &CatalogFile, hash: &str) -
 }
 
 pub(in crate::render) fn render_dialect_tcgen05(catalog: &CatalogFile, hash: &str) -> String {
-    assert_eq!(tcgen05_intrinsics(catalog).count(), 233);
+    assert!(matches!(tcgen05_intrinsics(catalog).count(), 233 | 249));
     let mut output = rust_header(catalog, hash);
     output.push_str(
         r#"//! Generated Tensor Core Generation 5 operations.
@@ -630,7 +626,6 @@ use pliron::{
     },
     common_traits::Verify,
     context::{Context, Ptr},
-    location::Located,
     op::Op,
     operation::Operation,
     result::Error,
@@ -756,11 +751,24 @@ pub enum Tcgen05MmaFormAttr {
     Shared, Tensor, TensorAshift, SpShared, SpTensor, SpTensorAshift,
     WsShared, WsSharedZeroColMask, WsSpShared, WsSpSharedZeroColMask,
     WsSpTensor, WsSpTensorZeroColMask, WsTensor, WsTensorZeroColMask,
+    SharedMxf4BlockScale, SharedMxf4BlockScaleBlock32,
+    SharedMxf4nvf4BlockScaleBlock16, SharedMxf4nvf4BlockScaleBlock32,
+    SharedMxf8f6f4BlockScale, SharedMxf8f6f4BlockScaleBlock32,
+    TensorMxf4BlockScale, TensorMxf4BlockScaleBlock32,
+    TensorMxf4nvf4BlockScaleBlock16, TensorMxf4nvf4BlockScaleBlock32,
+    TensorMxf8f6f4BlockScale, TensorMxf8f6f4BlockScaleBlock32,
+    SpSharedMxf8f6f4BlockScale, SpSharedMxf8f6f4BlockScaleBlock32,
+    SpTensorMxf8f6f4BlockScale, SpTensorMxf8f6f4BlockScaleBlock32,
 }
 
 #[pliron_attr(name = "nvvm.tcgen05_mma_kind", format, verifier = "succ")]
 #[derive(PartialEq, Eq, Clone, Debug, Hash)]
-pub enum Tcgen05MmaKindAttr { F16, Tf32, F8f6f4, I8 }
+pub enum Tcgen05MmaKindAttr {
+    F16, Tf32, F8f6f4, I8,
+    Mxf4BlockScale, Mxf4BlockScaleBlock32,
+    Mxf4nvf4BlockScaleBlock16, Mxf4nvf4BlockScaleBlock32,
+    Mxf8f6f4BlockScale, Mxf8f6f4BlockScaleBlock32,
+}
 
 #[pliron_attr(name = "nvvm.tcgen05_mma_cta_group", format, verifier = "succ")]
 #[derive(PartialEq, Eq, Clone, Debug, Hash)]
@@ -824,6 +832,26 @@ impl Verify for Tcgen05MmaOp {
                 (&[(I32, 2), (I64, 1), (I32, 1), (I1, 1), (I32, 1), (I64, 1)], false),
             Tcgen05MmaFormAttr::WsTensorZeroColMask =>
                 (&[(I32, 2), (I64, 1), (I32, 1), (I1, 1), (I64, 1)], false),
+            Tcgen05MmaFormAttr::SharedMxf4BlockScale
+            | Tcgen05MmaFormAttr::SharedMxf4BlockScaleBlock32
+            | Tcgen05MmaFormAttr::SharedMxf4nvf4BlockScaleBlock16
+            | Tcgen05MmaFormAttr::SharedMxf4nvf4BlockScaleBlock32
+            | Tcgen05MmaFormAttr::SharedMxf8f6f4BlockScale
+            | Tcgen05MmaFormAttr::SharedMxf8f6f4BlockScaleBlock32 =>
+                (&[(I32, 1), (I64, 2), (I32, 1), (I1, 1), (I32, 2)], true),
+            Tcgen05MmaFormAttr::TensorMxf4BlockScale
+            | Tcgen05MmaFormAttr::TensorMxf4BlockScaleBlock32
+            | Tcgen05MmaFormAttr::TensorMxf4nvf4BlockScaleBlock16
+            | Tcgen05MmaFormAttr::TensorMxf4nvf4BlockScaleBlock32
+            | Tcgen05MmaFormAttr::TensorMxf8f6f4BlockScale
+            | Tcgen05MmaFormAttr::TensorMxf8f6f4BlockScaleBlock32 =>
+                (&[(I32, 2), (I64, 1), (I32, 1), (I1, 1), (I32, 2)], true),
+            Tcgen05MmaFormAttr::SpSharedMxf8f6f4BlockScale
+            | Tcgen05MmaFormAttr::SpSharedMxf8f6f4BlockScaleBlock32 =>
+                (&[(I32, 1), (I64, 2), (I32, 1), (I1, 1), (I32, 3)], true),
+            Tcgen05MmaFormAttr::SpTensorMxf8f6f4BlockScale
+            | Tcgen05MmaFormAttr::SpTensorMxf8f6f4BlockScaleBlock32 =>
+                (&[(I32, 2), (I64, 1), (I32, 1), (I1, 1), (I32, 3)], true),
         };
         verify_tcgen05_signature(ctx, op, "nvvm.tcgen05_mma", operands, &[], None)?;
 

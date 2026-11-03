@@ -1,15 +1,16 @@
 ---
 name: cargo-deny
 
-# Runs as a job of the top-level CI workflow (.github/workflows/ci.yml) on
-# push/pull_request, plus a standalone weekly security scan via schedule.
+# Runs as a job of the top-level CI workflow (.github/workflows/ci.yml),
+# plus a standalone weekly security scan via schedule.
 # Concurrency for the CI path is governed by CI's own group.
 #
 # Four parts of the same concern. `check` enforces the license *policy* over
 # the whole resolved graph from deny.toml, once per `[workspace]` root that
 # resolves third-party crates and is neither an example nor under cutile-rs:
-# the root workspace, cuda-oxide/crates/rustc-codegen-cuda, and the cuda-macros
-# device-only fixture. Each declares its own `[workspace]`, so each is a
+# the stable host workspace, the SIMT workspace,
+# cuda-oxide/crates/rustc-codegen-cuda, and the cuda-macros device-only
+# fixture. Each declares its own `[workspace]`, so each is a
 # separate resolution the others cannot reach. `license-manifest` enforces that
 # the human-readable inventory in dependency-licenses.csv still lists what the
 # workspace declares, which nothing checked before: CONTRIBUTING asks
@@ -29,13 +30,23 @@ on:
 permissions:
   contents: read
 
+# A container job's default shell is dash; use bash, as on ubuntu-latest.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
+    container:
+      image: rust:1.98.0-bookworm
     timeout-minutes: 10
     steps:
       - name: Clone repository
         uses: actions/checkout@v4
+
+      - name: Mark the workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked
@@ -44,10 +55,17 @@ jobs:
       # re-resolved on the way past. Without it this step rewrites the very
       # Cargo.lock it is judging -- verified: deleting a package block from the
       # lock still exits 0 here and leaves the file rewritten, while --locked
-      # stops with "cannot update the lock file". The other two runs below and
+      # stops with "cannot update the lock file". The other runs below and
       # in cuda-oxide/scripts/ already pass it.
-      # Find deny.toml through a SIMT member; --workspace checks all root members.
-      - name: Run cargo-deny
+      # Host-crate dev-dependencies are a separate resolution (cuda-async's loom
+      # is not in the SIMT graph). The git-root deny.toml is a copy of
+      # cuda-oxide/deny.toml, so this walks up to that policy and does not pass
+      # --config.
+      - name: Run cargo-deny over the stable host workspace
+        run: cargo deny --manifest-path Cargo.toml --workspace --locked check
+
+      # Find deny.toml through a SIMT member; --workspace checks all SIMT members.
+      - name: Run cargo-deny over the CUDA Oxide workspace
         run: cargo deny --manifest-path cuda-oxide/crates/cargo-oxide/Cargo.toml --workspace --locked check
 
       # cuda-oxide/crates/rustc-codegen-cuda carries its own `[workspace]` for the
@@ -59,11 +77,11 @@ jobs:
       - name: Run cargo-deny over the codegen backend workspace
         run: cargo deny --manifest-path cuda-oxide/crates/rustc-codegen-cuda/Cargo.toml --locked check
 
-      # The last `[workspace]` root this job runs.
+      # The last independent `[workspace]` root this job runs.
       # `cuda-oxide/crates/cuda-macros/tests/device-only`
       # declares its own `[workspace]` so that its graph provably excludes
       # cuda-host, which is the whole point of the fixture -- and that same
-      # boundary puts it outside the root run above, outside the backend run,
+      # boundary puts it outside the SIMT run above, outside the backend run,
       # and outside the example-policy script (which walks
       # cuda-oxide/crates/rustc-codegen-cuda/examples only). Its lock resolves
       # proc-macro2, quote and syn at versions that appear nowhere in the root
@@ -86,11 +104,16 @@ jobs:
 
   license-manifest:
     name: dependency-licenses.csv covers every declared crate
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
+    container:
+      image: rust:1.98.0-bookworm
     timeout-minutes: 10
     steps:
       - name: Clone repository
         uses: actions/checkout@v4
+
+      - name: Mark the workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       # Only reads manifests: `cargo metadata` resolves the graph without
       # running build scripts, so this needs no CUDA toolkit and no LLVM.
@@ -99,11 +122,16 @@ jobs:
 
   example-policy:
     name: deny.toml governs the example workspaces
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
+    container:
+      image: rust:1.98.0-bookworm
     timeout-minutes: 15
     steps:
       - name: Clone repository
         uses: actions/checkout@v4
+
+      - name: Mark the workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked
@@ -117,11 +145,16 @@ jobs:
 
   source-headers:
     name: every source file carries the SPDX header
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
+    container:
+      image: rust:1.98.0-bookworm
     timeout-minutes: 5
     steps:
       - name: Clone repository
         uses: actions/checkout@v4
+
+      - name: Mark the workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       # Pure text check over tracked files: no toolchain, no network. The OSRB
       # review fixed 32 missing headers in #812 and the next two scripts to

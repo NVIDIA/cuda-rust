@@ -18,5 +18,5 @@ heuristic-inline = ["shared-memory-helper-lib/heuristic-inline"]
 [dependencies]
 cuda-device = { path = "../../../cuda-device" }
 cuda-host = { path = "../../../cuda-host" }
-cuda-core = "0.3.1"
+cuda-core = { path = "../../../../../cuda-core" }
 shared-memory-helper-lib = { path = "helper-lib" }

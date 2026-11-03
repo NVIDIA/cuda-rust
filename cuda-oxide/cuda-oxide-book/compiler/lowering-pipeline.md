@@ -229,6 +229,21 @@ It is not elegant, but it is exactly how C compilers have handled tagged unions
 for decades. LLVM's optimizer is quite good at cleaning up the redundant
 insertvalue/extractvalue chains.
 
+An enum whose tag and payload bytes under-align its storage, a `repr(align(N))`
+enum for example, also gets a zero-length integer array at slot 0 as an alignment
+anchor. The anchor adds no bytes and is capped at 16 bytes; the Rust alignment
+itself is stamped on every alloca, load and store of the enum.
+
+```{figure} images/enum-alignment-anchor.svg
+:align: center
+:width: 100%
+
+The enum alignment anchor. A zero-length integer array at slot 0 raises the storage type's natural
+alignment without adding bytes. Its width used to be `align * 8` with no bound, which LLVM rejects
+from align 2^21 up and which wraps to `i0` at 2^29. It is now capped at `[0 x i128]`, as union
+storage has been since #610, while the Rust alignment rides on every memory operation.
+```
+
 ---
 
 ## GPU Intrinsic Conversion
@@ -572,7 +587,7 @@ that cuda-oxide emits.
 | 5th      | `llc-21` on `PATH`                                        | Distro / `apt.llvm.org` install of LLVM 21.                           |
 | 6th      | `llc` on `PATH`                                           | Reporting fallback only; rejected at runtime if older than LLVM 21.   |
 
-The pinned Rust toolchain (`nightly-2026-08-28`) ships LLVM 23 with NVPTX
+The pinned Rust toolchain (`1.99.1`) ships LLVM 23 with NVPTX
 enabled, so `rustup component add llvm-tools` is the recommended onboarding
 path. The PATH probes for `llc-23` / `llc-22` / `llc-21` are kept as a fallback for
 users with an existing LLVM install. If none of the probes succeed the

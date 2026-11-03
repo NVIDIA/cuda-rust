@@ -1,0 +1,5 @@
+error: #[tile_export]: sync = warp with footprint 4 needs a shape that is a multiple of 128 (32 lanes times the footprint), found 64
+ --> tests/compile_fail/tile_export_warp_footprint.rs:6:28
+  |
+6 | #[tile_export(tile_shape = 64, sync = "warp")]
+  |                            ^^

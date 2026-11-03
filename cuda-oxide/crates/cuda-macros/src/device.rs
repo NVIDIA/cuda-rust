@@ -163,7 +163,9 @@ fn generate_device_function(mut input: ItemFn) -> TokenStream {
         //
         // - #[inline(never)] on the prefixed function — ensures each monomorphization
         //   appears as a distinct CGU item so the collector can find it. If it were
-        //   inlined, the function would disappear from the CGU.
+        //   inlined, the function would disappear from the CGU. It is a host-side
+        //   boundary only: the backend does not turn it into device `noinline`
+        //   (`device_codegen::is_generic_device_collector_boundary`).
         //
         // - The wrapper forwards type parameters via turbofish:
         //   `cuda_oxide_device_<hash>_add::<T>(a, b)`.

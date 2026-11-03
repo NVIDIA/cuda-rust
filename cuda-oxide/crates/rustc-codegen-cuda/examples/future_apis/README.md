@@ -16,6 +16,7 @@ Tests new type-safe abstractions: `CuSimd<T, N>` for SIMD values and `ManagedBar
 1. **test_managed_barrier**: Single barrier typestate flow
 2. **test_multi_barrier**: Multiple barriers (TMA + General)
 3. **test_double_buffered_barriers**: Ping-pong pattern with two barriers
+4. **test_managed_barrier_2d**: One barrier in a (32, 4, 1) block; every thread calls `init_by` and `inval_by`, and linear thread 127, that is thread (31, 3, 0), runs the instructions
 
 ## Key Concepts Demonstrated
 
@@ -152,6 +153,10 @@ cargo oxide run future_apis
 --- Test 5: Double-buffered barriers (ping-pong) ---
   All 32 threads completed 3 iterations
 ✓ Double-buffered PASSED
+
+--- Test 6: ManagedBarrier in a (32, 4, 1) block ---
+  All 128 threads wrote 42 in a (32, 4, 1) block
+✓ ManagedBarrier 2D PASSED
 
 === ALL FUTURE APIS TESTS COMPLETED ===
 ```

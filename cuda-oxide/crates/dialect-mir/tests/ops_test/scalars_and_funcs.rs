@@ -4,7 +4,7 @@
  */
 
 use dialect_mir::{
-    attributes::{MirCastKindAttr, ReferenceParamValidityAttr},
+    attributes::{InlineIntentAttr, MirCastKindAttr, ReferenceParamValidityAttr},
     ops::{
         MirAddOp, MirAssignOp, MirCallOp, MirCastOp, MirCheckedAddOp, MirCmpOp, MirConstantOp,
         MirDivOp, MirEqOp, MirFuncOp, MirGeOp, MirGtOp, MirLeOp, MirLtOp, MirMulOp, MirNeOp,
@@ -385,6 +385,102 @@ fn test_mir_func_verify() {
     );
 }
 
+/// Function attributes must remain parseable without leaking their indentation
+/// into the function body or later operations.
+#[test]
+fn function_attributes_print_and_parse_with_scoped_indentation() {
+    use pliron::{
+        builtin::op_interfaces::SymbolOpInterface,
+        linked_list::ContainsLinkedList,
+        parsable::parse_from_str,
+        printable::{Printable, State},
+    };
+
+    let mut ctx = Context::new();
+    dialect_mir::register(&mut ctx);
+    let ty = FunctionType::get(&ctx, vec![], vec![]);
+    let op = Operation::new(
+        &mut ctx,
+        MirFuncOp::get_concrete_op_info(),
+        vec![],
+        vec![],
+        vec![],
+        1,
+    );
+    let function = MirFuncOp::new(&mut ctx, op, TypeAttr::new(ty.into()));
+    function.set_symbol_name(&mut ctx, "roundtrip".try_into().unwrap());
+    op.deref_mut(&ctx).attributes.set(
+        "note".try_into().unwrap(),
+        StringAttr::new("quoted \"text\"\nnext line\\tail".into()),
+    );
+    let entry = BasicBlock::new(&mut ctx, None, vec![]);
+    entry.insert_at_back(op.deref(&ctx).get_region(0), &ctx);
+    let return_op = Operation::new(
+        &mut ctx,
+        dialect_mir::ops::MirReturnOp::get_concrete_op_info(),
+        vec![],
+        vec![],
+        vec![],
+        0,
+    );
+    return_op.insert_at_back(entry, &ctx);
+    op.verify(&ctx).unwrap();
+    let state = State::default();
+    state.set_indent_width(4);
+    let printed = function.print(&ctx, &state).to_string();
+    assert_eq!(state.current_indent(), 0);
+    assert!(printed.contains("\n    ["), "{printed}");
+
+    let mut parsed_ctx = Context::new();
+    dialect_mir::register(&mut parsed_ctx);
+    let parsed = parse_from_str(Operation::top_level_parser(), &mut parsed_ctx, &printed)
+        .expect("printed function attributes must parse");
+    assert_eq!(parsed.deref(&parsed_ctx).num_regions(), 1);
+    assert!(
+        parsed
+            .deref(&parsed_ctx)
+            .get_region(0)
+            .deref(&parsed_ctx)
+            .get_head()
+            .is_some()
+    );
+    assert_eq!(
+        parsed
+            .deref(&parsed_ctx)
+            .attributes
+            .get::<StringAttr>(&"note".try_into().unwrap()),
+        op.deref(&ctx)
+            .attributes
+            .get::<StringAttr>(&"note".try_into().unwrap()),
+    );
+    parsed
+        .verify(&parsed_ctx)
+        .expect("parsed function must verify");
+}
+
+/// Parsing a declaration supplies its empty body once; printing it without
+/// extra attributes must still produce a valid function on the next parse.
+#[test]
+fn function_declaration_without_attributes_round_trips() {
+    use pliron::{parsable::parse_from_str, printable::Printable};
+
+    let mut ctx = Context::new();
+    dialect_mir::register(&mut ctx);
+    let ty = FunctionType::get(&ctx, vec![], vec![]);
+    let text = format!("mir.func @declaration : {} []", ty.disp(&ctx));
+    let parsed = parse_from_str(Operation::top_level_parser(), &mut ctx, &text).unwrap();
+    assert_eq!(parsed.deref(&ctx).num_regions(), 1);
+    parsed.verify(&ctx).unwrap();
+    let printed = parsed.disp(&ctx).to_string();
+
+    let mut parsed_ctx = Context::new();
+    dialect_mir::register(&mut parsed_ctx);
+    let reparsed = parse_from_str(Operation::top_level_parser(), &mut parsed_ctx, &printed)
+        .expect("function without extra attributes must parse");
+    assert_eq!(reparsed.deref(&parsed_ctx).num_regions(), 1);
+    reparsed.verify(&parsed_ctx).unwrap();
+}
+
 #[test]
 fn test_mir_assign_verify() {
     let mut ctx = Context::new();
@@ -510,45 +606,123 @@ fn test_mir_func_reference_param_validity_verify() {
     };
 
     let valid = make_func(&mut ctx, true);
-    valid.set_reference_param_validity(&mut ctx, 0, ReferenceParamValidityAttr(4));
-    valid.set_reference_param_validity(&mut ctx, 1, ReferenceParamValidityAttr(4));
+    valid.set_reference_param_validity(
+        &mut ctx,
+        0,
+        ReferenceParamValidityAttr {
+            dereferenceable_bytes: 4,
+            ..ReferenceParamValidityAttr::new(4)
+        },
+    );
+    valid.set_reference_param_validity(&mut ctx, 1, ReferenceParamValidityAttr::new(4));
     assert!(
         valid.verify(&ctx).is_ok(),
         "Rust reference facts on kernel source arguments are valid"
     );
 
     let non_kernel = make_func(&mut ctx, false);
-    non_kernel.set_reference_param_validity(&mut ctx, 0, ReferenceParamValidityAttr(4));
+    non_kernel.set_reference_param_validity(&mut ctx, 0, ReferenceParamValidityAttr::new(4));
     assert!(
         non_kernel.verify(&ctx).is_err(),
         "reference validity is kernel-entry-only"
     );
 
     let raw = make_func(&mut ctx, true);
-    raw.set_reference_param_validity(&mut ctx, 2, ReferenceParamValidityAttr(4));
+    raw.set_reference_param_validity(&mut ctx, 2, ReferenceParamValidityAttr::new(4));
     assert!(
         raw.verify(&ctx).is_err(),
         "raw pointers cannot carry Rust-reference validity"
     );
 
     let scalar = make_func(&mut ctx, true);
-    scalar.set_reference_param_validity(&mut ctx, 3, ReferenceParamValidityAttr(4));
+    scalar.set_reference_param_validity(&mut ctx, 3, ReferenceParamValidityAttr::new(4));
     assert!(
         scalar.verify(&ctx).is_err(),
         "non-pointer parameters cannot carry Rust-reference validity"
     );
 
     let bad_alignment = make_func(&mut ctx, true);
-    bad_alignment.set_reference_param_validity(&mut ctx, 0, ReferenceParamValidityAttr(3));
+    bad_alignment.set_reference_param_validity(&mut ctx, 0, ReferenceParamValidityAttr::new(3));
     assert!(
         bad_alignment.verify(&ctx).is_err(),
         "alignment must be a non-zero power of two"
     );
 
     let out_of_range = make_func(&mut ctx, true);
-    out_of_range.set_reference_param_validity(&mut ctx, 9, ReferenceParamValidityAttr(4));
+    out_of_range.set_reference_param_validity(&mut ctx, 9, ReferenceParamValidityAttr::new(4));
     assert!(
         out_of_range.verify(&ctx).is_err(),
         "source argument index must be in range"
+    );
+}
+
+/// An inline request is a callee property: every request is valid on an
+/// ordinary function, none on a kernel entry, and a value of another attribute
+/// type under the key is an error rather than "no request".
+#[test]
+fn test_mir_func_inline_intent_verify() {
+    use dialect_mir::ops::INLINE_INTENT_ATTR_KEY;
+
+    let mut ctx = Context::new();
+    dialect_mir::register(&mut ctx);
+
+    let make_func = |ctx: &mut Context, kernel: bool| {
+        let func_ty = FunctionType::get(ctx, vec![], vec![]);
+        let op = Operation::new(
+            ctx,
+            MirFuncOp::get_concrete_op_info(),
+            vec![],
+            vec![],
+            vec![],
+            1,
+        );
+        let func = MirFuncOp::new(ctx, op, TypeAttr::new(func_ty.into()));
+        if kernel {
+            func.get_operation().deref_mut(ctx).attributes.set(
+                "gpu_kernel".try_into().unwrap(),
+                StringAttr::new("true".to_string()),
+            );
+        }
+        let region = func.get_operation().deref(ctx).get_region(0);
+        BasicBlock::new(ctx, None, vec![]).insert_at_front(region, ctx);
+        func
+    };
+
+    for intent in InlineIntentAttr::ALL {
+        let helper = make_func(&mut ctx, false);
+        helper.set_inline_intent(&mut ctx, intent);
+        assert!(
+            helper.verify(&ctx).is_ok(),
+            "{intent:?} is valid on a callee"
+        );
+        assert_eq!(helper.inline_intent(&ctx), Some(intent));
+
+        let kernel = make_func(&mut ctx, true);
+        kernel.set_inline_intent(&mut ctx, intent);
+        assert!(
+            kernel.verify(&ctx).is_err(),
+            "{intent:?} must be rejected on a kernel entry"
+        );
+    }
+
+    let mistyped = make_func(&mut ctx, false);
+    mistyped.get_operation().deref_mut(&ctx).attributes.set(
+        INLINE_INTENT_ATTR_KEY.try_into().unwrap(),
+        StringAttr::new("noinline".to_string()),
+    );
+    assert_eq!(mistyped.inline_intent(&ctx), None);
+    assert!(
+        mistyped.verify(&ctx).is_err(),
+        "a value of another attribute type is an error, never read as no request"
+    );
+
+    let plain = make_func(&mut ctx, false);
+    assert_eq!(plain.inline_intent(&ctx), None);
+    assert!(plain.verify(&ctx).is_ok());
+
+    let plain_kernel = make_func(&mut ctx, true);
+    assert!(
+        plain_kernel.verify(&ctx).is_ok(),
+        "a kernel without an intent is valid"
     );
 }

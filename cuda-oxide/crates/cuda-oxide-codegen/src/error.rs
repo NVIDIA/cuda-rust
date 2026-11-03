@@ -32,6 +32,8 @@ pub enum PipelineError {
     LibdeviceUnavailable { message: String },
     /// LLVM IR export failed.
     Export(String),
+    /// The selected official CUTLASS MLIR backend failed.
+    BackendB(String),
     /// The requested CUDA target could not be parsed, or cannot lower a
     /// feature the module needs. Distinct from `PtxGeneration`: this is a
     /// problem with the requested target itself, decided before `llc` runs.
@@ -81,6 +83,7 @@ impl std::fmt::Display for PipelineError {
                 write!(f, "libdevice linking is unavailable: {message}")
             }
             Self::Export(msg) => write!(f, "Export failed: {}", msg),
+            Self::BackendB(msg) => write!(f, "CUTLASS MLIR backend failed: {msg}"),
             Self::TargetSelection { reason, .. } => write!(f, "{reason}"),
             Self::PtxGeneration(msg) => write!(f, "PTX generation failed: {}", msg),
             Self::Optimization(msg) => write!(f, "LLVM optimization failed: {msg}"),

@@ -1,0 +1,198 @@
+{
+  "schema": 6,
+  "backend_profile": "rust-llvm-23.1.3-aab11ee0",
+  "backend_kind": "llvm_nvptx",
+  "llvm_revision": "aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019",
+  "backend_version": "LLVM version 23.1.3-rust-1.101.0-nightly",
+  "backend_sha256": "7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449",
+  "defaults": {
+    "llvm_results": [],
+    "target_triple": "nvptx64-nvidia-cuda",
+    "gpu_target": "sm_100a",
+    "ptx_feature": "+ptx86",
+    "status": "validated",
+    "declaration_attributes_canonicalized": true,
+    "runtime_validation": "unexecuted"
+  },
+  "fixtures": [
+    {
+      "id": "tcgen05_control3_llvm_inline_probe",
+      "coverage_count": 3,
+      "stages": [
+        {
+          "targets": [
+            "sm_100a",
+            "ptx86"
+          ],
+          "representation": "separate probes for the recorded lowering mechanism",
+          "stage": "backend_codegen",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "detail": "Revalidated 3 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): the exact reviewed PTX instruction shapes passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 b7368219d0f51e0e65a18632cbf4f38337cb173fe797770469aa6a0c6ddbd8a4.",
+          "tool_path": "/home/nihalp/.rustup/toolchains/nightly-2026-10-11-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin/llc",
+          "tool_version": "LLVM version 23.1.3-rust-1.101.0-nightly",
+          "tool_sha256": "7534b0236b9b26c7e6910548038b2285ee1bb5908e4700764dc78a7a1a54b449"
+        },
+        {
+          "targets": [
+            "sm_100a",
+            "ptx85"
+          ],
+          "representation": "isolated direct-intrinsic probes at and outside the imported selection predicates",
+          "stage": "backend_codegen",
+          "outcome": "not_revalidated",
+          "detail": "Historical evidence recorded for Rust e457a7b0d326d67b4322ef0d11bd715cfaeda48f, LLVM 16696adcd119e6ba9cc175207d984d7021211acb (LLVM version 23.1.0-rust-1.100.0-nightly). Not revalidated by the 2026-10-11 refresh: Original outcome: failed. Pinned LLVM rejected sm_100a and sm_101a at PTX 8.5, sm_103a at PTX 8.7, and sm_110a at PTX 8.8. Both shift records also rejected every tested base and family target. The commit record separately passed sm_100f/sm_101f/sm_103f at PTX 8.8 and sm_110f at PTX 9.0. All three records rejected sm_120 and sm_121 spellings. This closes the shared route to sm_100a, sm_101a, sm_103a, and sm_110a at their proved floors."
+        },
+        {
+          "targets": [
+            "sm_100a",
+            "ptx86"
+          ],
+          "representation": "separate PTX outputs assembled for the recorded target",
+          "stage": "ptx_assembly",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "Revalidated 3 separate probes with nightly-2026-10-11 (rustc 6f5da406b56c2db6607202b63daee73aa8c61297; LLVM aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019): terminal PTX assembly passed. The sorted ID/artifact-kind/SHA-256 ledger in refresh-2026-10-11/stages.jsonl has SHA-256 0ddbfb5241b0d4b9d3e3c84b5b1f7d23f557e4072d83ef074484a26aa31dfb7f.",
+          "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+          "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+          "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+        },
+        {
+          "targets": [
+            "sm_120a",
+            "ptx93"
+          ],
+          "representation": "the same three inline instructions emitted for excluded family and future targets",
+          "stage": "ptx_assembly",
+          "mechanism": "inline_ptx",
+          "outcome": "not_revalidated",
+          "detail": "Historical evidence recorded for Rust e457a7b0d326d67b4322ef0d11bd715cfaeda48f, LLVM 16696adcd119e6ba9cc175207d984d7021211acb (LLVM version 23.1.0-rust-1.100.0-nightly). Not revalidated by the 2026-10-11 refresh: Original outcome: failed. CUDA 13.3 ptxas rejected tcgen05.shift on sm_100f, sm_103f, and sm_110f. It rejected tcgen05.commit and tcgen05.shift on sm_120a/f and sm_121a/f.",
+          "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+          "tool_version": "CUDA 13.3 V13.3.33 build cuda_13.3.r13.3/compiler.37862127_0",
+          "tool_sha256": "7fdd01a4cf50e30746da98989c9272a907f491e6fd7fecfda14642e4375f88fb"
+        }
+      ]
+    }
+  ],
+  "matrices": [
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "tcgen05_commit_multicast"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tcgen05_control3_llvm_inline_probe"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_tcgen05_commit_mc_shared_cg1",
+        "llvm_symbol": "llvm.nvvm.tcgen05.commit.mc.shared.cg1",
+        "expected_ptx": {
+          "mnemonic": "tcgen05",
+          "modifiers": [
+            "commit",
+            "cta_group::1",
+            "mbarrier::arrive::one",
+            "shared::cluster",
+            "multicast::cluster",
+            "b64"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            },
+            {
+              "kind": "register"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "shared_ptr",
+            "i16"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "tcgen05_shift_down"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tcgen05_control3_llvm_inline_probe"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_tcgen05_shift_down_cg1",
+        "llvm_symbol": "llvm.nvvm.tcgen05.shift.down.cg1",
+        "expected_ptx": {
+          "mnemonic": "tcgen05",
+          "modifiers": [
+            "shift",
+            "cta_group::1",
+            "down"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "tmem_ptr"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "id",
+          "values": [
+            "tcgen05_shift_down_cg2"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "tcgen05_control3_llvm_inline_probe"
+      ],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_tcgen05_shift_down_cg2",
+        "llvm_symbol": "llvm.nvvm.tcgen05.shift.down.cg2",
+        "expected_ptx": {
+          "mnemonic": "tcgen05",
+          "modifiers": [
+            "shift",
+            "cta_group::2",
+            "down"
+          ],
+          "operands": [
+            {
+              "kind": "address"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "tmem_ptr"
+          ]
+        }
+      }
+    }
+  ]
+}

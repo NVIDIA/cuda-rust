@@ -12,7 +12,8 @@ use crate::model::{
     MaskEncoding, MbarrierExtendedAdmission, MbarrierExtendedOperation, MovmatrixAdapter,
     MovmatrixParticipation, OverlayBackendLowering, OverlayFile, OverlayIntrinsic,
     PackedAluAdapter, PackedAluFormat, PackedAluOperation, PackedConversionAdapter,
-    PackedConversionDestinationFormat, PackedConversionFp8Admission, PackedConversionFp8Direction,
+    PackedConversionDestinationFormat, PackedConversionFp8Admission,
+    PackedConversionFp8Bf16x2Admission, PackedConversionFp8Direction,
     PackedConversionFp8F16x2Admission, PackedConversionFp8Format, PackedConversionRounding,
     PackedConversionSaturation, PackedConversionSourceFormat, PreSm70MemberMaskRule, PrmtAdmission,
     PrmtMode, RegisterMmaAccumulator, RegisterMmaAmpereFloatAdmission, RegisterMmaF8F6F4Admission,
@@ -725,9 +726,9 @@ pub(super) fn packed_conversion_policy(
     record.memory = "none".into();
     record.convergent = false;
     record.execution_scope = "thread".into();
-    let (minimum_ptx, minimum_sm) = packed_conversion_floor(&conversion);
+    let (minimum_ptx, minimum_sm, _targets) = packed_conversion_floor(&conversion);
     record.minimum_ptx = minimum_ptx.into();
-    record.minimum_sm = Some(minimum_sm.into());
+    record.minimum_sm = minimum_sm.map(str::to_owned);
     record.ptx_result = format!("u{result_width}");
     record.ptx_isa_section = "9.7.9.22 Data Movement and Conversion Instructions: cvt".into();
     record.ptx_isa_url = "https://docs.nvidia.com/cuda/parallel-thread-execution/#data-movement-and-conversion-instructions-cvt".into();
@@ -740,7 +741,7 @@ pub(super) fn packed_conversion_policy(
             evidence_profile: "test".into(),
             targets: None,
             minimum_ptx: Some(minimum_ptx.into()),
-            minimum_sm: Some(minimum_sm.into()),
+            minimum_sm: minimum_sm.map(str::to_owned),
         })
         .collect();
     let modifiers = packed_conversion_ptx_modifiers(&conversion);
@@ -1410,6 +1411,20 @@ pub(super) fn test_fp8_conversion_admission() -> PackedConversionFp8Admission {
     }
 }
 
+pub(super) fn test_fp8_bf16x2_conversion_admission() -> PackedConversionFp8Bf16x2Admission {
+    PackedConversionFp8Bf16x2Admission {
+        llvm_evidence_profile: "llvm-test".into(),
+        libnvvm_evidence_profile: "libnvvm-test".into(),
+        runtime_validation: RuntimeValidation::Unexecuted,
+        fp8_formats: vec![
+            PackedConversionFp8Format::E4m3x2,
+            PackedConversionFp8Format::E5m2x2,
+        ],
+        relu_variants: true,
+        product_count: 4,
+    }
+}
+
 pub(super) fn test_fp8_f16x2_conversion_admission() -> PackedConversionFp8F16x2Admission {
     PackedConversionFp8F16x2Admission {
         llvm_evidence_profile: "llvm-test".into(),
@@ -1471,7 +1486,7 @@ pub(super) fn test_wgmma_control_admission() -> WgmmaControlAdmission {
 
 pub(super) fn test_special_register_admission() -> SpecialRegisterAdmission {
     SpecialRegisterAdmission {
-        llvm_evidence_profile: "rust-llvm-23.1.0-16696adc".into(),
+        llvm_evidence_profile: "rust-llvm-23.1.3-aab11ee0".into(),
         libnvvm_evidence_profile: "cuda-13.3-libnvvm-13.3.33".into(),
         runtime_validation: RuntimeValidation::Unexecuted,
         registers: REVIEWED_SPECIAL_REGISTERS.into(),
@@ -1520,6 +1535,8 @@ pub(super) fn test_tma_admission() -> TmaAdmission {
     TmaAdmission {
         llvm_evidence_profile: "llvm-tma-test".into(),
         libnvvm_evidence_profile: "libnvvm-tma-test".into(),
+        cta_llvm_evidence_profile: Some("llvm-tma-test".into()),
+        cta_libnvvm_evidence_profile: Some("libnvvm-tma-test".into()),
         reduce_llvm_evidence_profile: Some("llvm-tma-reduce-test".into()),
         reduce_libnvvm_evidence_profile: Some("libnvvm-tma-reduce-test".into()),
         runtime_validation: RuntimeValidation::Unexecuted,
@@ -1868,6 +1885,9 @@ pub(super) fn test_mbarrier_extended_admission() -> MbarrierExtendedAdmission {
         MbarrierExtendedOperation::FenceProxyAsyncGenericReleaseSharedCtaCluster,
         MbarrierExtendedOperation::FenceProxyAsyncGenericAcquireSharedClusterCluster,
         MbarrierExtendedOperation::Nanosleep,
+        MbarrierExtendedOperation::ArriveRemoteClusterRelaxed,
+        MbarrierExtendedOperation::TryWaitParityClusterRelaxed,
+        MbarrierExtendedOperation::FenceAcquireSharedClusterCluster,
     ]
     .map(|operation| crate::model::MbarrierExtendedAdmissionVariant {
         abi_id: mbarrier_extended_recipe(operation).abi_id.into(),
@@ -1877,6 +1897,7 @@ pub(super) fn test_mbarrier_extended_admission() -> MbarrierExtendedAdmission {
     MbarrierExtendedAdmission {
         llvm_evidence_profile: "llvm-test".into(),
         libnvvm_evidence_profile: "libnvvm-test".into(),
+        relaxed_libnvvm_evidence_profile: None,
         runtime_validation: RuntimeValidation::Unexecuted,
         variants,
     }

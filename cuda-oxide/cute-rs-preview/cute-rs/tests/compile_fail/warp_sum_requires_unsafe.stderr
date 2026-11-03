@@ -1,0 +1,7 @@
+error[E0133]: call to unsafe function `warp_reduction_sum_f32` is unsafe and requires unsafe block
+ --> tests/compile_fail/warp_sum_requires_unsafe.rs:6:13
+  |
+6 |     let _ = cute_rs::arch::warp_reduction_sum_f32(1.0);
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+  |
+  = note: consult the function's documentation for information on how to avoid undefined behavior

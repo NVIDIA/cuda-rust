@@ -19,7 +19,7 @@ use pliron::builtin::types::IntegerType;
 use pliron::common_traits::Verify;
 use pliron::context::{Context, Ptr};
 use pliron::input_err;
-use pliron::location::{Located, Location};
+use pliron::location::Location;
 use pliron::op::Op;
 use pliron::operation::Operation;
 use pliron::r#type::Typed;
@@ -1311,8 +1311,9 @@ pub fn emit_cvta_generic_to_shared_offset(
     block_map: &[Ptr<BasicBlock>],
     loc: Location,
     result_width: u32,
+    cluster: bool,
 ) -> TranslationResult<Ptr<Operation>> {
-    use dialect_nvvm::ops::CvtaGenericToSharedOffsetOp;
+    use dialect_nvvm::ops::{CvtaGenericToClusterSharedOffsetOp, CvtaGenericToSharedOffsetOp};
     use pliron::builtin::types::Signedness;
 
     if args.len() != 1 {
@@ -1348,7 +1349,11 @@ pub fn emit_cvta_generic_to_shared_offset(
     let result_ty = IntegerType::get(ctx, result_width, Signedness::Unsigned);
     let cvta_op = Operation::new(
         ctx,
-        CvtaGenericToSharedOffsetOp::get_concrete_op_info(),
+        if cluster {
+            CvtaGenericToClusterSharedOffsetOp::get_concrete_op_info()
+        } else {
+            CvtaGenericToSharedOffsetOp::get_concrete_op_info()
+        },
         vec![result_ty.into()],
         vec![ptr_val],
         vec![],

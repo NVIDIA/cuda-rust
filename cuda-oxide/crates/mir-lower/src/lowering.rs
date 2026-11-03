@@ -30,11 +30,12 @@
 use crate::context::{DynamicSmemAlignmentMap, SharedGlobalsMap};
 use crate::convert::types::{
     StructLayoutInfo, build_struct_slot_map, convert_function_type, convert_type, is_kernel_func,
-    is_zero_sized_type, llvm_type_size_align, mir_type_abi_align, transparent_scalar_field,
+    is_zero_sized_type, llvm_type_size_align, mir_type_abi_align, required_storage_align,
+    transparent_scalar_field,
 };
 
 use dialect_mir::ops::MirFuncOp;
-use dialect_mir::types::{MirDisjointSliceType, MirSliceType, MirStructType};
+use dialect_mir::types::{MirDisjointSliceType, MirPtrType, MirSliceType, MirStructType};
 use llvm_export::ops as llvm;
 use pliron::{
     basic_block::BasicBlock,
@@ -46,10 +47,11 @@ use pliron::{
         rewriter::Rewriter,
     },
     linked_list::ContainsLinkedList,
+    location::Location,
     op::Op,
     operation::Operation,
     result::Result,
-    r#type::TypeHandle,
+    r#type::{TypeHandle, Typed},
     value::Value,
 };
 use reserved_oxide_symbols::{
@@ -303,7 +305,7 @@ pub fn convert_func(
     }
     propagate_return_abi_alignment(ctx, &llvm_func, return_abi_alignment);
 
-    propagate_alwaysinline_attr(ctx, op, &llvm_func);
+    lower_inline_intent_attr(ctx, &mir_func, &llvm_func);
 
     let llvm_entry = llvm_func.get_or_create_entry_block(ctx);
 
@@ -314,7 +316,7 @@ pub fn convert_func(
         // Pre-scan MIR blocks for max dynamic shared memory alignment.
         // Must happen BEFORE inline_region empties the MIR region.
         let mir_blocks: Vec<_> = mir_region.deref(ctx).iter(ctx).collect();
-        let body_max_align = compute_max_dynamic_smem_alignment(ctx, &mir_blocks);
+        let body_max_align = compute_max_dynamic_smem_alignment(ctx, &mir_blocks)?;
         let contract_min_align = dynamic_shared_alignment_attr(ctx, op);
         let max_align = match (body_max_align, contract_min_align) {
             (Some(body), Some(contract)) => Some(body.max(contract)),
@@ -419,7 +421,10 @@ fn kernel_reference_param_validities(
     mir_func: &MirFuncOp,
     parameter_layout: &[KernelParameterLayout],
     llvm_func_type: pliron::r#type::TypedHandle<llvm_export::types::FuncType>,
-) -> std::result::Result<Vec<(usize, u64)>, anyhow::Error> {
+) -> std::result::Result<
+    Vec<(usize, dialect_mir::attributes::ReferenceParamValidityAttr)>,
+    anyhow::Error,
+> {
     use pliron::builtin::type_interfaces::FunctionTypeInterface;
 
     let llvm_args = llvm_func_type.deref(ctx).arg_types().to_vec();
@@ -442,7 +447,7 @@ fn kernel_reference_param_validities(
                 "kernel source argument {source_index} carries reference validity but its first ABI component is not an LLVM pointer"
             ));
         }
-        result.push((llvm_index, validity.0));
+        result.push((llvm_index, validity));
     }
     Ok(result)
 }
@@ -450,14 +455,18 @@ fn kernel_reference_param_validities(
 fn propagate_kernel_reference_param_validities(
     ctx: &mut Context,
     llvm_func: &llvm::FuncOp,
-    validities: &[(usize, u64)],
+    validities: &[(usize, dialect_mir::attributes::ReferenceParamValidityAttr)],
 ) {
-    for &(index, alignment) in validities {
+    for &(index, validity) in validities {
         llvm::set_kernel_reference_param_validity(
             ctx,
             llvm_func.get_operation(),
             index,
-            llvm::KernelReferenceParamValidityAttr(alignment),
+            llvm::KernelReferenceParamValidityAttr {
+                pointee_alignment: validity.pointee_alignment,
+                no_alias: validity.no_alias,
+                dereferenceable_bytes: validity.dereferenceable_bytes,
+            },
         );
     }
 }
@@ -867,33 +876,34 @@ fn propagate_return_abi_alignment(
         .set(key, IntegerAttr::new(u64_ty, value));
 }
 
-/// Propagate the `alwaysinline` attribute from MIR func to LLVM func.
+/// Lower the MIR func's `#[inline]` request (`MirFuncOp::inline_intent`) to
+/// its LLVM function attribute in the LLVM func's `llvm_func_attrs`, which
+/// `llvm-export` renders like any other. The mapping is rustc's own:
+/// `#[inline]` is `inlinehint`, `#[inline(always)]` is `alwaysinline` and
+/// `#[inline(never)]` is `noinline`. This is the only place that names the
+/// LLVM keywords; the dialect records the request, not the LLVM attribute.
 ///
-/// Set on the MIR func op by `mir-importer` when the source Rust function
-/// carries `#[inline(always)]`. The LLVM exporter then emits the
-/// `alwaysinline` keyword on the `define` line. Existing `opt -O2` runs can
-/// honor that attribute before `llc`, but this propagation is not a mandatory
-/// always-inline pass. The goal is to preserve Rust's inline intent for device
-/// helpers rather than leaving helper boundaries solely to optimizer
+/// `opt -O2` honors the keyword before `llc`; this adds no inliner pass. The
+/// goal is to preserve Rust's inline intent for device helpers in both
+/// directions, rather than leaving helper boundaries solely to optimizer
 /// heuristics.
-fn propagate_alwaysinline_attr(
-    ctx: &mut Context,
-    mir_op: Ptr<Operation>,
-    llvm_func: &llvm::FuncOp,
-) {
-    let key: pliron::identifier::Identifier = "alwaysinline".try_into().unwrap();
-    let attr_opt = mir_op
-        .deref(ctx)
-        .attributes
-        .get::<pliron::builtin::attributes::StringAttr>(&key)
-        .cloned();
-    if let Some(attr) = attr_opt {
-        llvm_func
-            .get_operation()
-            .deref_mut(ctx)
-            .attributes
-            .set(key, attr);
-    }
+fn lower_inline_intent_attr(ctx: &mut Context, mir_func: &MirFuncOp, llvm_func: &llvm::FuncOp) {
+    use dialect_mir::attributes::InlineIntentAttr;
+
+    let Some(intent) = mir_func.inline_intent(ctx) else {
+        return;
+    };
+    let keyword = match intent {
+        InlineIntentAttr::Hint => "inlinehint",
+        InlineIntentAttr::Always => "alwaysinline",
+        InlineIntentAttr::Never => "noinline",
+    };
+    let mut attrs = llvm_func
+        .get_attr_llvm_func_attrs(ctx)
+        .map(|attrs| (*attrs).clone())
+        .unwrap_or_default();
+    attrs.set(keyword, llvm::LlvmAttrValue::Unit);
+    llvm_func.set_attr_llvm_func_attrs(ctx, attrs);
 }
 
 // =====================================================================
@@ -1260,32 +1270,67 @@ fn insert_op_sequentially(
 /// Compute the maximum dynamic shared memory alignment across all
 /// `MirExternSharedOp` operations in a function.
 ///
+/// Each reference is first raised to the storage alignment of its pointee
+/// type, so the one pool satisfies its strongest typed use; the caller
+/// folds in the launch contract. The verifier has already rejected a
+/// requested alignment that is not a non-zero power of two.
+///
 /// This pre-pass must run BEFORE `inline_region` moves the blocks, since
 /// it iterates the MIR blocks directly. The result is stored in
 /// [`DynamicSmemAlignmentMap`] so that later per-op converters can
 /// create the global with the correct alignment.
 fn compute_max_dynamic_smem_alignment(
-    ctx: &Context,
+    ctx: &mut Context,
     mir_blocks: &[Ptr<BasicBlock>],
-) -> Option<u64> {
-    let mut max_alignment: Option<u64> = None;
-
+) -> Result<Option<u64>> {
+    // Collect first: converting a pointee type needs the context mutably,
+    // which the block iteration cannot hold.
+    let mut references: Vec<(u64, TypeHandle, Location)> = Vec::new();
     for mir_block in mir_blocks {
         for op in mir_block.deref(ctx).iter(ctx) {
             let op_id = Operation::get_opid(op, ctx);
-            if op_id == dialect_mir::ops::MirExternSharedOp::get_opid_static() {
-                let extern_shared = dialect_mir::ops::MirExternSharedOp::new(op);
-                let alignment = extern_shared.get_alignment_value(ctx);
-
-                max_alignment = Some(match max_alignment {
-                    Some(current_max) => current_max.max(alignment),
-                    None => alignment,
-                });
+            if op_id != dialect_mir::ops::MirExternSharedOp::get_opid_static() {
+                continue;
             }
+            let extern_shared = dialect_mir::ops::MirExternSharedOp::new(op);
+            let requested_alignment = extern_shared.get_alignment_value(ctx);
+            let op_ref = op.deref(ctx);
+            let result_ty = op_ref.get_result(0).get_type(ctx);
+            let pointee = result_ty
+                .deref(ctx)
+                .downcast_ref::<MirPtrType>()
+                .map(|ptr_ty| ptr_ty.pointee)
+                .ok_or_else(|| {
+                    pliron::create_error!(
+                        op_ref.loc(),
+                        pliron::result::ErrorKind::VerificationFailed,
+                        "mir.extern_shared result is not a MIR pointer"
+                    )
+                })?;
+            references.push((requested_alignment, pointee, op_ref.loc().clone()));
         }
     }
 
-    max_alignment
+    let mut max_alignment: Option<u64> = None;
+    for (requested_alignment, pointee, loc) in references {
+        let llvm_pointee = convert_type(ctx, pointee).map_err(|e| {
+            pliron::create_error!(&loc, pliron::result::ErrorKind::VerificationFailed, "{e}")
+        })?;
+        let required_alignment =
+            required_storage_align(ctx, pointee, llvm_pointee).ok_or_else(|| {
+                let pointee_display = pointee.deref(ctx).disp(ctx).to_string();
+                pliron::create_error!(
+                    &loc,
+                    pliron::result::ErrorKind::VerificationFailed,
+                    "mir.extern_shared pointee type `{pointee_display}` has no known ABI \
+                     alignment; refusing to guess the pool alignment"
+                )
+            })?;
+        let alignment = requested_alignment.max(required_alignment);
+        max_alignment = Some(max_alignment.map_or(alignment, |current| current.max(alignment)));
+    }
+
+    Ok(max_alignment)
 }
 
 // =====================================================================
@@ -1599,7 +1644,7 @@ mod reference_param_validity_tests {
     use super::*;
     use dialect_mir::{
         attributes::ReferenceParamValidityAttr,
-        types::{MirPointerKind, MirPtrType, MirSliceType},
+        types::{MirArrayType, MirPointerKind, MirPtrType, MirSliceType},
     };
     use pliron::{
         builtin::{
@@ -1630,8 +1675,20 @@ mod reference_param_validity_tests {
             MirPtrType::get_generic_with_kind(&mut ctx, f32_ty, false, MirPointerKind::RawConst)
                 .into();
 
-        let mir_func_type =
-            FunctionType::get(&ctx, vec![shared_ref, shared_slice, raw_ptr], vec![]);
+        let zst: TypeHandle = MirArrayType::get(&mut ctx, f32_ty, 0).into();
+        let mir_func_type = FunctionType::get(
+            &ctx,
+            vec![
+                shared_ref,
+                zst,
+                shared_slice,
+                raw_ptr,
+                zst,
+                shared_slice,
+                shared_ref,
+            ],
+            vec![],
+        );
         let op = Operation::new(
             &mut ctx,
             MirFuncOp::get_concrete_op_info(),
@@ -1641,8 +1698,19 @@ mod reference_param_validity_tests {
             1,
         );
         let mir_func = MirFuncOp::new(&mut ctx, op, TypeAttr::new(mir_func_type.into()));
-        mir_func.set_reference_param_validity(&mut ctx, 0, ReferenceParamValidityAttr(4));
-        mir_func.set_reference_param_validity(&mut ctx, 1, ReferenceParamValidityAttr(4));
+        let sized = ReferenceParamValidityAttr {
+            pointee_alignment: 4,
+            no_alias: true,
+            dereferenceable_bytes: 4,
+        };
+        let slice = ReferenceParamValidityAttr {
+            dereferenceable_bytes: 0,
+            ..sized
+        };
+        let aliasable = ReferenceParamValidityAttr::new(4);
+        for (source_index, validity) in [(0, sized), (2, slice), (5, aliasable), (6, sized)] {
+            mir_func.set_reference_param_validity(&mut ctx, source_index, validity);
+        }
 
         let llvm_func_type =
             convert_function_type(&mut ctx, mir_func_type, true).expect("kernel type lowers");
@@ -1651,14 +1719,52 @@ mod reference_param_validity_tests {
             kernel_reference_param_validities(&mut ctx, &mir_func, &layout, llvm_func_type)
                 .expect("reference validity mapping succeeds");
 
-        assert_eq!(mapped, vec![(0, 4), (1, 4)]);
+        assert_eq!(
+            mapped,
+            vec![(0, sized), (1, slice), (4, aliasable), (6, sized)]
+        );
+        let llvm_func =
+            llvm::FuncOp::new(&mut ctx, "transport".try_into().unwrap(), llvm_func_type);
+        propagate_kernel_reference_param_validities(&mut ctx, &llvm_func, &mapped);
+        let entries =
+            llvm::kernel_reference_param_validity_entries(&ctx, llvm_func.get_operation()).unwrap();
+        assert_eq!(
+            entries,
+            vec![
+                (
+                    0,
+                    llvm::KernelReferenceParamValidityAttr {
+                        pointee_alignment: 4,
+                        no_alias: true,
+                        dereferenceable_bytes: 4,
+                    }
+                ),
+                (
+                    1,
+                    llvm::KernelReferenceParamValidityAttr {
+                        pointee_alignment: 4,
+                        no_alias: true,
+                        dereferenceable_bytes: 0,
+                    }
+                ),
+                (4, llvm::KernelReferenceParamValidityAttr::new(4)),
+                (
+                    6,
+                    llvm::KernelReferenceParamValidityAttr {
+                        pointee_alignment: 4,
+                        no_alias: true,
+                        dereferenceable_bytes: 4,
+                    }
+                ),
+            ]
+        );
 
         use pliron::builtin::type_interfaces::FunctionTypeInterface;
         let llvm_args = llvm_func_type.deref(&ctx).arg_types().to_vec();
         assert_eq!(
             llvm_args.len(),
-            4,
-            "slice lowers to data pointer + length while raw pointer stays one parameter"
+            7,
+            "slices expand, ZSTs disappear, and raw pointers stay bare"
         );
         assert!(
             llvm_args[0]
@@ -1896,9 +2002,9 @@ mod grid_constant_abi_tests {
             1,
         );
         let function = MirFuncOp::new(&mut ctx, op, TypeAttr::new(function_type.into()));
-        function.set_reference_param_validity(&mut ctx, 0, ReferenceParamValidityAttr(1));
-        function.set_reference_param_validity(&mut ctx, 2, ReferenceParamValidityAttr(64));
-        function.set_reference_param_validity(&mut ctx, 4, ReferenceParamValidityAttr(64));
+        function.set_reference_param_validity(&mut ctx, 0, ReferenceParamValidityAttr::new(1));
+        function.set_reference_param_validity(&mut ctx, 2, ReferenceParamValidityAttr::new(64));
+        function.set_reference_param_validity(&mut ctx, 4, ReferenceParamValidityAttr::new(64));
         record(&mut ctx, op, 2, payload, 64);
         record(&mut ctx, op, 4, payload, 64);
         let llvm_type = convert_function_type(&mut ctx, function_type, true).unwrap();
@@ -1920,7 +2026,14 @@ mod grid_constant_abi_tests {
         assert_eq!(llvm_type_size_align(&ctx, grid[0].pointee).unwrap().0, 128);
         let validities =
             kernel_reference_param_validities(&mut ctx, &function, &layout, llvm_type).unwrap();
-        assert_eq!(validities, vec![(0, 1), (2, 64), (4, 64)]);
+        assert_eq!(
+            validities,
+            vec![
+                (0, ReferenceParamValidityAttr::new(1)),
+                (2, ReferenceParamValidityAttr::new(64)),
+                (4, ReferenceParamValidityAttr::new(64)),
+            ]
+        );
 
         // A stale pointee annotation cannot silently change the launch packet size.
         record(&mut ctx, op, 2, byte, 64);

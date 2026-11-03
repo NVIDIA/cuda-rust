@@ -1,0 +1,27 @@
+error[E0308]: arguments to this function are incorrect
+  --> tests/compile_fail/primitives_bf16_mma_dtype.rs:10:14
+   |
+10 |     unsafe { mma_bf16(Accumulator16x8::zero(), half_a, half_b) };
+   |              ^^^^^^^^                          ------  ------ expected `Bf16B`, found `F16B`
+   |                                                |
+   |                                                expected `Bf16A`, found `F16A`
+   |
+note: function defined here
+  --> src/mma.rs
+   |
+   | pub unsafe fn mma_bf16(c: Accumulator16x8, a: Bf16A, b: Bf16B) -> Accumulator16x8 {
+   |               ^^^^^^^^
+
+error[E0308]: arguments to this function are incorrect
+  --> tests/compile_fail/primitives_bf16_mma_dtype.rs:11:14
+   |
+11 |     unsafe { mma_f16(Accumulator16x8::zero(), a, b) };
+   |              ^^^^^^^                          -  - expected `F16B`, found `Bf16B`
+   |                                               |
+   |                                               expected `F16A`, found `Bf16A`
+   |
+note: function defined here
+  --> src/mma.rs
+   |
+   | pub unsafe fn mma_f16(c: Accumulator16x8, a: F16A, b: F16B) -> Accumulator16x8 {
+   |               ^^^^^^^

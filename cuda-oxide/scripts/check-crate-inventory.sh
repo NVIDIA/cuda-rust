@@ -17,7 +17,7 @@
 # resolves it.  So this checks for members with no row, never for rows with no
 # member.
 #
-# Members are read from the root Cargo.toml rather than from `cargo metadata`:
+# Members are read from CUDA Oxide's Cargo.toml rather than from `cargo metadata`:
 # the question is which crates the workspace declares, which is exactly what
 # that list says, and reading it needs no cargo, no lockfile and no network.
 #
@@ -35,9 +35,9 @@ export LC_ALL=C
 
 cd "$(dirname "$0")/.."
 
-MANIFEST=../Cargo.toml
-# The Oxide overview stays at the git root. This script runs from cuda-oxide/.
-README=../README.md
+MANIFEST=Cargo.toml
+# The Oxide overview lives with its component; this script runs from cuda-oxide/.
+README=README.md
 BOOK_MAP=cuda-oxide-book/compiler/architecture-overview.md
 
 if ! command -v python3 >/dev/null 2>&1; then

@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 # Verify dependency-licenses.csv still records every crate the workspace
-# declares: each root-workspace member, and each directly declared third-party
+# declares: each first-party workspace member, and each directly declared third-party
 # dependency (normal, dev, or build).  Run this after adding or removing a
 # dependency or a workspace member.
 #
@@ -25,6 +25,7 @@ set -euo pipefail
 # dictionary collation, reject the pair rustc-hash/rustc_apfloat with
 # "input is not in sorted order", and abort the run via set -e.
 export LC_ALL=C
+export RUSTC_BOOTSTRAP=1
 
 cd "$(dirname "$0")/.."
 GIT_ROOT="$(git rev-parse --show-toplevel)"
@@ -100,17 +101,19 @@ print("\n".join(sorted(names)))
 # Every first-party workspace root, not just the root one.  `cargo metadata`
 # stops at a `[workspace]` boundary, so one pass per root is the only way to
 # reach them all.  The list is no longer a claim: the self-check below compares
-# it against every tracked `[workspace]` manifest outside `examples/`, which the
-# second half covers.  Today that is three, and how each got here matters:
+# it against every tracked `[workspace]` manifest outside the example and model
+# roots, which the second half covers. Today that is five, and how each got
+# here matters:
 #
-#   1. Cargo.toml -- the root workspace.
-#   2. cuda-oxide/crates/rustc-codegen-cuda/Cargo.toml -- its own `[workspace]` for the
+#   1. Cargo.toml -- the stable shared-host workspace.
+#   2. cuda-oxide/Cargo.toml -- the SIMT workspace.
+#   3. cuda-oxide/crates/rustc-codegen-cuda/Cargo.toml -- its own `[workspace]` for the
 #      rustc-private dylibs, so `-p` from the root cannot reach it and the root
 #      `cargo metadata` stops at that boundary.  That is how the backend crate
 #      itself, the largest first-party crate in the tree, sat unrecorded while
 #      every other member had a row.  This is the second pass asked for in the
 #      #662 review.
-#   3. cuda-oxide/crates/cuda-macros/tests/device-only/Cargo.toml -- the fixture for
+#   4. cuda-oxide/crates/cuda-macros/tests/device-only/Cargo.toml -- the fixture for
 #      scripts/check-device-only-build.sh.  It declares `[workspace]` on
 #      purpose: the point is a graph that does *not* contain `cuda-host`
 #      (#701/#702), so it must resolve independently rather than share the root
@@ -118,16 +121,23 @@ print("\n".join(sorted(names)))
 #      member `device-only-kernels` had no row.  #1043 closed the identical gap
 #      for `cargo deny check` -- which judges the license *policy* -- and this
 #      guard covers the other half, that the human-readable inventory does not
-#      fall behind what a workspace declares.  Both halves need all three roots.
+#      fall behind what a workspace declares.
+#   5. cuda-oxide/crates/rustc-codegen-cuda/tests/fixtures/primitives_api_compile/Cargo.toml
+#      -- the isolated compile fixture for scripts/check-primitives-api-compile.py.
+#      Its own `[workspace]` keeps the instruction-level ctm-rs checks independent
+#      of the backend workspace, so it needs a separate inventory pass too.
 FIRST_PARTY_WORKSPACE_ROOTS=(
     Cargo.toml
+    cuda-oxide/Cargo.toml
     cuda-oxide/crates/rustc-codegen-cuda/Cargo.toml
     cuda-oxide/crates/cuda-macros/tests/device-only/Cargo.toml
+    cuda-oxide/crates/rustc-codegen-cuda/tests/fixtures/primitives_api_compile/Cargo.toml
 )
 
-# The vendored rustlantis subtree also declares `[workspace]`. It is
-# third-party code attributed in THIRD_PARTY_NOTICES, its dependencies are not
-# ours to record, and check-spdx-headers.sh excludes it for the same reason.
+# These vendored crates have independent workspace roots. Their upstream
+# development dependencies are not first-party inventory entries. Production
+# dependencies still participate in the consuming workspace's cargo-deny checks.
+# Attribution and local changes are recorded in THIRD_PARTY_NOTICES.
 VENDORED_WORKSPACE_ROOTS=(
     cuda-oxide/crates/fuzzer/rustlantis/Cargo.toml
 )
@@ -138,31 +148,53 @@ VENDORED_WORKSPACE_ROOTS=(
 #
 #   Cargo.toml -> Cargo workspace root
 #                      |-- named first-party or vendored root
-#                      `-- example root with a tracked Cargo.lock
-EXAMPLES_ROOT=cuda-oxide/crates/rustc-codegen-cuda/examples
-all_workspace_roots="$(
+#                      `-- example or model root with a tracked Cargo.lock
+EXAMPLE_ROOTS=(
+    cuda-oxide/crates/rustc-codegen-cuda/examples
+    cuda-oxide/examples
+    cuda-oxide/models
+    cuda-oxide/cute-rs-preview/examples
+    cuda-oxide/cute-rs-preview/models
+)
+EXAMPLE_ROOT_PATTERNS=()
+EXAMPLE_LOCK_GLOBS=()
+for root in "${EXAMPLE_ROOTS[@]}"; do
+    EXAMPLE_ROOT_PATTERNS+=("^${root}/")
+    EXAMPLE_LOCK_GLOBS+=("${root}/**/Cargo.lock")
+done
+workspace_roots() {
     git ls-files -z -- '*Cargo.toml' |
         while IFS= read -r -d '' manifest; do
-            root="$(
+            manifest_dir="$(dirname "${manifest}")"
+            manifest_name="$(basename "${manifest}")"
+            # rustup selects a toolchain from the working directory, not from
+            # --manifest-path. Run beside each manifest so cuda-oxide examples
+            # with nightly-only Cargo features use the component pin.
+            workspace_root="$(
+                cd "${manifest_dir}"
                 cargo locate-project --workspace --message-format plain --frozen \
-                    --manifest-path "${manifest}"
-            )"
-            case "${root}" in
-                "${PWD}/"*) printf '%s\n' "${root#"${PWD}/"}" ;;
+                    --manifest-path "${manifest_name}"
+            )" || {
+                echo "error: Cargo could not locate the workspace for ${manifest}" >&2
+                exit 1
+            }
+            case "${workspace_root}" in
+                "${PWD}/"*) printf '%s\n' "${workspace_root#"${PWD}/"}" ;;
                 *)
                     echo "error: Cargo returned a workspace root outside this checkout:" >&2
-                    echo "       ${root}" >&2
+                    echo "       ${workspace_root}" >&2
                     exit 1
                     ;;
             esac
         done | LC_ALL=C sort -u
-)"
+}
+all_workspace_roots="$(workspace_roots)"
 if [[ -z "${all_workspace_roots}" ]]; then
     echo "error: Cargo found no workspace roots; the scan broke" >&2
     exit 1
 fi
 
-# Nested cutile-rs is a separate product (own deny.toml / notices). Oxide's
+# Nested cutile-rs is a separate product (own deny.toml / notices). cuda-oxide's
 # CSV does not inventory it yet, and .github/workflows/cargo-deny.yml leaves
 # its roots out of the policy half for the same reason. When that changes,
 # drop the CUTILE_ROOT filter below and add each cutile-rs `[workspace]` root
@@ -171,7 +203,7 @@ fi
 CUTILE_ROOT=cutile-rs
 on_disk_roots="$(
     printf '%s\n' "${all_workspace_roots}" |
-        grep -v "^${EXAMPLES_ROOT}/" |
+        grep -v -f <(printf '%s\n' "${EXAMPLE_ROOT_PATTERNS[@]}") |
         grep -v "^${CUTILE_ROOT}/" |
         LC_ALL=C sort
 )"
@@ -204,11 +236,11 @@ if [[ -n "${stale}" ]]; then
     exit 1
 fi
 
-# Every example workspace is inventoried from its committed lock file. Compare
-# the two sets before reading any package names so a new nested workspace
+# Every example and model workspace is inventoried from its committed lock file.
+# Compare the two sets before reading any package names so a new nested workspace
 # cannot disappear merely because it has not committed a lock yet.
 mapfile -d '' -t EXAMPLE_LOCKFILES < <(
-    git ls-files -z -- "${EXAMPLES_ROOT}/**/Cargo.lock"
+    git ls-files -z -- "${EXAMPLE_LOCK_GLOBS[@]}"
 )
 if [[ ${#EXAMPLE_LOCKFILES[@]} -lt 20 ]]; then
     echo "error: found only ${#EXAMPLE_LOCKFILES[@]} tracked example lock files;" >&2
@@ -217,7 +249,7 @@ if [[ ${#EXAMPLE_LOCKFILES[@]} -lt 20 ]]; then
 fi
 example_roots="$(
     printf '%s\n' "${all_workspace_roots}" |
-        grep "^${EXAMPLES_ROOT}/" |
+        grep -f <(printf '%s\n' "${EXAMPLE_ROOT_PATTERNS[@]}") |
         LC_ALL=C sort
 )"
 example_lock_roots="$(
@@ -266,11 +298,11 @@ fi
 echo "OK: ${CSV} records all $(printf '%s\n' "${required}" | grep -c .) declared crates."
 
 # ---------------------------------------------------------------------------
-# Second half: the example workspaces.
+# Second half: the example and model workspaces.
 #
-# Every example under cuda-oxide/crates/rustc-codegen-cuda/examples/ sets its own
+# Every example under the ordinary and CuTe example roots sets its own
 # [workspace], so neither `cargo deny check` nor the check above resolves any
-# of them -- both stop at the root workspace boundary.  Most examples declare
+# of them -- both stop at the SIMT workspace boundary. Most examples declare
 # only path dependencies on first-party crates and so bring nothing new, but a
 # few link third-party code (tokio, rayon, libm, the shared cutile-rs crates),
 # and that code is compiled by `cargo oxide run <example>` and by
@@ -300,7 +332,7 @@ echo "OK: ${CSV} records all $(printf '%s\n' "${required}" | grep -c .) declared
 # rename fails the run instead of quietly exempting nothing -- or everything.
 INVENTORY_EXEMPT_EXAMPLES=(cutile_inter_kernel)
 
-examples_missing="$(python3 -c '
+examples_missing="$(EXAMPLE_ROOTS="$(printf '%s\n' "${EXAMPLE_ROOTS[@]}")" python3 -c '
 import os, re, sys
 
 def packages(path):
@@ -313,7 +345,11 @@ def packages(path):
     return out
 
 covered = set()
-for lock in ("Cargo.lock", "cuda-oxide/crates/rustc-codegen-cuda/Cargo.lock"):
+for lock in (
+    "Cargo.lock",
+    "cuda-oxide/Cargo.lock",
+    "cuda-oxide/crates/rustc-codegen-cuda/Cargo.lock",
+):
     covered |= {name for name, _ in packages(lock)}
 
 with open("cuda-oxide/dependency-licenses.csv", newline="") as handle:
@@ -326,11 +362,14 @@ locks = sorted(sys.argv[separator + 1:])
 if len(locks) < 20:
     sys.exit("parse self-test failed: found %d example lock files" % len(locks))
 
-examples_root = "cuda-oxide/crates/rustc-codegen-cuda/examples"
+example_roots = os.environ["EXAMPLE_ROOTS"].splitlines()
 
 def example_of(lock):
     """Top-level example directory a lockfile belongs to, however deep it sits."""
-    return os.path.relpath(lock, examples_root).split(os.sep)[0]
+    for root in example_roots:
+        if lock.startswith(root + os.sep):
+            return os.path.relpath(lock, root).split(os.sep)[0]
+    sys.exit("lockfile outside every configured example root: " + lock)
 
 present = {example_of(lock) for lock in locks}
 unknown = sorted(exempt - present)
@@ -359,7 +398,7 @@ for example, extra in findings:
 if [[ -n "${examples_missing}" ]]; then
     echo "error: ${CSV} is missing rows for third-party crates that example" >&2
     echo "       workspaces compile (neither cargo-deny nor the check above" >&2
-    echo "       resolves these -- both stop at the root workspace):" >&2
+    echo "       resolves these -- both stop at the SIMT workspace):" >&2
     printf '%s\n' "${examples_missing}" | sed 's/^/  /' >&2
     exit 1
 fi

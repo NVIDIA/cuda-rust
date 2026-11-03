@@ -18,7 +18,6 @@ use pliron::{
     derive::op_interface_impl,
     identifier::Identifier,
     irbuild::{inserter::Inserter, rewriter::Rewriter},
-    location::Located,
     op::Op,
     operation::Operation,
     opts::mem2reg::{
@@ -1117,6 +1116,16 @@ impl Verify for MirSharedAllocOp {
             return verify_err!(op.loc(), "MirSharedAllocOp missing size attribute");
         }
 
+        if let Some(alignment) = self.get_alignment_value(ctx)
+            && (alignment == 0 || !alignment.is_power_of_two())
+        {
+            return verify_err!(
+                op.loc(),
+                "MirSharedAllocOp alignment must be a non-zero power of two, found {}",
+                alignment
+            );
+        }
+
         // Check result is a shared memory pointer
         let res = op.get_result(0);
         let res_ty = res.get_type(ctx);
@@ -1354,18 +1363,21 @@ mod device_global_key_tests {
 /// All `MirExternSharedOp` instances in a kernel refer to the **same** underlying
 /// memory, with different byte offsets for partitioning.
 ///
-/// This is lowered to an LLVM global with extern linkage and addrspace(3):
+/// This is lowered to an LLVM global with extern linkage and addrspace(3).
+/// The global alignment is the maximum effective requirement across the
+/// function's dynamic shared-memory references and any propagated launch
+/// contract:
 /// ```llvm
-/// @__dynamic_smem = external addrspace(3) global [0 x i8], align 256
+/// @__dynamic_smem = external addrspace(3) global [0 x i8], align <effective>
 /// ```
 ///
 /// # Attributes
 ///
 /// ```text
-/// | Name            | Type        | Description                              |
-/// |-----------------|-------------|------------------------------------------|
-/// | `byte_offset`   | IntegerAttr | Byte offset from start of dynamic smem   |
-/// | `mir_alignment` | IntegerAttr | Alignment hint (global always uses 256)  |
+/// | Name                 | Type        | Description                                    |
+/// |----------------------|-------------|------------------------------------------------|
+/// | `extern_byte_offset` | IntegerAttr | Byte offset from start of dynamic smem         |
+/// | `extern_alignment`   | IntegerAttr | Requested minimum alignment for this reference |
 /// ```
 ///
 /// # Results
@@ -1379,6 +1391,10 @@ mod device_global_key_tests {
 /// # Verification
 ///
 /// - Result must be a pointer type with shared address space (3).
+/// - An explicit alignment must be a non-zero power of two.
+///
+/// Lowering also raises the requested alignment to the pointee type's required
+/// ABI alignment before computing the maximum alignment for the shared pool.
 #[pliron_op(
     name = "mir.extern_shared",
     format,
@@ -1414,10 +1430,11 @@ impl MirExternSharedOp {
         self.set_attr_extern_byte_offset(ctx, offset_attr);
     }
 
-    /// Get alignment as u64 (returns 128 if not set).
+    /// Get the requested minimum alignment as u64.
     ///
-    /// Note: The actual global alignment is fixed at 256 bytes in mir-lower,
-    /// regardless of this attribute value.
+    /// Legacy or synthetic MIR without an explicit alignment attribute falls
+    /// back to 128 bytes. Importer-produced dynamic shared-memory operations
+    /// carry the source-level alignment explicitly.
     pub fn get_alignment_value(&self, ctx: &Context) -> u64 {
         self.get_attr_extern_alignment(ctx)
             .map(|attr| attr.value().to_u64())
@@ -1443,6 +1460,18 @@ impl Verify for MirExternSharedOp {
     fn verify(&self, ctx: &Context) -> Result<(), Error> {
         let op = &*self.get_operation().deref(ctx);
 
+        if let Some(alignment) = self
+            .get_attr_extern_alignment(ctx)
+            .map(|attr| attr.value().to_u64())
+            && (alignment == 0 || !alignment.is_power_of_two())
+        {
+            return verify_err!(
+                op.loc(),
+                "MirExternSharedOp alignment must be a non-zero power of two, found {}",
+                alignment
+            );
+        }
+
         // Check result is a shared memory pointer
         let res = op.get_result(0);
         let res_ty = res.get_type(ctx);
@@ -1466,6 +1495,105 @@ impl Verify for MirExternSharedOp {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod shared_alignment_verifier_tests {
+    use super::*;
+    use pliron::utils::apint::APInt;
+    use pliron::{
+        builtin::{
+            attributes::{IntegerAttr, TypeAttr},
+            types::{IntegerType, Signedness},
+        },
+        common_traits::Verify,
+        operation::Operation,
+    };
+    use std::num::NonZeroUsize;
+
+    fn u64_attr(ctx: &Context, value: u64) -> IntegerAttr {
+        IntegerAttr::new(
+            IntegerType::get(ctx, 64, Signedness::Unsigned),
+            APInt::from_u64(value, NonZeroUsize::new(64).unwrap()),
+        )
+    }
+
+    fn shared_alloc(ctx: &mut Context, alignment: u64) -> MirSharedAllocOp {
+        let elem_ty: TypeHandle = IntegerType::get(ctx, 32, Signedness::Unsigned).into();
+        let result_ty = MirPtrType::get_shared(ctx, elem_ty, true);
+        let op = Operation::new(
+            ctx,
+            MirSharedAllocOp::get_concrete_op_info(),
+            vec![result_ty.into()],
+            vec![],
+            vec![],
+            0,
+        );
+        let alloc = MirSharedAllocOp::new(op);
+        alloc.set_attr_elem_type(ctx, TypeAttr::new(elem_ty));
+        alloc.set_attr_size(ctx, u64_attr(ctx, 1));
+        alloc.set_alignment_value(ctx, alignment);
+        alloc
+    }
+
+    fn extern_shared(ctx: &mut Context, alignment: u64) -> MirExternSharedOp {
+        let elem_ty: TypeHandle = IntegerType::get(ctx, 32, Signedness::Unsigned).into();
+        let result_ty = MirPtrType::get_shared(ctx, elem_ty, true);
+        let op = Operation::new(
+            ctx,
+            MirExternSharedOp::get_concrete_op_info(),
+            vec![result_ty.into()],
+            vec![],
+            vec![],
+            0,
+        );
+        let extern_shared = MirExternSharedOp::new(op);
+        extern_shared.set_alignment_value(ctx, alignment);
+        extern_shared
+    }
+
+    /// The rejection must name the op and the offending value: that line is
+    /// what the user sees at the use site.
+    fn assert_rejected(result: Result<(), Error>, expected: &str) {
+        let error = result.expect_err("an invalid alignment must fail verification");
+        let message = error.to_string();
+        assert!(
+            message.contains(expected),
+            "expected `{expected}` in the diagnostic, got: {message}"
+        );
+    }
+
+    #[test]
+    fn shared_alloc_rejects_non_power_of_two_alignment() {
+        let mut ctx = Context::new();
+        crate::register(&mut ctx);
+
+        assert_rejected(
+            shared_alloc(&mut ctx, 3).verify(&ctx),
+            "MirSharedAllocOp alignment must be a non-zero power of two, found 3",
+        );
+        assert_rejected(
+            shared_alloc(&mut ctx, 0).verify(&ctx),
+            "MirSharedAllocOp alignment must be a non-zero power of two, found 0",
+        );
+        assert!(shared_alloc(&mut ctx, 8).verify(&ctx).is_ok());
+    }
+
+    #[test]
+    fn extern_shared_rejects_non_power_of_two_alignment() {
+        let mut ctx = Context::new();
+        crate::register(&mut ctx);
+
+        assert_rejected(
+            extern_shared(&mut ctx, 3).verify(&ctx),
+            "MirExternSharedOp alignment must be a non-zero power of two, found 3",
+        );
+        assert_rejected(
+            extern_shared(&mut ctx, 0).verify(&ctx),
+            "MirExternSharedOp alignment must be a non-zero power of two, found 0",
+        );
+        assert!(extern_shared(&mut ctx, 8).verify(&ctx).is_ok());
     }
 }
 

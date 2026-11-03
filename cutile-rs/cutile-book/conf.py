@@ -55,7 +55,7 @@ html_theme_options = {
     "icon_links": [
         {
             "name": "GitHub",
-            "url": "https://github.com/NVlabs/cutile-rs",
+            "url": "https://github.com/NVIDIA/cuda-rust",
             "icon": "fa-brands fa-github",
         },
     ],
@@ -92,7 +92,7 @@ if _docs_version:
     html_theme_options["switcher"] = {
         "json_url": os.environ.get(
             "CUTILE_DOCS_SWITCHER_JSON",
-            "/cutile-rs/_static/versions.json",
+            "/cuda-rust/cutile/_static/versions.json",
         ),
         "version_match": _docs_version,
     }

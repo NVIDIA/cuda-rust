@@ -15,4 +15,4 @@ module-kernels = { path = "kernel-lib" }
 
 cuda-device = { path = "../../../cuda-device" }
 cuda-host = { path = "../../../cuda-host" }
-cuda-core = "0.3.1"
+cuda-core = { path = "../../../../../cuda-core" }

@@ -43,7 +43,7 @@ export LC_ALL=C
 
 cd "$(dirname "$0")/.."
 
-MANIFEST=../Cargo.toml
+MANIFEST=Cargo.toml
 WORKFLOW=../.github/workflows/unit-tests.yml
 JUSTFILE=Justfile
 

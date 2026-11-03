@@ -1,0 +1,5 @@
+error: #[tile_export] parameters must be `x: T`, `x: &T`, `x: &mut T`, `x: &[T; N]`, or `x: &mut [T; N]` with T one of f16, f32, f64, i8, i16, i32, i64, u8, u16, u32, u64 and N an integer literal; found `&[f32]`. Slices, raw pointers, tuples, structs, generics, and other element types are not accepted
+ --> tests/compile_fail/tile_export_unsupported_param.rs:7:17
+  |
+7 | pub fn first(x: &[f32]) -> f32 {
+  |                 ^^^^^^

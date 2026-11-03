@@ -2,19 +2,19 @@ schema = 57
 family = "tcgen05"
 
 [tcgen05]
-llvm_evidence_profile = "rust-llvm-23.1.0-16696adc"
+llvm_evidence_profile = "rust-llvm-23.1.3-aab11ee0"
 libnvvm_evidence_profile = "cuda-13.3-libnvvm-13.3.33-tcgen05"
-cp_llvm_evidence_profile = "rust-llvm-23.1.0-16696adc"
+cp_llvm_evidence_profile = "rust-llvm-23.1.3-aab11ee0"
 cp_libnvvm_evidence_profile = "cuda-13.3-libnvvm-13.3.33-tcgen05-cp"
-ld_llvm_evidence_profile = "rust-llvm-23.1.0-16696adc"
+ld_llvm_evidence_profile = "rust-llvm-23.1.3-aab11ee0"
 ld_libnvvm_evidence_profile = "cuda-13.3-libnvvm-13.3.33-tcgen05-ld"
-st_llvm_evidence_profile = "rust-llvm-23.1.0-16696adc"
+st_llvm_evidence_profile = "rust-llvm-23.1.3-aab11ee0"
 st_libnvvm_evidence_profile = "cuda-13.3-libnvvm-13.3.33-tcgen05-st"
-offset_llvm_evidence_profile = "rust-llvm-23.1.0-16696adc"
+offset_llvm_evidence_profile = "rust-llvm-23.1.3-aab11ee0"
 offset_libnvvm_evidence_profile = "cuda-13.3-libnvvm-13.3.33-tcgen05-ldst-offset"
-control_llvm_evidence_profile = "rust-llvm-23.1.0-16696adc"
+control_llvm_evidence_profile = "rust-llvm-23.1.3-aab11ee0"
 control_libnvvm_evidence_profile = "cuda-13.3-libnvvm-13.3.33-tcgen05-control"
-mma_llvm_evidence_profile = "rust-llvm-23.1.0-16696adc-tcgen05-mma"
+mma_llvm_evidence_profile = "rust-llvm-23.1.3-aab11ee0-tcgen05-mma"
 mma_libnvvm_evidence_profile = "cuda-13.3-libnvvm-13.3.33-tcgen05-mma"
 runtime_validation = "unexecuted"
 
@@ -1376,3 +1376,67 @@ alias = "e3m2"
 abi_id = "i1015"
 form = "shared"
 alias = "e2m1"
+
+[[tcgen05.mma_variant]]
+abi_id = "i1043"
+form = "shared_mxf4_block_scale"
+
+[[tcgen05.mma_variant]]
+abi_id = "i1044"
+form = "shared_mxf4_block_scale_block32"
+
+[[tcgen05.mma_variant]]
+abi_id = "i1045"
+form = "shared_mxf4nvf4_block_scale_block16"
+
+[[tcgen05.mma_variant]]
+abi_id = "i1046"
+form = "shared_mxf4nvf4_block_scale_block32"
+
+[[tcgen05.mma_variant]]
+abi_id = "i1047"
+form = "shared_mxf8f6f4_block_scale"
+
+[[tcgen05.mma_variant]]
+abi_id = "i1048"
+form = "shared_mxf8f6f4_block_scale_block32"
+
+[[tcgen05.mma_variant]]
+abi_id = "i1049"
+form = "tensor_mxf4_block_scale"
+
+[[tcgen05.mma_variant]]
+abi_id = "i1050"
+form = "tensor_mxf4_block_scale_block32"
+
+[[tcgen05.mma_variant]]
+abi_id = "i1051"
+form = "tensor_mxf4nvf4_block_scale_block16"
+
+[[tcgen05.mma_variant]]
+abi_id = "i1052"
+form = "tensor_mxf4nvf4_block_scale_block32"
+
+[[tcgen05.mma_variant]]
+abi_id = "i1053"
+form = "tensor_mxf8f6f4_block_scale"
+
+[[tcgen05.mma_variant]]
+abi_id = "i1054"
+form = "tensor_mxf8f6f4_block_scale_block32"
+
+[[tcgen05.mma_variant]]
+abi_id = "i1055"
+form = "sp_shared_mxf8f6f4_block_scale"
+
+[[tcgen05.mma_variant]]
+abi_id = "i1056"
+form = "sp_shared_mxf8f6f4_block_scale_block32"
+
+[[tcgen05.mma_variant]]
+abi_id = "i1057"
+form = "sp_tensor_mxf8f6f4_block_scale"
+
+[[tcgen05.mma_variant]]
+abi_id = "i1058"
+form = "sp_tensor_mxf8f6f4_block_scale_block32"

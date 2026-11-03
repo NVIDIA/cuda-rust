@@ -82,6 +82,12 @@ pub(crate) fn call_site_ident_avoiding_item(name: &str, item: &ItemFn) -> Ident 
 /// Returns `Some(compile_error)` to be returned from the macro entry point,
 /// or `None` if the name is safe.
 pub(crate) fn reject_reserved_name(name: &Ident) -> Option<TokenStream> {
+    reserved_name_error(name).map(|err| err.to_compile_error().into())
+}
+
+/// [`reject_reserved_name`] as a `syn::Error`, for macros that compose their
+/// diagnostics before converting to a token stream.
+pub(crate) fn reserved_name_error(name: &Ident) -> Option<syn::Error> {
     let name_str = name.to_string();
     if name_str.starts_with(RESERVED_ROOT) {
         let msg = format!(
@@ -90,7 +96,7 @@ pub(crate) fn reject_reserved_name(name: &Ident) -> Option<TokenStream> {
              is reserved for cuda-oxide internal symbol mangling \
              (see cuda-oxide/crates/reserved-oxide-symbols)"
         );
-        Some(syn::Error::new(name.span(), msg).to_compile_error().into())
+        Some(syn::Error::new(name.span(), msg))
     } else {
         None
     }

@@ -157,6 +157,7 @@ pub(in crate::render) fn register_mma_attr_variants(
         RegisterMmaKind::Standard => "RegisterMmaKindAttr::Standard",
         RegisterMmaKind::F8f6f4 => "RegisterMmaKindAttr::F8f6f4",
         RegisterMmaKind::Mxf8f6f4 => "RegisterMmaKindAttr::Mxf8f6f4",
+        RegisterMmaKind::Mxf4 => "RegisterMmaKindAttr::Mxf4",
     };
     let accumulator = match mma.accumulator {
         RegisterMmaAccumulator::F16 => "RegisterMmaAccumulatorAttr::F16",
@@ -366,6 +367,12 @@ pub(in crate::render) const SPARSE_MMA_ORDERED_TF32_METADATA_RULE: &str =
 
 pub(in crate::render) fn sparse_mma_metadata_rule(mma: &SparseMma) -> &'static str {
     match (mma.metadata, mma.a_element) {
+        // PTX 8.4 requires these six ordered index pairs for plain FP8 mma.sp
+        // too; this does not change the instruction to mma.sp::ordered_metadata.
+        // https://docs.nvidia.com/cuda/archive/12.4.1/parallel-thread-execution/index.html#warp-level-sparse-matrix-storage
+        (SparseMmaMetadata::Standard, SparseMmaElement::E4m3 | SparseMmaElement::E5m2) => {
+            SPARSE_MMA_ORDERED_METADATA_RULE
+        }
         (SparseMmaMetadata::Standard, _) => SPARSE_MMA_STANDARD_METADATA_RULE,
         (SparseMmaMetadata::Ordered, SparseMmaElement::Tf32) => {
             SPARSE_MMA_ORDERED_TF32_METADATA_RULE

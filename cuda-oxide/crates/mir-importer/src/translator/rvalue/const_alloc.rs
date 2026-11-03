@@ -23,7 +23,7 @@ use dialect_mir::types::MirFP16Type;
 use pliron::basic_block::BasicBlock;
 use pliron::builtin::types::{FP32Type, FP64Type, IntegerType, Signedness};
 use pliron::context::{Context, Ptr};
-use pliron::location::{Located, Location};
+use pliron::location::Location;
 use pliron::op::Op;
 use pliron::operation::Operation;
 use pliron::r#type::TypeHandle;
@@ -506,10 +506,10 @@ fn decode_relocation_addend(
 /// Materialize a thin pointer field from an aggregate constant's allocation.
 ///
 /// Aggregate **const** values with thin pointers to device statics are
-/// materialized via [`MirGlobalAllocOp`] per field (addend taken from the
+/// materialized via [`MirGlobalAllocOp`](dialect_mir::ops::MirGlobalAllocOp) per field (addend taken from the
 /// relocation's stored bytes). This does **not** mean device-static
 /// *initializers* that themselves contain pointer relocations are supported —
-/// those remain rejected by [`allocation_initializer_data`].
+/// those remain rejected by [`allocation_initializer_data`](super::statics::allocation_initializer_data).
 ///
 /// When the field has no provenance entry, falls back to the existing
 /// inttoptr-of-bytes path (null / exposed provenance).

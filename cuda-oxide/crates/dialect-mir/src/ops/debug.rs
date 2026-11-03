@@ -17,7 +17,7 @@ use pliron::{
     common_traits::Verify,
     context::{Context, Ptr},
     identifier::Identifier,
-    location::{Located, Location},
+    location::Location,
     op::Op,
     operation::Operation,
     result::Error,

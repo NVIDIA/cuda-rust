@@ -1,0 +1,16 @@
+[package]
+name = "ffn_cute"
+version = "0.1.0"
+edition = "2024"
+authors = ["Nihal Pasham <nihalp@nvidia.com>"]
+license = "Apache-2.0"
+description = "Checked BF16 feed-forward composition using typed tensor-core operands"
+
+[workspace]
+
+[dependencies]
+cute-rs = { path = "../../cute-rs", features = ["host"] }
+ctm-rs = { path = "../../ctm-rs" }
+cuda-device = { path = "../../../crates/cuda-device" }
+cuda-host = { path = "../../../crates/cuda-host" }
+cuda-core = { path = "../../../../cuda-core" }

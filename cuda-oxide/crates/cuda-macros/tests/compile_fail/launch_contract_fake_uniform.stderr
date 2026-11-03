@@ -10,7 +10,7 @@ help: the trait `cuda_device::uniform::__LaunchContractUniform<u32>` is not impl
 12 | pub struct Uniform<T> {
    | ^^^^^^^^^^^^^^^^^^^^^
 help: the trait `cuda_device::uniform::__LaunchContractUniform<T>` is implemented for `cuda_device::Uniform<T>`
-  --> $WORKSPACE/cuda-oxide/crates/cuda-device/src/uniform.rs
+  --> $WORKSPACE/crates/cuda-device/src/uniform.rs
    |
    | impl<T> __LaunchContractUniform<T> for Uniform<T> {}
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

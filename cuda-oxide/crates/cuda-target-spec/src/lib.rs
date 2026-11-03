@@ -480,8 +480,18 @@ pub fn recorded_ptx_floor(arch: &CudaArch) -> Result<u16, UnsupportedTargetError
         })
 }
 
+/// Whether `arch` is a known CUDA target supported by the NVVM IR / toolkit pipeline.
+///
+/// Includes every target with a recorded LLVM 23 PTX floor plus CUDA 13.4+
+/// Rubin (`sm_107`, `sm_107a`, `sm_107f`) targets that `libNVVM` and `nvJitLink`
+/// compile natively before the pinned `llc` backend gains `-mcpu=sm_107*`.
+pub fn is_known_nvvm_target(arch: &CudaArch) -> bool {
+    recorded_ptx_floor(arch).is_ok()
+        || (arch.capability == 107 && matches!(arch.suffix, None | Some('a' | 'f')))
+}
+
 /// Discrete PTX ISA feature spellings supported by the pinned LLVM backend.
-pub const PTX_ISA_SPELLINGS: &[u16] = &[62, 65, 70, 71, 73, 78, 80, 86, 87, 88, 90];
+pub const PTX_ISA_SPELLINGS: &[u16] = &[62, 65, 70, 71, 73, 78, 80, 86, 87, 88, 90, 91];
 
 /// A proof-carrying member of the supported PTX ISA spelling vocabulary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -528,6 +538,7 @@ impl PtxSpelling {
             87 => "+ptx87",
             88 => "+ptx88",
             90 => "+ptx90",
+            91 => "+ptx91",
             _ => unreachable!(),
         }
     }
@@ -582,6 +593,12 @@ mod tests {
         ] {
             assert!(raw.parse::<DeviceArch>().is_err(), "{raw}");
         }
+        for nvvm_only in ["sm_107", "sm_107a", "sm_107f"] {
+            let arch: CudaArch = nvvm_only.parse().unwrap();
+            assert!(is_known_nvvm_target(&arch), "{nvvm_only}");
+            assert!(recorded_ptx_floor(&arch).is_err(), "{nvvm_only}");
+        }
+        assert!(!is_known_nvvm_target(&"sm_102a".parse().unwrap()));
     }
 
     #[test]
@@ -670,7 +687,8 @@ mod tests {
         assert_eq!(spelling_feature(74), None);
         assert_eq!(PtxSpelling::from_spelling(74), None);
         assert_eq!(PtxSpelling::round_up(74).map(PtxSpelling::get), Some(78));
-        assert_eq!(PtxSpelling::round_up(91), None);
+        assert_eq!(PtxSpelling::round_up(91).map(PtxSpelling::get), Some(91));
+        assert_eq!(PtxSpelling::round_up(92), None);
     }
 
     #[test]

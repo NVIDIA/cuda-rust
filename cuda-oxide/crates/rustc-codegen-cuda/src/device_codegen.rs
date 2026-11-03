@@ -349,6 +349,10 @@ pub struct DeviceCodegenConfig {
     pub output_dir: PathBuf,
     /// Base name for output files (e.g., "kernel" → kernel.ll, kernel.ptx).
     pub output_name: String,
+    /// Optional exact path for the prepared semantic CUTLASS MLIR module.
+    pub mlir_output: Option<PathBuf>,
+    /// Device artifact backend selected by the rustc frontend.
+    pub device_backend: mir_importer::DeviceBackend,
     /// Print verbose progress to stderr.
     pub verbose: bool,
     /// Dump raw rustc MIR before translation.
@@ -364,6 +368,8 @@ impl Default for DeviceCodegenConfig {
         Self {
             output_dir: std::env::current_dir().unwrap_or_else(|_| ".".into()),
             output_name: "kernel".to_string(),
+            mlir_output: None,
+            device_backend: mir_importer::DeviceBackend::Native,
             verbose: false,
             dump_rustc_mir: false,
             dump_mir_dialect: false,
@@ -849,6 +855,29 @@ impl From<std::io::Error> for DeviceCodegenError {
     }
 }
 
+/// Whether this `#[inline(never)]` is the one `#[device]` puts on the prefixed
+/// function of a device function with its own type or const parameters
+/// (cuda-macros `generate_device_function`, `has_codegen_generics`). It keeps
+/// each monomorphization a separate item for the collector, a host-side
+/// requirement rather than a device-code intent; as `noinline` it would keep
+/// every call and stop const-generic arguments from folding into their callers.
+/// The macro's attribute comes first, so rustc keeps it and reports an inline
+/// attribute the user adds there as unused: on such functions a user's own
+/// inline attribute never reached device code, before or after this mapping.
+/// Unnamed instances never match (`opt_item_name`). The test keys on the
+/// device symbol name plus own generics, which is enough while the macro
+/// always writes its attribute first. Once #1472 lets a user's inline
+/// attribute replace the macro's, this test must key on where the attribute
+/// came from instead (`AttributeKind::Inline(_, span)` with
+/// `span.from_expansion()`), or it would drop a user's own `#[inline(never)]`.
+fn is_generic_device_collector_boundary<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>) -> bool {
+    let def_id = instance.def_id();
+    tcx.generics_of(def_id).own_requires_monomorphization()
+        && tcx
+            .opt_item_name(def_id)
+            .is_some_and(|name| reserved_oxide_symbols::is_device_symbol(name.as_str()))
+}
+
 /// Generates PTX for device functions using the cuda-oxide pipeline.
 ///
 /// This is the main entry point for device codegen. It bridges between
@@ -997,6 +1026,8 @@ pub fn generate_device_code<'tcx>(
 
     let output_dir = config.output_dir.clone();
     let output_name = config.output_name.clone();
+    let mlir_output = config.mlir_output.clone();
+    let device_backend = config.device_backend.clone();
     let verbose = config.verbose;
     let show_rustc_mir = config.dump_rustc_mir;
     let show_mir = config.dump_mir_dialect;
@@ -1062,18 +1093,26 @@ pub fn generate_device_code<'tcx>(
     // 2. Sets up thread-local CompilerCtxt
     // 3. Runs our closure with access to stable() conversion
     // 4. Tears down the context and returns our result
-    // Pre-compute `#[inline(always)]` flags before entering the stable_mir
-    // context, since the query lives on `rustc_middle::TyCtxt` and is not
-    // exposed through stable_mir. Preserving this hint avoids making helper
-    // boundaries depend entirely on later optimizer heuristics.
-    let inline_always_flags: Vec<bool> = functions
+    // Pre-compute each function's `#[inline]` intent before entering the
+    // stable_mir context, since the query lives on `rustc_middle::TyCtxt` and
+    // is not exposed through stable_mir. Every variant is preserved (as rustc's
+    // LLVM backend does): helper boundaries, `#[inline(never)]` ones included,
+    // must not depend entirely on later optimizer heuristics. The one exception
+    // is the collector boundary `#[device]` adds to generic device functions.
+    let inline_intents: Vec<Option<dialect_mir::attributes::InlineIntentAttr>> = functions
         .iter()
         .map(|func| {
-            let def_id = func.instance.def_id();
-            matches!(
-                tcx.codegen_fn_attrs(def_id).inline,
-                rustc_hir::attrs::InlineAttr::Always | rustc_hir::attrs::InlineAttr::Force { .. }
-            )
+            use dialect_mir::attributes::InlineIntentAttr;
+            use rustc_attr_ir::InlineAttr;
+            match tcx.codegen_fn_attrs(func.instance.def_id()).inline {
+                InlineAttr::None => None,
+                InlineAttr::Hint => Some(InlineIntentAttr::Hint),
+                InlineAttr::Always | InlineAttr::Force { .. } => Some(InlineIntentAttr::Always),
+                InlineAttr::Never if is_generic_device_collector_boundary(tcx, func.instance) => {
+                    None
+                }
+                InlineAttr::Never => Some(InlineIntentAttr::Never),
+            }
         })
         .collect();
     let device_mono_reachability: Vec<crate::collector::DeviceMonoReachability> = functions
@@ -1137,11 +1176,11 @@ pub fn generate_device_code<'tcx>(
             .iter()
             .zip(export_names.iter())
             .zip(debug_scope_maps.iter())
-            .zip(inline_always_flags.iter())
+            .zip(inline_intents.iter())
             .zip(device_mono_reachability.iter())
             .filter_map(
                 |(
-                    (((func, (export_name, is_kernel)), debug_source_scopes), is_inline_always),
+                    (((func, (export_name, is_kernel)), debug_source_scopes), inline),
                     reachability,
                 )| {
                     // Use rustc_internal::stable() to convert the Instance.
@@ -1172,7 +1211,7 @@ pub fn generate_device_code<'tcx>(
                         export_name: export_name.clone(),
                         debug_source_scopes: Some(debug_source_scopes.clone()),
                         statement_debug_info,
-                        is_inline_always: *is_inline_always,
+                        inline: *inline,
                     })
                 },
             )
@@ -1215,6 +1254,8 @@ pub fn generate_device_code<'tcx>(
         let pipeline_config = mir_importer::PipelineConfig {
             output_dir: output_dir.clone(),
             output_name: output_name.clone(),
+            mlir_output: mlir_output.clone(),
+            device_backend: device_backend.clone(),
             verbose,
             show_mir_dialect: show_mir,
             show_llvm_dialect: show_llvm,
@@ -1377,6 +1418,8 @@ mod tests {
         let config = DeviceCodegenConfig::default();
         assert!(!config.verbose);
         assert_eq!(config.output_name, "kernel");
+        assert_eq!(config.mlir_output, None);
+        assert_eq!(config.device_backend, mir_importer::DeviceBackend::Native);
     }
 
     #[test]

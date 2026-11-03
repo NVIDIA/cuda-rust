@@ -44,7 +44,6 @@ use pliron::context::{Context, Ptr};
 use pliron::irbuild::dialect_conversion::{DialectConversionRewriter, OperandsInfo};
 use pliron::irbuild::inserter::Inserter;
 use pliron::irbuild::rewriter::Rewriter;
-use pliron::location::Located;
 use pliron::op::Op;
 use pliron::operation::Operation;
 use pliron::result::Result;
@@ -57,7 +56,7 @@ use pliron::value::Value;
 
 /// Extract binary operands from the (already-converted) operation.
 fn get_binary_operands(op: Ptr<Operation>, ctx: &Context) -> Result<(Value, Value)> {
-    let loc = op.deref(ctx).loc();
+    let loc = op.deref(ctx).loc().clone();
     let operands: Vec<_> = op.deref(ctx).operands().collect();
     match operands.as_slice() {
         [lhs, rhs] => Ok((*lhs, *rhs)),
@@ -350,7 +349,7 @@ fn convert_checked_binop_with_intrinsic(
     rhs: Value,
     op_name: &str,
 ) -> Result<()> {
-    let loc = op.deref(ctx).loc();
+    let loc = op.deref(ctx).loc().clone();
     let lhs_ty = lhs.get_type(ctx);
 
     let width = lhs_ty
@@ -751,7 +750,7 @@ pub(crate) fn convert_three_way_cmp(
         // and f32::total_cmp lowers to integer bit-twiddling, not Cmp.
         // An OLT/OGT select chain would also miscompile: NaN compares
         // false on both predicates and would silently yield Equal.
-        let loc = op.deref(ctx).loc();
+        let loc = op.deref(ctx).loc().clone();
         return pliron::input_err!(
             loc,
             "BinOp::Cmp on floats is never emitted by rustc; total-order lowering unimplemented"
@@ -763,7 +762,7 @@ pub(crate) fn convert_three_way_cmp(
     let is_gt = emit_cmp_value(ctx, rewriter, op, lhs, rhs, is_signed, false);
 
     let mir_result_ty = op.deref(ctx).get_result(0).get_type(ctx);
-    let loc = op.deref(ctx).loc();
+    let loc = op.deref(ctx).loc().clone();
     let (discr_ty, variant_discriminants) = {
         let mir_result_ty_obj = mir_result_ty.deref(ctx);
         let enum_ty = mir_result_ty_obj
@@ -834,7 +833,7 @@ fn emit_cmp_value(
         (false, false) => ICmpPredicateAttr::UGT,
     };
     let cmp_op = llvm::ICmpOp::new(ctx, pred, lhs, rhs).get_operation();
-    cmp_op.deref_mut(ctx).set_loc(op.deref(ctx).loc());
+    cmp_op.deref_mut(ctx).set_loc(op.deref(ctx).loc().clone());
     rewriter.insert_operation(ctx, cmp_op);
     cmp_op.deref(ctx).get_result(0)
 }

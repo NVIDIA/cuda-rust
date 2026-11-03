@@ -18,7 +18,6 @@ use pliron::{
     },
     common_traits::Verify,
     context::{Context, Ptr},
-    location::Located,
     op::Op,
     operation::Operation,
     result::Error,
@@ -75,17 +74,69 @@ impl Verify for CvtaGenericToSharedOffsetOp {
         };
         if !matches!(
             pointer_ty.address_space,
-            address_space::GENERIC | address_space::SHARED
+            address_space::GENERIC | address_space::SHARED | 7
         ) {
             return verify_err!(
                 op.loc(),
-                "nvvm.cvta_generic_to_shared_offset operand must point to generic or shared memory"
+                "nvvm.cvta_generic_to_shared_offset operand must point to generic, shared or cluster shared memory"
             );
         }
         if !is_shared_offset_integer(ctx, op.get_result(0).get_type(ctx)) {
             return verify_err!(
                 op.loc(),
                 "nvvm.cvta_generic_to_shared_offset result must be u32 or u64"
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Convert generic, CTA-shared or cluster-shared pointers to cluster offsets.
+/// Generic and CTA-shared pointers first cast to AS7; AS7 inputs remain intact.
+#[pliron_op(
+    name = "nvvm.cvta_generic_to_cluster_shared_offset",
+    format,
+    interfaces = [NOpdsInterface<1>, NResultsInterface<1>],
+)]
+pub struct CvtaGenericToClusterSharedOffsetOp;
+
+impl CvtaGenericToClusterSharedOffsetOp {
+    /// Wrap an existing operation pointer.
+    pub fn new(op: Ptr<Operation>) -> Self {
+        CvtaGenericToClusterSharedOffsetOp { op }
+    }
+}
+
+impl Verify for CvtaGenericToClusterSharedOffsetOp {
+    fn verify(&self, ctx: &Context) -> Result<(), Error> {
+        let op = self.get_operation().deref(ctx);
+        if op.get_num_operands() != 1 || op.get_num_results() != 1 {
+            return verify_err!(
+                op.loc(),
+                "nvvm.cvta_generic_to_cluster_shared_offset requires one operand and one result"
+            );
+        }
+        let pointer_ty = op.get_operand(0).get_type(ctx);
+        let pointer_ty_obj = pointer_ty.deref(ctx);
+        let Some(pointer_ty) = pointer_ty_obj.downcast_ref::<MirPtrType>() else {
+            return verify_err!(
+                op.loc(),
+                "nvvm.cvta_generic_to_cluster_shared_offset operand must be a MIR pointer"
+            );
+        };
+        if !matches!(
+            pointer_ty.address_space,
+            address_space::GENERIC | address_space::SHARED | 7
+        ) {
+            return verify_err!(
+                op.loc(),
+                "nvvm.cvta_generic_to_cluster_shared_offset operand must point to generic, shared or cluster shared memory"
+            );
+        }
+        if !is_shared_offset_integer(ctx, op.get_result(0).get_type(ctx)) {
+            return verify_err!(
+                op.loc(),
+                "nvvm.cvta_generic_to_cluster_shared_offset result must be u32 or u64"
             );
         }
         Ok(())

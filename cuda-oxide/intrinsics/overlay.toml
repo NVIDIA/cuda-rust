@@ -1,7 +1,7 @@
 schema = 44
 catalog_version = "0.1.0"
 intrinsic_abi = 1
-backend_profile = "rust-llvm-23.1.0-16696adc"
+backend_profile = "rust-llvm-23.1.3-aab11ee0"
 shards = [
     "overlay/active_mask.toml",
     "overlay/clc.toml",
@@ -26,6 +26,7 @@ shards = [
     "overlay/packed_atomic.toml",
     "overlay/packed_conversion.toml",
     "overlay/packed_conversion_fp8.toml",
+    "overlay/packed_conversion_fp8_bf16x2.toml",
     "overlay/packed_conversion_fp8_f16x2.toml",
     "overlay/prmt.toml",
     "overlay/redux.toml",
@@ -40,6 +41,7 @@ shards = [
     "overlay/register_mma_int4_m8.toml",
     "overlay/register_mma_int8.toml",
     "overlay/register_mma_int8_m8.toml",
+    "overlay/register_mma_mxf4_f32.toml",
     "overlay/register_mma_mxf8f6f4_f32.toml",
     "overlay/scalar_arithmetic.toml",
     "overlay/scalar_conversion.toml",

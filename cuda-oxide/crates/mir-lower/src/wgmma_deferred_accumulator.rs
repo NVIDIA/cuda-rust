@@ -59,8 +59,8 @@ use dialect_mir::attributes::MirCastKindAttr;
 use dialect_mir::{
     ops::{
         MirAddOp, MirArrayElementAddrOp, MirCastOp, MirCondBranchOp, MirConstantOp, MirFuncOp,
-        MirGeOp, MirGotoOp, MirGtOp, MirLeOp, MirLoadOp, MirLtOp, MirNotOp, MirStorageDeadOp,
-        MirStorageLiveOp, MirStoreOp, MirSubOp,
+        MirGeOp, MirGotoOp, MirGtOp, MirLeOp, MirLoadOp, MirLtOp, MirNoUnrollHintOp, MirNotOp,
+        MirStorageDeadOp, MirStorageLiveOp, MirStoreOp, MirSubOp,
     },
     types::{MirArrayType, MirPtrType, address_space},
 };
@@ -166,6 +166,8 @@ struct CountedLoopPlan {
     trip_count: u64,
     row_type: TypeHandle,
     element_type: TypeHandle,
+    /// The K loop carried `#[nounroll]`, so the fused loop must stay rolled
+    nounroll: bool,
 }
 
 struct PipelinedCountedLoopPlan {
@@ -183,6 +185,8 @@ struct PipelinedCountedLoopPlan {
     trip_count: u64,
     slot_types: Vec<(TypeHandle, TypeHandle)>,
     max_pending_groups: u8,
+    /// The K loop carried `#[nounroll]`, so the fused loop must stay rolled
+    nounroll: bool,
 }
 
 fn collect_blocks(ctx: &Context, root: Ptr<Operation>) -> Vec<Ptr<BasicBlock>> {
@@ -283,7 +287,10 @@ fn loop_values_escape(ctx: &Context, loop_blocks: &FxHashSet<Ptr<BasicBlock>>) -
 }
 
 fn counted_loop_operation_is_supported(ctx: &Context, operation: Ptr<Operation>) -> bool {
-    Operation::get_op::<MirConstantOp>(operation, ctx).is_some()
+    // `#[nounroll]` on the K loop leaves a hint in it until lowering. Fusion
+    // replaces the loop and moves the request onto the fused operation
+    Operation::get_op::<MirNoUnrollHintOp>(operation, ctx).is_some()
+        || Operation::get_op::<MirConstantOp>(operation, ctx).is_some()
         || Operation::get_op::<ConstantOp>(operation, ctx).is_some()
         || Operation::get_op::<MirStorageLiveOp>(operation, ctx).is_some()
         || Operation::get_op::<MirStorageDeadOp>(operation, ctx).is_some()
@@ -298,6 +305,18 @@ fn counted_loop_operation_is_supported(ctx: &Context, operation: Ptr<Operation>)
         || Operation::get_op::<MirGotoOp>(operation, ctx).is_some()
         || wgmma_mma_kind(ctx, operation).is_some()
         || is_representation_only_ptr_retype(ctx, operation)
+}
+
+/// Whether a matched K loop carried `#[nounroll]`. Its hint becomes
+/// unreachable with the rest of the loop, so the fused operation carries the
+/// request instead.
+fn loop_has_nounroll_hint(ctx: &Context, blocks: &FxHashSet<Ptr<BasicBlock>>) -> bool {
+    blocks.iter().any(|block| {
+        block
+            .deref(ctx)
+            .iter(ctx)
+            .any(|operation| Operation::get_op::<MirNoUnrollHintOp>(operation, ctx).is_some())
+    })
 }
 
 fn pipelined_counted_loop_operation_is_supported(ctx: &Context, operation: Ptr<Operation>) -> bool {
@@ -730,6 +749,7 @@ fn match_pipelined_counted_loop(
         trip_count,
         slot_types,
         max_pending_groups,
+        nounroll: loop_has_nounroll_hint(ctx, &r#loop.blocks),
     }))
 }
 
@@ -914,6 +934,7 @@ fn match_counted_loop(
         trip_count,
         row_type,
         element_type,
+        nounroll: loop_has_nounroll_hint(ctx, &r#loop.blocks),
     }))
 }
 
@@ -1393,6 +1414,7 @@ fn apply_pipelined_counted_loop_plan(ctx: &mut Context, plan: PipelinedCountedLo
         trip_count,
         slot_types,
         max_pending_groups,
+        nounroll,
     } = plan;
 
     let slot_count = usize::from(max_pending_groups) + 1;
@@ -1442,6 +1464,9 @@ fn apply_pipelined_counted_loop_plan(ctx: &mut Context, plan: PipelinedCountedLo
         max_pending_groups,
     );
     pipeline.deref_mut(ctx).set_loc(loc.clone());
+    if nounroll {
+        llvm_export::ops::set_loop_unroll_disable(ctx, pipeline);
+    }
     let accumulator_results = (0..slot_count * ACCUMULATOR_LEN)
         .map(|index| pipeline.deref(ctx).get_result(index))
         .collect::<Vec<_>>();
@@ -1492,6 +1517,7 @@ fn apply_counted_loop_plan(ctx: &mut Context, plan: CountedLoopPlan) {
         trip_count,
         row_type,
         element_type,
+        nounroll,
     } = plan;
 
     debug_assert_eq!(
@@ -1538,6 +1564,9 @@ fn apply_counted_loop_plan(ctx: &mut Context, plan: CountedLoopPlan) {
         }
     };
     group.deref_mut(ctx).set_loc(loc.clone());
+    if nounroll {
+        llvm_export::ops::set_loop_unroll_disable(ctx, group);
+    }
     let accumulator_results = (0..ACCUMULATOR_LEN)
         .map(|index| group.deref(ctx).get_result(index))
         .collect::<Vec<_>>();
@@ -1575,7 +1604,8 @@ fn apply_pointer_fallback(
 }
 
 fn is_ignorable(ctx: &Context, op: Ptr<Operation>) -> bool {
-    Operation::get_op::<MirConstantOp>(op, ctx).is_some()
+    Operation::get_op::<MirNoUnrollHintOp>(op, ctx).is_some()
+        || Operation::get_op::<MirConstantOp>(op, ctx).is_some()
         || Operation::get_op::<ConstantOp>(op, ctx).is_some()
         || Operation::get_op::<MirStorageLiveOp>(op, ctx).is_some()
         || Operation::get_op::<MirStorageDeadOp>(op, ctx).is_some()

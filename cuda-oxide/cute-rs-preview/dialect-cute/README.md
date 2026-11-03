@@ -27,7 +27,7 @@ alias to the same module, preserving its existing types and functions.
 | `ops::pipeline` | `pipeline_ops` | Load-pipeline construction, scalar state, and lifecycle. |
 | `ops::scheduler` | `scheduler_ops` | Persistent work grids, coordinates, and cursor advancement. |
 | `ops::sm100` | `sm100_ops` | Two-CTA tensor-memory MMA, cluster TMA, and pipelines. |
-| `ops::sm100_attention` | `sm100_attention_ops` | Independent SM100 attention MMA and TMA contracts. |
+| `ops::sm100::attention` | `ops::sm100_attention`, `sm100_attention_ops` | Independent SM100 attention MMA and TMA contracts. |
 
 The existing `ops::CuteCopyOp`, `ops::CuteCopyG2SOp`, `ops::CuteAssumeDivOp`,
 `ops::CuteLdmatrixOp`, `ops::CuteTmaLoad2dOp`, and `ops::CuteTmaStore2dOp` imports

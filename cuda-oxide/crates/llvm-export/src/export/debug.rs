@@ -177,9 +177,12 @@ impl<'a> ModuleExportState<'a> {
             "!{dwarf_version_id} = !{{i32 2, !\"Dwarf Version\", i32 2}}"
         )
         .unwrap();
+        // NVVM requires Error (1), including when linking native CUDA LTO-IR.
+        // Ordinary LLVM debug metadata keeps its Warning (2) merge behavior.
+        let debug_version_behavior = if self.nvvm_ir_dialect.is_some() { 1 } else { 2 };
         writeln!(
             output,
-            "!{debug_info_version_id} = !{{i32 2, !\"Debug Info Version\", i32 3}}"
+            "!{debug_info_version_id} = !{{i32 {debug_version_behavior}, !\"Debug Info Version\", i32 3}}"
         )
         .unwrap();
 

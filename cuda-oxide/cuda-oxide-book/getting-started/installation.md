@@ -13,6 +13,7 @@ This section walks through everything you need to get `cargo oxide run vecadd` w
 | **CUDA Toolkit** | 13.0+               | `nvcc`, `cuda.h` and `curand.h` must be available             |
 | **LLVM**         | 21+                 | Must include the NVPTX backend                                |
 | **Clang**        | 21+                 | `clang-21` — needed by `bindgen` for host `cuda-bindings`     |
+| **Rust**         | 1.99.1 (pinned)     | Pinned in `cuda-oxide/rust-toolchain.toml`                    |
 
 The host runtime does not link `libcuda` at build time. The shared
 `cuda-bindings` crate loads it at the first driver call, so a binary starts
@@ -20,7 +21,6 @@ without a driver and fails on that call with `CUDA_ERROR_NOT_INITIALIZED`; the
 error message names the library files the loader tried. A driver whose CUDA
 major version is older than the toolkit's (a 12.x driver with a 13.x build)
 fails the same way with a "driver too old" message.
-| **Rust**         | 1.99.1 (pinned)     | Pinned in `cuda-oxide/rust-toolchain.toml`                    |
 
 :::{note}
 cuda-oxide currently targets **Linux only**. Windows is not supported.

@@ -3,7 +3,7 @@
 
 //! Behavior example for the packed bf16x2 FMA intrinsic.
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::bf16x2::fma_bf16x2;
 use cuda_device::convert::cvt_bf16x2_f32;

@@ -29,7 +29,7 @@ nvcc -cubin -arch=sm_80 my_kernel.cu -o my_kernel.cubin
 
 ### From cuda-oxide
 
-[cuda-oxide](https://nvidia.github.io/cuda-rust/cuda-oxide/) is CUDA Rust's SIMT kernel programming model; it lives next to cuTile Rust in the [cuda-rust repository](https://github.com/NVIDIA/cuda-rust/tree/main/cuda-oxide). Its documented output path is PTX: build or inspect the generated PTX with `cargo oxide build` or `cargo oxide pipeline`, then load that PTX with `load_module_from_ptx` and wrap the entry function in an `AsyncKernelLaunch` or typed `DeviceOp`.
+[cuda-oxide](https://nvidia.github.io/cuda-rust/cuda-oxide/) is CUDA Rust's SIMT kernel programming model; it lives next to cuTile Rust in the [cuda-rust repository](https://github.com/NVIDIA/cuda-rust/tree/main/cuda-oxide). Its documented output path is PTX: build or inspect the generated PTX with `cargo oxide build` or `cargo oxide pipeline`, then load that PTX with `load_module_from_ptx` and wrap the entry function in an `AsyncKernelLaunchBuilder` or typed `DeviceOp`.
 
 If you need a CUBIN, compile the PTX through the normal CUDA toolchain as a separate step.
 
@@ -50,13 +50,13 @@ let module = load_module_from_ptx(ptx_src, device_id)?;
 let function = Arc::new(module.load_function("my_kernel_entry")?);
 ```
 
-Launch the kernel via `AsyncKernelLaunch`, which is a `DeviceOp` wrapping the CUDA driver's kernel launch API:
+Launch the kernel via `AsyncKernelLaunchBuilder`, which is a `DeviceOp` wrapping the CUDA driver's kernel launch API:
 
 ```rust
-use cuda_async::launch::AsyncKernelLaunch;
+use cuda_async::launch::AsyncKernelLaunchBuilder;
 use cuda_core::LaunchConfig;
 
-let mut launcher = AsyncKernelLaunch::new(function.clone());
+let mut launcher = AsyncKernelLaunchBuilder::new(function.clone());
 launcher.push_arg(num_elements as u32);
 launcher.push_arg(scale);
 // SAFETY: input and output are valid device allocations with at least
@@ -77,7 +77,7 @@ launcher.set_launch_config(LaunchConfig {
 launcher.await?;
 ```
 
-Scalar arguments implementing `DType` use the safe `push_arg` method. Device
+Scalar arguments implementing `DType` use the safe `push_arg` method. Context
 pointers require `unsafe { push_device_ptr() }`. The caller must check that
 allocations are valid on the target GPU, large enough for the kernel, and free
 of conflicting accesses. Argument order and types must match the kernel's
@@ -99,7 +99,7 @@ use cuda_async::device_context::with_default_device_policy;
 use cuda_async::device_future::DeviceFuture;
 use cuda_async::device_operation::{DeviceOp, ExecutionContext};
 use cuda_async::error::DeviceError;
-use cuda_async::launch::AsyncKernelLaunch;
+use cuda_async::launch::AsyncKernelLaunchBuilder;
 use cuda_async::scheduling_policies::SchedulingPolicy;
 use cuda_core::{Function, LaunchConfig};
 use std::future::IntoFuture;
@@ -121,7 +121,7 @@ impl DeviceOp for ScaleKernel {
         self,
         ctx: &ExecutionContext,
     ) -> Result<<Self as DeviceOp>::Output, DeviceError> {
-        let mut launcher = AsyncKernelLaunch::new(self.function);
+        let mut launcher = AsyncKernelLaunchBuilder::new(self.function);
         launcher.push_arg(self.n);
         launcher.push_arg(self.scale);
         // SAFETY: input and output are framework-managed Tensor allocations.
@@ -224,13 +224,13 @@ requirements.
 
 ## Borrowing Foreign CUDA Handles
 
-If your application already owns CUDA handles through another Rust binding crate — cudarc, Candle, or a hand-rolled `bindgen` wrapper — wrap them into a cuTile `Device`, `Stream`, `Module`, or `Function` without transferring ownership.
+If your application already owns CUDA handles through another Rust binding crate — cudarc, Candle, or a hand-rolled `bindgen` wrapper — wrap them into a cuTile `Context`, `Stream`, `Module`, or `Function` without transferring ownership.
 
 The `borrow_raw` constructors take raw C primitives (`*mut c_void` for opaque handles, `c_int` for `CUdevice`) rather than `cuda_bindings` typedefs, so no nominal-type mismatch between binding crates gets in the way:
 
 ```rust
 use core::ffi::{c_int, c_void};
-use cuda_core::{Device, Stream};
+use cuda_core::{Context, Stream};
 
 // `foreign` is a handle bundle from another Rust binding crate (cudarc,
 // Candle, a bindgen wrapper, …). Its `CUcontext` / `CUstream` typedefs are
@@ -240,7 +240,7 @@ use cuda_core::{Device, Stream};
 // Safety: the caller guarantees the handles are valid, outlive the returned
 // wrappers, and are not concurrently destroyed.
 let device = unsafe {
-    Device::borrow_raw(
+    Context::borrow_raw(
         foreign.cu_ctx as *mut c_void,
         foreign.cu_device as c_int,
         foreign.ordinal,
@@ -252,7 +252,7 @@ let stream = unsafe { Stream::borrow_raw(foreign.cu_stream as *mut c_void, &devi
 let result = my_kernel(out, x).sync_on(&stream)?;
 ```
 
-Borrowed wrappers skip destruction on drop: `Stream` does not call `cuStreamDestroy`, `Module` does not unload, and `Device` does not release the primary context. The source framework retains full control over handle lifetimes.
+Borrowed wrappers skip destruction on drop: `Stream` does not call `cuStreamDestroy`, `Module` does not unload, and `Context` does not release the primary context. The source framework retains full control over handle lifetimes.
 
 `Module::borrow_raw` and `Function::borrow_raw` follow the same pattern for pre-compiled modules and already-resolved functions. See the `cudarc_interop` example in `cutile-examples/examples/` for an end-to-end walkthrough.
 
@@ -270,7 +270,7 @@ Borrowed wrappers skip destruction on drop: `Stream` does not call `cuStreamDest
 | Manual `tl.dot` placement across warps | `mma()` maps directly to Tensor Core instructions; thread/warp assignment is compiler-managed |
 | Tune `num_warps` and `num_stages` for occupancy | `occupancy` and `num_cta_in_cga` optimization hints guide the compiler |
 
-For patterns that don't map to the tile model, compile the kernel with Triton and integrate it via `AsyncKernelLaunch` as described above. Since Triton outputs PTX, load it directly:
+For patterns that don't map to the tile model, compile the kernel with Triton and integrate it via `AsyncKernelLaunchBuilder` as described above. Since Triton outputs PTX, load it directly:
 
 ```rust
 let module = load_module_from_ptx(triton_generated_ptx, device_id)?;
@@ -291,4 +291,4 @@ Both front-ends use the same underlying Tile IR compilation pipeline and generat
 
 ---
 
-Continue to [Debugging and Profiling](debugging-and-profiling.md) for troubleshooting. Interop kernels use the `DeviceOp` model described in [Device Operations](device-operations.md).
+Continue to [Debugging and Profiling](debugging-and-profiling.md) for troubleshooting. Interop kernels use the `DeviceOp` model described in [Context Operations](device-operations.md).

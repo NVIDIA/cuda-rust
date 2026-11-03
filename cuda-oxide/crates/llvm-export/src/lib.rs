@@ -1425,6 +1425,35 @@ pub mod ops {
             .map(|a| a.0)
     }
 
+    /// Op-attribute key on a loop's latch branch when that loop must stay
+    /// rolled. The exporter prints it as `!llvm.loop` metadata carrying
+    /// `llvm.loop.unroll.disable`.
+    const LOOP_UNROLL_DISABLE_KEY: &str = "cuda_oxide_loop_unroll_disable";
+
+    /// Mark a loop's latch branch so the loop stays rolled.
+    ///
+    /// The branch must be the loop's only back-edge. LLVM reads loop metadata
+    /// from the latch terminator and ignores it when several latches disagree.
+    /// A fused WGMMA K-loop operation carries the same mark, and its lowering
+    /// emits `.pragma "nounroll";` in the loop it generates.
+    pub fn set_loop_unroll_disable(ctx: &mut Context, op: Ptr<Operation>) {
+        let key =
+            Identifier::try_new(LOOP_UNROLL_DISABLE_KEY.to_string()).expect("valid identifier");
+        op.deref_mut(ctx)
+            .attributes
+            .set(key, pliron::builtin::attributes::UnitAttr);
+    }
+
+    /// Whether [`set_loop_unroll_disable`] marked this branch.
+    pub fn loop_unroll_disable(ctx: &Context, op: Ptr<Operation>) -> bool {
+        let key =
+            Identifier::try_new(LOOP_UNROLL_DISABLE_KEY.to_string()).expect("valid identifier");
+        op.deref(ctx)
+            .attributes
+            .get::<pliron::builtin::attributes::UnitAttr>(&key)
+            .is_some()
+    }
+
     /// Attach the source-facing name of a function to a MIR/LLVM function op.
     pub fn set_debug_function_name(ctx: &mut Context, op: Ptr<Operation>, name: &str) {
         set_string_attr(ctx, op, DEBUG_FUNCTION_NAME_KEY, name.to_string());
@@ -1985,18 +2014,6 @@ pub mod ops {
     /// Op-attribute key for [`LocalMemoryProvenanceAttr`] on `mir.alloca` and
     /// `llvm.alloca`.
     const LOCAL_MEMORY_PROVENANCE_KEY: &str = "cuda_oxide_local_memory_provenance";
-    const LOOP_UNROLL_DISABLE_KEY: &str = "cuda_oxide_loop_unroll_disable";
-
-    /// Mark an `llvm.br` backedge so textual export attaches `!llvm.loop`
-    /// with `!"llvm.loop.unroll.disable"`.
-    pub fn set_loop_unroll_disable(ctx: &mut Context, op: Ptr<Operation>) {
-        set_string_attr(ctx, op, LOOP_UNROLL_DISABLE_KEY, "1".to_string());
-    }
-
-    /// Whether an `llvm.br` backedge carries `!"llvm.loop.unroll.disable"`.
-    pub fn is_loop_unroll_disable(ctx: &Context, op: Ptr<Operation>) -> bool {
-        get_string_attr(ctx, op, LOOP_UNROLL_DISABLE_KEY).is_some()
-    }
 
     /// Attach Rust-local provenance to a stack-slot op.
     pub fn set_local_memory_provenance(

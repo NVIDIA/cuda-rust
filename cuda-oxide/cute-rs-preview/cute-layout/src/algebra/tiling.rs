@@ -6,6 +6,7 @@
 //! Logical division and products that partition or repeat layouts.
 
 use alloc::format;
+use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -268,4 +269,121 @@ pub fn blocked_product(a: &Layout, b: &Layout) -> Result<Layout> {
 /// value patterns without assigning the same tile cell twice.
 pub fn raked_product(a: &Layout, b: &Layout) -> Result<Layout> {
     zipped_product(a, b, false)
+}
+
+/// Tiles an `atom` layout to cover `target_shape`, stepping through the repetition
+/// grid in `order` (CuTeDSL `cute.tile_to_shape`).
+///
+/// Unlike [`blocked_product`], which coalesces each `(atom_mode, rep_mode)` pair,
+/// `tile_to_shape` preserves the two-level `(atom_mode, rep_mode)` hierarchy in each
+/// axis so hardware descriptor generators and TMA verifiers can inspect both the
+/// inner swizzle atom and the outer tile grid.
+///
+/// - `order = &[0, 1]` tiles in column-major order (mode 0 repeats fastest).
+/// - `order = &[1, 0]` tiles in row-major order (mode 1 repeats fastest).
+pub fn tile_to_shape(atom: &Layout, target_shape: &[i64], order: &[usize]) -> Result<Layout> {
+    let atom_modes = atom.modes();
+    let n = atom_modes.len();
+    if target_shape.len() != n || order.len() != n {
+        return Err(AlgebraError(format!(
+            "tile_to_shape: atom rank {n}, target_shape len {}, order len {} must match",
+            target_shape.len(),
+            order.len()
+        )));
+    }
+    let mut reps = Vec::with_capacity(n);
+    for (i, mode) in atom_modes.iter().enumerate() {
+        let atom_extent = mode
+            .checked_size()
+            .ok_or_else(|| AlgebraError("tile_to_shape: invalid atom mode size".into()))?;
+        let target = target_shape[i];
+        if target <= 0 || target % atom_extent != 0 {
+            return Err(AlgebraError(format!(
+                "tile_to_shape: target extent {target} is not a positive multiple of atom extent {atom_extent}"
+            )));
+        }
+        reps.push(target / atom_extent);
+    }
+    let mut seen = vec![false; n];
+    let mut rep_strides = vec![0i64; n];
+    let mut running = 1i64;
+    for &axis in order {
+        if axis >= n || seen[axis] {
+            return Err(AlgebraError(
+                "tile_to_shape: order must be a permutation of 0..rank".into(),
+            ));
+        }
+        seen[axis] = true;
+        rep_strides[axis] = running;
+        running = running
+            .checked_mul(reps[axis])
+            .ok_or_else(|| AlgebraError("tile_to_shape: repetition product overflow".into()))?;
+    }
+    let rep_layout = Layout::new(
+        IntTuple::Tuple(reps.into_iter().map(IntTuple::Leaf).collect()),
+        IntTuple::Tuple(rep_strides.into_iter().map(IntTuple::Leaf).collect()),
+    );
+    let lp = logical_product(atom, &rep_layout)?;
+    let parts = lp.modes();
+    let block_modes = parts[0].modes();
+    let rep_modes = parts[1].modes();
+    let paired = block_modes
+        .into_iter()
+        .zip(rep_modes)
+        .map(|(bm, rm)| Layout::from_modes(vec![bm, rm]))
+        .collect();
+    Ok(Layout::from_modes(paired))
+}
+
+/// Construct the canonical SM100 tiled FP16 shared-memory [` crate::ComposedLayout`]
+/// using [`tile_to_shape`] and [`crate::Swizzle`] (CuTeDSL `make_smem_layout_k` /
+/// `make_smem_layout_mn` + `cute.tile_to_shape`).
+///
+/// - `mn = false` (K-major): tiles the `(8, span) : (span, 1)` swizzle atom to
+///   `(rows, cols)` with `order = &[0, 1]`.
+/// - `mn = true` (MN-major): tiles the `(span, 8) : (1, span)` swizzle atom to
+///   `(rows, cols)` with `order = &[1, 0]`.
+pub fn sm100_smem_layout(
+    rows: u32,
+    cols: u32,
+    mn: bool,
+) -> core::result::Result<crate::ComposedLayout, alloc::string::String> {
+    let (contiguous, outer) = if mn { (rows, cols) } else { (cols, rows) };
+    if contiguous < 32
+        || (contiguous != 32 && !contiguous.is_multiple_of(64))
+        || outer == 0
+        || !outer.is_multiple_of(8)
+    {
+        return Err(
+            "SM100 shared layout needs contiguous 32 or a multiple of 64 and outer multiple of 8"
+                .into(),
+        );
+    }
+    let span = i64::from(contiguous.min(64));
+    let (atom, order): (Layout, [usize; 2]) = if mn {
+        (
+            Layout::col_major(IntTuple::Tuple(vec![
+                IntTuple::Leaf(span),
+                IntTuple::Leaf(8),
+            ])),
+            [1, 0],
+        )
+    } else {
+        (
+            Layout::row_major(IntTuple::Tuple(vec![
+                IntTuple::Leaf(8),
+                IntTuple::Leaf(span),
+            ])),
+            [0, 1],
+        )
+    };
+    let outer_layout = tile_to_shape(&atom, &[i64::from(rows), i64::from(cols)], &order)
+        .map_err(|e| e.to_string())?;
+    crate::ComposedLayout::new(
+        crate::Swizzle::new(if span == 32 { 2 } else { 3 }, 3, 3),
+        0,
+        outer_layout,
+        crate::OffsetUnit::Elements,
+    )
+    .map_err(|e| e.to_string())
 }

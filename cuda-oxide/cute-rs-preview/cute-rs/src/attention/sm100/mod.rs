@@ -19,7 +19,7 @@ mod tmem;
 pub use mma::{MmaSs, MmaTs};
 pub use shared::{SharedLayout, SharedTile, SharedTileArray, SmemLayout};
 pub use tma::TmaCopy;
-pub use tmem::TmemFragment;
+pub use tmem::{TmemAllocator, TmemFragment, tmem_row_address};
 
 #[doc(hidden)]
 pub mod __compiler;

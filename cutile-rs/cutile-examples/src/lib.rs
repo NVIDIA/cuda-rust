@@ -14,7 +14,7 @@ use candle_nn::ops::softmax;
 #[cfg(feature = "reference-cpu")]
 use cuda_core::DType;
 
-use cuda_core::{get_device_clock_rate, Device};
+use cuda_core::{get_device_clock_rate, Context};
 
 /// Convert a host slice to a candle CPU tensor.
 #[cfg(feature = "reference-cpu")]
@@ -134,7 +134,7 @@ pub fn rtx_5090_tensorcore_f16_sol_tflops_at(clock_speed: f64) -> f64 {
 
 /// Returns RTX 5090 theoretical peak f16 tensor core TFLOPS using the device's clock rate.
 pub fn rtx_5090_tensorcore_f16_sol_tflops(device_id: usize) -> f64 {
-    let device = Device::new(device_id).unwrap();
+    let device = Context::new(device_id).unwrap();
     let clock_rate = unsafe { get_device_clock_rate(device.cu_device()).unwrap() } as f64;
     rtx_5090_tensorcore_f16_sol_tflops_at(clock_rate)
 }
@@ -142,11 +142,11 @@ pub fn rtx_5090_tensorcore_f16_sol_tflops(device_id: usize) -> f64 {
 #[cfg(test)]
 mod test_peak {
     use crate::rtx_5090_tensorcore_f16_sol_tflops_at;
-    use cuda_core::{get_device_clock_rate, Device};
+    use cuda_core::{get_device_clock_rate, Context};
 
     #[test]
     fn test_5090() {
-        let device = Device::new(0).unwrap();
+        let device = Context::new(0).unwrap();
         // This appears to be correct / matches architecture documentation.
         let clock_rate = unsafe { get_device_clock_rate(device.cu_device()).unwrap() } as f64;
         let clock_mhz = clock_rate * 1e-3;

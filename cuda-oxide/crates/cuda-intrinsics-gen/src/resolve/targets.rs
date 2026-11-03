@@ -198,7 +198,9 @@ pub(super) fn validate_selected_target_predicates(
                 !has_tcgen05_support
                     && !has_tcgen05_shift_support
                     && !has_tcgen05_mma_i8_support
-                    && imported_ptx.is_none()
+                    && (imported_ptx.is_none()
+                        || tcgen05_mma
+                            .is_some_and(|mma| tcgen05_mma_has_ptx88_predicate(mma.form)))
                     && imported_sm.is_none()
                     && !has_dot_instructions
                     && !has_clc_multicast_support
@@ -321,16 +323,29 @@ pub(super) fn validate_selected_target_predicates(
     let overlay_ptx = parse_ptx_version(&policy.minimum_ptx, &policy.id)?.encoded();
     if let Some(mma) = tcgen05_mma {
         let i8_selection = selection.asm.contains(".kind::i8.");
+        let ptx88_selection = tcgen05_mma_has_ptx88_predicate(mma.form);
         ensure!(
-            selection.predicates.len() == 1
+            selection.predicates.len() == if ptx88_selection { 2 } else { 1 }
+                && imported_ptx == if ptx88_selection { Some(88) } else { None }
                 && ((i8_selection && has_tcgen05_mma_i8_support && !has_tcgen05_support)
                     || (!i8_selection && has_tcgen05_support && !has_tcgen05_mma_i8_support))
                 && !has_tcgen05_shift_support,
             "{} tcgen05 MMA selection does not retain its exact kind predicate",
             policy.id
         );
-        let contracts = expected_tcgen05_mma_target_contracts(IntrinsicBackend::LlvmNvptx);
-        let expected_target = if let Some(fixed) = mma.fixed_selectors {
+        let expected_target = if let Some(kind) = tcgen05_mma_block_scale_kind(mma.form) {
+            let contracts =
+                expected_tcgen05_mma_block_scale_target_contracts(IntrinsicBackend::LlvmNvptx);
+            resolve_target_contract(
+                "tcgen05 MMA selected block-scale predicate",
+                &[TargetSelectorBinding {
+                    name: "kind".into(),
+                    value: tcgen05_mma_kind_name(kind).into(),
+                }],
+                &contracts,
+            )?
+        } else if let Some(fixed) = mma.fixed_selectors {
+            let contracts = expected_tcgen05_mma_target_contracts(IntrinsicBackend::LlvmNvptx);
             resolve_target_contract(
                 "tcgen05 MMA selected predicate",
                 &[TargetSelectorBinding {
@@ -340,6 +355,7 @@ pub(super) fn validate_selected_target_predicates(
                 &contracts,
             )?
         } else {
+            let contracts = expected_tcgen05_mma_target_contracts(IntrinsicBackend::LlvmNvptx);
             resolve_target_contracts("tcgen05 MMA selected predicate", &contracts)?
         };
         ensure!(

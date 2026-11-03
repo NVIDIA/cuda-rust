@@ -4,7 +4,7 @@
  */
 use cutile::cuda_core::{f4e2m1fnx2, f8e4m3fn};
 use cutile::prelude::{
-    api, Arc, Device, DeviceOp, DeviceOpReshape, IntoPartition, Tensor, ToHostVec,
+    api, Arc, Context, DeviceOp, DeviceOpReshape, IntoPartition, Tensor, ToHostVec,
 };
 use cutile_compiler::compiler::utils::CompileOptions;
 use cutile_ir::requirements::Feature;
@@ -613,7 +613,7 @@ fn execute_raw_mmaf_scaled_nvfp4_e4_scale() {
             return;
         }
 
-        let device = Device::new(0).expect("device");
+        let device = Context::new(0).expect("device");
         let stream = device.new_stream().expect("stream");
         let fp4_one = f4e2m1fnx2::from_nibbles(0x2, 0x2);
         let scale_one = f8e4m3fn(0x38);

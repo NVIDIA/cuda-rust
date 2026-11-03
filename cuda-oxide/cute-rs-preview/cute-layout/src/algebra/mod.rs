@@ -81,7 +81,10 @@ pub use mapping::{
     coalesce, complement, composition, flatten, left_inverse, right_inverse, with_shape,
 };
 pub use thread_value::make_layout_tv;
-pub use tiling::{blocked_product, logical_divide, logical_product, raked_product, zipped_divide};
+pub use tiling::{
+    blocked_product, logical_divide, logical_product, raked_product, sm100_smem_layout,
+    tile_to_shape, zipped_divide,
+};
 
 use alloc::string::String;
 use alloc::vec::Vec;

@@ -1271,7 +1271,7 @@ pub fn cuda_launch(input: TokenStream) -> TokenStream {
 ///
 /// ```ignore
 /// use cuda_host::cuda_launch_async;
-/// use cuda_core::simt::LaunchConfig;
+/// use cuda_core::LaunchConfig;
 ///
 /// // SAFETY: ABI, lifetimes, geometry, and resources match vecadd.
 /// let op = unsafe {

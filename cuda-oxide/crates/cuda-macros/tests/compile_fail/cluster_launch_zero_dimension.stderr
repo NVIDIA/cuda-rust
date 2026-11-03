@@ -1,0 +1,5 @@
+error: cluster dimensions must be greater than zero
+ --> tests/compile_fail/cluster_launch_zero_dimension.rs:4:34
+  |
+4 | #[cuda_macros::cluster_launch(1, 0, 1)]
+  |                                  ^

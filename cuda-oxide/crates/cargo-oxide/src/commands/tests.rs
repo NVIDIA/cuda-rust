@@ -786,7 +786,11 @@ path = "src/main.rs"
     .unwrap();
 
     let mut cmd = Command::new("cargo");
-    cmd.args(["build", "--release"]).current_dir(&root);
+    // CARGO_TARGET_DIR takes precedence over build.target-dir, so an
+    // inherited value would bypass the configured directory under test.
+    cmd.args(["build", "--release"])
+        .current_dir(&root)
+        .env_remove("CARGO_TARGET_DIR");
     let binary = run_cargo_build_for_executable(&mut cmd, &root, None).unwrap();
 
     assert!(binary.exists());
@@ -5665,16 +5669,15 @@ fn scaffold_async_template_keeps_async_deps_and_docs() {
     assert!(files.main_rs.contains("vecadd_async"));
     assert!(files.main_rs.contains("use cuda_host::cuda_module;"));
     assert!(!files.main_rs.contains("use cuda_device::{cuda_module"));
-    // Shared host runtime from the same git source as cuda-host; the SIMT
-    // surface lives under simt::.
+    // Shared host runtime from the same git source as cuda-host.
     assert!(files.cargo_toml.contains("cuda-async = { git = \""));
     assert!(!files.cargo_toml.contains("cuda-async = \""));
     assert!(!files.cargo_toml.contains("cuda-bindings"));
-    assert!(files.main_rs.contains("use cuda_core::simt::LaunchConfig;"));
+    assert!(files.main_rs.contains("use cuda_core::LaunchConfig;"));
     assert!(
         files
             .main_rs
-            .contains("use cuda_async::simt::device_operation::DeviceOperation;")
+            .contains("use cuda_async::device_operation::DeviceOperation;")
     );
 }
 

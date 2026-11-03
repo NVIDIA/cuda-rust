@@ -254,7 +254,8 @@ $ cargo oxide build my_example --unchecked-indexing   # same thing
 
 Scope, precisely:
 
-- Only indexing checks (`a[i]`) are removed. Arithmetic overflow, division
+- Only indexing checks (`a[i]` on slices, arrays, and `SharedArray`) are
+  removed. Arithmetic overflow, division
   by zero, and every other safety check still traps. Range indexing
   (`&a[i..j]`) also still traps.
 - The per-kernel flag covers that kernel's body, including functions

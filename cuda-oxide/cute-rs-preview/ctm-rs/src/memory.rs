@@ -6,13 +6,31 @@
 //! Instruction-visible storage formats, without tensor layout algebra.
 
 use core::{cell::UnsafeCell, marker::PhantomData};
-use cuda_device::SharedArray;
 
 // Keep the canonical storage types and defining crate used by the importer
 // and launch-contract macros. Reexports do not introduce new storage markers.
 /// Canonical sixteen-byte aligned register-word carrier for vector memory accesses.
 pub use cuda_device::vector::U32x4;
-pub use cuda_device::{CuSimd, DisjointSlice, DynamicSharedArray};
+pub use cuda_device::{CuSimd, DisjointSlice, DynamicSharedArray, SharedArray};
+
+/// Convert a generic shared pointer to its 64-bit CTA-shared byte offset.
+///
+/// # Safety
+/// `ptr` must point into the calling CTA's shared memory space.
+#[inline(always)]
+pub unsafe fn shared_offset(ptr: *const u8) -> u64 {
+    unsafe { cuda_device::shared::cvta_generic_to_shared_offset(ptr) }
+}
+
+/// Atomically add two packed `bf16` values (`bf16x2` in `addend`) into global memory at `address`
+/// (`atom.global.add.noftz.bf16x2`), returning the previous packed 32-bit word.
+///
+/// # Safety
+/// `address` must be four-byte aligned and point to a valid global-memory allocation of two `bf16` values.
+#[inline(always)]
+pub unsafe fn atom_add_bf16x2(address: *mut u32, addend: u32) -> u32 {
+    unsafe { cuda_device::atomic::atom_add_bf16x2(address, addend) }
+}
 
 /// Read one aligned 32-bit storage word without interpreting its packed lanes.
 ///

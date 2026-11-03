@@ -278,7 +278,27 @@ pub fn compile_translated_module(
         && validated.device_arch.is_some()
         && has_iket_operations(ctx, module)
     {
-        validated.options.target_arch = validated.device_arch.map(|arch| arch.as_ref().sm());
+        let requested_nvvm_ir = matches!(
+            request.output_policy,
+            OutputPolicy::ExternalLinkAllowed {
+                request_nvvm_ir: true
+            }
+        );
+        validated.options.target_arch = validated.device_arch.map(|arch| {
+            let arch = arch.as_ref();
+            if !requested_nvvm_ir
+                && cuda_target_spec::recorded_ptx_floor(arch).is_err()
+                && arch.capability() == 107
+            {
+                match arch.suffix() {
+                    Some('a') => "sm_100a".to_string(),
+                    Some('f') => "sm_100f".to_string(),
+                    _ => "sm_100".to_string(),
+                }
+            } else {
+                arch.sm()
+            }
+        });
         validated.options.target_arch_source = "the detected GPU, pinned by IKET materialization";
     }
     let backend = validated.options();

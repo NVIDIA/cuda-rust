@@ -12,7 +12,7 @@ use std::error::Error;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, CudaEvent, CudaStream, DeviceBuffer, PinnedHostBuffer};
 use cuda_device::{DisjointSlice, kernel, thread};
 use cuda_host::cuda_module;

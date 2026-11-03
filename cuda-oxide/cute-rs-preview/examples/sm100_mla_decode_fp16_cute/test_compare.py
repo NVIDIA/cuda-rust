@@ -27,7 +27,8 @@ class ComparisonTests(unittest.TestCase):
 
         class Reference:
             clusters = 1
-            torch = SimpleNamespace(__version__="test")
+            torch = SimpleNamespace(__version__="test",
+                                    cuda=SimpleNamespace(get_device_capability=lambda: (10, 0)))
 
             def validate(self, data, atol):
                 events.append("cutedsl-validate")

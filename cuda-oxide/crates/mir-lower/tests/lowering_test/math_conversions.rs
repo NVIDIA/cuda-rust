@@ -3038,3 +3038,300 @@ fn test_scalar_arithmetic_libnvvm_uses_exact_inline_ptx() -> Result<(), anyhow::
     );
     Ok(())
 }
+
+/// Lower `max` and `min` calls on both f32 and f64 operands under `backend`.
+fn lower_float_minmax(
+    backend: mir_lower::IntrinsicBackend,
+) -> Result<(Context, pliron::context::Ptr<Operation>), anyhow::Error> {
+    use dialect_mir::rust_intrinsics;
+    use pliron::builtin::attributes::StringAttr;
+    use pliron::builtin::types::{FP32Type, FP64Type};
+    use pliron::r#type::TypeHandle;
+
+    let mut ctx = make_test_ctx();
+    let f32_ty: TypeHandle = FP32Type::get(&ctx).into();
+    let f64_ty: TypeHandle = FP64Type::get(&ctx).into();
+    let (module_ptr, entry) = build_test_kernel(&mut ctx, vec![f32_ty, f32_ty, f64_ty, f64_ty]);
+    let f32_args = [
+        entry.deref(&ctx).get_argument(0),
+        entry.deref(&ctx).get_argument(1),
+    ];
+    let f64_args = [
+        entry.deref(&ctx).get_argument(2),
+        entry.deref(&ctx).get_argument(3),
+    ];
+
+    for (callee, args, result_ty) in [
+        (rust_intrinsics::CALLEE_MAXNUM_NSZ_F32, f32_args, f32_ty),
+        (rust_intrinsics::CALLEE_MINNUM_NSZ_F32, f32_args, f32_ty),
+        (rust_intrinsics::CALLEE_MAXNUM_NSZ_F64, f64_args, f64_ty),
+        (rust_intrinsics::CALLEE_MINNUM_NSZ_F64, f64_args, f64_ty),
+    ] {
+        let call_ptr = Operation::new(
+            &mut ctx,
+            mir::MirCallOp::get_concrete_op_info(),
+            vec![result_ty],
+            args.to_vec(),
+            vec![],
+            0,
+        );
+        let call = mir::MirCallOp::new(call_ptr);
+        call.set_attr_callee(&ctx, StringAttr::new(callee.to_string()));
+        call_ptr.insert_at_back(entry, &ctx);
+    }
+    append_return(&mut ctx, entry);
+
+    mir_lower::lower_mir_to_llvm_with_options(
+        &mut ctx,
+        module_ptr,
+        mir_lower::LoweringOptions {
+            intrinsic_backend: backend,
+            ..Default::default()
+        },
+    )
+    .map_err(|error| anyhow::anyhow!("{error}"))?;
+    Ok((ctx, module_ptr))
+}
+
+/// Direct callee names, `fcmp` count and `select` count of a lowered body.
+fn minmax_lowering_shape(
+    ctx: &Context,
+    body: &[pliron::context::Ptr<Operation>],
+) -> (Vec<String>, usize, usize) {
+    let mut callees = Vec::new();
+    let (mut fcmps, mut selects) = (0, 0);
+    for &op in body {
+        assert!(
+            Operation::get_op::<mir::MirCallOp>(op, ctx).is_none(),
+            "max/min placeholder mir.call must not survive MIR lowering"
+        );
+        if let Some(call) = Operation::get_op::<llvm::CallOp>(op, ctx)
+            && let CallOpCallable::Direct(sym) = call.callee(ctx)
+        {
+            callees.push(sym.to_string());
+        }
+        fcmps += usize::from(Operation::get_op::<llvm::FCmpOp>(op, ctx).is_some());
+        selects += usize::from(Operation::get_op::<llvm::SelectOp>(op, ctx).is_some());
+    }
+    (callees, fcmps, selects)
+}
+
+#[test]
+fn test_float_minmax_llvm_nvptx_f32_uses_nvvm_intrinsics_f64_uses_compare_select()
+-> Result<(), anyhow::Error> {
+    let (ctx, module_ptr) = lower_float_minmax(mir_lower::IntrinsicBackend::LlvmNvptx)?;
+    let (callees, fcmps, selects) =
+        minmax_lowering_shape(&ctx, &lowered_kernel_body(&ctx, module_ptr));
+
+    // f32 max/min: one native NVVM call each, no compare/select.
+    assert_eq!(
+        callees,
+        ["llvm_nvvm_fmax_f", "llvm_nvvm_fmin_f"],
+        "f32 max/min must call the non-.NaN, non-.ftz NVVM intrinsics"
+    );
+    // f64 max/min: the NaN-ignoring expansion, two fcmp + two select each.
+    assert_eq!(fcmps, 4, "only the two f64 ops keep the compare/select");
+    assert_eq!(selects, 4, "only the two f64 ops keep the compare/select");
+    Ok(())
+}
+
+#[test]
+fn test_float_minmax_libnvvm_keeps_compare_select_for_both_widths() -> Result<(), anyhow::Error> {
+    let (ctx, module_ptr) = lower_float_minmax(mir_lower::IntrinsicBackend::LibNvvm)?;
+    let (callees, fcmps, selects) =
+        minmax_lowering_shape(&ctx, &lowered_kernel_body(&ctx, module_ptr));
+
+    assert!(
+        callees.is_empty(),
+        "libNVVM max/min must not call an intrinsic, found {callees:?}"
+    );
+    assert_eq!(fcmps, 8, "all four ops expand to two fcmp each");
+    assert_eq!(selects, 8, "all four ops expand to two select each");
+    Ok(())
+}
+
+/// Append a `float_to_int_unchecked` placeholder call to `block`.
+fn append_float_to_int_unchecked_call(
+    ctx: &mut Context,
+    block: pliron::context::Ptr<pliron::basic_block::BasicBlock>,
+    value: pliron::value::Value,
+    result_ty: pliron::r#type::TypeHandle,
+) {
+    use pliron::builtin::attributes::StringAttr;
+
+    let call_ptr = Operation::new(
+        ctx,
+        mir::MirCallOp::get_concrete_op_info(),
+        vec![result_ty],
+        vec![value],
+        vec![],
+        0,
+    );
+    mir::MirCallOp::new(call_ptr).set_attr_callee(
+        ctx,
+        StringAttr::new(dialect_mir::rust_intrinsics::CALLEE_FLOAT_TO_INT_UNCHECKED.to_string()),
+    );
+    call_ptr.insert_at_back(block, ctx);
+}
+
+/// `float_to_int_unchecked` lowers to a bare `fptosi`/`fptoui`, picked from
+/// the destination's signedness, on both intrinsic backends. No saturating
+/// `llvm.fpto*i.sat` call (the `as` cast lowering) and no placeholder call
+/// may survive.
+#[test]
+fn test_float_to_int_unchecked_lowers_to_plain_fptosi_fptoui() -> Result<(), anyhow::Error> {
+    use pliron::builtin::types::{FP32Type, FP64Type, IntegerType, Signedness};
+    use pliron::r#type::{TypeHandle, Typed};
+
+    for backend in [
+        mir_lower::IntrinsicBackend::LlvmNvptx,
+        mir_lower::IntrinsicBackend::LibNvvm,
+    ] {
+        let mut ctx = make_test_ctx();
+        let f32_ty: TypeHandle = FP32Type::get(&ctx).into();
+        let f64_ty: TypeHandle = FP64Type::get(&ctx).into();
+        let (module_ptr, entry) = build_test_kernel(&mut ctx, vec![f32_ty, f64_ty]);
+        let f32_value = entry.deref(&ctx).get_argument(0);
+        let f64_value = entry.deref(&ctx).get_argument(1);
+
+        for (value, width, signedness) in [
+            (f32_value, 32, Signedness::Signed),
+            (f32_value, 32, Signedness::Unsigned),
+            (f64_value, 64, Signedness::Signed),
+            (f64_value, 64, Signedness::Unsigned),
+        ] {
+            let result_ty: TypeHandle = IntegerType::get(&ctx, width, signedness).into();
+            append_float_to_int_unchecked_call(&mut ctx, entry, value, result_ty);
+        }
+        append_return(&mut ctx, entry);
+
+        mir_lower::lower_mir_to_llvm_with_options(
+            &mut ctx,
+            module_ptr,
+            mir_lower::LoweringOptions {
+                intrinsic_backend: backend,
+                ..Default::default()
+            },
+        )
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+        let result_width = |op: pliron::context::Ptr<Operation>| {
+            let ty = op.deref(&ctx).get_result(0).get_type(&ctx);
+            ty.deref(&ctx)
+                .downcast_ref::<IntegerType>()
+                .map(|int_ty| int_ty.width())
+        };
+        let mut signed_widths = Vec::new();
+        let mut unsigned_widths = Vec::new();
+        for op in lowered_kernel_body(&ctx, module_ptr) {
+            assert!(
+                Operation::get_op::<mir::MirCallOp>(op, &ctx).is_none(),
+                "float_to_int_unchecked placeholder mir.call must not survive MIR lowering"
+            );
+            assert!(
+                Operation::get_op::<llvm::CallOp>(op, &ctx).is_none(),
+                "float_to_int_unchecked must not lower to a call (saturating or placeholder)"
+            );
+            if Operation::get_op::<llvm::FPToSIOp>(op, &ctx).is_some() {
+                signed_widths.push(result_width(op));
+            }
+            if Operation::get_op::<llvm::FPToUIOp>(op, &ctx).is_some() {
+                unsigned_widths.push(result_width(op));
+            }
+        }
+        assert_eq!(signed_widths, [Some(32), Some(64)], "{backend:?}");
+        assert_eq!(unsigned_widths, [Some(32), Some(64)], "{backend:?}");
+    }
+    Ok(())
+}
+
+/// Destinations wider than 64 bits fail with a clear error, as the
+/// saturating `as` cast does, rather than reaching the backend.
+#[test]
+fn test_float_to_int_unchecked_rejects_wide_destination() {
+    use pliron::builtin::types::{FP32Type, IntegerType, Signedness};
+    use pliron::r#type::TypeHandle;
+
+    let mut ctx = make_test_ctx();
+    let f32_ty: TypeHandle = FP32Type::get(&ctx).into();
+    let (module_ptr, entry) = build_test_kernel(&mut ctx, vec![f32_ty]);
+    let value = entry.deref(&ctx).get_argument(0);
+    let i128_ty: TypeHandle = IntegerType::get(&ctx, 128, Signedness::Signed).into();
+    append_float_to_int_unchecked_call(&mut ctx, entry, value, i128_ty);
+    append_return(&mut ctx, entry);
+
+    let error = mir_lower::lower_mir_to_llvm(&mut ctx, module_ptr)
+        .expect_err("a 128-bit float_to_int_unchecked destination must not lower")
+        .to_string();
+    assert!(error.contains("wider than 64 bits"), "{error}");
+}
+
+/// Rust float `%` is C `fmod`, exact for every finite pair. NVPTX expands
+/// `llvm.frem` inexactly (`a - trunc(a / b) * b`), so float `mir.rem` must
+/// lower to a libdevice `fmod` call on both widths, while integer `mir.rem`
+/// keeps lowering to `srem` / `urem`.
+#[test]
+fn test_float_rem_lowers_to_libdevice_fmod() -> Result<(), anyhow::Error> {
+    use mir_lower::convert::ops::arithmetic::{LIBDEVICE_FMOD_F32, LIBDEVICE_FMOD_F64};
+    use pliron::builtin::types::{FP32Type, FP64Type, IntegerType, Signedness};
+    use pliron::r#type::TypeHandle;
+
+    let mut ctx = make_test_ctx();
+    let f32_ty: TypeHandle = FP32Type::get(&ctx).into();
+    let f64_ty: TypeHandle = FP64Type::get(&ctx).into();
+    let i32_ty: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Signed).into();
+    let u32_ty: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Unsigned).into();
+    let (module_ptr, entry) = build_test_kernel(
+        &mut ctx,
+        vec![f32_ty, f32_ty, f64_ty, f64_ty, i32_ty, u32_ty],
+    );
+    let arg = |ctx: &Context, i: usize| entry.deref(ctx).get_argument(i);
+    let operands = [
+        (arg(&ctx, 0), arg(&ctx, 1), f32_ty),
+        (arg(&ctx, 2), arg(&ctx, 3), f64_ty),
+        (arg(&ctx, 4), arg(&ctx, 4), i32_ty),
+        (arg(&ctx, 5), arg(&ctx, 5), u32_ty),
+    ];
+    for (lhs, rhs, result_ty) in operands {
+        let rem = Operation::new(
+            &mut ctx,
+            mir::MirRemOp::get_concrete_op_info(),
+            vec![result_ty],
+            vec![lhs, rhs],
+            vec![],
+            0,
+        );
+        rem.insert_at_back(entry, &ctx);
+    }
+    append_return(&mut ctx, entry);
+
+    mir_lower::lower_mir_to_llvm(&mut ctx, module_ptr).map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    let mut callees = Vec::new();
+    let mut frem = 0usize;
+    let mut srem = 0usize;
+    let mut urem = 0usize;
+    for body_op in lowered_kernel_body(&ctx, module_ptr) {
+        if let Some(call) = Operation::get_op::<llvm::CallOp>(body_op, &ctx)
+            && let CallOpCallable::Direct(sym) = call.callee(&ctx)
+        {
+            callees.push(sym.to_string());
+        }
+        frem += usize::from(Operation::get_op::<llvm::FRemOp>(body_op, &ctx).is_some());
+        srem += usize::from(Operation::get_op::<llvm::SRemOp>(body_op, &ctx).is_some());
+        urem += usize::from(Operation::get_op::<llvm::URemOp>(body_op, &ctx).is_some());
+    }
+
+    assert_eq!(
+        callees,
+        vec![
+            LIBDEVICE_FMOD_F32.to_string(),
+            LIBDEVICE_FMOD_F64.to_string()
+        ],
+        "float mir.rem must lower to libdevice fmod on each width"
+    );
+    assert_eq!(frem, 0, "float mir.rem must not lower to llvm.frem");
+    assert_eq!(srem, 1, "signed mir.rem must lower to llvm.srem");
+    assert_eq!(urem, 1, "unsigned mir.rem must lower to llvm.urem");
+    Ok(())
+}

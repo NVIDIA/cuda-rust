@@ -903,6 +903,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return verify_ptx_only();
     }
 
+    // The module's own `.target` decides too. Its compile-only coverage kernels
+    // include `tcgen05.mma ... kind::i8`, which sm_103a does not provide, so on a
+    // cc 10.3 GPU the backend falls back to an sm_100a module. An arch-specific
+    // target runs only on that exact compute capability.
+    let target = ptx_target()?;
+    if !module_target_runs_on(&target, major, minor) {
+        println!(
+            "\n⚠️  WARNING: tcgen05 module targets {target}, which sm_{major}{minor} cannot load."
+        );
+        println!("   PTX was generated successfully; run on {target} to execute kernels.");
+        return verify_ptx_only();
+    }
+
     let module = match kernels::load(&ctx) {
         Ok(m) => m,
         Err(e) => {
@@ -948,6 +961,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 // module-load failure into an execution pass.
 fn can_execute_tcgen05_ptx(major: i32, minor: i32) -> bool {
     matches!((major, minor), (10, 0) | (10, 1) | (10, 3) | (11, 0))
+}
+
+/// The `.target` of the generated PTX (e.g. `sm_100a`).
+fn ptx_target() -> Result<String, Box<dyn std::error::Error>> {
+    let ptx_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tcgen05.ptx");
+    let ptx = std::fs::read_to_string(&ptx_path)?;
+    ptx.lines()
+        .find_map(|line| line.strip_prefix(".target "))
+        .map(|rest| rest.split([',', ' ']).next().unwrap_or(rest).to_string())
+        .ok_or_else(|| format!("no .target line in {}", ptx_path.display()).into())
+}
+
+/// Whether a GPU of compute capability `major.minor` can load a module built
+/// for `target`: an `a` target needs that exact capability, an `f` target the
+/// same major and at least its minor, a plain target at least its capability.
+fn module_target_runs_on(target: &str, major: i32, minor: i32) -> bool {
+    let Some(digits) = target.strip_prefix("sm_") else {
+        return false;
+    };
+    let (number, suffix) = match digits.chars().last() {
+        Some(c @ ('a' | 'f')) => (&digits[..digits.len() - 1], Some(c)),
+        _ => (digits, None),
+    };
+    let Ok(capability) = number.parse::<i32>() else {
+        return false;
+    };
+    let (t_major, t_minor) = (capability / 10, capability % 10);
+    match suffix {
+        Some('a') => (major, minor) == (t_major, t_minor),
+        Some(_) => major == t_major && minor >= t_minor,
+        None => (major, minor) >= (t_major, t_minor),
+    }
 }
 
 fn verify_ptx_only() -> Result<(), Box<dyn std::error::Error>> {

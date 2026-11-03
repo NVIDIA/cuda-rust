@@ -5,7 +5,7 @@
 //! SM100 tensor-memory allocation, FP16 MMA and register readback.
 //!
 //! Instructions require PTX 8.6 and a tcgen05-capable target profile; the current
-//! CTM consumer validates `sm_100a`. TCGEN05 is unavailable on SM120a.
+//! CTM consumer validates `sm_100a` and `sm_103a`. TCGEN05 is unavailable on SM120a.
 //!
 //! Start with [`descriptors::DenseSharedF16`] for supported shapes and
 //! [`tmem::TmemGuard`] for allocation ownership. Issue, commit, wait and release

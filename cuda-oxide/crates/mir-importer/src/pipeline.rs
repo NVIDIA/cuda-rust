@@ -42,7 +42,7 @@ use cuda_oxide_codegen::__private::{
     PipelineTrace, append_to_module, compile_translated_module, verify_operation,
 };
 pub use cuda_oxide_codegen::__private::{
-    DeviceArchHint, DeviceExternAttrs, DeviceExternDecl, PipelineError,
+    DeviceArchHint, DeviceExternAttrs, DeviceExternDecl, HintLocation, HintWarning, PipelineError,
 };
 use llvm_export::export::DebugKind;
 pub use llvm_export::export::DeviceExternType;
@@ -181,6 +181,9 @@ pub struct CompilationResult {
     pub allow_fma_contraction: bool,
     /// Per-kernel source launch bounds preserved for post-link diagnostics.
     pub kernel_launch_bounds: BTreeMap<String, KernelLaunchBounds>,
+    /// Loop annotations that could not be honoured, for the frontend to report
+    /// as compiler warnings.
+    pub warnings: Vec<HintWarning>,
 }
 
 /// Configuration for the compilation pipeline.
@@ -531,6 +534,10 @@ pub fn run_pipeline(
     let mut legaliser = Legaliser::default();
     let mut kernel_launch_bounds = BTreeMap::new();
     let mut expected_kernels = Vec::new();
+    let has_integer_redux_sync = cuda_oxide_codegen::__private::target_has_integer_redux_sync(
+        config.target_arch.as_deref(),
+        config.device_arch_hint.as_ref(),
+    );
 
     // Step 3: Translate all functions
     for func in functions {
@@ -550,13 +557,18 @@ pub fn run_pipeline(
             .instance
             .body()
             .ok_or_else(|| PipelineError::NoBody(func.export_name.clone()))?;
+        let mono_successors = crate::translator::body::narrow_target_predicate_switches(
+            &body,
+            &func.rustc_mono_successors,
+            has_integer_redux_sync,
+        );
 
         let func_op_ptr = crate::translator::body::translate_body(
             &mut ctx,
             &body,
             &func.instance,
             func.rustc_mir_block_count,
-            &func.rustc_mono_successors,
+            &mono_successors,
             func.is_kernel,
             func.inline,
             Some(&func.export_name),
@@ -657,6 +669,7 @@ pub fn run_pipeline(
                 target: generated.target,
                 allow_fma_contraction: config.allow_fma_contraction,
                 kernel_launch_bounds,
+                warnings: generated.warnings,
             })
         }
         ModuleArtifactKind::Ptx => Ok(CompilationResult {
@@ -667,6 +680,7 @@ pub fn run_pipeline(
             target: generated.target,
             allow_fma_contraction: config.allow_fma_contraction,
             kernel_launch_bounds,
+            warnings: generated.warnings,
         }),
         ModuleArtifactKind::Cubin => Ok(CompilationResult {
             artifact_path: cubin_path,
@@ -676,6 +690,7 @@ pub fn run_pipeline(
             target: generated.target,
             allow_fma_contraction: config.allow_fma_contraction,
             kernel_launch_bounds,
+            warnings: generated.warnings,
         }),
     }
 }

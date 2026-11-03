@@ -36,7 +36,7 @@ pub fn lower_to_llvm(
     allow_fma_contraction: bool,
     intrinsic_backend: mir_lower::IntrinsicBackend,
     module_disambiguator: Option<u64>,
-) -> Result<(), PipelineError> {
+) -> Result<Vec<mir_transforms::unroll::HintWarning>, PipelineError> {
     mir_lower::register(ctx);
 
     match mir_lower::lower_mir_to_llvm_with_options(
@@ -48,7 +48,7 @@ pub fn lower_to_llvm(
             module_disambiguator,
         },
     ) {
-        Ok(()) => Ok(()),
+        Ok(warnings) => Ok(warnings),
         // Format with `ctx` so the failing op's location/span survives.
         Err(e) => Err(PipelineError::Lowering(e.disp(ctx).to_string())),
     }

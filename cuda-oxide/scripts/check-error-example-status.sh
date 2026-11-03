@@ -78,9 +78,15 @@ if [[ ${self_test_failed} -ne 0 ]]; then
     exit 1
 fi
 
+# A loop, not `printf | grep -qx`: under pipefail, grep -q exits at the first
+# match and printf can die of SIGPIPE, turning a match into a miss (seen on an
+# aarch64 host for a name early in the list, 3 runs in 20).
 contains() {
-    local needle="$1"; shift
-    printf '%s\n' "$@" | grep -qx "$needle"
+    local needle="$1" item; shift
+    for item in "$@"; do
+        [[ "$item" == "$needle" ]] && return 0
+    done
+    return 1
 }
 
 for ex in "${on_disk[@]}"; do

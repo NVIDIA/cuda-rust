@@ -264,7 +264,8 @@ target-derived `cfg`, so a kernel has no way to ask which architecture it is
 being compiled for. Arch requirements live in doc comments and are enforced by
 the caller, which is why an example that needs `redux.sync` checks
 `ctx.compute_capability()` on the host and skips rather than specializing the
-kernel.
+kernel (`cuda-device`'s own `warp_reduce` selects `redux.sync` vs shuffles
+through an internal compiler-resolved target floor predicate).
 
 `--device-cfg NAME` is how you supply one yourself. It is repeatable, and each
 occurrence becomes a `--cfg NAME` in the build's rustflags:
@@ -380,9 +381,10 @@ unroll that loop.
 Partial unrolling also requires a counted-up loop: the counter must have a
 positive step, use `<` or `<=`, and compare against a limit that does not change
 inside the loop. The compiler warns and does not unroll unsupported requests.
-Every warning about a loop that was not unrolled names the `#[unroll]`
-attribute it refers to as `file:line:column` on a `-->` line, so a kernel with
-several annotated loops shows which one was left alone.
+Every warning about a loop that was not unrolled is an ordinary compiler warning
+that points at the `#[unroll]` attribute it refers to: rustc prints its
+`file:line:column` on a `-->` line and underlines it, so a kernel with several
+annotated loops shows which one was left alone.
 
 To keep generated code bounded, one annotation may create at most 1,024 body
 copies, 8,192 cloned basic blocks, and 65,536 cloned operations. A larger

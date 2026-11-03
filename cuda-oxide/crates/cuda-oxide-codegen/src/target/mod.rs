@@ -25,11 +25,11 @@ pub(crate) use generated_requirements::{
     generated_ptx_isa_requirement, generated_target_satisfied, merge_generated_module_requirements,
     merge_generated_module_requirements_for_target, validate_generated_target,
 };
-pub use select::{required_ptx_feature, validate_target_features, validate_target_for_llvm_major};
 pub(crate) use select::{
-    resolve_ptx_target_with_generated, select_target_with_generated,
+    honour_sm_floor, resolve_ptx_target_with_generated, select_target_with_generated,
     validate_ptx_isa_for_llvm_major,
 };
+pub use select::{required_ptx_feature, validate_target_features, validate_target_for_llvm_major};
 
 // The re-exports below preserve the module's pre-split surface. In-crate
 // consumers currently reach these names only from test code (or straight

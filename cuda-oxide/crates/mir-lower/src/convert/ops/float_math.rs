@@ -99,6 +99,11 @@ impl FloatMathLowering for RustFloatMathIntrinsic {
         if self == Self::Fabs {
             return fabs_llvm_intrinsic_name(ctx, result_ty, loc).map(Some);
         }
+        match self {
+            Self::MaxNumNszF32 => return Ok(Some("llvm_nvvm_fmax_f")),
+            Self::MinNumNszF32 => return Ok(Some("llvm_nvvm_fmin_f")),
+            _ => {}
+        }
         Ok(self.llvm_symbol(false))
     }
 
@@ -177,6 +182,15 @@ pub fn convert_rust_float_math_intrinsic(
             propagate_nan,
         } => lower_float_ieee_minmax(ctx, rewriter, op, intrinsic, &args, is_max, propagate_nan),
         RustFloatMathLowering::MinMaxNsz { is_max } => {
+            if matches!(
+                intrinsic,
+                RustFloatMathIntrinsic::MaxNumNszF32 | RustFloatMathIntrinsic::MinNumNszF32
+            ) && matches!(
+                crate::context::lowering_options(ctx).intrinsic_backend,
+                crate::IntrinsicBackend::LlvmNvptx
+            ) {
+                return lower_scalar_call(ctx, rewriter, op, intrinsic, false, &args, loc);
+            }
             let predicate = if is_max {
                 FCmpPredicateAttr::OGE
             } else {
@@ -1477,7 +1491,13 @@ mod tests {
             RustFloatMathIntrinsic::MaxNumNszF32
                 .llvm_intrinsic_name(&ctx, f32_ty, loc.clone())
                 .unwrap(),
-            None
+            Some("llvm_nvvm_fmax_f")
+        );
+        assert_eq!(
+            RustFloatMathIntrinsic::MinNumNszF32
+                .llvm_intrinsic_name(&ctx, f32_ty, loc.clone())
+                .unwrap(),
+            Some("llvm_nvvm_fmin_f")
         );
         assert_eq!(
             RustFloatMathIntrinsic::MinNumNszF64

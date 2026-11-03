@@ -786,7 +786,11 @@ path = "src/main.rs"
     .unwrap();
 
     let mut cmd = Command::new("cargo");
-    cmd.args(["build", "--release"]).current_dir(&root);
+    // CARGO_TARGET_DIR takes precedence over build.target-dir, so an
+    // inherited value would bypass the configured directory under test.
+    cmd.args(["build", "--release"])
+        .current_dir(&root)
+        .env_remove("CARGO_TARGET_DIR");
     let binary = run_cargo_build_for_executable(&mut cmd, &root, None).unwrap();
 
     assert!(binary.exists());

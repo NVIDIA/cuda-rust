@@ -11,44 +11,44 @@
   "debug_ir_version": "3.2",
   "defaults": {
     "target_triple": "nvptx64-nvidia-cuda",
-    "gpu_target": "compute_80",
+    "gpu_target": "compute_75",
     "ptx_feature": "PTX ISA 7.0 minimum; CUDA 13.3 emits PTX 9.3",
     "status": "validated",
     "runtime_validation": "unexecuted"
   },
   "fixtures": [
     {
-      "id": "scalar_arithmetic_compute80_ptx93",
+      "id": "scalar_arithmetic_compute75_ptx93",
       "coverage_count": 44,
       "stages": [
         {
-          "targets": ["compute_80", "ptx93"],
+          "targets": ["compute_75", "ptx93"],
           "representation": "44 pure inline-PTX scalar arithmetic calls in one retained NVVM IR kernel",
           "stage": "backend_codegen",
           "mechanism": "inline_ptx",
           "outcome": "succeeded",
-          "detail": "CUDA 13.3 libNVVM compiled the 9,966-byte typed-pointer NVVM IR fixture (SHA-256 1887e2d19e9253874b9cc04aa9ddf6fecfe626021185f23c6023da7ec55e1d6f) to 5,956-byte PTX 9.3 (SHA-256 d84a9f54933f0a6d231f81bca8b68939dab13ff12be30ab09f823107dbdce574) and 5,908-byte LTOIR (SHA-256 d11a9ec3ee80833f14fbf0aa68710a1a1e4135a9314f5b7978313ffe6b442ce2). The PTX retained all 44 exact, unique instructions with no extern calls or unresolved llvm.nvvm symbols."
+          "detail": "CUDA 13.3 libNVVM verified and compiled the 8,150-byte typed-pointer NVVM IR kernel with SHA-256 99eac077fe0327273bcaa59f653fe4855c49451908d61565f0153d09058b9abd for compute_75. Its 5,841-byte PTX 9.3 / sm_75 output (SHA-256 6cee940acad3508b994e35fea98f8f573fc0409f0f07370a04e56a149e412e9d) retains each of the 44 F32 and F64 scalar arithmetic instructions (mul, div, fma across rounding, ftz, and sat modes) exactly once with no extern calls, and -gen-lto emitted 5,260-byte LTOIR with SHA-256 98c7f5c40f3d9aab3f1a9a08e98cbe6f93c4e4ac7ebc45932145ed0b094ac53b. An @llvm.used entry keeps the kernel through LTO, as cuda-oxide's NVVM exporter emits it."
         },
         {
-          "targets": ["sm_80", "ptx93"],
+          "targets": ["sm_75", "ptx93"],
           "representation": "libNVVM-emitted PTX retaining all 44 scalar arithmetic forms",
           "stage": "ptx_assembly",
           "mechanism": "inline_ptx",
           "outcome": "succeeded",
           "artifact_kind": "cubin",
-          "detail": "CUDA 13.3 ptxas assembled the retained PTX into a 25,000-byte sm_80 cubin with SHA-256 8d204a91958f0abeeaa94e65dda13f8a3238c941ccfca69f81df16ef1dae42f7.",
+          "detail": "CUDA 13.3 ptxas V13.3.33 (the CUDA 13.3.0 redistributable binary, whose SHA-256 matches tool_sha256) assembled the PTX with -arch=sm_75 into a 23,464-byte cubin with SHA-256 edc7257de929b43e1de1009dcb218553deb3969b3bb0bdf47aa4bd156b7bf9a5.",
           "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
           "tool_version": "Cuda compilation tools, release 13.3, V13.3.33; build cuda_13.3.r13.3/compiler.37862127_0",
           "tool_sha256": "7fdd01a4cf50e30746da98989c9272a907f491e6fd7fecfda14642e4375f88fb"
         },
         {
-          "targets": ["sm_80", "ptx93"],
-          "representation": "retained libNVVM LTOIR linked to an sm_80 cubin",
+          "targets": ["sm_75", "ptx93"],
+          "representation": "retained libNVVM LTOIR linked to an sm_75 cubin",
           "stage": "device_link",
           "mechanism": "inline_ptx",
           "outcome": "succeeded",
           "artifact_kind": "cubin",
-          "detail": "CUDA 13.3 nvJitLink emitted linked PTX byte-identical to the direct libNVVM PTX and a 25,000-byte cubin with SHA-256 8a820550050fdd6239eea0a9cc5dc0573926fbb49dc58c94ec226e96c8e21f6e. The cubin exports scalar_arithmetic_inline with a 0x4a00-byte text section.",
+          "detail": "nvJitLink 13.3 linked the LTOIR with -arch=sm_75 -lto into a 23,464-byte cubin with SHA-256 f243882f5c312ea9f6507bb759833c52715cf2858d0d4578939326a23ffb845e that exports scalar_arithmetic_inline; with -ptx it emits PTX byte-identical to the direct libNVVM PTX. The CUDA 13.3.1 cuobjdump SASS of this cubin and the ptxas cubin is identical.",
           "tool_path": "/usr/local/cuda-13.3/targets/x86_64-linux/lib/libnvJitLink.so.13.3.33",
           "tool_version": "nvJitLinkVersion 13.3; CUDA 13.3 V13.3.33",
           "tool_sha256": "3ba1e744347cd68617b862eccfd98b125482e882b7a6319f42abc9a768513db8"
@@ -56,37 +56,37 @@
       ]
     },
     {
-      "id": "scalar_add_compute80_ptx93",
+      "id": "scalar_add_compute75_ptx93",
       "coverage_count": 20,
       "stages": [
         {
-          "targets": ["compute_80", "ptx93"],
+          "targets": ["compute_75", "ptx93"],
           "representation": "20 pure inline-PTX scalar add calls in one retained NVVM IR kernel",
           "stage": "backend_codegen",
           "mechanism": "inline_ptx",
           "outcome": "succeeded",
-          "detail": "CUDA 13.3 libNVVM compiled the 4,719-byte typed-pointer NVVM IR fixture (SHA-256 4115a5696631ec940f8f90cb4f70c21f929f58fa259b34533528e58b11c0968b) to 3,023-byte PTX 9.3 (SHA-256 943adbcba0c1004fe6d4bff9af24f15c965ab426c1b47b878a9425a70ce5bb5f) and 3,540-byte LTOIR (SHA-256 1b10b69dae868b3f058b31d75e855d5433966b87af138cf74cf3b8a99af46e3c). The PTX retained all 20 exact, unique add forms with no extern calls or unresolved llvm.nvvm symbols."
+          "detail": "CUDA 13.3 libNVVM verified and compiled the 4,161-byte typed-pointer NVVM IR kernel with SHA-256 37d4c272b1007365316ec87a61358ba8c8f4bcec7d0a036f6fb2664043215047 for compute_75. Its 3,036-byte PTX 9.3 / sm_75 output (SHA-256 05622fd8d1c16d89e591ac06730762a437676fb642f20dfd7da67a641f9c1c2c) retains each of the 20 F32 and F64 scalar add instructions across rounding, ftz, and sat modes exactly once with no extern calls, and -gen-lto emitted 3,272-byte LTOIR with SHA-256 55d51a4ff3eb0a08fed6488769cc3771250c068b9133190124e0716e53fdd468. An @llvm.used entry keeps the kernel through LTO, as cuda-oxide's NVVM exporter emits it."
         },
         {
-          "targets": ["sm_80", "ptx93"],
+          "targets": ["sm_75", "ptx93"],
           "representation": "libNVVM-emitted PTX retaining all 20 scalar add forms",
           "stage": "ptx_assembly",
           "mechanism": "inline_ptx",
           "outcome": "succeeded",
           "artifact_kind": "cubin",
-          "detail": "CUDA 13.3 ptxas assembled the retained PTX into a 4,008-byte sm_80 cubin with SHA-256 bf08ec6f01a1a355c9d39c967d133ff8146de0cfb5da01bb5f1679cbc0551b27.",
+          "detail": "CUDA 13.3 ptxas V13.3.33 (the CUDA 13.3.0 redistributable binary, whose SHA-256 matches tool_sha256) assembled the PTX with -arch=sm_75 into a 3,880-byte cubin with SHA-256 8a2cc4373b5f2a467edf7c233ca024b112560d2d990db58d6b338230dcd1e569.",
           "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
           "tool_version": "Cuda compilation tools, release 13.3, V13.3.33; build cuda_13.3.r13.3/compiler.37862127_0",
           "tool_sha256": "7fdd01a4cf50e30746da98989c9272a907f491e6fd7fecfda14642e4375f88fb"
         },
         {
-          "targets": ["sm_80", "ptx93"],
-          "representation": "retained scalar-add libNVVM LTOIR linked to an sm_80 cubin",
+          "targets": ["sm_75", "ptx93"],
+          "representation": "retained scalar-add libNVVM LTOIR linked to an sm_75 cubin",
           "stage": "device_link",
           "mechanism": "inline_ptx",
           "outcome": "succeeded",
           "artifact_kind": "cubin",
-          "detail": "CUDA 13.3 nvJitLink emitted linked PTX byte-identical to the direct libNVVM PTX and a 4,008-byte cubin with SHA-256 55b093a238d90be57b1962928326d1ca597ad54189fa2097b3e2207177d708c0.",
+          "detail": "nvJitLink 13.3 linked the LTOIR with -arch=sm_75 -lto into a 3,880-byte cubin with SHA-256 0149d0b7648ca8d06c52d7e664e77c5b004db9c768d57d89502d5e880684dc20 that exports scalar_add_inline; with -ptx it emits PTX byte-identical to the direct libNVVM PTX. The CUDA 13.3.1 cuobjdump SASS of this cubin and the ptxas cubin is identical.",
           "tool_path": "/usr/local/cuda-13.3/targets/x86_64-linux/lib/libnvJitLink.so.13.3.33",
           "tool_version": "nvJitLinkVersion 13.3; CUDA 13.3 V13.3.33",
           "tool_sha256": "3ba1e744347cd68617b862eccfd98b125482e882b7a6319f42abc9a768513db8"
@@ -98,7 +98,7 @@
     {
       "axes": [{"name": "rounding", "values": ["rn", "rz", "rm", "rp"]}],
       "product_count": 4,
-      "fixtures": ["scalar_arithmetic_compute80_ptx93"],
+      "fixtures": ["scalar_arithmetic_compute75_ptx93"],
       "template": {
         "id": "mul_${rounding}_f64",
         "source_record": "int_nvvm_mul_${rounding}_d",
@@ -114,7 +114,7 @@
     {
       "axes": [{"name": "rounding", "values": ["rn", "rz", "rm", "rp"]}],
       "product_count": 4,
-      "fixtures": ["scalar_arithmetic_compute80_ptx93"],
+      "fixtures": ["scalar_arithmetic_compute75_ptx93"],
       "template": {
         "id": "div_${rounding}_f64",
         "source_record": "int_nvvm_div_${rounding}_d",
@@ -130,7 +130,7 @@
     {
       "axes": [{"name": "rounding", "values": ["rn", "rz", "rm", "rp"]}],
       "product_count": 4,
-      "fixtures": ["scalar_arithmetic_compute80_ptx93"],
+      "fixtures": ["scalar_arithmetic_compute75_ptx93"],
       "template": {
         "id": "fma_${rounding}_f64",
         "source_record": "int_nvvm_fma_${rounding}_d",
@@ -146,7 +146,7 @@
     {
       "axes": [{"name": "rounding", "values": ["rn", "rz", "rm", "rp"]}],
       "product_count": 4,
-      "fixtures": ["scalar_arithmetic_compute80_ptx93"],
+      "fixtures": ["scalar_arithmetic_compute75_ptx93"],
       "template": {
         "id": "mul_${rounding}_f32",
         "source_record": "int_nvvm_mul_${rounding}_f",
@@ -162,7 +162,7 @@
     {
       "axes": [{"name": "rounding", "values": ["rn", "rz", "rm", "rp"]}],
       "product_count": 4,
-      "fixtures": ["scalar_arithmetic_compute80_ptx93"],
+      "fixtures": ["scalar_arithmetic_compute75_ptx93"],
       "template": {
         "id": "mul_${rounding}_ftz_f32",
         "source_record": "int_nvvm_mul_${rounding}_ftz_f",
@@ -178,7 +178,7 @@
     {
       "axes": [{"name": "rounding", "values": ["rn", "rz", "rm", "rp"]}],
       "product_count": 4,
-      "fixtures": ["scalar_arithmetic_compute80_ptx93"],
+      "fixtures": ["scalar_arithmetic_compute75_ptx93"],
       "template": {
         "id": "div_${rounding}_f32",
         "source_record": "int_nvvm_div_${rounding}_f",
@@ -194,7 +194,7 @@
     {
       "axes": [{"name": "rounding", "values": ["rn", "rz", "rm", "rp"]}],
       "product_count": 4,
-      "fixtures": ["scalar_arithmetic_compute80_ptx93"],
+      "fixtures": ["scalar_arithmetic_compute75_ptx93"],
       "template": {
         "id": "div_${rounding}_ftz_f32",
         "source_record": "int_nvvm_div_${rounding}_ftz_f",
@@ -210,7 +210,7 @@
     {
       "axes": [{"name": "rounding", "values": ["rn", "rz", "rm", "rp"]}],
       "product_count": 4,
-      "fixtures": ["scalar_arithmetic_compute80_ptx93"],
+      "fixtures": ["scalar_arithmetic_compute75_ptx93"],
       "template": {
         "id": "fma_${rounding}_f32",
         "source_record": "int_nvvm_fma_${rounding}_f",
@@ -226,7 +226,7 @@
     {
       "axes": [{"name": "rounding", "values": ["rn", "rz", "rm", "rp"]}],
       "product_count": 4,
-      "fixtures": ["scalar_arithmetic_compute80_ptx93"],
+      "fixtures": ["scalar_arithmetic_compute75_ptx93"],
       "template": {
         "id": "fma_${rounding}_ftz_f32",
         "source_record": "int_nvvm_fma_${rounding}_ftz_f",
@@ -242,7 +242,7 @@
     {
       "axes": [{"name": "rounding", "values": ["rn", "rz", "rm", "rp"]}],
       "product_count": 4,
-      "fixtures": ["scalar_arithmetic_compute80_ptx93"],
+      "fixtures": ["scalar_arithmetic_compute75_ptx93"],
       "template": {
         "id": "fma_${rounding}_sat_f32",
         "source_record": "int_nvvm_fma_${rounding}_sat_f",
@@ -258,7 +258,7 @@
     {
       "axes": [{"name": "rounding", "values": ["rn", "rz", "rm", "rp"]}],
       "product_count": 4,
-      "fixtures": ["scalar_arithmetic_compute80_ptx93"],
+      "fixtures": ["scalar_arithmetic_compute75_ptx93"],
       "template": {
         "id": "fma_${rounding}_ftz_sat_f32",
         "source_record": "int_nvvm_fma_${rounding}_ftz_sat_f",
@@ -274,7 +274,7 @@
     {
       "axes": [{"name": "rounding", "values": ["rn", "rz", "rm", "rp"]}],
       "product_count": 4,
-      "fixtures": ["scalar_add_compute80_ptx93"],
+      "fixtures": ["scalar_add_compute75_ptx93"],
       "template": {
         "id": "add_${rounding}_f64",
         "source_record": "int_nvvm_add_${rounding}_d",
@@ -290,7 +290,7 @@
     {
       "axes": [{"name": "rounding", "values": ["rn", "rz", "rm", "rp"]}],
       "product_count": 4,
-      "fixtures": ["scalar_add_compute80_ptx93"],
+      "fixtures": ["scalar_add_compute75_ptx93"],
       "template": {
         "id": "add_${rounding}_f32",
         "source_record": "int_nvvm_add_${rounding}_f",
@@ -306,7 +306,7 @@
     {
       "axes": [{"name": "rounding", "values": ["rn", "rz", "rm", "rp"]}],
       "product_count": 4,
-      "fixtures": ["scalar_add_compute80_ptx93"],
+      "fixtures": ["scalar_add_compute75_ptx93"],
       "template": {
         "id": "add_${rounding}_ftz_f32",
         "source_record": "int_nvvm_add_${rounding}_ftz_f",
@@ -322,7 +322,7 @@
     {
       "axes": [{"name": "rounding", "values": ["rn", "rz", "rm", "rp"]}],
       "product_count": 4,
-      "fixtures": ["scalar_add_compute80_ptx93"],
+      "fixtures": ["scalar_add_compute75_ptx93"],
       "template": {
         "id": "add_${rounding}_sat_f32",
         "source_record": "int_nvvm_add_${rounding}_sat_f",
@@ -338,7 +338,7 @@
     {
       "axes": [{"name": "rounding", "values": ["rn", "rz", "rm", "rp"]}],
       "product_count": 4,
-      "fixtures": ["scalar_add_compute80_ptx93"],
+      "fixtures": ["scalar_add_compute75_ptx93"],
       "template": {
         "id": "add_${rounding}_ftz_sat_f32",
         "source_record": "int_nvvm_add_${rounding}_ftz_sat_f",

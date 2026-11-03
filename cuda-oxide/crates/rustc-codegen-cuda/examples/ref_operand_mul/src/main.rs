@@ -22,7 +22,7 @@
 //!
 //! Run: cargo oxide run ref_operand_mul
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer};
 use cuda_host::cuda_module;
 use std::sync::Arc;

@@ -18,8 +18,9 @@ pub mod mma;
 pub mod pipeline;
 pub mod scheduler;
 pub mod sm100;
-pub mod sm100_attention;
 pub mod tensor;
+
+pub use sm100::attention as sm100_attention;
 
 pub use copy::{
     CuteCopyG2SOp, CuteCopyOp, CuteTmaLoad2dOp, CuteTmaStore2dOp, cooperative_elem_bytes,

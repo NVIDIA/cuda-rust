@@ -67,7 +67,7 @@ use cute_rs::{
     PipelineState, PipelineTmaAsync, PipelineTmaStore, Producer, RowMajor, SharedScaleAtom,
     SharedTensor, Sm1xxBlockScaleKMajor, Sm120Epilogue128x128, Sm120EpilogueHalfLayout,
     Sm120ScaleAtom, SmemTile, StaticPersistentTileScheduler, Swizzle, TensorMap, copy_tma_2d,
-    copy_tma_s2g_2d,
+    copy_tma_s2g_2d, size_in_bytes,
 };
 
 /// Output row count for the fixed benchmark problem.
@@ -110,10 +110,10 @@ type SharedB = SharedTensor<Mxf4E2M1, f16, SmemP, Nkl>;
 
 /// Number of 128-element K tiles consumed for each output tile.
 const K_STAGES: usize = KB / 4;
-/// Byte footprint of one packed input-operand stage.
-const DATA_STAGE_BYTES: usize = BLOCK_M * 64;
-/// Byte footprint of one SM120 scale atom.
-const SCALE_STAGE_BYTES: usize = Sm120ScaleAtom::BYTES;
+/// Byte footprint of one packed input-operand stage, derived from [`ByteSmem`] via [`size_in_bytes`].
+const DATA_STAGE_BYTES: usize = size_in_bytes::<u8, ByteSmem>() as usize;
+/// Byte footprint of one SM120 scale atom, derived from [`ScaleTmaSmem`] via [`size_in_bytes`].
+const SCALE_STAGE_BYTES: usize = size_in_bytes::<u16, ScaleTmaSmem>() as usize;
 /// Total A/B value and scale bytes announced to each full-stage barrier.
 const TMA_TX_BYTES: u32 = (2 * DATA_STAGE_BYTES + 2 * SCALE_STAGE_BYTES) as u32;
 /// Number of shared slots overlapped by the load pipeline.
@@ -671,10 +671,10 @@ fn main() {
     let mut times_ms = Vec::with_capacity(SAMPLES);
     for _ in 0..SAMPLES {
         let start = ctx
-            .new_event(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))
+            .new_event_with_flags(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))
             .expect("create start event");
         let end = ctx
-            .new_event(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))
+            .new_event_with_flags(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))
             .expect("create end event");
 
         start.record(&stream).expect("record start event");

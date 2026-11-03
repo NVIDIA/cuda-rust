@@ -44,7 +44,7 @@ fn atomic_red_view_accumulates_across_blocks() {
         if !common::supports_tile_ir(&[cutile_ir::requirements::Feature::AtomicRedView]) {
             return;
         }
-        let device = cuda_core::Device::new(0).expect("device");
+        let device = cuda_core::Context::new(0).expect("device");
         let stream = device.new_stream().expect("stream");
 
         const BLOCKS: usize = 32;

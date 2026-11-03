@@ -16,14 +16,14 @@ cuda-device   raw intrinsics
 
 | Family | Operations | Targets |
 | --- | --- | --- |
-| Shared memory | `SharedRegion<F>` with checked alignment and capacity, typed CTA and cluster addresses | both |
-| TMA | 2D load, two-CTA multicast load, 2D store, descriptor prefetch, bulk commit and wait; host `create_tensor_map_tiled` behind the `host` feature | both; multicast on `sm_100a` |
-| Barriers, fences and clusters | mbarrier init, arrive, expect-tx, parity wait; named CTA barrier sync and arrive (`bar` and `barrier.cta`, plain and aligned); `fence.mbarrier_init`, `fence.proxy.async` for `shared::cta` and its two `sync_restrict` forms, `fence.acquire.sync_restrict`; cluster arrive and wait, `mapa`, remote arrive, `CtaMask` | both |
-| tcgen05 | `TmemGuard` collective alloc and dealloc, F16 two-CTA MMA through `InstructionDescriptor`, 32x32b TMEM load and store, commit, fences | `sm_100a` |
-| Register MMA | m16n8k16 F16 and BF16 with F32 accumulate; m16n8k64 MXF4 with UE8M0 scales; ldmatrix x4, stmatrix x2 | both; MXF4 on `sm_120a` |
-| Async copy | 4-byte `cp.async`, noinc barrier arrive, commit and wait groups | both |
-| Warp | shuffle (full-warp and masked), elect, vote (all, any, ballot), lane id, active mask, sum reduce, `setmaxnreg` | both |
-| Numerics | BF16 round-to-nearest convert, packed f32x2 add, mul and fma, approximate ex2, lg2, rcp, rsqrt and sin, trap | both |
+| Shared memory | `SharedRegion<F>` with checked alignment and capacity, typed CTA and cluster addresses | all three |
+| TMA | 2D load, two-CTA multicast load, 2D store, descriptor prefetch, bulk commit and wait; host `create_tensor_map_tiled` behind the `host` feature | all three; multicast on `sm_100a`, `sm_103a` |
+| Barriers, fences and clusters | mbarrier init, arrive, expect-tx, parity wait; named CTA barrier sync and arrive (`bar` and `barrier.cta`, plain and aligned); `fence.mbarrier_init`, `fence.proxy.async` for `shared::cta` and its two `sync_restrict` forms, `fence.acquire.sync_restrict`; cluster arrive and wait, `mapa`, remote arrive, `CtaMask` | all three |
+| tcgen05 | `TmemGuard` collective alloc and dealloc, F16 two-CTA MMA through `InstructionDescriptor`, 32x32b TMEM load and store, commit, fences | `sm_100a`, `sm_103a` |
+| Register MMA | m16n8k16 F16 and BF16 with F32 accumulate; m16n8k64 MXF4 with UE8M0 scales; ldmatrix x4, stmatrix x2 | all three; MXF4 on `sm_120a` |
+| Async copy | 4-byte `cp.async`, noinc barrier arrive, commit and wait groups | all three |
+| Warp | shuffle (full-warp and masked), elect, vote (all, any, ballot), lane id, active mask, sum reduce, `setmaxnreg` | all three |
+| Numerics | BF16 round-to-nearest convert, packed f32x2 add, mul and fma, approximate ex2, lg2, rcp, rsqrt and sin, trap | all three |
 
 Not covered: other tcgen05 kinds and TMEM shapes, atomics and reductions, wgmma,
 libdevice, arbitrary physical layouts. An unsupported selector fails at export,

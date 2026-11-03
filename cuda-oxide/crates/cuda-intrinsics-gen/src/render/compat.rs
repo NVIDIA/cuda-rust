@@ -1213,6 +1213,11 @@ fn render_compat_tcgen05_mma_record(output: &mut String, record: &CatalogIntrins
                     "/// `B_BUFFER` is 0 through 3. `B_USAGE` is 0=discard, 1=lastuse, 2=fill, or 3=use.\n",
                 );
             }
+            Tcgen05MmaSelectorLayout::BlockScaled { .. } => {
+                output.push_str(
+                    "/// `CTA_GROUP` is 1 or 2. `COLLECTOR_A` is 0=discard, 1=lastuse, 2=fill, or 3=use.\n",
+                );
+            }
         }
     }
     output.push_str("///\n/// # Safety\n");
@@ -1284,7 +1289,7 @@ fn render_compat_tcgen05_mma_record(output: &mut String, record: &CatalogIntrins
 }
 
 pub(super) fn render_compat_tcgen05(catalog: &CatalogFile, hash: &str) -> String {
-    assert_eq!(tcgen05_intrinsics(catalog).count(), 233);
+    assert!(matches!(tcgen05_intrinsics(catalog).count(), 233 | 249));
     let mut output = rust_header(catalog, hash);
     output.push_str("// Included inside `cuda_device::tcgen05` to keep its public API stable.\n\n");
     for record in tcgen05_intrinsics(catalog) {

@@ -711,7 +711,7 @@ fn launch_contract_generates_prepared_and_unsafe_raw_paths() {
         expanded.contains("__cuda_oxide_prepared:&::cuda_core::PreparedLaunch<__map_CudaKernel>")
     );
     assert!(expanded.contains("unsafefnmap_unchecked("));
-    assert!(expanded.contains("__cuda_oxide_config:::cuda_core::simt::LaunchConfig"));
+    assert!(expanded.contains("__cuda_oxide_config:::cuda_core::LaunchConfig"));
     assert!(expanded.contains("min_alignment:128u32"));
     assert!(expanded.contains("with_min_compute_capability(8u32,0u32)"));
     assert!(expanded.contains("with_u32_coordinates()"));

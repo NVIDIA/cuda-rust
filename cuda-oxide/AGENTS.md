@@ -29,11 +29,14 @@ up or pass one off as the other:
   partitions (`StridedTensor`, `RegisterTile`), TMA descriptors and copies
   (`TensorMap<T, Layout>`, `copy_tma_2d`), producer/consumer pipelines
   (`PipelineTmaAsync`, `PipelineTmaUmma`, `PipelineUmmaAsync`,
-  `PipelineTmaStore`), shared-memory operand tiles (`Sm100SharedTile<Layout, Role>`,
-  `Sm100ScaleTile<Role>`), and Tensor Core MMAs (`Sm100TiledMma`,
-  `Sm100BlockScaledTiledMma`, `Mxf4TiledMma`) **must be encoded in Rust's type
-  system**. Do not write a regular SIMT kernel with raw pointer arithmetic and
-  call it a `cute-rs` kernel. See [`cute-rs-preview/AGENTS.md`](cute-rs-preview/AGENTS.md).
+  `PipelineTmaStore`, `TwoCtaRing`), shared-memory operand tiles (`Sm100SharedTile<Layout, Role>`,
+  `Sm100ScaleTile<Role>`, `SharedTile`, `SharedTileArray`), and Tensor Core MMAs (`Sm100TiledMma`,
+  `Sm100BlockScaledTiledMma`, `Mxf4TiledMma`, `MmaSs`, `MmaTs`) **must be encoded in Rust's type
+  system**, and **all `cute-rs` names must match CuTeDSL 4.7** (`NamedBarrier`,
+  `PipelineTmaAsync`, `PipelineTmaUmma`, `PipelineUmmaAsync`, `PipelineTmaStore`,
+  `Producer`, `Consumer`, `PipelineState`, `prefetch_descriptor`, etc.).
+  * **Single source of truth in `cute-layout` (never reinvent layouts):** Everything related to CuTe layouts, swizzles, coordinate mappings (`crd2idx`, `idx2crd`), tilings (`logical_divide`, `zipped_divide`, `blocked_product`), and compositions must live in the `cute-layout` crate. Never duplicate XOR swizzle formulas, string-formatted layout builders, or parallel layout representations outside `cute-layout`.
+  * **Zero hand-rolled layout math in final implementations:** Any coordinate, tiling, rasterization, or offset operation that can be handled by CuTe layout algebra must be expressed through `cute-layout` / `cute-rs` layout algebra—never via manual `/`, `%`, `&`, `>>` coordinate unpacking, hand-rolled `swizzle_tile` functions, or raw `row * stride + col` pointer arithmetic in `*_cute` kernels (even if a Python reference script wrote that math by hand). You may use temporary rough work to verify correctness while developing, **but the final implementation must use `cute-layout` / `cute-rs` layout algebra exclusively** (enforced by `scripts/check-cute-layout-algebra.sh` in `just check-guards`). See [`cute-rs-preview/AGENTS.md`](cute-rs-preview/AGENTS.md).
 
 ---
 

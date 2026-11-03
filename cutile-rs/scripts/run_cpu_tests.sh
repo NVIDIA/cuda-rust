@@ -45,6 +45,10 @@ run_step \
     "cutile doc tests" \
     cargo test -p cutile --doc
 
+run_step \
+    "cutile compile-fail API contracts" \
+    cargo test -p cutile --test ui
+
 for test_target in \
     basics_and_inlining \
     binary_math_ops \
@@ -89,6 +93,10 @@ run_step \
     cargo test -p cutile --test debug_info nested_helper_cubin_lines_stay_inside_their_functions -- --ignored --nocapture
 
 run_step \
+    "cutile entry setup locations through the assembler" \
+    cargo test -p cutile --test debug_info entry_setup_cubin_uses_signature_in_line_and_full_modes -- --ignored
+
+run_step \
     "cutile generated source locations through the assembler" \
     cargo test -p cutile --test generated_source_locations generated_locations_survive_assembly -- --ignored
 
@@ -119,8 +127,8 @@ run_step \
 # (trybuild derive suite, DeviceCopy impl coverage, launch type contracts).
 # The GPU-dependent integration tests live in run_gpu_tests.sh.
 # `cuda_tests` is the one GPU-requiring module in the cuda-bindings suite
-# (its `init()` asserts a live `cuInit`); it runs unfiltered in
-# run_gpu_tests.sh.
+# (its `init()` asserts a live `cuInit`); it runs in run_gpu_tests.sh.
+# Binding-generation regressions run here with the build runner's libclang.
 run_step \
     "cuda-bindings unit and toolkit-discovery tests" \
     host_cargo test -p cuda-bindings -- --skip cuda_tests::
@@ -132,9 +140,10 @@ run_step \
 run_step \
     "cuda-core compile-time contract tests" \
     host_cargo test -p cuda-core \
-    --test simt_device_copy_derive \
-    --test simt_device_copy_impls \
-    --test simt_launch_contract_types
+    --test device_copy_derive \
+    --test device_copy_impls \
+    --test device_buffer_casts \
+    --test launch_contract_types
 
 # Builds the compile_fail soundness contracts (non-Send launch storage,
 # brand/rank rejection, buffer aliasing) that no other target covers.

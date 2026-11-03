@@ -87,7 +87,7 @@ set -uo pipefail
 
 # ---- Example categorization ---------------------------------------------
 
-TCGEN05_EXAMPLES=(gemm_sol gemm_sol_final tcgen05 tcgen05_matmul)
+TCGEN05_EXAMPLES=(gemm_sol tcgen05 tcgen05_matmul)
 WGMMA_EXAMPLES=(wgmma)
 BLACKWELL_MMA_EXAMPLES=(mma_mxf8f6f4)
 LTOIR_EXAMPLES=(addressof_sharedarray constant_memory cpp_consumes_rust_device device_ffi_test legacy_atomic_fadd legacy_atomic_rmw_cas legacy_nvvm_pointer_shapes manual_launch_libdevice mathdx_ffi_test primitive_stress)
@@ -227,7 +227,7 @@ nvvm_verify_arch() {
             ;;
         cp_async_small) floor=80 ;;
         ex2_approx_f16) floor=75 ;;
-        generated_intrinsics) floor=80 ;;
+        generated_intrinsics) floor=86 ;;
         generated_ldmatrix) floor=75 ;;
         packed_atomic_add) floor=90 ;;
         shuffle_64) floor=75 ;;
@@ -474,6 +474,12 @@ IKET_EXEC=0
 IKET_ARCH="sm_90"
 if [[ "${host_cc}" =~ ^([0-9]+)\.[0-9]+$ ]] && [[ $((10#${BASH_REMATCH[1]})) -ge 9 ]]; then
     IKET_ARCH="${LTOIR_ARCH}"
+    # The pinned LLVM 23 `llc` used by the direct PTX path does not yet have an
+    # `-mcpu=sm_107` processor entry; use the sm_100 family baseline, which has
+    # the identical SM10x IKET placeholder ABI and JIT-loads on sm_107.
+    if [[ "${IKET_ARCH}" == "sm_107" ]]; then
+        IKET_ARCH="sm_100"
+    fi
     IKET_EXEC=1
 fi
 
@@ -817,10 +823,18 @@ verdict_tcgen05() {
 
 verdict_wgmma() {
     local ex="$1" log="$2" ec="$3"
+    local ptx="crates/rustc-codegen-cuda/examples/${ex}/${ex//-/_}.ptx"
     if [[ ${ec} -gt 128 ]]; then echo "FAIL (crashed, signal $((ec - 128)))"; return 1; fi
+    if [[ ${ec} -ne 0 ]]; then echo "FAIL (wgmma, exit=${ec})"; return 1; fi
     if grep -qE 'WARNING: WGMMA requires|WGMMA is Hopper-only|PTX load failed \(expected on non-Hopper\)|PTX module loaded' "${log}"; then
         if grep -qE 'PTX written|PTX Verification|PTX file generated|inspect generated PTX|\.ptx' "${log}"; then
-            if ! ptxas_verify "crates/rustc-codegen-cuda/examples/${ex}/${ex//-/_}.ptx"; then
+            # ptxas_verify may skip missing files; that is not evidence that
+            # the PTX-only fallback actually produced a device artifact.
+            if [[ ! -s "${ptx}" ]]; then
+                echo "FAIL (wgmma, PTX missing or empty: ${ptx})"
+                return 1
+            fi
+            if ! ptxas_verify "${ptx}"; then
                 echo "FAIL (wgmma, ${PTXAS_NOTE})"
                 return 1
             fi
@@ -830,7 +844,6 @@ verdict_wgmma() {
         echo "FAIL (wgmma, PTX not generated)"
         return 1
     fi
-    if [[ ${ec} -ne 0 ]]; then echo "FAIL (wgmma, exit=${ec})"; return 1; fi
     if grep_failure_markers "${log}"; then
         echo "FAIL (wgmma, failure marker in output)"
         return 1

@@ -248,6 +248,158 @@ impl<const M_TILES: usize, const N_TILES: usize, const BATCHES: usize>
     }
 }
 
+/// Runtime persistent tile-grid parameters with compile-time tile extents,
+/// L2 group-M swizzling, and cluster size (`cutlass.utils.PersistentTileSchedulerParams`).
+///
+/// Maps each persistent worker's linear tile index `tile` into `(m_tile, n_tile)`
+/// in groups of `GROUP_M` M-tiles via [`cute_layout::idx2crd_grouped_2d`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PersistentTileSchedulerParams<
+    const TILE_M: u32,
+    const TILE_N: u32,
+    const GROUP_M: u32 = 8,
+    const CLUSTER_CTAS: u32 = 1,
+> {
+    /// Initial linear tile index assigned to this persistent CTA or cluster.
+    first_tile: u32,
+    /// Persistent grid stride in clusters across consecutive tile waves.
+    stride: u32,
+    /// Number of `TILE_M`-row tiles along the M dimension.
+    m_tiles: u32,
+    /// Number of `TILE_N`-column tiles along the N dimension.
+    n_tiles: u32,
+    /// Total number of 2D output tiles (`m_tiles * n_tiles`).
+    tile_count: u32,
+}
+
+impl<const TILE_M: u32, const TILE_N: u32, const GROUP_M: u32, const CLUSTER_CTAS: u32>
+    PersistentTileSchedulerParams<TILE_M, TILE_N, GROUP_M, CLUSTER_CTAS>
+{
+    /// Validate positive compile-time tile, group, and cluster dimensions.
+    const VALID: () = {
+        assert!(TILE_M > 0 && TILE_N > 0);
+        assert!(GROUP_M > 0 && CLUSTER_CTAS > 0);
+    };
+
+    /// Construct persistent tile scheduler parameters from explicit grid coordinates
+    /// and runtime problem dimensions `(m, n)`.
+    #[must_use]
+    #[inline(always)]
+    pub const fn from_grid(m: u32, n: u32, block_x: u32, grid_x: u32) -> Self {
+        let () = Self::VALID;
+        let m_tiles = m / TILE_M;
+        let n_tiles = n / TILE_N;
+        Self {
+            first_tile: block_x / CLUSTER_CTAS,
+            stride: grid_x / CLUSTER_CTAS,
+            m_tiles,
+            n_tiles,
+            tile_count: m_tiles * n_tiles,
+        }
+    }
+
+    /// Construct warp-uniform persistent tile scheduler parameters on the device from
+    /// `block_idx()`, `grid_dim()`, and runtime `(m, n)` dimensions.
+    ///
+    /// # Safety
+    /// All 32 lanes of the calling warp must execute this together with the same
+    /// uniform grid/block coordinates.
+    #[must_use]
+    #[inline(always)]
+    pub unsafe fn new_2d(m: u32, n: u32) -> Self {
+        let () = Self::VALID;
+        let (block_x, _, _) = crate::arch::block_idx();
+        let (grid_x, _, _) = crate::arch::grid_dim();
+        let first_tile = unsafe { crate::arch::make_warp_uniform(block_x / CLUSTER_CTAS) };
+        let stride = unsafe { crate::arch::make_warp_uniform(grid_x / CLUSTER_CTAS) };
+        let m_tiles = m / TILE_M;
+        let n_tiles = n / TILE_N;
+        Self {
+            first_tile,
+            stride,
+            m_tiles,
+            n_tiles,
+            tile_count: m_tiles * n_tiles,
+        }
+    }
+
+    /// Return the first linear tile index for the calling CTA or cluster.
+    #[must_use]
+    #[inline(always)]
+    pub const fn first_tile(self) -> u32 {
+        self.first_tile
+    }
+
+    /// Return the persistent cluster stride between successive tiles.
+    #[must_use]
+    #[inline(always)]
+    pub const fn stride(self) -> u32 {
+        self.stride
+    }
+
+    /// Return the total number of output tiles (`m_tiles * n_tiles`).
+    #[must_use]
+    #[inline(always)]
+    pub const fn tile_count(self) -> u32 {
+        self.tile_count
+    }
+
+    /// Map a linear persistent tile index to `(m_tile, n_tile)` using `cute-layout`'s
+    /// grouped-M 2D layout algebra (`cute_layout::idx2crd_grouped_2d::<GROUP_M>`).
+    #[must_use]
+    #[inline(always)]
+    pub const fn tile_idx(self, tile: u32) -> (u32, u32) {
+        cute_layout::idx2crd_grouped_2d::<GROUP_M>(tile, self.m_tiles, self.n_tiles)
+    }
+
+    /// Map `(m_tile, n_tile, cta_rank)` to this CTA's starting `(row, col)` global TMA
+    /// coordinates via [`cute_layout::crd2idx_col_major_3d`].
+    #[must_use]
+    #[inline(always)]
+    pub const fn cta_tile_coord(self, m_tile: u32, n_tile: u32, cta_rank: u32) -> (i32, i32) {
+        const {
+            assert!(TILE_M.is_multiple_of(CLUSTER_CTAS) && TILE_N.is_multiple_of(CLUSTER_CTAS));
+        }
+        let cta_m = TILE_M / CLUSTER_CTAS;
+        let cta_n = TILE_N / CLUSTER_CTAS;
+        let row = cute_layout::crd2idx_col_major_3d(0, cta_rank, m_tile, cta_m, CLUSTER_CTAS);
+        let col = cute_layout::crd2idx_col_major_3d(0, cta_rank, n_tile, cta_n, CLUSTER_CTAS);
+        (row as i32, col as i32)
+    }
+
+    /// Map an epilogue thread `tid` within `(m_tile, n_tile, cta_rank)` to its global
+    /// `(row, head_idx)` coordinates using `ThreadLayout` (`idx2crd_2d`) composed with
+    /// [`cute_layout::crd2idx_col_major_3d`] and [`cute_layout::crd2idx_col_major_2d`].
+    #[must_use]
+    #[inline(always)]
+    pub const fn epilogue_thread_coord<ThreadLayout: crate::markers::ReifySmem2D>(
+        self,
+        m_tile: u32,
+        n_tile: u32,
+        cta_rank: u32,
+        tid: u32,
+    ) -> (u32, u32) {
+        const {
+            assert!(TILE_M.is_multiple_of(CLUSTER_CTAS));
+            assert!(
+                ThreadLayout::SHAPE.0 as u32 == TILE_M / CLUSTER_CTAS && ThreadLayout::SHAPE.1 > 0
+            );
+        }
+        let cta_m = TILE_M / CLUSTER_CTAS;
+        let heads_per_tile = ThreadLayout::SHAPE.1 as u32;
+        let (lane_row, lane_head) = crate::static_layout::idx2crd_2d::<ThreadLayout>(tid as usize);
+        let row = cute_layout::crd2idx_col_major_3d(
+            lane_row as u32,
+            cta_rank,
+            m_tile,
+            cta_m,
+            CLUSTER_CTAS,
+        );
+        let head_idx = cute_layout::crd2idx_col_major_2d(lane_head as u32, n_tile, heads_per_tile);
+        (row, head_idx)
+    }
+}
+
 /// Stable compiler boundaries for the five scheduler operations.
 ///
 /// The public methods above stay pleasant to use. Device compilation

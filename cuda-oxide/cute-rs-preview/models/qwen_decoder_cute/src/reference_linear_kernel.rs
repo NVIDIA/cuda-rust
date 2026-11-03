@@ -24,7 +24,7 @@ use cute_rs::BFloat16;
 pub mod kernels {
     use super::*;
     use cute_rs::mma::bf16::{APartition, BPartition, Bf16Mma16x8x16, FragmentC, PackedDecode};
-    use cute_rs::tensor::partition::StridedTensorMut;
+    use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
     use cute_rs::{RegisterTile, Tensor};
 
     /// BF16 elements each lane loads per step: one 8-byte vector.
@@ -162,7 +162,11 @@ pub mod kernels {
                     .load()
             }
         } else {
-            RegisterTile::from_fn(|i| weight[offset + i])
+            unsafe {
+                StridedTensor::from_slice(weight)
+                    .subview_unchecked(offset, VECTOR)
+                    .load_unchecked::<VECTOR>()
+            }
         }
     }
 
@@ -234,19 +238,22 @@ pub mod kernels {
         // `member ^ (offset / VECTOR)`; both partners compute the same sum.
         let mut mask = lanes / 2;
         while mask >= 1 {
-            acc = [
-                acc[0] + ctm_rs::warp::shuffle_xor_f32(acc[0], mask as u32),
-                acc[1] + ctm_rs::warp::shuffle_xor_f32(acc[1], mask as u32),
-                acc[2] + ctm_rs::warp::shuffle_xor_f32(acc[2], mask as u32),
-                acc[3] + ctm_rs::warp::shuffle_xor_f32(acc[3], mask as u32),
-            ];
+            // SAFETY: all 32 lanes execute this butterfly exchange convergently.
+            acc = unsafe {
+                [
+                    acc[0] + cute_rs::arch::shuffle_sync_bfly_f32(acc[0], mask as u32, u32::MAX),
+                    acc[1] + cute_rs::arch::shuffle_sync_bfly_f32(acc[1], mask as u32, u32::MAX),
+                    acc[2] + cute_rs::arch::shuffle_sync_bfly_f32(acc[2], mask as u32, u32::MAX),
+                    acc[3] + cute_rs::arch::shuffle_sync_bfly_f32(acc[3], mask as u32, u32::MAX),
+                ]
+            };
             mask /= 2;
         }
         // Residue offsets two and one stay inside the lane.
         let total = (acc[0] + acc[2]) + (acc[1] + acc[3]);
         if valid && member == 0 {
             let value = if HAS_BIAS {
-                total + bias[n].to_f32()
+                total + unsafe { StridedTensor::from_slice(bias).get_unchecked(n) }.to_f32()
             } else {
                 total
             };
@@ -381,10 +388,11 @@ pub mod kernels {
         let mut index = 0;
         // The decode epilogue visits the valid rows in the same register order
         // the totals were gathered in; the zero accumulator only drives it.
+        let bias_view = StridedTensor::from_slice(bias);
         mma.partition_c()
             .store_decode_with(FragmentC::ZERO, source, |row, col, _| {
                 let value = if HAS_BIAS {
-                    total[index] + bias[n + col].to_f32()
+                    total[index] + unsafe { bias_view.get_unchecked(n + col) }.to_f32()
                 } else {
                     total[index]
                 };

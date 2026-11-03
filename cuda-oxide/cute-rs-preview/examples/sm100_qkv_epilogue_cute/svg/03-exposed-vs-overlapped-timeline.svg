@@ -1,0 +1,59 @@
+<svg class="qtts" xmlns="http://www.w3.org/2000/svg" width="680" height="456" viewBox="0 0 680 456" role="img" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif">
+<title>Exposed Epilogue vs. Overlapped 2-Stage TMEM Ping-Pong on B200</title>
+<style>.qtts .bg { fill:#faf9f5 } .qtts .th { font-size:14px; font-weight:600; fill:#1e1e1e } .qtts .t { font-size:13px; fill:#2b2b2b } .qtts .ts { font-size:12px; fill:#5c5c5c } .qtts .k-box { fill:#f1efe9; stroke:#c8c5be } .qtts .tx-box { fill:#1e1e1e } .qtts .k-purple { fill:#ebe9fb; stroke:#7f77dd } .qtts .tx-purple { fill:#3a3490 } .qtts .k-teal { fill:#dff3ec; stroke:#3aa47f } .qtts .tx-teal { fill:#1f5c47 } .qtts .k-coral { fill:#fde7e2; stroke:#e0735c } .qtts .tx-coral { fill:#7d2f1f } .qtts .k-amber { fill:#fdeed3; stroke:#ef9f27 } .qtts .tx-amber { fill:#6b4100 } .qtts .k-gray { fill:#e8e6e0; stroke:#a9a69f } .qtts .tx-gray { fill:#2b2b2b } .qtts .dash { fill:none; stroke:#b8b4ac; stroke-dasharray:4 3 } .qtts .arr { fill:none; stroke:#7b7b7b; stroke-width:1.5 } .qtts .arrhead { fill:none; stroke:#7b7b7b; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round } @media (prefers-color-scheme: dark) { .qtts .bg { fill: #1b1d23 } .qtts .th { fill: #f5f6f8 } .qtts .t { fill: #eceef2 } .qtts .ts { fill: #cfd4de } .qtts .k-box { fill: #2e323c; stroke: #5c6375 } .qtts .tx-box { fill: #f5f6f8 } .qtts .dash { stroke: #606675 } .qtts .arr, .qtts .arrhead { stroke: #b6bcc8 } .qtts .k-purple { fill: #524e7d; stroke: #bab5f4 } .qtts .tx-purple { fill: #f6f5ff } .qtts .k-teal { fill: #346357; stroke: #7ed8bb } .qtts .tx-teal { fill: #f0fdf8 } .qtts .k-coral { fill: #6b443e; stroke: #f29b8a } .qtts .tx-coral { fill: #fff0ed } .qtts .k-amber { fill: #735a3c; stroke: #f4c474 } .qtts .tx-amber { fill: #fff8eb } .qtts .k-gray { fill: #414654; stroke: #7c8496 } .qtts .tx-gray { fill: #f2f4f7 } }</style>
+<rect class="bg" width="680" height="456" rx="10"/>
+
+<rect class="dash" x="36" y="20" width="608" height="184" rx="10" stroke-width="1"/>
+<text class="th" x="340" y="44" text-anchor="middle" dominant-baseline="central">1. Exposed Epilogue (Without Persistent 2-Stage TMEM · 1,226.7 µs)</text>
+
+<text class="ts" x="124" y="88" text-anchor="end" dominant-baseline="central">Tensor Cores</text>
+<rect class="k-coral" x="136" y="68" width="116" height="40" rx="6" stroke-width="0.75"/>
+<text class="th tx-coral" x="194" y="88" text-anchor="middle" dominant-baseline="central">Tile 0 MMA</text>
+<rect class="k-gray" x="258" y="68" width="124" height="40" rx="6" stroke-width="0.75"/>
+<text class="ts tx-gray" x="320" y="88" text-anchor="middle" dominant-baseline="central">Stalled</text>
+<rect class="k-coral" x="388" y="68" width="116" height="40" rx="6" stroke-width="0.75"/>
+<text class="th tx-coral" x="446" y="88" text-anchor="middle" dominant-baseline="central">Tile 1 MMA</text>
+<rect class="k-gray" x="510" y="68" width="114" height="40" rx="6" stroke-width="0.75"/>
+<text class="ts tx-gray" x="567" y="88" text-anchor="middle" dominant-baseline="central">Stalled</text>
+
+<text class="ts" x="124" y="140" text-anchor="end" dominant-baseline="central">CUDA Cores</text>
+<rect class="k-gray" x="136" y="120" width="116" height="40" rx="6" stroke-width="0.75"/>
+<text class="ts tx-gray" x="194" y="140" text-anchor="middle" dominant-baseline="central">Idle</text>
+<rect class="k-purple" x="258" y="120" width="124" height="40" rx="6" stroke-width="0.75"/>
+<text class="th tx-purple" x="320" y="140" text-anchor="middle" dominant-baseline="central">Epilogue 0</text>
+<rect class="k-gray" x="388" y="120" width="116" height="40" rx="6" stroke-width="0.75"/>
+<text class="ts tx-gray" x="446" y="140" text-anchor="middle" dominant-baseline="central">Idle</text>
+<rect class="k-purple" x="510" y="120" width="114" height="40" rx="6" stroke-width="0.75"/>
+<text class="th tx-purple" x="567" y="140" text-anchor="middle" dominant-baseline="central">Epilogue 1</text>
+
+<text class="ts" x="340" y="182" text-anchor="middle" dominant-baseline="central">RMSNorm + FP8 quant + Paged KV Scatter blocks the next tile's MMA</text>
+
+<rect class="dash" x="36" y="222" width="608" height="214" rx="10" stroke-width="1"/>
+<text class="th" x="340" y="246" text-anchor="middle" dominant-baseline="central">2. Overlapped 2-Stage TMEM Ping-Pong in cute-rs &amp; CuTeDSL (295.5 µs)</text>
+
+<text class="ts" x="124" y="290" text-anchor="end" dominant-baseline="central">Warp 4 (MMA)</text>
+<rect class="k-teal" x="136" y="270" width="116" height="40" rx="6" stroke-width="0.75"/>
+<text class="th tx-teal" x="194" y="290" text-anchor="middle" dominant-baseline="central">T0 → TMEM_0</text>
+<rect class="k-amber" x="258" y="270" width="116" height="40" rx="6" stroke-width="0.75"/>
+<text class="th tx-amber" x="316" y="290" text-anchor="middle" dominant-baseline="central">T1 → TMEM_1</text>
+<rect class="k-teal" x="380" y="270" width="116" height="40" rx="6" stroke-width="0.75"/>
+<text class="th tx-teal" x="438" y="290" text-anchor="middle" dominant-baseline="central">T2 → TMEM_0</text>
+<rect class="k-amber" x="502" y="270" width="116" height="40" rx="6" stroke-width="0.75"/>
+<text class="th tx-amber" x="560" y="290" text-anchor="middle" dominant-baseline="central">T3 → TMEM_1</text>
+
+<text class="ts" x="124" y="348" text-anchor="end" dominant-baseline="central">Warps 0..3</text>
+<rect class="k-purple" x="258" y="322" width="116" height="52" rx="6" stroke-width="0.75"/>
+<text class="th tx-purple" x="316" y="339" text-anchor="middle" dominant-baseline="central">Epilogue 0</text>
+<text class="ts tx-purple" x="316" y="358" text-anchor="middle" dominant-baseline="central">from TMEM_0</text>
+
+<rect class="k-purple" x="380" y="322" width="116" height="52" rx="6" stroke-width="0.75"/>
+<text class="th tx-purple" x="438" y="339" text-anchor="middle" dominant-baseline="central">Epilogue 1</text>
+<text class="ts tx-purple" x="438" y="358" text-anchor="middle" dominant-baseline="central">from TMEM_1</text>
+
+<rect class="k-purple" x="502" y="322" width="116" height="52" rx="6" stroke-width="0.75"/>
+<text class="th tx-purple" x="560" y="339" text-anchor="middle" dominant-baseline="central">Epilogue 2</text>
+<text class="ts tx-purple" x="560" y="358" text-anchor="middle" dominant-baseline="central">from TMEM_0</text>
+
+<text class="ts" x="340" y="394" text-anchor="middle" dominant-baseline="central">Warps 0..3 free TMEM_i right after tcgen05.ld (before RMSNorm &amp; stores)</text>
+<text class="ts" x="340" y="414" text-anchor="middle" dominant-baseline="central">4.15× faster at M = 8,192 · ~1,400 TFLOP/s sustained across M = 1,024..8,192</text>
+</svg>

@@ -20,12 +20,13 @@ ptx = open(ptx_path, encoding="utf-8").read()
 # Strip comments so a mention in a comment cannot satisfy or hide a check.
 ptx = re.sub(r"/\*.*?\*/|//[^\n]*", "", ptx, flags=re.S)
 # Kernels whose accumulator must stay in registers. A `.local` depot here
-# means the annotated range loops were left for LLVM, which does not unroll
-# `nested_lane_range`.
-names = ("nested_lane_range", "isize_range_for")
+# means the annotated loops were left for LLVM, which does not unroll
+# `nested_lane_range` or `const_generic_bound`. A generic kernel's entry name
+# carries a `_TID_<hash>` suffix.
+names = ("nested_lane_range", "isize_range_for", "const_generic_bound")
 local_memory = re.compile(r"(?m)(?:^|\s)\.local\b|ld\.local|st\.local")
 for name in names:
-    header = re.search(r"\.entry\s+" + re.escape(name) + r"\s*\(", ptx)
+    header = re.search(r"\.entry\s+" + re.escape(name) + r"(?:_TID_\w+)?\s*\(", ptx)
     if header is None:
         sys.exit(f"error: missing PTX entry {name} in {ptx_path}")
     brace = ptx.find("{", header.end())

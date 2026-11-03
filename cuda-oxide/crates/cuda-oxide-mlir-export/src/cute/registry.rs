@@ -18,7 +18,7 @@ use crate::cute::{
     },
     mma::sm120::{
         FragmentFillTranslation, FragmentSliceKTranslation, MmaLoadATranslation,
-        MmaLoadScalesTranslation, TiledGemmTranslation,
+        MmaLoadScalesTranslation, Nvfp4MmaAtomTranslation, TiledGemmTranslation,
     },
     pipeline::sm120::{
         LoadPipelineTypeTranslation, PipelineExpectTxTranslation, PipelineInitTranslation,
@@ -34,8 +34,8 @@ use crate::{DropAttribute, TranslationError, TranslationRegistry};
 use dialect_cute::{
     attributes::{
         CuteCountedCtaBarrierAttr, CuteEpilogueHalfAttr, CuteEpilogueSyncPhaseAttr,
-        CuteMmaCarrierKindAttr, CutePipelineStateAttr, CuteTileGridAttr, CuteTiledMmaPlanAttr,
-        CuteTmaStorePipelineAttr,
+        CuteMmaAtomAttr, CuteMmaCarrierKindAttr, CutePipelineStateAttr, CuteTileGridAttr,
+        CuteTiledMmaPlanAttr, CuteTmaStorePipelineAttr,
     },
     epilogue_ops::{
         CuteEpilogueHalfOp, CuteEpilogueSmemOverlayOp, CuteEpilogueStoreFragmentOp,
@@ -55,7 +55,8 @@ use dialect_cute::{
     },
     smem_mma_ops::{
         CuteFragmentFillOp, CuteFragmentSliceKOp, CuteMmaLoadAOp, CuteMmaLoadScalesOp,
-        CuteMmaPartitionBOp, CuteSmemTensorOverlayOp, CuteTiledGemmOp, CuteTiledMmaSliceOp,
+        CuteMmaPartitionBOp, CuteNvfp4MmaAtomOp, CuteSmemTensorOverlayOp, CuteTiledGemmOp,
+        CuteTiledMmaSliceOp,
     },
     types::{
         CuteEpilogueTileType, CuteSmemTensorType, CuteTmaLoadPipelineType, CuteTmaViewType,
@@ -79,6 +80,7 @@ pub(crate) fn register_cute_gemm_pack(
 
     registry.register_attribute::<CuteTileGridAttr>(DropAttribute)?;
     registry.register_attribute::<CutePipelineStateAttr>(DropAttribute)?;
+    registry.register_attribute::<CuteMmaAtomAttr>(DropAttribute)?;
     registry.register_attribute::<CuteTiledMmaPlanAttr>(DropAttribute)?;
     registry.register_attribute::<CuteMmaCarrierKindAttr>(DropAttribute)?;
     registry.register_attribute::<CuteTmaStorePipelineAttr>(DropAttribute)?;
@@ -169,6 +171,7 @@ fn register_mma_and_epilogue_mappings(
         attributes: &["mma_partition_b_view"],
     })?;
     registry.register_operation::<CuteTiledGemmOp>(TiledGemmTranslation)?;
+    registry.register_operation::<CuteNvfp4MmaAtomOp>(Nvfp4MmaAtomTranslation)?;
     registry.register_operation::<CuteEpilogueStoreFragmentOp>(EpilogueStoreTranslation)?;
     Ok(())
 }

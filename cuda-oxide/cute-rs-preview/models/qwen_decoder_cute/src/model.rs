@@ -15,7 +15,7 @@
 //! preserving the general MMA reduction and BF16 rounding boundaries.
 use crate::operator::Result;
 use crate::{element_kernel, ffn_kernel, norm_kernel, operator, rotary::HostTables};
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaStream, DeviceBuffer};
 use cute_rs::{
     BFloat16,

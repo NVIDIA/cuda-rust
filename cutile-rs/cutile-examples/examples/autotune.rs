@@ -11,7 +11,7 @@
 //! ```
 
 use cuda_async::device_operation::DeviceOp;
-use cuda_core::Device;
+use cuda_core::Context;
 use cutile::api::{randn, zeros};
 use cutile::error::Error;
 use cutile::tensor::{IntoPartition, Tensor};
@@ -71,7 +71,7 @@ fn main() -> Result<(), Error> {
         return Ok(());
     }
 
-    let device = Device::new(0)?;
+    let device = Context::new(0)?;
     let stream = device.new_stream()?;
     let (m, n) = (512usize, 1024usize);
     let eps: f32 = 1e-8;

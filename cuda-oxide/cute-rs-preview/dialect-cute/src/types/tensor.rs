@@ -168,7 +168,7 @@ impl CuteTensorViewType {
 }
 
 /// Resolve scalar bits only through wrappers with a fully checked identical layout.
-fn scalar_transport_layout(
+pub(crate) fn scalar_transport_layout(
     ctx: &Context,
     ty: TypeHandle,
     depth: usize,
@@ -262,7 +262,7 @@ impl Verify for CuteTensorViewType {
                 let plain_integer_is_supported = storage_ty
                     .downcast_ref::<IntegerType>()
                     .is_some_and(|integer| {
-                        integer.is_unsigned() && matches!(integer.width(), 8 | 16)
+                        integer.is_unsigned() && matches!(integer.width(), 8 | 16 | 32)
                     });
                 let plain_is_supported = storage_ty.downcast_ref::<MirFP16Type>().is_some()
                     || storage_ty.downcast_ref::<FP32Type>().is_some()
@@ -270,7 +270,7 @@ impl Verify for CuteTensorViewType {
                 if !plain_is_supported {
                     return verify_err!(
                         Location::Unknown,
-                        "plain cute.tensor_view supports u8, u16, f16, and f32 carriers or proven transparent scalar wrappers only"
+                        "plain cute.tensor_view supports u8, u16, u32, f16, and f32 carriers or proven transparent scalar wrappers only"
                     );
                 }
                 if self.role != CuteTensorRoleAttr::Generic {

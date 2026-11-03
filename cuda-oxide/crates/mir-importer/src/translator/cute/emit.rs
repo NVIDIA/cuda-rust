@@ -467,8 +467,6 @@ pub(crate) fn emit_load_matrix(
             );
         }
     };
-    let elem: TypeHandle = dialect_mir::types::MirFP16Type::get(ctx).into();
-
     let (smem_ref, prev) = translate_operand(
         ctx,
         body,
@@ -493,6 +491,12 @@ pub(crate) fn emit_load_matrix(
         prev,
         &loc,
     )?;
+    let elem: TypeHandle = smem_base
+        .get_type(ctx)
+        .deref(ctx)
+        .downcast_ref::<MirPtrType>()
+        .map(|ptr| ptr.pointee)
+        .unwrap_or_else(|| dialect_mir::types::MirFP16Type::get(ctx).into());
     let prev = Some(prev);
 
     let coordinate_ty: TypeHandle = pliron::builtin::types::IntegerType::get(

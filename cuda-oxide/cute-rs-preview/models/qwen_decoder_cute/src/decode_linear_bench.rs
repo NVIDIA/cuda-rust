@@ -58,17 +58,17 @@ pub fn run(stream: Arc<CudaStream>) -> Result<()> {
             DeviceBuffer::from_host(&stream, &vec![BFloat16::from_f32(0.0); rows * outputs])?;
         let config = LaunchConfig1D::new(outputs.div_ceil(8) as u32, 32, 0);
         let prepared = module.prepare_decode_linear_bf16(config)?;
-        let original = cuda_core::simt::LaunchConfig {
+        let original = cuda_core::LaunchConfig {
             grid_dim: (outputs.div_ceil(32) as u32, 1, 1),
             block_dim: (128, 1, 1),
             shared_mem_bytes: 0,
         };
         let start = stream
             .context()
-            .new_event(Some(sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+            .new_event_with_flags(Some(sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
         let end = stream
             .context()
-            .new_event(Some(sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+            .new_event_with_flags(Some(sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
         for variant in ["original", "decode", "reference"] {
             if variant == "reference" && plan == ReductionPlan::MmaChain {
                 continue;

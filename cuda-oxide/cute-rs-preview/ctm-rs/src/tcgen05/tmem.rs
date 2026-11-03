@@ -444,6 +444,20 @@ pub unsafe fn store_32x32b_x32(address: u32, data: crate::memory::CuSimd<u32, 32
     unsafe { cuda_device::tcgen05::tcgen05_st_32x32b_x32_raw(address, data) }
 }
 
+/// Issue an SM100 `32x32b.x64` TMEM load into 64 raw registers per lane.
+/// This uses an encoded instruction address; no bounds checks or waits are inserted.
+///
+/// # Safety
+/// The encoded address must cover a live allocation's selected tile and be
+/// row-group aligned. All 32 warp lanes must execute convergently with the same
+/// address, after producer completion and the required after-thread-sync fence.
+/// All tcgen05 instructions must agree on CTA-group mode. Call [`load_wait`]
+/// before conflicting memory operations or a consumer-release handoff.
+#[inline(always)]
+pub unsafe fn load_32x32b_x64(address: u32) -> crate::memory::CuSimd<u32, 64> {
+    unsafe { cuda_device::tcgen05::tcgen05_ld_32x32b_x64_raw(address) }
+}
+
 /// Complete the executing thread's previously issued SM100 TMEM loads.
 /// No CTA barrier, producer wait or memory/proxy fence is inserted.
 ///

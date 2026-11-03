@@ -731,6 +731,38 @@ fn contains_dynamic_stack_features(contents: &str) -> bool {
         || contains_llvm_pointer_intrinsic_call(contents, "@llvm.stackrestore")
 }
 
+/// Detect packed aggregate global initializers that contain symbol addresses.
+///
+/// LLVM's `NVPTXAsmPrinter::printModuleLevelGV` lowers pointers inside a packed
+/// struct initializer (`<{ ... }>`) using PTX byte-mask expressions
+/// (`mask(0xFF)`), which require PTX ISA 7.1 (`+ptx71`) and abort `llc` when
+/// targeting `sm_80` at its default PTX 7.0 floor.
+fn contains_packed_pointer_global_initializer(contents: &str) -> bool {
+    contents.lines().any(|line| {
+        if !line.contains("<{") {
+            return false;
+        }
+        let code = llvm_code_without_comments_or_strings(line);
+        let trimmed = code.trim_start();
+        if !trimmed.starts_with('@')
+            || !(contains_llvm_keyword(trimmed, "global")
+                || contains_llvm_keyword(trimmed, "constant"))
+        {
+            return false;
+        }
+        let Some((_, after_first_open)) = trimmed.split_once("<{") else {
+            return false;
+        };
+        let Some((_, initializer_region)) = after_first_open.split_once("<{") else {
+            return false;
+        };
+        initializer_region.contains('@')
+            || contains_llvm_keyword(initializer_region, "ptrtoint")
+            || contains_llvm_keyword(initializer_region, "addrspacecast")
+            || contains_llvm_keyword(initializer_region, "getelementptr")
+    })
+}
+
 /// Detect every architecture requirement in exported LLVM text.
 ///
 /// Both the ordinary PTX path and automatic libdevice mode use this exact
@@ -837,10 +869,10 @@ pub(super) fn detect_module_requirements_in_llvm_text(contents: &str) -> ModuleR
     {
         ptx_isa = ptx_isa.max(PtxIsaRequirement::new(70));
     }
-    if contains_mbarrier_ptx71_features(contents) {
-        ptx_isa = ptx_isa.max(PtxIsaRequirement::new(71));
-    }
-    if contains_b1_and_mma_features(contents) {
+    if contains_mbarrier_ptx71_features(contents)
+        || contains_b1_and_mma_features(contents)
+        || contains_packed_pointer_global_initializer(contents)
+    {
         ptx_isa = ptx_isa.max(PtxIsaRequirement::new(71));
     }
     if contains_dynamic_stack_features(contents) {

@@ -26,7 +26,7 @@
 //! Build and run with:
 //!   cargo oxide run counted_barrier
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::barrier::{barrier_cta_arrive, barrier_cta_sync};
 use cuda_device::{DisjointSlice, SharedArray, cuda_module, kernel, thread};

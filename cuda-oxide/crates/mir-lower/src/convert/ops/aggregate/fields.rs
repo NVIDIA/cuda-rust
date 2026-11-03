@@ -505,8 +505,8 @@ mod tests {
 
         assert_eq!(
             count_ops::<llvm::AddrSpaceCastOp>(&ctx, &body),
-            2,
-            "union insertion must genericize AS3 and extraction must restore AS3"
+            3,
+            "union insertion must genericize AS3, extraction must restore AS3, and return must genericize for .func ABI"
         );
         assert_eq!(
             count_ops::<MirInsertFieldOp>(&ctx, &body),
@@ -610,8 +610,8 @@ mod tests {
 
         assert_eq!(
             count_ops::<llvm::AddrSpaceCastOp>(&ctx, &body),
-            2,
-            "nested union insertion must genericize AS3 and extraction must restore AS3"
+            3,
+            "nested union insertion must genericize AS3, extraction must restore AS3, and return must genericize for .func ABI"
         );
         assert_eq!(count_ops::<MirInsertFieldOp>(&ctx, &body), 0);
         assert_eq!(count_ops::<MirExtractFieldOp>(&ctx, &body), 0);

@@ -6,7 +6,10 @@
 //! Warp MMA slices and shared-memory fragment loading.
 
 use super::{__compiler, Mxf4BTileK64, Mxf4ScaleStage, Mxf4ScaleTile128};
-use crate::block_scaled::{Mkl, MmaScalePair, Nkl, ScalePack4, SharedScaleAtom};
+use crate::block_scaled::{
+    Mkl, MmaScalePair, MmaScaleQuad, Nkl, ScalePack4, SharedNvfp4ScaleAtom, SharedScaleAtom,
+    Sm120ScaleAtom,
+};
 use crate::copy::tiled::SharedTensor;
 use crate::markers::ColMajor;
 use crate::mma::{FragmentA, FragmentB, FragmentC, load_matrix_a};
@@ -94,7 +97,7 @@ impl<SharedLayout> Mxf4TiledMma<SharedLayout> {
         source: &SharedTensor<Mxf4E2M1, f16, SharedLayout, Mkl>,
         warp_tile: (usize, usize),
     ) -> FragmentA {
-        unsafe { load_matrix_a::<SharedLayout>(source.carrier(), warp_tile, self.lane) }
+        unsafe { load_matrix_a::<SharedLayout, f16>(source.carrier(), warp_tile, self.lane) }
     }
 
     /// Load two neighboring B fragments.
@@ -118,7 +121,7 @@ impl<SharedLayout> Mxf4TiledMma<SharedLayout> {
         warp_tile: (usize, usize),
     ) -> (FragmentB, FragmentB) {
         let loaded =
-            unsafe { load_matrix_a::<SharedLayout>(source.carrier(), warp_tile, self.lane) };
+            unsafe { load_matrix_a::<SharedLayout, f16>(source.carrier(), warp_tile, self.lane) };
         (
             FragmentB([loaded.0[0], loaded.0[2]]),
             FragmentB([loaded.0[1], loaded.0[3]]),
@@ -335,4 +338,203 @@ impl<SharedLayout> Mxf4TiledMma<SharedLayout> {
         let _ = (self, a, scale_a, b, scale_b, c);
         unreachable!("cute-rs block-scaled MMA executed outside recognized CuTe device compilation")
     }
+
+    /// Load this lane's `Float8E4M3FN` (`SF_VEC = 16`) scale quad for a 16-row A tile (`tile_m`).
+    ///
+    /// Maps `lane` through the SM120 `m16n8k64` SFA thread-value layout (`q + 8 * (r & 1)`)
+    /// and [`Sm120ScaleAtom::word_offset`].
+    ///
+    /// # Safety
+    /// `atom` must point to an initialized 512-byte canonical scale atom in shared
+    /// or global memory, and `tile_m * 16 + 15 < 128`.
+    #[must_use]
+    #[inline(always)]
+    pub unsafe fn load_nvfp4_scale_a(
+        &self,
+        atom_words: *const u32,
+        tile_m: usize,
+    ) -> MmaScaleQuad<Mkl> {
+        let q = (self.lane >> 2) as usize;
+        let r = (self.lane & 3) as usize;
+        let row = (tile_m * 16 + q + 8 * (r & 1)) & 127;
+        let bits = unsafe { *atom_words.add(Sm120ScaleAtom::word_offset(row)) };
+        MmaScaleQuad::from_bits(bits)
+    }
+
+    /// Load this lane's `Float8E4M3FN` (`SF_VEC = 16`) scale quad for an 8-row B tile (`tile_n`).
+    ///
+    /// Maps `lane` through the SM120 `m16n8k64` SFB thread-value layout (`q = lane / 4`)
+    /// and [`Sm120ScaleAtom::word_offset`].
+    ///
+    /// # Safety
+    /// `atom_words` must point to an initialized 512-byte canonical scale atom in
+    /// shared or global memory, and `tile_n * 8 + 7 < 128`.
+    #[must_use]
+    #[inline(always)]
+    pub unsafe fn load_nvfp4_scale_b(
+        &self,
+        atom_words: *const u32,
+        tile_n: usize,
+    ) -> MmaScaleQuad<Nkl> {
+        let q = (self.lane >> 2) as usize;
+        let row = (tile_n * 8 + q) & 127;
+        let bits = unsafe { *atom_words.add(Sm120ScaleAtom::word_offset(row)) };
+        MmaScaleQuad::from_bits(bits)
+    }
+
+    /// Load this lane's `Float8E4M3FN` (`SF_VEC = 16`) A scale quad from a shared scale atom.
+    ///
+    /// # Safety
+    /// `a` must be an initialized 512-byte [`SharedNvfp4ScaleAtom`], and `tile_m < 8`.
+    #[must_use]
+    #[inline(always)]
+    pub unsafe fn load_shared_nvfp4_scale_a(
+        &self,
+        a: &SharedNvfp4ScaleAtom<Mkl>,
+        tile_m: usize,
+    ) -> MmaScaleQuad<Mkl> {
+        unsafe { self.load_nvfp4_scale_a(a.carrier().base.cast_const(), tile_m) }
+    }
+
+    /// Load this lane's `Float8E4M3FN` (`SF_VEC = 16`) B scale quad from a shared scale atom.
+    ///
+    /// # Safety
+    /// `b` must be an initialized 512-byte [`SharedNvfp4ScaleAtom`], and `tile_n < 16`.
+    #[must_use]
+    #[inline(always)]
+    pub unsafe fn load_shared_nvfp4_scale_b(
+        &self,
+        b: &SharedNvfp4ScaleAtom<Nkl>,
+        tile_n: usize,
+    ) -> MmaScaleQuad<Nkl> {
+        unsafe { self.load_nvfp4_scale_b(b.carrier().base.cast_const(), tile_n) }
+    }
+
+    /// Run one 16 x 8 x 64 NVFP4 (`Float4E2M1FN` + `Float8E4M3FN`, `SF_VEC = 16`) Tensor-Core MMA.
+    ///
+    /// Emits `cute_nvgpu.arch.mma.SM120.block_scaled` (`m16n8k64.kind::mxf4nvf4.block_scale.scale_vec::4X`).
+    ///
+    /// # Safety
+    /// All 32 lanes of the warp must execute this call convergently on SM120a with
+    /// matching `m16n8k64` fragments and per-lane `E4M3x4` scale quads.
+    #[must_use]
+    #[inline(always)]
+    pub unsafe fn gemm_nvfp4(
+        &self,
+        a: FragmentA,
+        scale_a: MmaScaleQuad<Mkl>,
+        b: FragmentB,
+        scale_b: MmaScaleQuad<Nkl>,
+        c: FragmentC,
+    ) -> FragmentC {
+        let _ = self.lane;
+        unsafe { __compiler::nvfp4_mma_atom_call(c, a, b, scale_a, scale_b) }
+    }
 }
+
+/// One lane's handle to the SM120 NVFP4 (`Float4E2M1FN` + `Float8E4M3FN`, `SF_VEC = 16`) tensor-core operation.
+///
+/// Pairs warp-cooperative `ldmatrix.x4` shared-memory loads with the SM120
+/// `m16n8k64.kind::mxf4nvf4.block_scale.scale_vec::4X` tensor-core instruction.
+#[derive(Clone, Copy)]
+pub struct Nvfp4TiledMma<SharedLayout> {
+    /// Calling thread's hardware lane index in `0..32`.
+    lane: u32,
+    /// Retains the shared-memory coordinate map for fragment loads.
+    layout: PhantomData<SharedLayout>,
+}
+
+impl<SharedLayout> Nvfp4TiledMma<SharedLayout> {
+    /// Create the handle for one lane (`0..32`) of the warp.
+    #[must_use]
+    #[inline(always)]
+    pub const fn get_slice(lane: u32) -> Self {
+        Self {
+            lane,
+            layout: PhantomData,
+        }
+    }
+
+    /// Load this lane's part of a 16 x 64 FP4 A block (`16 x 16` `f16` carriers) using `ldmatrix.x4`.
+    ///
+    /// # Safety
+    /// All 32 lanes of the warp must call this convergently with their hardware
+    /// lane index, and `warp_tile` must select an initialized, 16-byte-aligned
+    /// 16x16 `f16` window inside `source`.
+    #[must_use]
+    #[inline(always)]
+    pub unsafe fn load_a<T: crate::mma::LdmatrixElement>(
+        &self,
+        source: &crate::copy::cooperative::SmemTile<T, SharedLayout>,
+        warp_tile: (usize, usize),
+    ) -> FragmentA {
+        unsafe { load_matrix_a::<SharedLayout, T>(source, warp_tile, self.lane) }
+    }
+
+    /// Load two neighboring 8 x 64 FP4 B fragments (`16 x 16` 16-bit carriers) using `ldmatrix.x4`.
+    ///
+    /// # Safety
+    /// Same collective participation and alignment requirements as [`Self::load_a`].
+    #[must_use]
+    #[inline(always)]
+    pub unsafe fn load_b_pair<T: crate::mma::LdmatrixElement>(
+        &self,
+        source: &crate::copy::cooperative::SmemTile<T, SharedLayout>,
+        warp_tile: (usize, usize),
+    ) -> (FragmentB, FragmentB) {
+        let loaded = unsafe { load_matrix_a::<SharedLayout, T>(source, warp_tile, self.lane) };
+        (
+            FragmentB([loaded.0[0], loaded.0[2]]),
+            FragmentB([loaded.0[1], loaded.0[3]]),
+        )
+    }
+
+    /// Load this lane's `Float8E4M3FN` (`SF_VEC = 16`) scale quad for a 16-row A tile (`tile_m`).
+    ///
+    /// # Safety
+    /// `atom_words` must point to an initialized 512-byte canonical scale atom.
+    #[must_use]
+    #[inline(always)]
+    pub unsafe fn load_scale_a(&self, atom_words: *const u32, tile_m: usize) -> MmaScaleQuad<Mkl> {
+        let q = (self.lane >> 2) as usize;
+        let r = (self.lane & 3) as usize;
+        let row = (tile_m * 16 + q + 8 * (r & 1)) & 127;
+        let bits = unsafe { *atom_words.add(Sm120ScaleAtom::word_offset(row)) };
+        MmaScaleQuad::from_bits(bits)
+    }
+
+    /// Load this lane's `Float8E4M3FN` (`SF_VEC = 16`) scale quad for an 8-row B tile (`tile_n`).
+    ///
+    /// # Safety
+    /// `atom_words` must point to an initialized 512-byte canonical scale atom.
+    #[must_use]
+    #[inline(always)]
+    pub unsafe fn load_scale_b(&self, atom_words: *const u32, tile_n: usize) -> MmaScaleQuad<Nkl> {
+        let q = (self.lane >> 2) as usize;
+        let row = (tile_n * 8 + q) & 127;
+        let bits = unsafe { *atom_words.add(Sm120ScaleAtom::word_offset(row)) };
+        MmaScaleQuad::from_bits(bits)
+    }
+
+    /// Run one 16 x 8 x 64 NVFP4 (`Float4E2M1FN` + `Float8E4M3FN`, `SF_VEC = 16`) Tensor-Core MMA.
+    ///
+    /// # Safety
+    /// All 32 lanes of the warp must execute this call convergently on SM120a with
+    /// matching `m16n8k64` fragments and per-lane `E4M3x4` scale quads.
+    #[must_use]
+    #[inline(always)]
+    pub unsafe fn gemm(
+        &self,
+        a: FragmentA,
+        scale_a: MmaScaleQuad<Mkl>,
+        b: FragmentB,
+        scale_b: MmaScaleQuad<Nkl>,
+        c: FragmentC,
+    ) -> FragmentC {
+        let _ = self.lane;
+        unsafe { __compiler::nvfp4_mma_atom_call(c, a, b, scale_a, scale_b) }
+    }
+}
+
+/// CuTeDSL-aligned alias (`MmaMXF4NVF4Op`) for [`Nvfp4TiledMma`].
+pub type Mxf4Nvf4TiledMma<SharedLayout> = Nvfp4TiledMma<SharedLayout>;

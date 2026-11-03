@@ -327,7 +327,7 @@ describe. There are seven modules and 27 operations:
 **Generated**, under `ops/generated/`, from `intrinsics/catalog.json` by
 `cuda-intrinsics-gen`. Every file there opens with `// @generated ... DO NOT
 EDIT.`, and editing one by hand is undone by the next generator run. This is
-the large majority -- 35 modules and 562 operations, resolved from 1042 catalog
+the large majority -- 35 modules and 562 operations, resolved from 1058 catalog
 entries, since several intrinsics can share one structural op:
 
 | Area                        | Modules                                                                       | Ops |

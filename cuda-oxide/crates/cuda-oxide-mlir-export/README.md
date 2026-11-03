@@ -47,8 +47,8 @@ Unsupported primitive selectors and intrinsic identities fail at export.
 Select `CUDA_OXIDE_MLIR_PROFILE=cutlass-primitives-mlir22` together with the
 CUTLASS backend for Rust kernels using `ctm_rs`. This profile
 accepts ordinary MIR plus the reviewed NVVM subset and rejects CuTe operations,
-types and attributes recursively. It targets `sm_100a` and `sm_120a`; TCGen05
-requires `sm_100a`, while MXF4 register MMA requires `sm_120a`. The default full
+types and attributes recursively. It targets `sm_100a`, `sm_103a` and `sm_120a`; TCGen05
+requires `sm_100a` or `sm_103a`, while MXF4 register MMA requires `sm_120a`. The default full
 CuTe profile remains available. Profile identity participates in build caching.
 
 Real Rust fixtures also exercise checked arithmetic, padded tuple carriers,

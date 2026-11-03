@@ -176,7 +176,7 @@ fn new_device_context_with_invalid_device_returns_driver_error() {
     // Device ordinal 9999 should not exist on any reasonable system.
     // Device::new(9999) will fail with a driver error, which propagates
     // through new_device_context.
-    let result = cuda_core::Device::new(9999);
+    let result = cuda_core::Context::new(9999);
     let result = result.map_err(DeviceError::Driver);
     match result {
         Err(DeviceError::Driver(_)) => { /* expected */ }

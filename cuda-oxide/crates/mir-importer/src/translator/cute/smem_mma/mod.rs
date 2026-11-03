@@ -23,6 +23,8 @@ const SHARED_TENSOR: &str = "cute_rs::copy::tiled::SharedTensor";
 const MXF4_E2M1: &str = "cute_rs::numeric::Mxf4E2M1";
 /// Exact defining path of `cute_rs::numeric::UE8M0x4`; public reexports do not change it.
 const UE8M0_X4: &str = "cute_rs::numeric::UE8M0x4";
+/// Exact defining path of `cute_rs::numeric::E4M3x4`; public reexports do not change it.
+const E4M3_X4: &str = "cute_rs::numeric::E4M3x4";
 /// Exact defining path of `cute_rs::block_scaled::layouts::Sm120ScaleAtom`; public reexports do not change it.
 const SM120_SCALE_ATOM: &str = "cute_rs::block_scaled::layouts::Sm120ScaleAtom";
 /// Exact defining path of `cute_rs::block_scaled::Mkl`; public reexports do not change it.
@@ -45,8 +47,10 @@ const B_TILE_K64: &str = "cute_rs::mma::block_scaled::fragments::Mxf4BTileK64";
 pub(crate) enum SharedTensorKind {
     /// Packed FP4 matrix values carried in shared FP16 storage.
     Data,
-    /// Packed UE8M0 scale words in the canonical shared atom.
+    /// Packed UE8M0 scale words in the canonical shared atom (`SF_VEC = 32`).
     Scale,
+    /// Packed E4M3 scale words in the canonical shared atom (`SF_VEC = 16`).
+    ScaleE4m3,
 }
 
 /// Static kind, role and physical placement decoded from a shared tensor type.
@@ -156,7 +160,17 @@ pub(crate) fn decode_shared_tensor(ty: &Ty) -> Result<Option<SharedTensorRust>, 
             placement: scale_placement(),
         }));
     }
-    Err("shared MMA tensor must be packed E2M1/f16 data or UE8M0x4/u32 scales".to_string())
+    if exact_marker(&element, E4M3_X4)?
+        && is_u32(&storage)
+        && exact_marker(&layout, SM120_SCALE_ATOM)?
+    {
+        return Ok(Some(SharedTensorRust {
+            kind: SharedTensorKind::ScaleE4m3,
+            role,
+            placement: scale_placement(),
+        }));
+    }
+    Err("shared MMA tensor must be packed E2M1/f16 data or UE8M0x4/E4M3x4/u32 scales".to_string())
 }
 
 /// Decode a value directly or through one reference or raw-pointer layer.

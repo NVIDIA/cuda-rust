@@ -7,7 +7,7 @@ use crate::device_context::with_default_device_policy;
 use crate::device_future::DeviceFuture;
 use crate::device_operation::{DeviceOp, ExecutionContext, GraphNode, ReplayResource};
 use crate::error::DeviceError;
-use cuda_core::{sys, Device, IntoResult, Stream};
+use cuda_core::{sys, Context, IntoResult, Stream};
 use std::collections::HashMap;
 use std::future::IntoFuture;
 use std::mem::MaybeUninit;
@@ -67,7 +67,7 @@ struct GraphExecHandle {
     /// Contexts of `update` ops not yet consumed by a replay.
     pending: Mutex<Vec<ExecutionContext>>,
     /// Bound before destruction: the driver needs the owning context current.
-    device: Arc<Device>,
+    device: Arc<Context>,
     cu_graph: sys::CUgraph,
     cu_graph_exec: sys::CUgraphExec,
 }
@@ -85,7 +85,7 @@ impl GraphExecHandle {
     /// instantiation fails, and owned by the returned handle otherwise
     /// (whose `Drop` also covers an upload failure).
     fn instantiate(
-        device: Arc<Device>,
+        device: Arc<Context>,
         cu_graph: sys::CUgraph,
         stream: &Stream,
     ) -> Result<Self, DeviceError> {
@@ -165,7 +165,7 @@ fn capture_on<R>(
     stream: &Arc<Stream>,
     record: impl FnOnce() -> Result<R, DeviceError>,
 ) -> Result<(R, Arc<GraphExecHandle>), DeviceError> {
-    let device = stream.device().clone();
+    let device = stream.context().clone();
     device.bind_to_thread()?;
 
     unsafe {
@@ -204,7 +204,7 @@ fn capture_on<R>(
     let exec = GraphExecHandle::instantiate(device, cu_graph, stream)?;
 
     // Drain the upload. The recorded work itself has *not* run.
-    unsafe { stream.synchronize() }?;
+    stream.synchronize()?;
 
     Ok((output, Arc::new(exec)))
 }
@@ -367,6 +367,12 @@ impl DeviceOp for GraphLaunch {
     type Output = ();
 
     unsafe fn execute(self, context: &ExecutionContext) -> Result<(), DeviceError> {
+        if self.exec.device.as_ref() != context.context().as_ref() {
+            return Err(DeviceError::Internal(
+                "graph and launch stream belong to different CUDA contexts".into(),
+            ));
+        }
+        context.context().bind_to_thread()?;
         context.retain(self.exec.clone())?;
         // Reacquire every captured buffer for this replay: one lease per
         // distinct storage, registered on the launch submission so other
@@ -377,7 +383,7 @@ impl DeviceOp for GraphLaunch {
             }
         }
         // Pending updates need not accumulate over the graph's lifetime.
-        // The launch submission now owns them; their contexts wait on the
+        // The launch submission now owns them; their contexts retain owners on the
         // update stream if it differs from the launch stream.
         let pending =
             std::mem::take(&mut *self.exec.pending.lock().unwrap_or_else(|e| e.into_inner()));

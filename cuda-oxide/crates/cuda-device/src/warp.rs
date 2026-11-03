@@ -691,6 +691,14 @@ pub fn popc(predicate: bool) -> u32 {
     ballot(predicate).count_ones()
 }
 
+/// Compiler-resolved predicate returning whether the target floor supports
+/// integer `redux.sync` (`sm_80` or newer).
+#[doc(hidden)]
+#[inline(never)]
+pub fn __target_has_integer_redux_sync() -> bool {
+    unreachable!("__target_has_integer_redux_sync called outside CUDA kernel context")
+}
+
 // =============================================================================
 // Warp Match Operations (sm_70+)
 // =============================================================================

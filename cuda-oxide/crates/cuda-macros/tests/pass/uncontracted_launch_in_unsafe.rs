@@ -21,7 +21,7 @@ fn launch_with_unsafe(
         module
             .uncontracted(
                 stream,
-                cuda_core::simt::LaunchConfig {
+                cuda_core::LaunchConfig {
                     grid_dim: (1, 2, 1),
                     block_dim: (64, 1, 1),
                     shared_mem_bytes: 0,

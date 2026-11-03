@@ -556,6 +556,10 @@ pub(in crate::resolve) fn expand_tcgen05_admission(
                     .is_some_and(|profile| !profile.trim().is_empty()),
             "compact tcgen05 MMA admission requires both backend evidence profiles"
         );
+        let has_block_scale_variants = admission
+            .mma_variants
+            .iter()
+            .any(|variant| tcgen05_mma_is_block_scale(variant.form));
         let expected_variants = TCGEN05_MMA_FORMS
             .into_iter()
             .map(|form| (form, None))
@@ -569,6 +573,13 @@ pub(in crate::resolve) fn expand_tcgen05_admission(
                     .into_iter()
                     .map(|alias| (Tcgen05MmaForm::Shared, Some(alias))),
             )
+            .chain(
+                has_block_scale_variants
+                    .then_some(TCGEN05_MMA_BLOCK_SCALE_FORMS)
+                    .into_iter()
+                    .flatten()
+                    .map(|form| (form, None)),
+            )
             .collect::<Vec<_>>();
         ensure!(
             admission
@@ -576,7 +587,7 @@ pub(in crate::resolve) fn expand_tcgen05_admission(
                 .iter()
                 .map(|variant| (variant.form, variant.alias))
                 .eq(expected_variants),
-            "compact tcgen05 MMA admission must list all 24 APIs in canonical order"
+            "compact tcgen05 MMA admission must list all 24 base APIs or all 40 current APIs in canonical order"
         );
         for variant in &admission.mma_variants {
             validate_abi_id(&variant.abi_id)?;
@@ -608,15 +619,42 @@ pub(in crate::resolve) fn expand_tcgen05_admission(
             &fixed_selector,
             &admission.mma_libnvvm_target_contracts,
         )?;
+        let block_scale_llvm_contracts =
+            expected_tcgen05_mma_block_scale_target_contracts(IntrinsicBackend::LlvmNvptx);
+        let block_scale_libnvvm_contracts =
+            expected_tcgen05_mma_block_scale_target_contracts(IntrinsicBackend::LibNvvm);
         for variant in &admission.mma_variants {
-            let (llvm, libnvvm) = if variant.alias.is_some() {
-                (&fixed_llvm, &fixed_libnvvm)
+            if let Some(kind) = tcgen05_mma_block_scale_kind(variant.form) {
+                let selector = [TargetSelectorBinding {
+                    name: "kind".into(),
+                    value: tcgen05_mma_kind_name(kind).into(),
+                }];
+                let bs_llvm = resolve_target_contract(
+                    "tcgen05 MMA LLVM block scale",
+                    &selector,
+                    &block_scale_llvm_contracts,
+                )?;
+                let bs_libnvvm = resolve_target_contract(
+                    "tcgen05 MMA libNVVM block scale",
+                    &selector,
+                    &block_scale_libnvvm_contracts,
+                )?;
+                records.push(materialize_tcgen05_mma_variant(
+                    admission,
+                    variant,
+                    &bs_llvm,
+                    &bs_libnvvm,
+                ));
             } else {
-                (&llvm_target, &libnvvm_target)
-            };
-            records.push(materialize_tcgen05_mma_variant(
-                admission, variant, llvm, libnvvm,
-            ));
+                let (llvm, libnvvm) = if variant.alias.is_some() {
+                    (&fixed_llvm, &fixed_libnvvm)
+                } else {
+                    (&llvm_target, &libnvvm_target)
+                };
+                records.push(materialize_tcgen05_mma_variant(
+                    admission, variant, llvm, libnvvm,
+                ));
+            }
         }
     }
     Ok(records)

@@ -229,6 +229,37 @@ fn dynamic_stack_mentions_without_calls_do_not_raise_requirements() {
 }
 
 #[test]
+fn packed_pointer_global_initializers_require_ptx71() {
+    let packed_relocation = concat!(
+        "@target = addrspace(1) global [4 x i8] c\"\\01\\02\\03\\04\", align 4\n",
+        "@packed = local_unnamed_addr addrspace(1) global <{ [3 x i8], i64, [2 x i8] }> ",
+        "<{ [3 x i8] c\"\\11\\223\", i64 ptrtoint (ptr addrspacecast (ptr addrspace(1) @target to ptr) to i64), [2 x i8] c\"UD\" }>, align 1\n",
+    );
+    let requirements = detect_module_requirements_in_llvm_text(packed_relocation);
+    assert_eq!(requirements.ptx_isa, PtxIsaRequirement::new(71));
+    assert_eq!(
+        required_ptx_feature(&"sm_80".parse().unwrap(), requirements.ptx_isa).unwrap(),
+        Some("+ptx71")
+    );
+    assert_eq!(
+        required_ptx_feature(&"sm_86".parse().unwrap(), requirements.ptx_isa).unwrap(),
+        None
+    );
+
+    for non_packed_or_scalar in [
+        "@unpacked = addrspace(1) global { i64 } { i64 ptrtoint (ptr addrspacecast (ptr addrspace(1) @target to ptr) to i64) }, align 8\n",
+        "@packed_bytes = addrspace(1) global <{ [3 x i8], i32 }> <{ [3 x i8] c\"abc\", i32 7 }>, align 1\n",
+        "; @commented = addrspace(1) global <{ [1 x i8], i64 }> <{ [1 x i8] c\"x\", i64 ptrtoint (ptr @target to i64) }>\n",
+    ] {
+        assert_eq!(
+            detect_module_requirements_in_llvm_text(non_packed_or_scalar).ptx_isa,
+            PtxIsaRequirement::Default,
+            "{non_packed_or_scalar}"
+        );
+    }
+}
+
+#[test]
 fn ptx73_feature_is_requested_only_when_the_target_default_is_older() {
     assert_eq!(
         ptx_isa_requirement_for_floor(72, "test", "test").unwrap(),

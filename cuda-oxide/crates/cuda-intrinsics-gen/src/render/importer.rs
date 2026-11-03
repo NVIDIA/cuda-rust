@@ -403,13 +403,13 @@ fn render_importer_tcgen05_mma_dispatch(
     } else if mma.alias.is_some() {
         (0..record.rust.arguments.len()).collect()
     } else {
-        let selector_indices = match mma.selector_layout {
+        let selector_indices: Vec<usize> = match mma.selector_layout {
             Tcgen05MmaSelectorLayout::Base {
                 kind_argument,
                 cta_group_argument,
                 collector_a_argument,
                 ..
-            } => [
+            } => vec![
                 kind_argument as usize,
                 cta_group_argument as usize,
                 collector_a_argument as usize,
@@ -418,11 +418,15 @@ fn render_importer_tcgen05_mma_dispatch(
                 kind_argument,
                 b_buffer_argument,
                 b_usage_argument,
-            } => [
+            } => vec![
                 kind_argument as usize,
                 b_buffer_argument as usize,
                 b_usage_argument as usize,
             ],
+            Tcgen05MmaSelectorLayout::BlockScaled {
+                cta_group_argument,
+                collector_a_argument,
+            } => vec![cta_group_argument as usize, collector_a_argument as usize],
         };
         (0..record.rust.arguments.len())
             .filter(|index| !selector_indices.contains(index))
@@ -466,6 +470,21 @@ fn render_importer_tcgen05_mma_dispatch(
                 )
                 .unwrap();
             }
+            Tcgen05MmaSelectorLayout::BlockScaled {
+                cta_group_argument,
+                collector_a_argument,
+            } => {
+                writeln!(
+                    output,
+                    "            let cta_group = match generated_tcgen05_mma_selector(args.get({cta_group_argument}usize)) {{\n                Some(1) => Tcgen05MmaCtaGroupAttr::Cg1,\n                Some(2) => Tcgen05MmaCtaGroupAttr::Cg2,\n                _ => {{\n                    return input_err!(\n                        loc.clone(),\n                        TranslationErr::unsupported(\n                            \"tcgen05 MMA CTA group must be the compile-time u32 constant 1 or 2\"\n                                .to_owned()\n                        )\n                    );\n                }}\n            }};"
+                )
+                .unwrap();
+                writeln!(
+                    output,
+                    "            let collector_a = match generated_tcgen05_mma_selector(args.get({collector_a_argument}usize)) {{\n                Some(0) => Tcgen05MmaCollectorAAttr::Discard,\n                Some(1) => Tcgen05MmaCollectorAAttr::LastUse,\n                Some(2) => Tcgen05MmaCollectorAAttr::Fill,\n                Some(3) => Tcgen05MmaCollectorAAttr::Use,\n                _ => return input_err!(loc.clone(), TranslationErr::unsupported(\"tcgen05 MMA collector-A selector is outside its closed range\".to_owned())),\n            }};"
+                )
+                .unwrap();
+            }
         }
     } else {
         let (kind_argument, second_argument, third_argument) = match mma.selector_layout {
@@ -480,6 +499,7 @@ fn render_importer_tcgen05_mma_dispatch(
                 b_buffer_argument,
                 b_usage_argument,
             } => (kind_argument, b_buffer_argument, b_usage_argument),
+            Tcgen05MmaSelectorLayout::BlockScaled { .. } => unreachable!(),
         };
         writeln!(
             output,
@@ -519,6 +539,7 @@ fn render_importer_tcgen05_mma_dispatch(
                 )
                 .unwrap();
             }
+            Tcgen05MmaSelectorLayout::BlockScaled { .. } => unreachable!(),
         }
     }
 
@@ -533,9 +554,11 @@ fn render_importer_tcgen05_mma_dispatch(
     .unwrap();
     output.push_str("            mma_op.set_attr_nvvm_tcgen05_mma_kind(ctx, kind);\n");
     match mma.selector_layout {
-        Tcgen05MmaSelectorLayout::Base { .. } => output.push_str(
-            "            mma_op.set_attr_nvvm_tcgen05_mma_cta_group(ctx, cta_group);\n            mma_op.set_attr_nvvm_tcgen05_mma_collector_a(ctx, collector_a);\n",
-        ),
+        Tcgen05MmaSelectorLayout::Base { .. } | Tcgen05MmaSelectorLayout::BlockScaled { .. } => {
+            output.push_str(
+                "            mma_op.set_attr_nvvm_tcgen05_mma_cta_group(ctx, cta_group);\n            mma_op.set_attr_nvvm_tcgen05_mma_collector_a(ctx, collector_a);\n",
+            )
+        }
         Tcgen05MmaSelectorLayout::WarpSpecialized { .. } => output.push_str(
             "            mma_op.set_attr_nvvm_tcgen05_mma_b_buffer(ctx, b_buffer);\n            mma_op.set_attr_nvvm_tcgen05_mma_b_usage(ctx, b_usage);\n",
         ),

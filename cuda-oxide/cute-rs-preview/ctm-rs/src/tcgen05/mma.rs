@@ -49,6 +49,54 @@ dispatch!(collector_a::LastUse, 1);
 dispatch!(collector_a::Fill, 2);
 dispatch!(collector_a::Use, 3);
 
+/// Issue one group-one shared/shared FP16 MMA (`tcgen05.mma.cta_group::1.kind::f16`).
+///
+/// # Safety
+/// One elected thread in the CTA must issue this operation after shared operands are published
+/// and live, and `dst` must name a valid group-one TMEM allocation.
+#[inline(always)]
+pub unsafe fn issue_cg1_f16(dst: u32, a: u64, b: u64, descriptor: u32, enable_d: bool) {
+    unsafe { cuda_device::tcgen05::tcgen05_mma_shared::<0, 1, 0>(dst, a, b, descriptor, enable_d) }
+}
+
+/// Copy one 512-byte (`32x128b`) scale atom from Shared Memory to Tensor Memory (`tcgen05.cp.cta_group::1.32x128b.warpx4`).
+///
+/// # Safety
+/// One elected thread in the CTA must issue this operation after the shared-memory scale atom is
+/// published and live, and `scale_tmem` must name a valid 4-column TMEM allocation.
+#[inline(always)]
+pub unsafe fn cp_32x128b_warpx4(scale_tmem: u32, smem_desc: u64) {
+    unsafe { cuda_device::tcgen05::tcgen05_cp_32x128b_warpx4(scale_tmem, smem_desc) }
+}
+
+/// Issue one group-one hardware block-scaled NVFP4 MMA (`tcgen05.mma.cta_group::1.kind::mxf4nvf4.block_scale.block16`).
+///
+/// # Safety
+/// One elected thread in the CTA must issue this operation after shared operands and TMEM scales
+/// are published and live, and `dst` must name a valid group-one TMEM allocation.
+#[inline(always)]
+pub unsafe fn issue_cg1_mxf4nvf4_block16(
+    dst: u32,
+    a: u64,
+    b: u64,
+    descriptor: u32,
+    enable_d: bool,
+    scale_a_tmem: u32,
+    scale_b_tmem: u32,
+) {
+    unsafe {
+        cuda_device::tcgen05::tcgen05_mma_shared_mxf4nvf4_block_scale_block16::<1, 0>(
+            dst,
+            a,
+            b,
+            descriptor,
+            enable_d,
+            scale_a_tmem,
+            scale_b_tmem,
+        )
+    }
+}
+
 /// Issue one MMA. The collector selector does not infer a sequence or pipeline.
 ///
 /// cute-rs exposes the `enable_d` flag (PTX `enable-input-d`) as `accumulate`,

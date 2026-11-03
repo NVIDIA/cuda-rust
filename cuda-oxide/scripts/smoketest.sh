@@ -87,17 +87,17 @@ set -uo pipefail
 
 # ---- Example categorization ---------------------------------------------
 
-TCGEN05_EXAMPLES=(gemm_sol gemm_sol_final tcgen05 tcgen05_matmul)
+TCGEN05_EXAMPLES=(gemm_sol tcgen05 tcgen05_matmul)
 WGMMA_EXAMPLES=(wgmma)
 BLACKWELL_MMA_EXAMPLES=(mma_mxf8f6f4)
 LTOIR_EXAMPLES=(addressof_sharedarray constant_memory cpp_consumes_rust_device device_ffi_test legacy_atomic_fadd legacy_atomic_rmw_cas legacy_nvvm_pointer_shapes manual_launch_libdevice mathdx_ffi_test primitive_stress)
-LTOIR_MODERN_EXAMPLES=(small_type_ffi_test)
+LTOIR_MODERN_EXAMPLES=(small_type_ffi_test nvvm_entry_allocas)
 TILELIB_EXAMPLES=(tilelib_relu)
 AUTO_NVVM_EXAMPLES=(libdevice_math)
 IKET_EXAMPLES=(iket_trace)
 BLACKWELL_COMPILE_EXAMPLES=(generated_intrinsics_blackwell)
 SM100_COMPILE_EXAMPLES=(redux_f32)
-NVVM_VERIFY_EXAMPLES=(constant_memory cp_async_small device_global enum_constant_provenance ex2_approx_f16 generated_intrinsics generated_intrinsics_blackwell generated_ldmatrix kernel_reference_validity legacy_atomic_fadd legacy_atomic_rmw_cas libdevice_math legacy_nvvm_pointer_shapes packed_atomic_add primitive_stress scoped_atomic_load_store shuffle_64 tcgen05 tuple_constant_provenance wgmma_mma_bf16)
+NVVM_VERIFY_EXAMPLES=(array_from_fn constant_memory cp_async_small device_global enum_constant_provenance ex2_approx_f16 generated_intrinsics generated_intrinsics_blackwell generated_ldmatrix kernel_reference_validity legacy_atomic_fadd legacy_atomic_rmw_cas libdevice_math legacy_nvvm_pointer_shapes packed_atomic_add primitive_stress scoped_atomic_load_store shuffle_64 tcgen05 tuple_constant_provenance wgmma_mma_bf16)
 ERROR_EXAMPLES=(error error_set_discriminant_uninhabited error_enum_bool_payload_addr error_enum_pointer_overlap error_enum_shared_pointer_layout error_heap_alloc error_host_arch_intrinsic error_host_target_feature error_kernel_shared_param error_missing_device_attr error_generated_intrinsic_abi error_generated_intrinsic_unknown_id error_generated_intrinsic_fn_pointer error_generated_intrinsic_callable error_union_shared_pointer_addr error_union_shared_pointer_layout)
 
 # Per-example rustc flags policy: an example that needs a special rustc flag
@@ -227,7 +227,7 @@ nvvm_verify_arch() {
             ;;
         cp_async_small) floor=80 ;;
         ex2_approx_f16) floor=75 ;;
-        generated_intrinsics) floor=80 ;;
+        generated_intrinsics) floor=86 ;;
         generated_ldmatrix) floor=75 ;;
         packed_atomic_add) floor=90 ;;
         shuffle_64) floor=75 ;;
@@ -474,6 +474,12 @@ IKET_EXEC=0
 IKET_ARCH="sm_90"
 if [[ "${host_cc}" =~ ^([0-9]+)\.[0-9]+$ ]] && [[ $((10#${BASH_REMATCH[1]})) -ge 9 ]]; then
     IKET_ARCH="${LTOIR_ARCH}"
+    # The pinned LLVM 23 `llc` used by the direct PTX path does not yet have an
+    # `-mcpu=sm_107` processor entry; use the sm_100 family baseline, which has
+    # the identical SM10x IKET placeholder ABI and JIT-loads on sm_107.
+    if [[ "${IKET_ARCH}" == "sm_107" ]]; then
+        IKET_ARCH="sm_100"
+    fi
     IKET_EXEC=1
 fi
 
@@ -817,10 +823,18 @@ verdict_tcgen05() {
 
 verdict_wgmma() {
     local ex="$1" log="$2" ec="$3"
+    local ptx="crates/rustc-codegen-cuda/examples/${ex}/${ex//-/_}.ptx"
     if [[ ${ec} -gt 128 ]]; then echo "FAIL (crashed, signal $((ec - 128)))"; return 1; fi
+    if [[ ${ec} -ne 0 ]]; then echo "FAIL (wgmma, exit=${ec})"; return 1; fi
     if grep -qE 'WARNING: WGMMA requires|WGMMA is Hopper-only|PTX load failed \(expected on non-Hopper\)|PTX module loaded' "${log}"; then
         if grep -qE 'PTX written|PTX Verification|PTX file generated|inspect generated PTX|\.ptx' "${log}"; then
-            if ! ptxas_verify "crates/rustc-codegen-cuda/examples/${ex}/${ex//-/_}.ptx"; then
+            # ptxas_verify may skip missing files; that is not evidence that
+            # the PTX-only fallback actually produced a device artifact.
+            if [[ ! -s "${ptx}" ]]; then
+                echo "FAIL (wgmma, PTX missing or empty: ${ptx})"
+                return 1
+            fi
+            if ! ptxas_verify "${ptx}"; then
                 echo "FAIL (wgmma, ${PTXAS_NOTE})"
                 return 1
             fi
@@ -830,7 +844,6 @@ verdict_wgmma() {
         echo "FAIL (wgmma, PTX not generated)"
         return 1
     fi
-    if [[ ${ec} -ne 0 ]]; then echo "FAIL (wgmma, exit=${ec})"; return 1; fi
     if grep_failure_markers "${log}"; then
         echo "FAIL (wgmma, failure marker in output)"
         return 1
@@ -2274,6 +2287,22 @@ run_cargo() {
     if [[ ${CARGO_EC} -eq 0 && -f "${shape_check}" ]]; then
         if ! bash "${shape_check}" >>"${log}" 2>&1; then
             printf '%s failed its verify-code-shape.sh assertions\n' "${ex}" >>"${log}"
+            CARGO_EC=1
+        fi
+    fi
+    # Loop-hint warnings are rustc diagnostics, so cargo counts every one of
+    # them. A warning printed around rustc leaves no summary to count it.
+    # unroll_smoke exists to produce them, so it may not come back empty.
+    if [[ ${CARGO_EC} -eq 0 ]]; then
+        local hint_warnings counted_warnings
+        hint_warnings=$(grep -cE '^warning: .* requested but the loop (was not unrolled|may still be unrolled)' "${log}" || true)
+        counted_warnings=$(grep -oE 'generated [0-9]+ warnings?' "${log}" | awk '{ sum += $2 } END { print sum + 0 }')
+        if [[ "${ex}" == "unroll_smoke" && ${hint_warnings} -eq 0 ]]; then
+            printf '%s produced no loop-hint warnings\n' "${ex}" >>"${log}"
+            CARGO_EC=1
+        elif [[ ${counted_warnings} -lt ${hint_warnings} ]]; then
+            printf '%s printed %d loop-hint warnings but cargo counted %d warnings\n' \
+                "${ex}" "${hint_warnings}" "${counted_warnings}" >>"${log}"
             CARGO_EC=1
         fi
     fi

@@ -3,18 +3,17 @@
 This cuda-oxide example computes `softmax(Q @ K.T / sqrt(128)) @ V` on
 data center Blackwell GPUs, using the public CUTLASS 4.7 FMHA schedule.
 
-The kernel uses `cute-rs` for typed layouts, structured MMA and TMA operations,
-and `ctm-rs` for instruction primitives, kernel macros and storage types.
-Barrier rings distinguish TMA producers from ordinary arrivals; packed FP32
-arithmetic and TMEM allocation retain their CTM types.
+The kernel uses `cute-rs` for typed layouts, structured MMA and TMA operations
+(`MmaSs`, `MmaTs`, `TmaCopy`, `SharedTile::store_packed_8`), single-CTA
+`PipelineTmaUmma` / `PipelineUmmaAsync` / `PipelineAsyncUmma` / `PipelineAsync`
+stage rings, `TmemAllocator<512, 1>`, `TmemFragment`, and `cute_rs::arch`
+forwarders (`add_packed_f32x2`, `mul_packed_f32x2`, `fma_packed_f32x2`,
+`cvt_f16x2_f32`, `fence_view_async_shared`, `NamedBarrier`), while `ctm-rs`
+supplies kernel macros and shared-storage declarations.
 The manifest retains `cuda-device` because macro expansions still refer to
 that crate internally. CuTe operations retain their CuTe dialect lowering
 through `cutlass-mlir`; the primitives-only compiler profile does not cover
 this example.
-
-Direct instruction calls and workload-local fragment handling remain legacy
-migration work under the [CuTe kernel architecture](../../AGENTS.md). Tensor
-computation belongs in reusable `cute-rs` operations.
 
 The measurements below validate both implementations on the current branch.
 This kernel requires

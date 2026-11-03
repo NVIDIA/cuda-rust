@@ -34,7 +34,8 @@ use super::{
     mma::{build_mma_facts, require_smem_overlay_pair, verify_mma_use_closure},
     pipeline::require_producer_pipeline_order,
     provenance::{
-        is_local_cell_pointer_alias_cast, is_semantic_pointer_carrier_cast, local_cell_is_closed,
+        CarrierFact, LocalCells, OrdinaryFacts, is_local_cell_pointer_alias_cast,
+        is_semantic_pointer_carrier_cast, local_cell_is_closed,
     },
     scheduler::{build_scheduler_facts, scheduler_root},
     *,
@@ -189,12 +190,15 @@ fn cond_branch(
 }
 
 /// Construct one valid persistent-scheduler function with configurable body/exit placement.
+/// The scheduler state reaches the loop header through `pad` ordinary blocks, each passing it
+/// as block arguments and through a closed local cell.
 fn append_complete_scheduler_function(
     ctx: &mut Context,
     module_block: Ptr<BasicBlock>,
     name: &str,
     grid: CuteTileGridAttr,
     misroute_work_edge: bool,
+    pad: usize,
 ) {
     let function_type = FunctionType::get(ctx, vec![], vec![]);
     let function = Operation::new(
@@ -222,12 +226,20 @@ fn append_complete_scheduler_function(
     let start = CuteSchedulerNew1dOp::new(ctx, grid).get_operation();
     start.insert_at_back(entry, ctx);
     let start = CuteSchedulerNew1dOp::wrap(start);
-    goto(
-        ctx,
-        entry,
-        header,
-        vec![start.current(ctx), start.stride(ctx)],
-    );
+    let mut carried = vec![start.current(ctx), start.stride(ctx)];
+    let mut previous = entry;
+    for _ in 0..pad {
+        let block = BasicBlock::new(ctx, None, vec![u64_ty, u64_ty]);
+        block.insert_at_back(region, ctx);
+        goto(ctx, previous, block, carried);
+        let current = block.deref(ctx).get_argument(0);
+        let stride = block.deref(ctx).get_argument(1);
+        let cell = local_cell(ctx, block, u64_ty);
+        store(ctx, block, cell, current);
+        carried = vec![load(ctx, block, cell, u64_ty), stride];
+        previous = block;
+    }
+    goto(ctx, previous, header, carried);
 
     let current = header.deref(ctx).get_argument(0);
     let stride = header.deref(ctx).get_argument(1);
@@ -305,6 +317,7 @@ fn accepts_independent_scheduler_stories_in_two_functions_without_mutation() {
         "first",
         CuteTileGridAttr::new(4, 4, 1),
         false,
+        0,
     );
     append_complete_scheduler_function(
         &mut ctx,
@@ -312,6 +325,7 @@ fn accepts_independent_scheduler_stories_in_two_functions_without_mutation() {
         "second",
         CuteTileGridAttr::new(5, 4, 1),
         false,
+        0,
     );
     let mut before = Vec::new();
     collect_ops(&ctx, module, &mut before);
@@ -334,6 +348,7 @@ fn rejects_a_scheduler_body_on_the_exit_edge_even_when_preorder_looks_ordered() 
         "misrouted",
         CuteTileGridAttr::new(4, 4, 1),
         true,
+        0,
     );
 
     let error = verify_cute_semantics(&ctx, module).unwrap_err().to_string();
@@ -386,6 +401,195 @@ fn factless_block_argument_store_poisons_a_valid_scheduler_cell() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("merges values"), "{error}");
+}
+
+/// A scope's cell table answers every pointer as walking that pointer's cell aliases does,
+/// including cells allocated outside the scope.
+#[test]
+fn local_cells_agree_with_the_alias_walk() {
+    let mut ctx = Context::new();
+    module_top(&mut ctx);
+    let u64_ty: TypeHandle = IntegerType::get(&ctx, 64, Signedness::Unsigned).into();
+    let block = BasicBlock::new(&mut ctx, None, vec![]);
+    let closed = local_cell(&mut ctx, block, u64_ty);
+    let read_only_type: TypeHandle = MirPtrType::get_generic(&mut ctx, u64_ty, false).into();
+    let alias_cast = pointer_cast(&mut ctx, block, closed, read_only_type);
+    let alias = alias_cast.deref(&ctx).get_result(0);
+    let value = undef(&mut ctx, block, u64_ty);
+    store(&mut ctx, block, closed, value);
+    load(&mut ctx, block, alias, u64_ty);
+    let escaped = local_cell(&mut ctx, block, u64_ty);
+    let pointer_type = escaped.get_type(&ctx);
+    let holder = local_cell(&mut ctx, block, pointer_type);
+    store(&mut ctx, block, holder, escaped);
+    let operations: Vec<_> = block.deref(&ctx).iter(&ctx).collect();
+    let without_allocas: Vec<_> = operations
+        .iter()
+        .copied()
+        .filter(|operation| Operation::get_opid(*operation, &ctx) != MirAllocaOp::get_opid_static())
+        .collect();
+
+    for scope in [&operations, &without_allocas] {
+        let cells = LocalCells::new(&ctx, scope);
+        for pointer in [closed, alias, escaped, holder] {
+            let walked = super::provenance::local_cell(&ctx, pointer)
+                .filter(|(root, _)| local_cell_is_closed(&ctx, *root));
+            assert_eq!(cells.closed_cell(&ctx, pointer), walked);
+        }
+        assert!(cells.closed_cell(&ctx, alias).is_some());
+        assert!(cells.closed_cell(&ctx, escaped).is_none());
+    }
+}
+
+/// Fact lookups see only the named carrier, and a copy forwards the source as it was when the copy began.
+#[test]
+fn ordinary_facts_forward_a_snapshot_of_one_carrier() {
+    let mut ctx = Context::new();
+    let (_, block) = module_top(&mut ctx);
+    let u64_ty: TypeHandle = IntegerType::get(&ctx, 64, Signedness::Unsigned).into();
+    let source = undef(&mut ctx, block, u64_ty);
+    let other = undef(&mut ctx, block, u64_ty);
+    let destination = undef(&mut ctx, block, u64_ty);
+    let sorted = |facts: &OrdinaryFacts<u32>, value| {
+        let mut entries = facts.entries(value);
+        entries.sort();
+        entries
+    };
+
+    let mut facts = OrdinaryFacts::default();
+    assert!(facts.insert_path(source, vec![0], 1));
+    assert!(facts.insert_path(source, vec![1, 2], 2));
+    assert!(!facts.insert_path(source, vec![1, 2], 2));
+    assert!(facts.insert(other, 3));
+    assert_eq!(sorted(&facts, source), vec![(vec![0], 1), (vec![1, 2], 2)]);
+    assert_eq!(sorted(&facts, other), vec![(vec![], 3)]);
+    assert!(sorted(&facts, destination).is_empty());
+    assert_eq!(
+        facts.at_path(source, &[1, 2]).map(|found| found.len()),
+        Some(1)
+    );
+    assert!(facts.at_path(source, &[1]).is_none());
+    assert!(facts.at(other).is_some_and(|found| found.contains(&3)));
+
+    assert!(facts.copy_entries(source, source, &[], &[5]));
+    assert_eq!(
+        sorted(&facts, source),
+        vec![
+            (vec![0], 1),
+            (vec![1, 2], 2),
+            (vec![5, 0], 1),
+            (vec![5, 1, 2], 2)
+        ]
+    );
+    assert!(facts.copy_entries(source, destination, &[1], &[]));
+    assert!(!facts.copy_entries(source, destination, &[1], &[]));
+    assert_eq!(sorted(&facts, destination), vec![(vec![2], 2)]);
+    assert_eq!(sorted(&facts, other), vec![(vec![], 3)]);
+
+    // Opaque origins stop at two per path; semantic origins are always kept.
+    assert!(facts.insert(other, 100));
+    assert!(facts.insert(other, 101));
+    assert!(!facts.insert(other, 102));
+    assert!(!facts.insert(other, 100));
+    assert!(facts.insert(other, 4));
+    assert_eq!(
+        sorted(&facts, other),
+        vec![(vec![], 3), (vec![], 4), (vec![], 100), (vec![], 101)]
+    );
+    assert!(facts.insert(destination, 102));
+    assert!(facts.copy_entries(destination, other, &[], &[]));
+    assert_eq!(
+        sorted(&facts, other),
+        vec![
+            (vec![], 3),
+            (vec![], 4),
+            (vec![], 100),
+            (vec![], 101),
+            (vec![2], 2)
+        ]
+    );
+}
+
+/// Origins at or above 100 stand for opaque facts in the fact-set tests.
+impl CarrierFact for u32 {
+    fn is_opaque(&self) -> bool {
+        *self >= 100
+    }
+}
+
+/// A scheduler cursor that passes through many blocks and cells keeps its one origin.
+#[test]
+fn accepts_scheduler_state_carried_through_many_blocks_and_cells() {
+    let mut ctx = Context::new();
+    let (module, block) = module_top(&mut ctx);
+    append_complete_scheduler_function(
+        &mut ctx,
+        block,
+        "padded",
+        CuteTileGridAttr::new(4, 4, 1),
+        false,
+        48,
+    );
+    verify_cute_semantics(&ctx, module).unwrap();
+}
+
+/// Build a function whose `cute.scheduler_has_work` reads a cursor with no scheduler origin:
+/// a plain value, or a block argument merging `incoming` unrelated values.
+fn scheduler_has_work_without_origin(incoming: usize) -> String {
+    let mut ctx = Context::new();
+    let (module, module_block) = module_top(&mut ctx);
+    let function_type = FunctionType::get(&ctx, vec![], vec![]);
+    let function = Operation::new(
+        &mut ctx,
+        MirFuncOp::get_concrete_op_info(),
+        vec![],
+        vec![],
+        vec![],
+        1,
+    );
+    let function_op = MirFuncOp::new(&mut ctx, function, TypeAttr::new(function_type.into()));
+    function_op.set_symbol_name(&mut ctx, "unrooted".try_into().unwrap());
+    function.insert_at_back(module_block, &ctx);
+    let region = function.deref(&ctx).get_region(0);
+    let u64_ty: TypeHandle = IntegerType::get(&ctx, 64, Signedness::Unsigned).into();
+    let entry = BasicBlock::new(&mut ctx, None, vec![]);
+    entry.insert_at_back(region, &ctx);
+    let mut cursor = undef(&mut ctx, entry, u64_ty);
+    let mut current = entry;
+    if incoming > 0 {
+        let join = BasicBlock::new(&mut ctx, None, vec![u64_ty]);
+        join.insert_at_back(region, &ctx);
+        goto(&mut ctx, entry, join, vec![cursor]);
+        for _ in 1..incoming {
+            let side = BasicBlock::new(&mut ctx, None, vec![]);
+            side.insert_at_back(region, &ctx);
+            let value = undef(&mut ctx, side, u64_ty);
+            goto(&mut ctx, side, join, vec![value]);
+        }
+        cursor = join.deref(&ctx).get_argument(0);
+        current = join;
+    }
+    let grid = CuteTileGridAttr::new(4, 4, 1);
+    CuteSchedulerHasWorkOp::new(&mut ctx, cursor, grid)
+        .get_operation()
+        .insert_at_back(current, &ctx);
+    verify_cute_semantics(&ctx, module).unwrap_err().to_string()
+}
+
+/// Rejections keep their wording however many unrelated values a cursor merges.
+#[test]
+fn scheduler_cursor_without_origin_is_rejected_with_the_same_wording() {
+    let prefix = "invalid CuTe semantic module: cute.scheduler_has_work current";
+    assert_eq!(
+        scheduler_has_work_without_origin(0),
+        format!("{prefix} is not derived from the required scheduler_new_1d result")
+    );
+    for incoming in [1, 3, 8] {
+        assert_eq!(
+            scheduler_has_work_without_origin(incoming),
+            format!("{prefix} merges values from different scheduler stories")
+        );
+    }
 }
 
 /// Casts that change pointee, address space, or write capability cannot establish closed-cell aliases.

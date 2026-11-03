@@ -310,9 +310,10 @@ first.
 To bound compile time and memory, one annotation may create at most 1,024 body
 copies, 8,192 cloned basic blocks, and 65,536 cloned operations. A request over
 one of those limits warns and is not unrolled. Every warning about a loop that
-was not unrolled names the `#[unroll]` attribute it refers to as
-`file:line:column` on a `-->` line, so a kernel with several annotated loops
-shows which one was left alone.
+was not unrolled is an ordinary compiler warning that points at the `#[unroll]`
+attribute it refers to: rustc prints its `file:line:column` on a `-->` line and
+underlines it, so a kernel with several annotated loops shows which one was left
+alone.
 
 For the complete kernel-author reference, see {ref}`Loop unrolling <loop-unrolling>`.
 

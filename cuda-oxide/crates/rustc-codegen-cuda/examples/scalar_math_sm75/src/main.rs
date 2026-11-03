@@ -6,7 +6,7 @@
 //! Every F32/F64 `cuda_device::float` scalar math form, built for sm_75 and
 //! checked against the PTX ISA error bounds
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_host::cuda_module;
 

@@ -11,7 +11,7 @@ use crate::reference_linear_kernel::kernels as reference;
 use crate::{
     attention_kernel, element_kernel, ffn_kernel, kernel, norm_kernel, predictor_graph_kernel,
 };
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaStream, DeviceBuffer, LaunchConfig1D, PreparedLaunch};
 use cute_rs::{
     BFloat16,

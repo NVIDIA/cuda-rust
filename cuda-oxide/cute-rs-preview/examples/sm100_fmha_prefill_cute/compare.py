@@ -295,8 +295,8 @@ def main():
 def run_case(args, config):
     import numpy as np
     import torch
-    if torch.cuda.get_device_capability() != (10, 0):
-        raise RuntimeError('this matched comparison requires SM100 (B200)')
+    if torch.cuda.get_device_capability() not in ((10, 0), (10, 3)):
+        raise RuntimeError('this matched comparison requires SM100 or SM103')
     with tempfile.TemporaryDirectory(prefix='sm100-fmha-prefill-') as tmp:
         directory = Path(tmp)
         arrays = fixture(config, directory, args.seed, args.pattern)

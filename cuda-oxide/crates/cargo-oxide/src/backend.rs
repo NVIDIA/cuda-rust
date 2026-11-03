@@ -109,14 +109,14 @@ use std::time::SystemTime;
 
 use crate::backend_source::{self, DependencySource};
 
-/// Finds the workspace root by walking up from CWD.
+/// Finds the workspace root by walking up from `start`, normally the CWD.
 ///
 /// Supports the component workspace (`crates/rustc-codegen-cuda`) and the
 /// historical combined layout (`cuda-oxide/crates/rustc-codegen-cuda`).
 /// Starting below `cuda-oxide/` finds the component root before the stable
 /// parent workspace.
-pub fn find_workspace_root() -> Option<PathBuf> {
-    let mut dir = std::env::current_dir().ok()?;
+pub fn find_workspace_root(start: &Path) -> Option<PathBuf> {
+    let mut dir = start.to_path_buf();
     loop {
         if dir.join("Cargo.toml").is_file() && codegen_crate_path(&dir).join("Cargo.toml").is_file()
         {

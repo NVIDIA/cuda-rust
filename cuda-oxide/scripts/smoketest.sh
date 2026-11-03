@@ -127,6 +127,24 @@ NO_LAUNCH_EXAMPLES=(wgmma_mma_bf16)
 # afterwards purely to produce the artifacts the shape check reads.
 NO_OPT_SHAPE_EXAMPLES=(const_bool_dead_branch)
 
+# Examples whose verify-code-shape.sh measured OPTIMIZER-INDEPENDENT: each was
+# built with a forced full debug and its script run against that build's
+# artifacts; the script still passed, so under the ambient full-debug sweep
+# (#1217) these gates keep running and deciding instead of skipping. Measured
+# on the current tree (a forced-full-debug build + script run per holder);
+# re-measure when shape scripts change. A new optimizer-dependent example is
+# unaffected by this list: its gate is not exempt, so it skips -- the failure
+# mode of a stale entry here is a spurious SKIP, never a hidden FAIL.
+OPT_INDEPENDENT_SHAPE_EXAMPLES=(cluster const_bool_dead_branch device_ffi_test function_item_call tma_copy unroll_bounds_check)
+
+optimizer_independent_shape() {
+    local ex="$1" ind
+    for ind in "${OPT_INDEPENDENT_SHAPE_EXAMPLES[@]}"; do
+        [[ "${ex}" == "${ind}" ]] && return 0
+    done
+    return 1
+}
+
 # This example intentionally configures a cubin artifact in Cargo metadata.
 # Its supported project route necessarily includes NVVM IR + libNVVM +
 # nvJitLink; the full-debug census must exercise that reality rather than
@@ -272,6 +290,19 @@ OPTIONS
                        gates because those do not accept/describe full-debug
                        output. Nothing is executed. Cannot be combined with
                        --compile-only.
+
+  CUDA_OXIDE_DEBUG=full in the environment (no flag): the sweep runs its
+                       normal lane -- builds and kernel executions still
+                       decide the verdict -- while every optimizer-dependent
+                       code-shape gate skips with a note, because full debug
+                       removes the optimizer those gates assert on (#1217).
+                       Measured optimizer-independent gates (see
+                       OPT_INDEPENDENT_SHAPE_EXAMPLES) and the full-debug-native
+                       debug/shared_debug gates keep running and deciding.
+                       Reported as SKIPPED, never as PASS. Combined with
+                       --compile-only it is refused: those lanes gate on
+                       optimized artifacts and would have nothing left
+                       to run.
   -x, --fail-fast      Stop at the first failure.
   -v, --verbose        Stream cargo output live (instead of capturing to
                        a per-example log file). Verdict is printed at the
@@ -309,6 +340,11 @@ KEEP_LOGS=0
 FORCE_NO_COLOR=0
 COMPILE_ONLY=0
 FULL_DEBUG=0
+# Set at preflight when the ambient environment (never a flag) forces full
+# device debug: the sweep runs its normal lane and every code-shape gate
+# skips with a note instead of asserting on output the optimizer could not
+# have produced (#1217).
+AMBIENT_FULL_DEBUG=0
 declare -a POSITIONAL=()
 
 while [[ $# -gt 0 ]]; do
@@ -374,13 +410,21 @@ fi
 # longer has the shapes they describe. #1217 measured 11 examples failing that
 # way, none of them a compiler bug.
 #
-# --full-debug is the supported spelling of that intent -- it drives the build
-# with `--device-debug`, runs the permanent verify-debug-info.sh contracts, and
-# keeps the optimized shape gates out of the lane instead of failing them. So
-# refuse the ambient variable rather than silently reinterpreting the sweep as
-# a census the caller did not ask for: a run that quietly stopped executing
-# kernels is the worse outcome of the two. Passing --full-debug as well is the
-# caller asking for the mode explicitly, and stays allowed.
+# --full-debug is the explicit spelling of the census intent -- it drives the
+# build with `--device-debug`, runs the permanent verify-debug-info.sh
+# contracts, and keeps the optimized shape gates out of the lane instead of
+# failing them.
+#
+# An ambient full-debug value without the flag runs the normal lane with the
+# optimizer absent: builds, kernel executions, and every non-shape gate still
+# decide the verdict, while each code-shape gate skips with a note and reports
+# as SKIPPED rather than PASS (#1217). Skipping the gate never skips the build
+# that feeds it, and a full-debug build failure still fails the example. The
+# one refused combination is ambient full debug together with --compile-only:
+# those lanes gate almost entirely on optimized artifacts, so a forced
+# full-debug version of them would have nothing left to decide. Passing
+# --full-debug as well is the caller asking for the census explicitly, and
+# stays allowed.
 #
 # Which values mean full debug is not decided here. `cargo oxide
 # __debug-policy` reports what `DebugPolicy::parse_env_override` -- the one
@@ -408,14 +452,28 @@ unset | none | line-tables | full | unrecognized) ;;
 esac
 
 if [[ "${debug_policy}" == "full" && ${FULL_DEBUG} -eq 0 ]]; then
-    echo "error: CUDA_OXIDE_DEBUG=${CUDA_OXIDE_DEBUG-} selects full device debug;" >&2
-    echo "       use --full-debug instead." >&2
-    echo "       The variable reaches every build this sweep runs, which skips" >&2
-    echo "       dialect-mir mem2reg while the optimized code-shape gates still" >&2
-    echo "       assert on optimized output (#1217). --full-debug is the mode" >&2
-    echo "       that takes those gates out of the lane and checks the" >&2
-    echo "       full-debug contracts instead." >&2
-    exit 2
+    if [[ ${COMPILE_ONLY} -eq 1 ]]; then
+        # A compile-only sweep's verdicts are almost entirely artifact-shape
+        # gates; under a forced full debug they would all be skipped, leaving
+        # nothing to decide. Refuse rather than run a sweep that cannot
+        # verify anything (#1217).
+        echo "error: CUDA_OXIDE_DEBUG=${CUDA_OXIDE_DEBUG-} selects full device debug;" >&2
+        echo "       --compile-only lanes gate on optimized artifacts, so a" >&2
+        echo "       forced-full-debug compile-only sweep has no gates left to" >&2
+        echo "       run. Drop --compile-only, or use --full-debug for the" >&2
+        echo "       debug-artifact census instead." >&2
+        exit 2
+    fi
+    # The operator forced full debug from outside: run the normal lane and
+    # skip the code-shape gates with a note instead of failing them (#1217).
+    # Builds (including second builds), kernel executions, and every
+    # non-shape gate still decide the verdict; a skipped gate reports as
+    # SKIPPED, never as PASS.
+    AMBIENT_FULL_DEBUG=1
+    echo "note: CUDA_OXIDE_DEBUG=${CUDA_OXIDE_DEBUG-} forces full device debug on every build;" >&2
+    echo "      code-shape gates will be skipped with a note (#1217). Builds," >&2
+    echo "      kernel executions, and all other checks still run. --full-debug" >&2
+    echo "      is the compile-only census for debug-artifact contracts." >&2
 fi
 
 # ---- Colors --------------------------------------------------------------
@@ -1498,7 +1556,10 @@ run_cargo() {
         # The header's .version is the floor of the newest form in the
         # module: PTX 9.1 since the bf16x2 to packed-FP8 conversions joined
         # the example (the ldmatrix and kind::f8f6f4 MMA forms need 8.7).
-        if [[ ! -s "${llvm_ptx}" ]] \
+        if [[ ${AMBIENT_FULL_DEBUG} -eq 1 ]]; then
+            SHAPE_GATE_SKIPPED=1
+            printf 'code-shape gate skipped: asserts on optimized output; full debug forced by CUDA_OXIDE_DEBUG (#1217)\n' >>"${log}"
+        elif [[ ! -s "${llvm_ptx}" ]] \
             || ! grep -qx '\.version 9\.1' "${llvm_ptx}" \
             || ! grep -qx '\.target sm_120a' "${llvm_ptx}" \
             || [[ ${instruction_count} -ne 25 || ${unique_instruction_count} -ne 25 ]] \
@@ -1560,7 +1621,10 @@ run_cargo() {
         unique_inline_standard_fp8_f32_count="$(grep -oE "${standard_fp8_f32_instruction_re}" "${nvvm_ll}" 2>/dev/null | sort -u | wc -l)"
         inline_standard_fp8_f16_count="$(grep -oE "${standard_fp8_f16_instruction_re}" "${nvvm_ll}" 2>/dev/null | wc -l)"
         unique_inline_standard_fp8_f16_count="$(grep -oE "${standard_fp8_f16_instruction_re}" "${nvvm_ll}" 2>/dev/null | sort -u | wc -l)"
-        if [[ ! -s "${nvvm_ll}" ]] \
+        if [[ ${AMBIENT_FULL_DEBUG} -eq 1 ]]; then
+            SHAPE_GATE_SKIPPED=1
+            printf 'code-shape gate skipped: asserts on optimized output; full debug forced by CUDA_OXIDE_DEBUG (#1217)\n' >>"${log}"
+        elif [[ ! -s "${nvvm_ll}" ]] \
             || [[ ${inline_fp8_count} -ne 4 || ${unique_inline_fp8_count} -ne 4 ]] \
             || [[ ${inline_bf16x2_fp8_count} -ne 4 || ${unique_inline_bf16x2_fp8_count} -ne 4 ]] \
             || [[ ${inline_tf32_count} -ne 10 || ${unique_inline_tf32_count} -ne 10 ]] \
@@ -1611,7 +1675,10 @@ run_cargo() {
                 kernels_ok=0
             fi
         done
-        if [[ ! -s "${llvm_ptx}" ]] \
+        if [[ ${AMBIENT_FULL_DEBUG} -eq 1 ]]; then
+            SHAPE_GATE_SKIPPED=1
+            printf 'code-shape gate skipped: asserts on optimized output; full debug forced by CUDA_OXIDE_DEBUG (#1217)\n' >>"${log}"
+        elif [[ ! -s "${llvm_ptx}" ]] \
             || ! grep -qx '\.version 8\.6' "${llvm_ptx}" \
             || ! grep -qx '\.target sm_100a' "${llvm_ptx}" \
             || [[ ${kernels_ok} -ne 1 ]]; then
@@ -2256,7 +2323,28 @@ run_cargo() {
     # otherwise be skipped in exactly the silence this is meant to remove -- so
     # it runs through `bash` rather than being executed directly.
     local shape_check="crates/rustc-codegen-cuda/examples/${ex}/verify-code-shape.sh"
-    if [[ ${CARGO_EC} -eq 0 && -f "${shape_check}" ]]; then
+    # Ambient forced full debug (#1217): every verify-code-shape.sh asserts on
+    # compiled output, and most of them on the shapes only the optimizer
+    # produces, so they skip with a note. Three kinds of exemption keep their
+    # gate running and deciding:
+    #   * debug and shared_debug -- this script itself builds them with
+    #     --device-debug; their gates assert source locations that only exist
+    #     under full debug, so a forced full debug is their normal environment.
+    #   * the measured optimizer-independent holders
+    #     (OPT_INDEPENDENT_SHAPE_EXAMPLES) -- built and script-checked under a
+    #     forced full debug, their assertions held, so the gate still applies.
+    # Everything else skips: its assertions describe optimizer-produced shapes.
+    if [[ ${AMBIENT_FULL_DEBUG} -eq 1 && ${CARGO_EC} -eq 0 && -f "${shape_check}" ]] \
+        && [[ "${ex}" != "debug" && "${ex}" != "shared_debug" ]] \
+        && ! optimizer_independent_shape "${ex}"; then
+        SHAPE_GATE_SKIPPED=1
+        printf 'code-shape gate skipped: asserts on optimized output; full debug forced by CUDA_OXIDE_DEBUG (#1217)\n' >>"${log}"
+    fi
+    if [[ ${AMBIENT_FULL_DEBUG} -eq 1 && ${SHAPE_GATE_SKIPPED} -eq 1 ]]; then
+        # The gate was already skipped above; running the script here would
+        # re-introduce the assertion the skip exists to remove.
+        :
+    elif [[ ${CARGO_EC} -eq 0 && -f "${shape_check}" ]]; then
         local no_opt_shape
         for no_opt_shape in "${NO_OPT_SHAPE_EXAMPLES[@]}"; do
             if [[ "${ex}" == "${no_opt_shape}" ]]; then
@@ -2272,7 +2360,9 @@ run_cargo() {
             fi
         done
     fi
-    if [[ ${CARGO_EC} -eq 0 && -f "${shape_check}" ]]; then
+    if [[ ${AMBIENT_FULL_DEBUG} -eq 1 && ${SHAPE_GATE_SKIPPED} -eq 1 ]]; then
+        :
+    elif [[ ${CARGO_EC} -eq 0 && -f "${shape_check}" ]]; then
         if ! bash "${shape_check}" >>"${log}" 2>&1; then
             printf '%s failed its verify-code-shape.sh assertions\n' "${ex}" >>"${log}"
             CARGO_EC=1
@@ -2297,6 +2387,10 @@ run_cargo() {
         fi
     fi
     if [[ ${CARGO_EC} -eq 0 && "${ex}" == "disjoint_slice_len" ]]; then
+        if [[ ${AMBIENT_FULL_DEBUG} -eq 1 ]]; then
+            SHAPE_GATE_SKIPPED=1
+            printf 'code-shape gate skipped: asserts on optimized output; full debug forced by CUDA_OXIDE_DEBUG (#1217)\n' >>"${log}"
+        else
         local llvm_ir="crates/rustc-codegen-cuda/examples/${ex}/${ex}.ll"
         local kernel_ir loaded_slice extracted_len
         kernel_ir="$(
@@ -2320,6 +2414,7 @@ run_cargo() {
             || "${extracted_len}" != "${loaded_slice}" ]]; then
             printf 'disjoint_slice_len must load the &DisjointSlice receiver before extracting field 1; the no-inline regression path was bypassed\n' >>"${log}"
             CARGO_EC=1
+        fi
         fi
     fi
     if [[ ${CARGO_EC} -eq 0 && ${COMPILE_ONLY} -eq 1 && "${ex}" == "standalone_device_fn" ]]; then
@@ -2468,6 +2563,8 @@ mkdir -p "${log_dir}"
 
 pass=0
 failures=()
+ambient_skips=0
+declare -a skipped_examples=()
 started=${SECONDS}
 i=0
 full_debug_direct_ran=0
@@ -2489,6 +2586,7 @@ for ex in "${selected[@]}"; do
 
     t0=${SECONDS}
     full_debug_route=""
+    SHAPE_GATE_SKIPPED=0
     if [[ ${FULL_DEBUG} -eq 1 ]]; then
         if full_debug_uses_configured_route "${ex}"; then
             full_debug_route="configured cubin/modern libNVVM (${LTOIR_MODERN_ARCH})"
@@ -2527,6 +2625,16 @@ for ex in "${selected[@]}"; do
         esac
     fi
 
+    # Ambient forced full debug (#1217): a clean build whose only skipped part
+    # was its code-shape gate reports as SKIPPED -- never as PASS, so a
+    # forced-full-debug sweep cannot be mistaken for a shape-verified one.
+    # A build failure (ec != 0) still reports as FAIL below.
+    ambient_skip=0
+    if [[ ${AMBIENT_FULL_DEBUG} -eq 1 && ${SHAPE_GATE_SKIPPED} -eq 1 && ${ec} -eq 0 && ${status} -eq 0 ]]; then
+        verdict="SKIPPED (code-shape gate asserts on optimized output; full debug forced by CUDA_OXIDE_DEBUG)"
+        ambient_skip=1
+    fi
+
     if [[ ${FULL_DEBUG} -eq 1 ]]; then
         verdict="${verdict}; route: ${full_debug_route}"
         if [[ ${status} -eq 0 ]]; then
@@ -2538,7 +2646,9 @@ for ex in "${selected[@]}"; do
         fi
     fi
 
-    if [[ ${status} -eq 0 ]]; then
+    if [[ ${ambient_skip} -eq 1 ]]; then
+        color="${C_SKIP}"
+    elif [[ ${status} -eq 0 ]]; then
         color="${C_PASS}"
     else
         color="${C_FAIL}"
@@ -2550,7 +2660,11 @@ for ex in "${selected[@]}"; do
         printf "%s%s%s %s[%ds]%s\n" "${color}" "${verdict}" "${C_RESET}" "${C_DIM}" "${dt}" "${C_RESET}"
     fi
 
-    if [[ ${status} -eq 0 ]]; then
+    if [[ ${ambient_skip} -eq 1 ]]; then
+        ambient_skips=$((ambient_skips + 1))
+        skipped_examples+=("${ex}")
+        # Keep the log: it holds the skip note.
+    elif [[ ${status} -eq 0 ]]; then
         pass=$((pass + 1))
         if [[ ${KEEP_LOGS} -eq 0 ]]; then
             rm -f "${log}"
@@ -2565,7 +2679,7 @@ done
 
 elapsed=$((SECONDS - started))
 ran=${i}
-fail=$((ran - pass))
+fail=$((ran - pass - ambient_skips))
 
 # ---- Summary -------------------------------------------------------------
 
@@ -2573,6 +2687,11 @@ echo ""
 printf "%s===== SMOKETEST SUMMARY =====%s\n" "${C_BOLD}" "${C_RESET}"
 printf "Pass:    %s%d%s / %d\n" "${C_PASS}" "${pass}" "${C_RESET}" "${ran}"
 printf "Fail:    %s%d%s / %d\n" "${C_FAIL}" "${fail}" "${C_RESET}" "${ran}"
+if [[ ${ambient_skips} -gt 0 ]]; then
+    printf "Shape-skipped: %s%d%s (code-shape gates; full debug forced by CUDA_OXIDE_DEBUG; #1217)\n" \
+        "${C_SKIP}" "${ambient_skips}" "${C_RESET}"
+    printf "  %s\n" "${skipped_examples[*]}"
+fi
 if [[ ${ran} -lt ${total} ]]; then
     printf "Skipped: %s%d%s (fail-fast stopped early)\n" "${C_SKIP}" "$((total - ran))" "${C_RESET}"
 fi

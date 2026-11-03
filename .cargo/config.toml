@@ -1,5 +1,0 @@
-# Workspace-root Cargo aliases. SIMT-specific environment configuration lives
-# in cuda-oxide/.cargo/config.toml.
-
-[alias]
-oxide = "run --package cargo-oxide --"

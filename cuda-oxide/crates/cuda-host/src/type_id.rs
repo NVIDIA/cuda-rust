@@ -23,7 +23,7 @@
 //! Framing note for future contributors: `core::intrinsics::type_id` is an
 //! internal API and requires `#![feature(core_intrinsics)]` on the owning
 //! crate. cuda-oxide already ships against `rustc_private` and pins a
-//! nightly toolchain, so this is inside our existing risk surface — but the
+//! toolchain, so this is inside our existing risk surface, but the
 //! helper cannot be lifted into a stable-feeling utility crate without
 //! re-introducing the feature gate there.
 

@@ -11,7 +11,7 @@ error[E0308]: mismatched types
    | |_________- arguments to this function are incorrect
    |
 note: function defined here
-  --> $WORKSPACE/cuda-oxide/crates/cuda-device/src/ptx.rs
+  --> $WORKSPACE/crates/cuda-device/src/ptx.rs
    |
    | pub const fn __ptx_asm_c<const N: usize>(value: &'static [u8; N]) -> &'static [u8; N] {
    |              ^^^^^^^^^^^

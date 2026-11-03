@@ -28,9 +28,10 @@ let lane = warp::lane_id();     // 0..31, hardware register %laneid
 let warp = warp::warp_id();     // threadIdx.x / 32
 ```
 
-`warp_id()` is derived from `threadIdx.x / 32`. For multi-dimensional
-blocks, this only accounts for the x dimension — which is usually fine,
-since most kernels that care about lane identity use 1D blocks.
+`warp_id()` is derived from `threadIdx.x / 32`. In a 2D or 3D block that
+value does not name a hardware warp: warps are formed from consecutive
+block-linear thread ids, `x + blockDim.x * (y + blockDim.y * z)`. Use
+`this_thread_block().thread_rank() / 32` there.
 
 ---
 

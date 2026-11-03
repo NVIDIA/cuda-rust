@@ -9,7 +9,7 @@ use pliron::builtin::op_interfaces::{CallOpCallable, CallOpInterface, SymbolOpIn
 use pliron::builtin::ops::ModuleOp;
 use pliron::context::Context;
 use pliron::linked_list::ContainsLinkedList;
-use pliron::location::{Located, Location};
+use pliron::location::Location;
 use pliron::op::Op;
 use pliron::operation::Operation;
 
@@ -182,7 +182,7 @@ fn addrspace_coercion_inserts_addrspacecast_at_call_site() -> Result<(), anyhow:
                     found_call = true;
                     assert_eq!(
                         call.get_operation().deref(&ctx).loc(),
-                        expected_call_location
+                        &expected_call_location
                     );
                 }
             }

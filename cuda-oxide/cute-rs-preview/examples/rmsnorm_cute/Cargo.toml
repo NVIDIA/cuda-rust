@@ -1,0 +1,16 @@
+[package]
+name = "rmsnorm_cute"
+version = "0.1.0"
+edition = "2024"
+authors = ["Nihal Pasham <nihalp@nvidia.com>"]
+license = "Apache-2.0"
+description = "FP32 and BF16 RMSNorm with explicit storage and collective contracts"
+
+[workspace]
+
+[dependencies]
+ctm-rs = { path = "../../ctm-rs" }
+cute-rs = { path = "../../cute-rs", features = ["host"] }
+cuda-device = { path = "../../../crates/cuda-device" }
+cuda-host = { path = "../../../crates/cuda-host" }
+cuda-core = { path = "../../../../cuda-core" }

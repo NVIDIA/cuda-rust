@@ -48,7 +48,7 @@
 //! cargo oxide run cuda_module_in_lib
 //! ```
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, cuda_module, kernel, thread};
 use module_kernels::kernels;

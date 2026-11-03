@@ -60,7 +60,7 @@ BM times. This reduces global-memory traffic.
 
 ```rust
 use cuda_async::device_operation::DeviceOp;
-use cuda_core::Device;
+use cuda_core::Context;
 use std::sync::Arc;
 use cutile;
 use cutile::api;
@@ -98,7 +98,7 @@ mod my_module {
 use my_module::gemm;
 
 fn main() -> Result<(), Error> {
-    let device = Device::new(0)?;
+    let device = Context::new(0)?;
     let stream = device.new_stream()?;
 
     let (bm, bn, bk) = (16usize, 16usize, 8usize);
@@ -328,7 +328,7 @@ Changing the full runtime tensor dimensions does not require recompilation.
 Only the type-level parameters, such as tile sizes and the map shape, specialize
 the JIT compilation.
 
-See [`cutile-examples/examples/persistent_gemm.rs`](https://github.com/nvlabs/cutile-rs/tree/main/cutile-examples/examples/persistent_gemm.rs) for the complete example.
+See [`cutile-examples/examples/persistent_gemm.rs`](https://github.com/NVIDIA/cuda-rust/blob/main/cutile-rs/cutile-examples/examples/persistent_gemm.rs) for the complete example.
 
 ### Approach 2: Disabling Bounds Checks (Unsafe)
 
@@ -383,7 +383,7 @@ unsafe {
 }
 ```
 
-See [`cutile-benchmarks/benches/gemm.rs`](https://github.com/nvlabs/cutile-rs/tree/main/cutile-benchmarks/benches/gemm.rs) for a full benchmark comparing optimized and unoptimized variants.
+See [`cutile-benchmarks/benches/gemm.rs`](https://github.com/NVIDIA/cuda-rust/blob/main/cutile-rs/cutile-benchmarks/benches/gemm.rs) for a full benchmark comparing optimized and unoptimized variants.
 
 ### Approach 3: Fully Static GEMM (Safe, Legacy)
 
@@ -432,7 +432,7 @@ let (z, _x, _y) = gemm(z, x, y)
     .sync_on(&stream)?;
 ```
 
-See [`cutile-examples/examples/gemm_static.rs`](https://github.com/nvlabs/cutile-rs/tree/main/cutile-examples/examples/gemm_static.rs) for the legacy static example.
+See [`cutile-examples/examples/gemm_static.rs`](https://github.com/NVIDIA/cuda-rust/blob/main/cutile-rs/cutile-examples/examples/gemm_static.rs) for the legacy static example.
 
 ### Choosing Between the Approaches
 

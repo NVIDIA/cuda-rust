@@ -9,7 +9,7 @@ error[E0308]: mismatched types
   = note: expected reference `&LaunchContext<'_, Domain1, cuda_device::__internal::U32Coordinates>`
              found reference `&LaunchContext<'_, Domain1, cuda_device::__internal::NativeCoordinates>`
 note: function defined here
- --> $WORKSPACE/cuda-oxide/crates/cuda-device/src/thread.rs
+ --> $WORKSPACE/crates/cuda-device/src/thread.rs
   |
   | pub fn index_1d_u32<'kernel>(
   |        ^^^^^^^^^^^^

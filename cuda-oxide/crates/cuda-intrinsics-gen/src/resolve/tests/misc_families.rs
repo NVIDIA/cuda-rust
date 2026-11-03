@@ -191,6 +191,7 @@ fn debug_control_compact_schema_is_reserved_for_aggregation() {
         sparse_mma_ordered_ampere_float: None,
         prmt: None,
         packed_conversion_fp8: None,
+        packed_conversion_fp8_bf16x2: None,
         packed_conversion_fp8_f16x2: None,
         scalar_conversion: None,
         scalar_arithmetic: None,
@@ -233,7 +234,7 @@ fn active_debug_control_sources_parse_and_prove_both_backend_routes() {
 
     let evidence = vec![
         read_evidence_file(
-            &repo_root.join("intrinsics/evidence/rust-llvm-23.1.0-16696adc-debug-control.json"),
+            &repo_root.join("intrinsics/evidence/rust-llvm-23.1.3-aab11ee0-debug-control.json"),
         )
         .unwrap(),
         read_evidence_file(
@@ -241,7 +242,7 @@ fn active_debug_control_sources_parse_and_prove_both_backend_routes() {
         )
         .unwrap(),
     ];
-    let indexed = index_evidence(&evidence, "16696adcd119e6ba9cc175207d984d7021211acb").unwrap();
+    let indexed = index_evidence(&evidence, "aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019").unwrap();
     for record in &records {
         let routes = resolve_backend_lowerings(record, &indexed).unwrap();
         assert_eq!(routes.len(), 2);
@@ -252,15 +253,82 @@ fn active_debug_control_sources_parse_and_prove_both_backend_routes() {
 }
 
 #[test]
+fn relaxed_cluster_arrival_and_wait_preserve_distinct_memory_contracts() {
+    let arrival: MbarrierExtendedOperation =
+        serde_json::from_str("\"arrive_remote_cluster_relaxed\"")
+            .expect("relaxed remote arrival is admitted");
+    let wait: MbarrierExtendedOperation =
+        serde_json::from_str("\"try_wait_parity_cluster_relaxed\"")
+            .expect("relaxed cluster wait is admitted");
+    let arrival = mbarrier_extended_recipe(arrival);
+    let wait = mbarrier_extended_recipe(wait);
+    assert_eq!(arrival.abi_id, "i1040");
+    assert_eq!(wait.abi_id, "i1041");
+    assert_eq!(arrival.id, "mbarrier_arrive_cluster_relaxed");
+    assert_eq!(wait.id, "mbarrier_try_wait_parity_cluster_relaxed");
+    assert_eq!(arrival.rust_arguments, ["u64"]);
+    assert_eq!(arrival.rust_result, "()");
+    assert_eq!(arrival.execution_scope, "cluster");
+    assert_eq!(
+        arrival.inline_ptx,
+        "mbarrier.arrive.relaxed.cluster.shared::cluster.b64 _, [$0];"
+    );
+    assert_eq!(wait.execution_scope, "cluster");
+    assert!(
+        wait.inline_ptx
+            .contains("mbarrier.try_wait.parity.relaxed.cluster.shared::cta.b64")
+    );
+    assert_eq!(arrival.minimum_ptx, "8.6");
+    assert_eq!(wait.minimum_ptx, "8.6");
+    let existing = mbarrier_extended_recipe(MbarrierExtendedOperation::ArriveRemoteCluster);
+    assert_eq!(existing.abi_id, "i0308");
+    assert_eq!(
+        existing.inline_ptx,
+        "mbarrier.arrive.release.cluster.shared::cluster.b64 _, [$0];"
+    );
+    let existing = mbarrier_extended_recipe(MbarrierExtendedOperation::TryWaitParityCluster);
+    assert_eq!(existing.abi_id, "i0311");
+    assert!(
+        existing
+            .inline_ptx
+            .contains("try_wait.parity.acquire.cluster")
+    );
+}
+
+#[test]
+fn restricted_acquire_fence_orders_cluster_shared_memory_only() {
+    let operation: MbarrierExtendedOperation =
+        serde_json::from_str("\"fence_acquire_shared_cluster_cluster\"")
+            .expect("restricted shared-memory acquire is admitted");
+    let fence = mbarrier_extended_recipe(operation);
+    assert_eq!(fence.abi_id, "i1042");
+    assert_eq!(fence.id, "fence_acquire_shared_cluster_cluster");
+    assert_eq!(fence.rust_arguments, [] as [&str; 0]);
+    assert_eq!(fence.rust_result, "()");
+    assert_eq!(fence.execution_scope, "cluster");
+    assert_eq!(fence.minimum_ptx, "8.6");
+    assert_eq!(fence.minimum_sm, "sm_90");
+    assert_eq!(
+        fence.llvm_symbol,
+        Some("llvm.nvvm.fence.acquire.sync_restrict.space.cluster.scope.cluster")
+    );
+    assert_eq!(
+        fence.inline_ptx,
+        "fence.acquire.sync_restrict::shared::cluster.cluster;"
+    );
+}
+
+#[test]
 fn compact_extended_mbarrier_admission_preserves_all_manual_contracts() {
     let records = expand_mbarrier_extended_admission(&test_mbarrier_extended_admission()).unwrap();
-    assert_eq!(records.len(), 11);
+    assert_eq!(records.len(), 14);
     assert_eq!(
         records
             .iter()
             .map(|record| record.abi_id.as_str())
             .collect::<Vec<_>>(),
         (306..=316)
+            .chain([1040, 1041, 1042])
             .map(|id| format!("i{id:04}"))
             .collect::<Vec<_>>()
     );
@@ -460,6 +528,7 @@ fn wgmma_control_compact_schema_is_reserved_for_aggregation() {
         sparse_mma_ordered_ampere_float: None,
         prmt: None,
         packed_conversion_fp8: None,
+        packed_conversion_fp8_bf16x2: None,
         packed_conversion_fp8_f16x2: None,
         scalar_conversion: None,
         scalar_arithmetic: None,

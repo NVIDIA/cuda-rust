@@ -22,7 +22,6 @@ use pliron::context::{Context, Ptr};
 use pliron::irbuild::dialect_conversion::{DialectConversionRewriter, OperandsInfo};
 use pliron::irbuild::inserter::Inserter;
 use pliron::irbuild::rewriter::Rewriter;
-use pliron::location::Located;
 use pliron::op::Op;
 use pliron::operation::Operation;
 use pliron::result::Result;
@@ -276,7 +275,7 @@ pub(crate) fn convert_ptr_offset(
     op: Ptr<Operation>,
     _operands_info: &OperandsInfo,
 ) -> Result<()> {
-    let loc = op.deref(ctx).loc();
+    let loc = op.deref(ctx).loc().clone();
     let operands: Vec<_> = op.deref(ctx).operands().collect();
 
     let (ptr, offset) = match operands.as_slice() {

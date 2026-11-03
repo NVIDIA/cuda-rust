@@ -17,14 +17,14 @@
 //! dependency instead of from a separately cloned `main`:
 //!
 //! ```text
-//! Cargo.lock   cuda-device = git+https://github.com/NVlabs/cuda-oxide.git#<sha>
+//! Cargo.lock   cuda-device = git+https://github.com/NVIDIA/cuda-rust.git#<sha>
 //!                  │  cargo metadata: package.manifest_path
 //!                  ▼
-//! ~/.cargo/git/checkouts/cuda-oxide-<hash>/<sha>/crates/cuda-device/Cargo.toml
-//!                  │  walk up to the repository root
+//! ~/.cargo/git/checkouts/cuda-rust-<hash>/<sha>/cuda-oxide/crates/cuda-device/Cargo.toml
+//!                  │  walk up to the checkout root that holds the backend crate
 //!                  ▼
-//! ~/.cargo/git/checkouts/cuda-oxide-<hash>/<sha>/crates/rustc-codegen-cuda   built
-//! ~/.cargo/git/checkouts/cuda-oxide-<hash>/<sha>/rust-toolchain.toml         nightly it needs
+//! ~/.cargo/git/checkouts/cuda-rust-<hash>/<sha>/cuda-oxide/crates/rustc-codegen-cuda   built
+//! ~/.cargo/git/checkouts/cuda-rust-<hash>/<sha>/cuda-oxide/rust-toolchain.toml         nightly it needs
 //! ```
 //!
 //! The checkout's `rust-toolchain.toml` matters as much as the code: the
@@ -109,12 +109,28 @@ pub fn short_rev(rev: &str) -> &str {
     rev.get(..10).unwrap_or(rev)
 }
 
-/// The nightly a checkout pins in its `rust-toolchain.toml`, when readable.
+/// The nearest toolchain pin for the selected backend, within its checkout.
+///
+/// A fallback clone names the git root, whose pin may belong to the stable
+/// host workspace. Follow the same backend layout selection as the build,
+/// then walk toward that root so the component's nightly takes precedence.
 pub fn pinned_channel(checkout: &Path) -> Option<String> {
-    let contents = std::fs::read_to_string(checkout.join("rust-toolchain.toml")).ok()?;
-    crate::commands::parse_rust_toolchain_toml(&contents)
-        .ok()
-        .map(|pin| pin.channel)
+    let codegen_crate = codegen_crate_in_checkout(checkout);
+    for directory in codegen_crate.ancestors() {
+        match std::fs::read_to_string(directory.join("rust-toolchain.toml")) {
+            Ok(contents) => {
+                return crate::commands::parse_rust_toolchain_toml(&contents)
+                    .ok()
+                    .map(|pin| pin.channel);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return None,
+        }
+        if directory == checkout {
+            break;
+        }
+    }
+    None
 }
 
 /// Resolves the cuda-oxide checkout the project in `project_dir` depends on.
@@ -300,7 +316,7 @@ mod tests {
     use serde_json::json;
     use std::time::SystemTime;
 
-    const REPO: &str = "https://github.com/NVlabs/cuda-oxide.git";
+    const REPO: &str = "https://github.com/NVIDIA/cuda-rust.git";
     const SHA: &str = "a1b4f11882592fae9d022c86a9d8d1a4c9426980";
 
     /// Lays out what Cargo's checkout of the repository looks like: the crate
@@ -683,6 +699,60 @@ mod tests {
             Some("nightly-2026-08-28".to_string())
         );
         assert_eq!(pinned_channel(&checkout.join("absent")), None);
+        std::fs::remove_dir_all(checkout).unwrap();
+    }
+
+    #[test]
+    fn pinned_channel_follows_the_selected_backend_and_nearest_pin() {
+        let root = tempdir();
+        checkout_with_backend(&root, "cuda-device");
+        std::fs::write(
+            root.join("rust-toolchain.toml"),
+            "[toolchain]\nchannel = \"nightly-2026-04-03\"\n",
+        )
+        .unwrap();
+        let component = root.join("cuda-oxide");
+        std::fs::create_dir_all(&component).unwrap();
+        std::fs::write(
+            component.join("rust-toolchain.toml"),
+            "[toolchain]\nchannel = \"nightly-2026-08-28\"\n",
+        )
+        .unwrap();
+        // A similarly named directory without the selected backend cannot
+        // override the flat checkout's pin.
+        assert_eq!(pinned_channel(&root).as_deref(), Some("nightly-2026-04-03"));
+
+        checkout_with_backend(&component, "cuda-device");
+        assert_eq!(pinned_channel(&root).as_deref(), Some("nightly-2026-08-28"));
+        assert_eq!(pinned_channel(&component), pinned_channel(&root));
+
+        let backend_pin = codegen_crate_in_checkout(&root).join("rust-toolchain.toml");
+        std::fs::write(
+            &backend_pin,
+            "[toolchain]\nchannel = \"nightly-2026-02-01\"\n",
+        )
+        .unwrap();
+        assert_eq!(pinned_channel(&root).as_deref(), Some("nightly-2026-02-01"));
+
+        // An invalid nearer pin is not permission to choose a different
+        // compiler from the parent workspace.
+        std::fs::write(&backend_pin, "[toolchain]\nchannel = [").unwrap();
+        assert_eq!(pinned_channel(&root), None);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn pinned_channel_never_uses_a_pin_outside_the_checkout() {
+        let outer = tempdir();
+        std::fs::write(
+            outer.join("rust-toolchain.toml"),
+            "[toolchain]\nchannel = \"nightly-2026-08-28\"\n",
+        )
+        .unwrap();
+        let checkout = outer.join("checkout");
+        checkout_with_backend(&checkout, "cuda-device");
+        assert_eq!(pinned_channel(&checkout), None);
+        std::fs::remove_dir_all(outer).unwrap();
     }
 
     #[test]

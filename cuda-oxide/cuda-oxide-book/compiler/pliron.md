@@ -73,7 +73,7 @@ model -- operations, regions, basic blocks, types, attributes, dialects, passes
 | DSLs required     | None -- just Rust macros                 | TableGen, ODS                      |
 | Debugging         | Standard Rust tooling (`dbg!`, rust-gdb) | gdb on C++ templates               |
 | Extensibility     | Add a dialect as a Rust crate            | C++ extension against LLVM headers |
-| Dependency weight | One crate (git dependency)               | Gigabytes of LLVM build artifacts  |
+| Dependency weight | One published crate                      | Gigabytes of LLVM build artifacts  |
 
 For cuda-oxide, this means the entire compiler -- from MIR import to LLVM IR
 export -- stays within the same Rust build and debugging environment as the rest

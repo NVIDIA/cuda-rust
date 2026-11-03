@@ -34,8 +34,10 @@ fn main() {
       ▼
   rustc_codegen_cuda
       ├── collect #[kernel] functions + transitive callees
-      ├── device MIR  → dialect-mir → mem2reg → unroll → LLVM dialect → LLVM IR → PTX
-      └── host   MIR  → rustc_codegen_llvm (standard path)
+      ├── device MIR → dialect-mir → common preparation + verification
+      │                         ├── ordinary backend → LLVM IR → PTX
+      │                         └── CUTLASS backend → MLIR → cubin
+      └── host MIR → rustc_codegen_llvm (standard path)
       │
       ▼
   host binary + PTX file(s)
@@ -50,6 +52,20 @@ The backend implements rustc's `CodegenBackend` trait. When rustc calls `codegen
 3. **Compile host code** -- The standard `rustc_codegen_llvm` backend handles everything else.
 
 ## Usage
+
+For the instruction-level CUTLASS path, select both the compiler and its
+primitives profile:
+
+```bash
+CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir \
+CUDA_OXIDE_MLIR_PROFILE=cutlass-primitives-mlir22 \
+cargo oxide build <example> --arch sm_100a
+```
+
+This profile accepts the reviewed MIR/NVVM subset and rejects CuTe operations
+and types, including types nested inside pointers. It uses the managed CUTLASS
+4.7 compiler. Leaving `CUDA_OXIDE_MLIR_PROFILE` unset retains the full-CuTe
+profile. Native compilation and native MLIR dump defaults remain unchanged.
 
 ```bash
 # Preferred: use the cargo-oxide wrapper
@@ -87,6 +103,10 @@ These are set automatically by `cargo oxide`. For manual invocations, all four a
 | `CUDA_OXIDE_DUMP_LLVM`               | Dump the LLVM dialect module                |
 | `CUDA_OXIDE_SHOW_RUSTC_MIR`          | Dump raw rustc MIR                          |
 | `CUDA_OXIDE_EMIT_NVVM_IR`            | Emit NVVM IR for libNVVM                    |
+| `CUDA_OXIDE_DEVICE_BACKEND`          | Select `native` or `cutlass-mlir`           |
+| `CUDA_OXIDE_CUTLASS_COMPILER`        | Absolute `libCutlassCompiler.so` override   |
+| `CUDA_OXIDE_MLIR_PROFILE`            | Select the pinned CUTLASS consumer profile  |
+| `CUDA_OXIDE_MLIR_OUTPUT`             | Optional exact path for prepared MLIR       |
 | `CUDA_OXIDE_DEVICE_CODEGEN_CRATE`    | Comma-separated device owner crate filter   |
 | `CUDA_OXIDE_DEVICE_ARCH`             | Detected GPU arch; advisory (see below)     |
 | `CUDA_OXIDE_DEBUG`                   | Device DWARF level override                 |
@@ -119,6 +139,23 @@ Owner-filter names are normalized like Cargo crate names, so hyphens match
 underscores. Host LLVM codegen still runs for every crate. An excluded target
 must not call its generated module loader; the filter suppresses its device
 artifact but does not give sibling targets separate runtime bundle names.
+
+### Official CUTLASS backend
+
+The ordinary MIR/NVVM/LLVM backend remains the default. To compile high-level
+CuTe kernels through NVIDIA's official CUTLASS 4.7 compiler, first install the
+pinned toolchain and then select it for the build:
+
+```bash
+cargo oxide toolchain install cutlass
+CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir \
+  cargo oxide build blockscale_gemm_cute --arch sm_120a
+```
+
+`cargo oxide` resolves the managed compiler automatically. An explicit
+absolute `CUDA_OXIDE_CUTLASS_COMPILER` path takes precedence. The CUTLASS
+continuation produces a validated cubin and uses the same embedded-artifact
+launch machinery as the ordinary backend.
 
 ## Source Layout
 
@@ -192,6 +229,6 @@ cargo oxide pipeline <example_name>
 - **Closures work**. Both `move` closures (capture by value) and non-move closures (capture by reference via HMM) can be passed to kernels.
 - **Unwind paths are unreachable**. The backend ignores all MIR unwind edges, so `panic=abort` and custom sysroots are unnecessary. If a panic condition is hit at runtime, the GPU traps.
 
-### Nightly Rust
+### Pinned Rust Toolchain
 
-The backend uses `#![feature(rustc_private)]` and pins to a specific nightly via `rust-toolchain.toml`. The workspace currently uses `nightly-2026-08-28`.
+The backend uses `#![feature(rustc_private)]` (unlocked on stable via `RUSTC_BOOTSTRAP=1`) and pins to a specific toolchain release via `rust-toolchain.toml`. The workspace currently uses `1.99.1`.

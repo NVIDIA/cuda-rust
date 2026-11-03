@@ -419,7 +419,13 @@ fn tma_rendering_preserves_api_and_injects_backend_defaults() {
     assert!(compatibility.contains(
             "pub unsafe fn cp_async_bulk_tensor_reduce_xor_im2col_5d(src: *const u8, tensor_map: *const TmaDescriptor, coord0: i32, coord1: i32, coord2: i32, coord3: i32, coord4: i32)"
         ));
+    assert!(compatibility.contains(
+            "pub unsafe fn cp_async_bulk_tensor_2d_g2s_cta(dst: *mut u8, tensor_map: *const TmaDescriptor, coord0: i32, coord1: i32, barrier: *mut Barrier)"
+        ));
     for dimensions in 1..=5 {
+        assert!(compatibility.contains(&format!(
+            "pub unsafe fn cp_async_bulk_tensor_{dimensions}d_g2s_cta(dst: *mut u8,"
+        )));
         assert!(compatibility.contains(&format!(
             "pub unsafe fn cp_async_bulk_prefetch_tensor_{dimensions}d_l2("
         )));
@@ -437,8 +443,8 @@ fn tma_rendering_preserves_api_and_injects_backend_defaults() {
     assert!(compatibility.contains("pub fn fence_proxy_tensormap_generic_release_system()"));
 
     let dialect = render_dialect_tma(&catalog, "test-hash");
-    assert_eq!(dialect.matches("pub struct ").count(), 111);
-    assert_eq!(dialect.matches("NResultsInterface<0>").count(), 111);
+    assert_eq!(dialect.matches("pub struct ").count(), 116);
+    assert_eq!(dialect.matches("NResultsInterface<0>").count(), 116);
     assert!(dialect.contains("NOpdsInterface<10>"));
     assert!(dialect.contains("CpAsyncBulkWaitGroupReadOp::register(ctx)"));
     assert!(dialect.contains("CpAsyncBulkPrefetchTensorGather4TwoDimensionalL2Op::register(ctx)"));
@@ -703,7 +709,7 @@ fn tcgen05_rendering_preserves_api_and_inline_ptx_routes() {
                     "/// All tcgen05 operations in the kernel must use the same CTA-group mode.\n",
                 )
                 .count(),
-            233
+            249
         );
     assert!(compatibility.contains("/// `KIND` is 0=f16, 1=tf32, 2=f8f6f4, or 3=i8."));
     assert!(compatibility.contains(
@@ -776,7 +782,7 @@ fn tcgen05_rendering_preserves_api_and_inline_ptx_routes() {
                 "/// All tcgen05 operations in the kernel must use the same CTA-group mode.\n",
             )
             .count(),
-            233
+            249
         );
     assert!(raw.contains("pub fn i0345() -> ()"));
     assert!(raw.contains("pub fn i0357() -> ()"));

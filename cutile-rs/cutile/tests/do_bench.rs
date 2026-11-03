@@ -5,7 +5,7 @@
 
 //! GPU integration tests for `cutile::bench` (device-event timing).
 
-use cuda_core::Device;
+use cuda_core::Context;
 use cutile::bench::{do_bench, do_bench_paired, BenchOptions};
 use cutile::prelude::*;
 use std::time::Duration;
@@ -22,7 +22,7 @@ fn quick_opts() -> BenchOptions {
 
 #[test]
 fn do_bench_times_a_kernel() {
-    let device = Device::new(0).expect("device 0");
+    let device = Context::new(0).expect("device 0");
     let stream = device.new_stream().expect("stream");
 
     let result = do_bench(&stream, &quick_opts(), |s| {
@@ -45,7 +45,7 @@ fn do_bench_times_a_kernel() {
 
 #[test]
 fn do_bench_paired_runs_equal_reps() {
-    let device = Device::new(0).expect("device 0");
+    let device = Context::new(0).expect("device 0");
     let stream = device.new_stream().expect("stream");
 
     let (a, b) = do_bench_paired(
@@ -73,7 +73,7 @@ fn do_bench_paired_runs_equal_reps() {
 
 #[test]
 fn closure_errors_propagate() {
-    let device = Device::new(0).expect("device 0");
+    let device = Context::new(0).expect("device 0");
     let stream = device.new_stream().expect("stream");
 
     let err = do_bench(&stream, &quick_opts(), |_| {

@@ -118,7 +118,7 @@ load a, load b, fma, advance, compare, branch
 ```
 
 -- exactly the shape of a hand-written raw-pointer loop. The
-[`gemm_views`](https://github.com/NVlabs/cuda-oxide/tree/main/cuda-oxide/crates/rustc-codegen-cuda/examples/gemm_views)
+[`gemm_views`](https://github.com/NVIDIA/cuda-rust/tree/main/cuda-oxide/crates/rustc-codegen-cuda/examples/gemm_views)
 example proves this literally: it compiles each safe kernel next to an
 `unsafe` raw-pointer twin and verifies that the PTX has the same branch
 counts, the same memory instructions, no traps in the loop, and
@@ -262,7 +262,7 @@ Scope, precisely:
   helper function keeps its own checks.
 - Turn it on only after the checked build passes, ideally under
   `compute-sanitizer`. The
-  [`unchecked_indexing`](https://github.com/NVlabs/cuda-oxide/tree/main/cuda-oxide/crates/rustc-codegen-cuda/examples/unchecked_indexing)
+  [`unchecked_indexing`](https://github.com/NVIDIA/cuda-rust/tree/main/cuda-oxide/crates/rustc-codegen-cuda/examples/unchecked_indexing)
   example shows the PTX with and without the flag.
 
 ---

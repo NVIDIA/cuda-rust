@@ -15,7 +15,7 @@
 # lock file disagree.
 #
 # Format changes therefore go: bump crates/oxide-artifacts, publish, then move
-# the requirement in the root and backend manifests and relock.
+# the requirement in the SIMT and backend manifests and relock.
 set -euo pipefail
 export LC_ALL=C
 cd "$(dirname "$0")/.."
@@ -37,7 +37,7 @@ req_of() {  # req_of FILE -> the version requirement on the oxide-artifacts line
         echo "missing"
     fi
 }
-for manifest in "${GIT_ROOT}/Cargo.toml" crates/rustc-codegen-cuda/Cargo.toml; do
+for manifest in Cargo.toml crates/rustc-codegen-cuda/Cargo.toml; do
     req="$(req_of "${manifest}")"
     if [ "${req}" != "${in_tree}" ]; then
         echo "error: ${manifest}: oxide-artifacts requirement is '${req}', in-tree version is ${in_tree}" >&2; status=1
@@ -45,7 +45,7 @@ for manifest in "${GIT_ROOT}/Cargo.toml" crates/rustc-codegen-cuda/Cargo.toml; d
 done
 
 # Every lock that resolves oxide-artifacts must resolve exactly the in-tree
-# version, from the registry (the root lock also lists the in-tree member).
+# version, from the registry (the SIMT lock also lists the in-tree member).
 while IFS= read -r lock; do
     versions="$(awk '/^name = "oxide-artifacts"$/{getline; print $3}' "${lock}" | tr -d '"' | sort -u)"
     [ -n "${versions}" ] || continue

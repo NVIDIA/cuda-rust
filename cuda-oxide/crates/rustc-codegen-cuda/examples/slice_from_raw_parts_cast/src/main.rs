@@ -20,7 +20,7 @@
 //! Usage:
 //!   cargo oxide run slice_from_raw_parts_cast
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, SharedArray, cuda_module, kernel, thread};
 

@@ -5,7 +5,7 @@
 # The runtime SUCCESS gate only proves the kernels are bit-correct, which
 # holds with or without the optimization this example exists to demonstrate.
 # The perf property lives in the PTX shape: an #[repr(C, align(8))] pair must
-# fuse its two adjacent f32 field reads into one ld.global.v2.b32, while the
+# fuse its two adjacent f32 field reads into one vector load, while the
 # natural-align-4 control must keep two scalar loads. Assert both directions
 # so a silent regression of either the fusion or the control cannot pass.
 
@@ -57,8 +57,10 @@ reject_entry_shape() {
     fi
 }
 
-vector_load='ld\.global\.v2\.b32'
-scalar_load='ld\.global\.b32'
+# Read-only, non-aliasing inputs may use the non-coherent read-only cache
+# (`ld.global.nc`). That changes the cache path, not the load width or alignment.
+vector_load='ld\.global(\.nc)?\.v2\.b32'
+scalar_load='ld\.global(\.nc)?\.b32'
 
 # The align(8) kernels must fuse the pair into a single wide load. The `lanes`
 # kernels reach the same two f32 through an array index rather than named

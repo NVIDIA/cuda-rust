@@ -2,7 +2,7 @@
     // Project-level editor settings, tracked in git. Keep personal preferences
     // (fonts, colours, keybindings) in your VS Code User settings instead.
     "rust-analyzer.rustc.source": "discover",
-    "rust-analyzer.cargo.features": "all",
+    "rust-analyzer.cargo.features": [],
     "rust-analyzer.procMacro.enable": true,
     "rust-analyzer.procMacro.attributes.enable": true,
     // "rust-analyzer.cargo.extraEnv": {
@@ -17,9 +17,11 @@
     // rust-analyzer reports "Failed to load workspaces".
     "rust-analyzer.linkedProjects": [
         "./Cargo.toml",
+        "./cuda-oxide/Cargo.toml",
+        "./cutile-rs/Cargo.toml",
         "./cuda-oxide/crates/rustc-codegen-cuda/Cargo.toml",
         "./cuda-oxide/crates/rustc-codegen-cuda/examples/debug_pointer_locals/Cargo.toml",
-        "./cuda-oxide/crates/rustc-codegen-cuda/examples/gemm_sol_final/Cargo.toml",
+        "./cuda-oxide/examples/gemm_sol_final/Cargo.toml",
         "./cuda-oxide/crates/rustc-codegen-cuda/examples/vecadd/Cargo.toml",
         "./cuda-oxide/crates/rustc-codegen-cuda/examples/abi_hmm/Cargo.toml",
     ],

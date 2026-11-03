@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-# Enforce deny.toml over the example workspaces, which `cargo deny check` does
+# Enforce deny.toml over example and model workspaces, which `cargo deny check` does
 # not reach.
 #
-# `cargo deny check` resolves the root workspace.  Every example under
-# crates/rustc-codegen-cuda/examples/ sets its own `[workspace]`, so the root
+# `cargo deny check` resolves the SIMT workspace. Every example under the
+# roots below sets its own `[workspace]`, so that
 # run stops at that boundary and the license, source and ban policies never see
 # any crate an example pulls on its own.  #664 closed the *inventory* half of
 # this (dependency-licenses.csv now records those crates); this closes the
@@ -19,8 +19,8 @@
 # Why one run per distinct dependency set, not one per workspace:
 #
 #   Every example depends on cuda-device/cuda-host by path and on the shared
-#   cuda-core by the same cutile-rs pin as the root workspace, so each lock
-#   file re-lists the root workspace's own transitive crates.  Grouping the
+#   cuda-core by the same cutile-rs pin as the SIMT workspace, so each lock
+#   file re-lists the SIMT workspace's own transitive crates. Grouping the
 #   lock files by their exact set of third-party (name, version, source) triples
 #   collapses every example lock file (one per example directory, plus one per
 #   nested sub-workspace) to far fewer distinct sets, and one cargo-deny run
@@ -33,10 +33,17 @@
 set -euo pipefail
 
 export LC_ALL=C
+export RUSTC_BOOTSTRAP=1
 
 cd "$(dirname "$0")/.."
 
-EXAMPLES_ROOT=crates/rustc-codegen-cuda/examples
+EXAMPLE_ROOTS=(
+    crates/rustc-codegen-cuda/examples
+    examples
+    models
+    cute-rs-preview/examples
+    cute-rs-preview/models
+)
 
 # Examples whose dependencies deliberately cannot satisfy deny.toml.
 #
@@ -44,7 +51,7 @@ EXAMPLES_ROOT=crates/rustc-codegen-cuda/examples
 # NVlabs/cutile-rs by git while `[sources] allow-git` listed only pliron, and
 # cutile-rs's cuda-bindings 0.1.0 carried no license.  Both are gone: every
 # example now takes the shared host crates from the same crates.io release as
-# the root workspace, and the 0.3.x crates are Apache-2.0, so the example is
+# the SIMT workspace, and the 0.3.x crates are Apache-2.0, so the example is
 # judged like every other one.
 #
 # Every name here is checked against the examples on disk below, so a typo or a
@@ -65,7 +72,11 @@ command -v cargo-deny >/dev/null 2>&1 || {
 representatives="$(python3 -c '
 import glob, os, re, sys
 
-examples_root, *exempt = sys.argv[1:]
+separator = sys.argv.index("--roots")
+exempt = sys.argv[1:separator]
+example_roots = sys.argv[separator + 1:]
+if not example_roots:
+    sys.exit("parse self-test failed: no example roots configured")
 
 def third_party(lock):
     """(name, version, source) for every locked package that has a source.
@@ -92,8 +103,15 @@ def third_party(lock):
             found.add((name.group(1), version.group(1), source.group(1)))
     return found, parsed
 
-locks = sorted(glob.glob(os.path.join(examples_root, "**", "Cargo.lock"), recursive=True))
-on_disk = {os.path.relpath(lock, examples_root).split(os.sep)[0] for lock in locks}
+locks = sorted(
+    (root, lock)
+    for root in example_roots
+    for lock in glob.glob(os.path.join(root, "**", "Cargo.lock"), recursive=True)
+)
+on_disk = {
+    os.path.relpath(lock, root).split(os.sep)[0]
+    for root, lock in locks
+}
 
 # Cross-check the glob against an independent enumeration rather than a fixed
 # floor.  Every example directory that carries a Cargo.toml carries a
@@ -104,8 +122,10 @@ on_disk = {os.path.relpath(lock, examples_root).split(os.sep)[0] for lock in loc
 # not to fail on ordinary growth.  The floor this replaces was 20.
 expected = {
     name
-    for name in os.listdir(examples_root)
-    if os.path.exists(os.path.join(examples_root, name, "Cargo.toml"))
+    for root in example_roots
+    if os.path.isdir(root)
+    for name in os.listdir(root)
+    if os.path.exists(os.path.join(root, name, "Cargo.toml"))
 }
 missed = sorted(expected - on_disk)
 if missed:
@@ -121,8 +141,8 @@ if unknown:
 
 groups = {}
 total_parsed = 0
-for lock in locks:
-    example = os.path.relpath(lock, examples_root).split(os.sep)[0]
+for root, lock in locks:
+    example = os.path.relpath(lock, root).split(os.sep)[0]
     crates, parsed = third_party(lock)
     total_parsed += parsed
     # Every example reaches crates.io through cuda-core/cuda-device/cuda-host,
@@ -149,10 +169,10 @@ if total_parsed < 10 * len(locks):
 
 for manifest in sorted(groups.values()):
     print(manifest)
-' "${EXAMPLES_ROOT}" "${POLICY_EXEMPT_EXAMPLES[@]}")"
+' "${POLICY_EXEMPT_EXAMPLES[@]}" --roots "${EXAMPLE_ROOTS[@]}")"
 
 total="$(printf '%s\n' "${representatives}" | grep -c .)"
-locks="$(find "${EXAMPLES_ROOT}" -name Cargo.lock | grep -c .)"
+locks="$(find "${EXAMPLE_ROOTS[@]}" -name Cargo.lock | grep -c .)"
 echo "Checking deny.toml over ${total} representative example workspaces" \
     "across ${locks} example lock files."
 
@@ -165,7 +185,7 @@ echo "Checking deny.toml over ${total} representative example workspaces" \
 failed=()
 for manifest in ${representatives}; do
     if ! cargo deny --manifest-path "${manifest}" --locked check 2>&1 |
-        sed "s|^|  [$(dirname "${manifest#"${EXAMPLES_ROOT}/"}")] |"; then
+        sed "s|^|  [$(dirname "${manifest}")] |"; then
         failed+=("${manifest}")
     fi
 done

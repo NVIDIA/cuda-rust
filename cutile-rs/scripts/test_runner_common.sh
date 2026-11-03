@@ -13,6 +13,13 @@ NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# Host crates (cuda-bindings, cuda-core, cuda-async) are members of the
+# git-root workspace, not this nested cutile-rs workspace. The root
+# rust-toolchain.toml is what selects stable once this cds there.
+GIT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+host_cargo() {
+    (cd "$GIT_ROOT" && cargo "$@")
+}
 
 OVERALL_SUCCESS=true
 

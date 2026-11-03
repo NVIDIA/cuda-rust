@@ -1,0 +1,29 @@
+[package]
+name = "tilelib_relu"
+version = "0.1.0"
+edition = "2024"
+authors = ["Nihal Pasham <nihalp@nvidia.com>"]
+license = "Apache-2.0"
+
+# Mark as standalone crate (not part of parent workspace)
+[workspace]
+
+# A tile library written in Rust: #[tile_export] functions a cuTile program
+# calls through `foreign_call`. The host program proves the native SIMT ABI on
+# this machine's GPU through a generated CUDA C++ caller:
+#   cargo oxide run tilelib_relu --emit-nvvm-ir --arch sm_120
+
+[dependencies]
+# Device-side intrinsics (#[tile_export], warp shuffles, etc.).
+cuda-device = { path = "../../../cuda-device" }
+
+# The descriptions the backend writes next to the device artifact. The host
+# derives the C++ prototypes from them instead of restating the ABI by hand.
+oxide-tile-export = { path = "../../../oxide-tile-export" }
+
+# libNVVM and nvJitLink without the CUDA driver: NVVM IR to LTOIR, then the
+# two-input LTOIR link into a cubin, the same calls cuda-host makes.
+cuda-artifact-finalizer = { path = "../../../cuda-artifact-finalizer" }
+
+# Host-side CUDA runtime: context, device buffers, raw kernel launches.
+cuda-core = { path = "../../../../../cuda-core" }

@@ -1,5 +1,5 @@
 error[E0080]: evaluation panicked: launch_bounds maximum threads must be greater than zero
- --> $WORKSPACE/cuda-oxide/crates/cuda-device/src/thread.rs
+ --> $WORKSPACE/crates/cuda-device/src/thread.rs
   |
   |     const { validate_launch_bounds(MAX_THREADS) }
   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `cuda_device::__launch_bounds_config::<0, 0>::{constant#0}` failed inside this call
@@ -10,7 +10,7 @@ note: inside `cuda_device::thread::validate_launch_bounds`
   |           $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the failure occurred here
   |
- ::: $WORKSPACE/cuda-oxide/crates/cuda-device/src/thread.rs
+ ::: $WORKSPACE/crates/cuda-device/src/thread.rs
   |
   | /     assert!(
   | |         max_threads > 0,
@@ -19,7 +19,7 @@ note: inside `cuda_device::thread::validate_launch_bounds`
   | |_____- in this macro invocation
 
 note: erroneous constant encountered
- --> $WORKSPACE/cuda-oxide/crates/cuda-device/src/thread.rs
+ --> $WORKSPACE/crates/cuda-device/src/thread.rs
   |
   |     const { validate_launch_bounds(MAX_THREADS) }
   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

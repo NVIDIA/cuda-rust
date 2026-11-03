@@ -86,13 +86,18 @@ pub(super) fn selection_matches_policy(
             } else {
                 tcgen05_mma_valid_selection_asms(mma.form)
             };
+            let expected_predicates: &[&str] = if selection.asm.contains(".kind::i8.") {
+                &["Subtarget->hasTcgen05MMAI8Kind()"]
+            } else if tcgen05_mma_has_ptx88_predicate(mma.form) {
+                &[
+                    "Subtarget->getPTXVersion() >= 88",
+                    "Subtarget->hasTcgen05InstSupport()",
+                ]
+            } else {
+                &["Subtarget->hasTcgen05InstSupport()"]
+            };
             return Ok(expected.contains(&selection.asm)
-                && selection.predicates
-                    == [if selection.asm.contains(".kind::i8.") {
-                        "Subtarget->hasTcgen05MMAI8Kind()"
-                    } else {
-                        "Subtarget->hasTcgen05InstSupport()"
-                    }]
+                && selection.predicates == expected_predicates
                 && selection.constraints.is_empty());
         }
         if tcgen05.source_contract != Tcgen05SourceContract::ExactTablegenSelection {
@@ -307,9 +312,17 @@ pub(super) fn selection_matches_tma_policy(
             "TMA_G2S_TILE_CG0_1D",
             "cp.async.bulk.tensor.1d.shared::cluster.global.tile.mbarrier::complete_tx::bytes$cg [$dst], [$tmap, {{$d0}}], [$mbar];",
         ),
+        TmaOperation::G2sCtaTile1d => (
+            "TMA_G2S_CTA_TILE_1D",
+            "cp.async.bulk.tensor.1d.shared::cta.global.tile.mbarrier::complete_tx::bytes [$dst], [$tmap, {{$d0}}], [$mbar];",
+        ),
         TmaOperation::G2sTile2d => (
             "TMA_G2S_TILE_CG0_2D",
             "cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes$cg [$dst], [$tmap, {{$d0, $d1}}], [$mbar];",
+        ),
+        TmaOperation::G2sCtaTile2d => (
+            "TMA_G2S_CTA_TILE_2D",
+            "cp.async.bulk.tensor.2d.shared::cta.global.tile.mbarrier::complete_tx::bytes [$dst], [$tmap, {{$d0, $d1}}], [$mbar];",
         ),
         TmaOperation::G2sTile2dMulticast => (
             "TMA_G2S_TILE_CG0_2D_MC",
@@ -323,13 +336,25 @@ pub(super) fn selection_matches_tma_policy(
             "TMA_G2S_TILE_CG0_3D",
             "cp.async.bulk.tensor.3d.shared::cluster.global.tile.mbarrier::complete_tx::bytes$cg [$dst], [$tmap, {{$d0, $d1, $d2}}], [$mbar];",
         ),
+        TmaOperation::G2sCtaTile3d => (
+            "TMA_G2S_CTA_TILE_3D",
+            "cp.async.bulk.tensor.3d.shared::cta.global.tile.mbarrier::complete_tx::bytes [$dst], [$tmap, {{$d0, $d1, $d2}}], [$mbar];",
+        ),
         TmaOperation::G2sTile4d => (
             "TMA_G2S_TILE_CG0_4D",
             "cp.async.bulk.tensor.4d.shared::cluster.global.tile.mbarrier::complete_tx::bytes$cg [$dst], [$tmap, {{$d0, $d1, $d2, $d3}}], [$mbar];",
         ),
+        TmaOperation::G2sCtaTile4d => (
+            "TMA_G2S_CTA_TILE_4D",
+            "cp.async.bulk.tensor.4d.shared::cta.global.tile.mbarrier::complete_tx::bytes [$dst], [$tmap, {{$d0, $d1, $d2, $d3}}], [$mbar];",
+        ),
         TmaOperation::G2sTile5d => (
             "TMA_G2S_TILE_CG0_5D",
             "cp.async.bulk.tensor.5d.shared::cluster.global.tile.mbarrier::complete_tx::bytes$cg [$dst], [$tmap, {{$d0, $d1, $d2, $d3, $d4}}], [$mbar];",
+        ),
+        TmaOperation::G2sCtaTile5d => (
+            "TMA_G2S_CTA_TILE_5D",
+            "cp.async.bulk.tensor.5d.shared::cta.global.tile.mbarrier::complete_tx::bytes [$dst], [$tmap, {{$d0, $d1, $d2, $d3, $d4}}], [$mbar];",
         ),
         TmaOperation::S2gTile1d => (
             "TMA_TENSOR_S2G_TILE_1D",
@@ -456,29 +481,48 @@ pub(super) fn selection_matches_tma_policy(
     if matches!(
         operation,
         TmaOperation::G2sTile1d
+            | TmaOperation::G2sCtaTile1d
             | TmaOperation::G2sTile2d
+            | TmaOperation::G2sCtaTile2d
             | TmaOperation::G2sTile2dMulticast
             | TmaOperation::G2sTile2dMulticastCg2
             | TmaOperation::G2sTile3d
+            | TmaOperation::G2sCtaTile3d
             | TmaOperation::G2sTile4d
+            | TmaOperation::G2sCtaTile4d
             | TmaOperation::G2sTile5d
+            | TmaOperation::G2sCtaTile5d
     ) {
         let dimensions = operation.dimensions().unwrap();
-        immediate_bindings.push(crate::model::ImportedImmediateBinding {
-            argument_index: dimensions + 5,
-            value: if matches!(
-                operation,
-                TmaOperation::G2sTile2dMulticast | TmaOperation::G2sTile2dMulticastCg2
-            ) {
-                -1
-            } else {
-                0
-            },
-        });
-        immediate_bindings.push(crate::model::ImportedImmediateBinding {
-            argument_index: dimensions + 6,
-            value: 0,
-        });
+        if matches!(
+            operation,
+            TmaOperation::G2sCtaTile1d
+                | TmaOperation::G2sCtaTile2d
+                | TmaOperation::G2sCtaTile3d
+                | TmaOperation::G2sCtaTile4d
+                | TmaOperation::G2sCtaTile5d
+        ) {
+            immediate_bindings.push(crate::model::ImportedImmediateBinding {
+                argument_index: dimensions + 4,
+                value: 0,
+            });
+        } else {
+            immediate_bindings.push(crate::model::ImportedImmediateBinding {
+                argument_index: dimensions + 5,
+                value: if matches!(
+                    operation,
+                    TmaOperation::G2sTile2dMulticast | TmaOperation::G2sTile2dMulticastCg2
+                ) {
+                    -1
+                } else {
+                    0
+                },
+            });
+            immediate_bindings.push(crate::model::ImportedImmediateBinding {
+                argument_index: dimensions + 6,
+                value: 0,
+            });
+        }
     } else if matches!(
         operation,
         TmaOperation::S2gTile1d

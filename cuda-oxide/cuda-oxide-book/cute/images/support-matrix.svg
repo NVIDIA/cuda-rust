@@ -1,0 +1,204 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 836" width="1240" height="836" role="img"
+  aria-label="cute-rs preview against CuTeDSL 4.7: a status grid of feature areas for CuTeDSL 4.7 and the cute-rs preview on sm_100a and sm_120a">
+<style>
+  :root, svg {
+  --bg: #f4f6f8; --fg: #1a232e; --muted: #5d6b7a; --line: #9aa7b4; --panel: #ffffff;
+  --meta: #0e7c72; --meta-fill: #d9f3ef; --code: #b4560a; --code-fill: #fdebd2;
+  --sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+ }
+  @media (prefers-color-scheme: dark) { :root, svg {
+  --bg: #1b1d23; --fg: #f2f4f7; --muted: #bcc4d0; --line: #5c6475; --panel: #282c36;
+  --meta: #7ed8bb; --meta-fill: #346357; --code: #f4c474; --code-fill: #735a3c;
+ } }
+</style>
+<rect x="0" y="0" width="1240" height="836" style="fill: var(--bg)"/>
+<text x="40" y="34" text-anchor="start" style="font: 600 17px var(--sans); fill: var(--fg)">cute-rs preview against CuTeDSL 4.7</text>
+<text x="40" y="56" text-anchor="start" style="font: 400 12.5px var(--sans); fill: var(--muted)">Rust CuTe kernels compiled ahead of time through the pinned CUTLASS 4.7 compiler for two Blackwell targets. Status at 5eaa6cbda (2026-10-22).</text>
+<text x="40" y="92" text-anchor="start" style="font: 600 11px var(--sans); fill: var(--muted)">TARGETS</text>
+<rect x="40.0" y="106" width="158.9" height="58" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="50.0" y="124" text-anchor="start" style="font: 600 10.5px var(--sans); fill: var(--fg)">Ampere  sm_80/86/87</text>
+<circle cx="56.0" cy="146" r="6" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="68.0" y="150" text-anchor="start" style="font: 400 10.5px var(--sans); fill: var(--muted)">CuTeDSL</text>
+<circle cx="125.42857142857143" cy="146" r="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
+<text x="137.42857142857144" y="150" text-anchor="start" style="font: 400 10.5px var(--sans); fill: var(--muted)">cute-rs</text>
+<rect x="206.9" y="106" width="158.9" height="58" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="216.85714285714286" y="124" text-anchor="start" style="font: 600 10.5px var(--sans); fill: var(--fg)">Ada  sm_89</text>
+<circle cx="222.85714285714286" cy="146" r="6" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="234.85714285714286" y="150" text-anchor="start" style="font: 400 10.5px var(--sans); fill: var(--muted)">CuTeDSL</text>
+<circle cx="292.2857142857143" cy="146" r="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
+<text x="304.2857142857143" y="150" text-anchor="start" style="font: 400 10.5px var(--sans); fill: var(--muted)">cute-rs</text>
+<rect x="373.7" y="106" width="158.9" height="58" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="383.7142857142857" y="124" text-anchor="start" style="font: 600 10.5px var(--sans); fill: var(--fg)">Hopper  sm_90a</text>
+<circle cx="389.7142857142857" cy="146" r="6" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="401.7142857142857" y="150" text-anchor="start" style="font: 400 10.5px var(--sans); fill: var(--muted)">CuTeDSL</text>
+<circle cx="459.14285714285717" cy="146" r="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
+<text x="471.14285714285717" y="150" text-anchor="start" style="font: 400 10.5px var(--sans); fill: var(--muted)">cute-rs</text>
+<rect x="540.6" y="106" width="158.9" height="58" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="550.5714285714286" y="124" text-anchor="start" style="font: 600 10.5px var(--sans); fill: var(--fg)">Blackwell  sm_100a</text>
+<circle cx="556.5714285714286" cy="146" r="6" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="568.5714285714286" y="150" text-anchor="start" style="font: 400 10.5px var(--sans); fill: var(--muted)">CuTeDSL</text>
+<circle cx="626.0" cy="146" r="6" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="638.0" y="150" text-anchor="start" style="font: 400 10.5px var(--sans); fill: var(--muted)">cute-rs</text>
+<rect x="707.4" y="106" width="158.9" height="58" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="717.4285714285714" y="124" text-anchor="start" style="font: 600 10.5px var(--sans); fill: var(--fg)">Blackwell  sm_103a, sm_110a</text>
+<circle cx="723.4285714285714" cy="146" r="6" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="735.4285714285714" y="150" text-anchor="start" style="font: 400 10.5px var(--sans); fill: var(--muted)">CuTeDSL</text>
+<circle cx="792.8571428571429" cy="146" r="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
+<text x="804.8571428571429" y="150" text-anchor="start" style="font: 400 10.5px var(--sans); fill: var(--muted)">cute-rs</text>
+<rect x="874.3" y="106" width="158.9" height="58" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="884.2857142857143" y="124" text-anchor="start" style="font: 600 10.5px var(--sans); fill: var(--fg)">GeForce Blackwell  sm_120a</text>
+<circle cx="890.2857142857143" cy="146" r="6" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="902.2857142857143" y="150" text-anchor="start" style="font: 400 10.5px var(--sans); fill: var(--muted)">CuTeDSL</text>
+<circle cx="959.7142857142858" cy="146" r="6" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="971.7142857142858" y="150" text-anchor="start" style="font: 400 10.5px var(--sans); fill: var(--muted)">cute-rs</text>
+<rect x="1041.1" y="106" width="158.9" height="58" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="1051.142857142857" y="124" text-anchor="start" style="font: 600 10.5px var(--sans); fill: var(--fg)">GeForce Blackwell  sm_121a</text>
+<circle cx="1057.142857142857" cy="146" r="6" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="1069.142857142857" y="150" text-anchor="start" style="font: 400 10.5px var(--sans); fill: var(--muted)">CuTeDSL</text>
+<circle cx="1126.5714285714284" cy="146" r="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
+<text x="1138.5714285714284" y="150" text-anchor="start" style="font: 400 10.5px var(--sans); fill: var(--muted)">cute-rs</text>
+<text x="40" y="198" text-anchor="start" style="font: 600 11px var(--sans); fill: var(--muted)">FEATURE AREA</text>
+<text x="372" y="198" text-anchor="middle" style="font: 600 11px var(--sans); fill: var(--muted)">CuTeDSL 4.7</text>
+<text x="452" y="185" text-anchor="middle" style="font: 600 11px var(--sans); fill: var(--muted)">cute-rs</text>
+<text x="452" y="198" text-anchor="middle" style="font: 600 11px var(--mono); fill: var(--muted)">sm_100a</text>
+<text x="532" y="185" text-anchor="middle" style="font: 600 11px var(--sans); fill: var(--muted)">cute-rs</text>
+<text x="532" y="198" text-anchor="middle" style="font: 600 11px var(--mono); fill: var(--muted)">sm_120a</text>
+<text x="600" y="198" text-anchor="start" style="font: 600 11px var(--sans); fill: var(--muted)">WHAT THE PREVIEW HAS</text>
+<rect x="32" y="208" width="1176" height="24" rx="3" style="fill: var(--panel)"/>
+<text x="40" y="224" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Layout algebra, static</text>
+<circle cx="372" cy="220" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="452" cy="220" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 452 213 A 7 7 0 0 1 452 227 Z" style="fill: var(--code)"/>
+<circle cx="532" cy="220" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 532 213 A 7 7 0 0 1 532 227 Z" style="fill: var(--code)"/>
+<text x="600" y="224" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">layouts are Rust types checked at compile time; no layout ops in kernels</text>
+<text x="40" y="248" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Dynamic layouts, runtime shapes</text>
+<circle cx="372" cy="244" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="452" cy="244" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 452 237 A 7 7 0 0 1 452 251 Z" style="fill: var(--code)"/>
+<circle cx="532" cy="244" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 532 237 A 7 7 0 0 1 532 251 Z" style="fill: var(--code)"/>
+<text x="600" y="248" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">runtime lengths and one runtime row pitch; strides and tiles are types</text>
+<rect x="32" y="256" width="1176" height="24" rx="3" style="fill: var(--panel)"/>
+<text x="40" y="272" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Tensors, partitions, tiled atoms</text>
+<circle cx="372" cy="268" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="452" cy="268" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 452 261 A 7 7 0 0 1 452 275 Z" style="fill: var(--code)"/>
+<circle cx="532" cy="268" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 532 261 A 7 7 0 0 1 532 275 Z" style="fill: var(--code)"/>
+<text x="600" y="272" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">1D tiles (zipped_divide, slice, 1D local_tile) and fixed 2D block-scaled views; no make_tiled_copy</text>
+<text x="40" y="296" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">TMA copies</text>
+<circle cx="372" cy="292" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="452" cy="292" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 452 285 A 7 7 0 0 1 452 299 Z" style="fill: var(--code)"/>
+<circle cx="532" cy="292" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 532 285 A 7 7 0 0 1 532 299 Z" style="fill: var(--code)"/>
+<text x="600" y="296" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">2D tile load and store, two-CTA load; no im2col, reduce-store, multicast</text>
+<rect x="32" y="304" width="1176" height="24" rx="3" style="fill: var(--panel)"/>
+<text x="40" y="320" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">cp.async, bulk, DSMEM copies</text>
+<circle cx="372" cy="316" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="452" cy="316" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 452 309 A 7 7 0 0 1 452 323 Z" style="fill: var(--code)"/>
+<circle cx="532" cy="316" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 532 309 A 7 7 0 0 1 532 323 Z" style="fill: var(--code)"/>
+<text x="600" y="320" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">cooperative cp.async with a coverage proof; no bulk or DSMEM data copies</text>
+<text x="40" y="344" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">ldmatrix, stmatrix, atomics</text>
+<circle cx="372" cy="340" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="452" cy="340" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 452 333 A 7 7 0 0 1 452 347 Z" style="fill: var(--code)"/>
+<circle cx="532" cy="340" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 532 333 A 7 7 0 0 1 532 347 Z" style="fill: var(--code)"/>
+<text x="600" y="344" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">ldmatrix x4 and x2.trans, stmatrix x2, no-allocate stores; no atomics</text>
+<rect x="32" y="352" width="1176" height="24" rx="3" style="fill: var(--panel)"/>
+<text x="40" y="368" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">tcgen05 MMA kinds</text>
+<circle cx="372" cy="364" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="452" cy="364" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 452 357 A 7 7 0 0 1 452 371 Z" style="fill: var(--code)"/>
+<line x1="527" y1="364" x2="537" y2="364" style="stroke: var(--line); stroke-width: 1.6"/>
+<text x="600" y="368" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">1 of 11 kinds: F16 in, F32 accumulate, one or two CTAs</text>
+<text x="40" y="392" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Warp MMA kinds (mma.sync)</text>
+<circle cx="372" cy="388" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="452" cy="388" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 452 381 A 7 7 0 0 1 452 395 Z" style="fill: var(--code)"/>
+<circle cx="532" cy="388" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 532 381 A 7 7 0 0 1 532 395 Z" style="fill: var(--code)"/>
+<text x="600" y="392" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">3 of 7 kinds: MXF4 with UE8M0 scales (sm_120a), F16, BF16</text>
+<rect x="32" y="400" width="1176" height="24" rx="3" style="fill: var(--panel)"/>
+<text x="40" y="416" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">NVFP4 tensor cores (E4M3 scales)</text>
+<circle cx="372" cy="412" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="452" cy="412" r="7" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
+<circle cx="532" cy="412" r="7" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
+<text x="600" y="416" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">NVFP4 projections run on CUDA cores through scaled loads and dot</text>
+<text x="40" y="440" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">wgmma (Hopper)</text>
+<circle cx="372" cy="436" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<line x1="447" y1="436" x2="457" y2="436" style="stroke: var(--line); stroke-width: 1.6"/>
+<line x1="527" y1="436" x2="537" y2="436" style="stroke: var(--line); stroke-width: 1.6"/>
+<text x="600" y="440" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">no sm_90a target</text>
+<rect x="32" y="448" width="1176" height="24" rx="3" style="fill: var(--panel)"/>
+<text x="40" y="464" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">TMEM</text>
+<circle cx="372" cy="460" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="452" cy="460" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 452 453 A 7 7 0 0 1 452 467 Z" style="fill: var(--code)"/>
+<line x1="527" y1="460" x2="537" y2="460" style="stroke: var(--line); stroke-width: 1.6"/>
+<text x="600" y="464" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">allocate, 32x32b load and store, FP32 to FP16; no 16xNb, LdRed or S2T</text>
+<text x="40" y="488" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Pipelines and barriers</text>
+<circle cx="372" cy="484" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="452" cy="484" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 452 477 A 7 7 0 0 1 452 491 Z" style="fill: var(--code)"/>
+<circle cx="532" cy="484" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 532 477 A 7 7 0 0 1 532 491 Z" style="fill: var(--code)"/>
+<text x="600" y="488" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">5 typed pipelines and a two-CTA ring; no CLC, no compiler pipelining</text>
+<rect x="32" y="496" width="1176" height="24" rx="3" style="fill: var(--panel)"/>
+<text x="40" y="512" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Schedulers, persistence, PDL</text>
+<circle cx="372" cy="508" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="452" cy="508" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 452 501 A 7 7 0 0 1 452 515 Z" style="fill: var(--code)"/>
+<circle cx="532" cy="508" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 532 501 A 7 7 0 0 1 532 515 Z" style="fill: var(--code)"/>
+<text x="600" y="512" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">one static 1D persistent scheduler; no grouped, CLC or stream-K</text>
+<text x="40" y="536" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Clusters and multicast</text>
+<circle cx="372" cy="532" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="452" cy="532" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 452 525 A 7 7 0 0 1 452 539 Z" style="fill: var(--code)"/>
+<line x1="527" y1="532" x2="537" y2="532" style="stroke: var(--line); stroke-width: 1.6"/>
+<text x="600" y="536" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">two-CTA clusters validated; no N-CTA multicast plan</text>
+<rect x="32" y="544" width="1176" height="24" rx="3" style="fill: var(--panel)"/>
+<text x="40" y="560" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Epilogue fusion (EFC)</text>
+<circle cx="372" cy="556" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="452" cy="556" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 452 549 A 7 7 0 0 1 452 563 Z" style="fill: var(--code)"/>
+<circle cx="532" cy="556" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 532 549 A 7 7 0 0 1 532 563 Z" style="fill: var(--code)"/>
+<text x="600" y="560" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">two fixed FP16 epilogues, bias on sm_100a; activations fused by hand</text>
+<text x="40" y="584" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Numerics and intrinsics</text>
+<circle cx="372" cy="580" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="452" cy="580" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 452 573 A 7 7 0 0 1 452 587 Z" style="fill: var(--code)"/>
+<circle cx="532" cy="580" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 532 573 A 7 7 0 0 1 532 587 Z" style="fill: var(--code)"/>
+<text x="600" y="584" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">f16, f32 native; BF16 and FP4 carriers; no inline PTX or libdevice</text>
+<rect x="32" y="592" width="1176" height="24" rx="3" style="fill: var(--panel)"/>
+<text x="40" y="608" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Control flow, printf, debugging</text>
+<circle cx="372" cy="604" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="452" cy="604" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 452 597 A 7 7 0 0 1 452 611 Z" style="fill: var(--code)"/>
+<circle cx="532" cy="604" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 532 597 A 7 7 0 0 1 532 611 Z" style="fill: var(--code)"/>
+<text x="600" y="608" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">full Rust control flow and traps, MLIR dumps; no device printf</text>
+<text x="40" y="632" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Host: JIT, torch, JAX, AOT export</text>
+<circle cx="372" cy="628" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="452" cy="628" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 452 621 A 7 7 0 0 1 452 635 Z" style="fill: var(--code)"/>
+<circle cx="532" cy="628" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 532 621 A 7 7 0 0 1 532 635 Z" style="fill: var(--code)"/>
+<text x="600" y="632" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">AOT cubin inside the Rust binary; no JIT, no Python interop</text>
+<rect x="32" y="640" width="1176" height="24" rx="3" style="fill: var(--panel)"/>
+<text x="40" y="656" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Autotuning, Task Scheduling, IKET</text>
+<circle cx="372" cy="652" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="452" cy="652" r="7" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
+<circle cx="532" cy="652" r="7" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
+<text x="600" y="656" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">no autotuner, schedule checker or in-kernel tracing</text>
+<text x="40" y="680" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Verification before codegen</text>
+<circle cx="372" cy="676" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="452" cy="676" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="532" cy="676" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="600" y="680" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">whole-module layout, pipeline and role checks; CuTeDSL checks at trace</text>
+<rect x="32" y="688" width="1176" height="24" rx="3" style="fill: var(--panel)"/>
+<text x="40" y="704" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Grouped, MoE, mixed-input, FP8</text>
+<circle cx="372" cy="700" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="452" cy="700" r="7" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
+<circle cx="532" cy="700" r="7" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
+<text x="600" y="704" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">dense kernels only</text>
+<text x="40" y="728" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Shipped kernel examples</text>
+<circle cx="372" cy="724" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<circle cx="452" cy="724" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 452 717 A 7 7 0 0 1 452 731 Z" style="fill: var(--code)"/>
+<circle cx="532" cy="724" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 532 717 A 7 7 0 0 1 532 731 Z" style="fill: var(--code)"/>
+<text x="600" y="728" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">4 sm_100a and 10 sm_120a example crates versus 86 CuTeDSL kernel files</text>
+<rect x="32" y="736" width="1176" height="24" rx="3" style="fill: var(--panel)"/>
+<text x="40" y="752" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">End-to-end models</text>
+<circle cx="372" cy="748" r="7" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
+<circle cx="452" cy="748" r="7" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
+<circle cx="532" cy="748" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="600" y="752" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">Qwen3-TTS 1.7B and Qwen3-8B on sm_120a; CuTeDSL ships none</text>
+<circle cx="47" cy="782" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="62" y="786" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">available on that target</text>
+<circle cx="265" cy="782" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 265 775 A 7 7 0 0 1 265 789 Z" style="fill: var(--code)"/>
+<text x="280" y="786" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">fixed or narrower form only</text>
+<circle cx="504" cy="782" r="7" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
+<text x="519" y="786" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">not available</text>
+<line x1="640" y1="782" x2="650" y2="782" style="stroke: var(--line); stroke-width: 1.6"/>
+<text x="660" y="786" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">not applicable to that target</text>
+<text x="40" y="812" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">Every other architecture is rejected before compilation. The support matrix page in the cuda-oxide book has the full table and evidence.</text>
+</svg>

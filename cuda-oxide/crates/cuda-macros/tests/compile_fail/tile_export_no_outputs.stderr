@@ -1,0 +1,5 @@
+error: #[tile_export] function has no output: return a scalar value or take at least one `&mut T` or `&mut [T; N]` parameter, because a tile library declaration's results are its `out` and `inout` arguments
+ --> tests/compile_fail/tile_export_no_outputs.rs:7:5
+  |
+7 | pub fn sink(x: f32, y: &f32) {
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^

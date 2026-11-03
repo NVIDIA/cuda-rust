@@ -1,0 +1,5 @@
+error: #[tile_export] requires `tile_shape = N`, the 1-D tile extent; a static tile library cannot ship a parametric implementation, so every export names one extent
+ --> tests/compile_fail/tile_export_missing_shape.rs:7:8
+  |
+7 | pub fn relu(x: f32) -> f32 {
+  |        ^^^^

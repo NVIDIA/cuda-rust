@@ -28,6 +28,7 @@ mod scaffold;
 mod setup_update;
 #[cfg(test)]
 mod tests;
+mod tilelib;
 mod toolkit;
 
 use artifacts::*;
@@ -47,4 +48,5 @@ pub use passthrough::*;
 pub use pipeline_debug::*;
 pub use scaffold::*;
 pub use setup_update::*;
+pub use tilelib::*;
 use toolkit::*;

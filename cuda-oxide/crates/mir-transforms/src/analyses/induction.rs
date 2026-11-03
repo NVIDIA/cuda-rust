@@ -55,8 +55,11 @@ use dialect_mir::ops::arithmetic::{MirAddOp, MirNotOp, MirSubOp};
 use dialect_mir::ops::comparison::{MirGeOp, MirGtOp, MirLeOp, MirLtOp};
 use dialect_mir::ops::constants::MirConstantOp;
 use dialect_mir::ops::control_flow::MirCondBranchOp;
+use pliron::attribute::Attribute;
 use pliron::basic_block::BasicBlock;
+use pliron::builtin::attributes::IntegerAttr;
 use pliron::builtin::op_interfaces::BranchOpInterface;
+use pliron::builtin::ops::ConstantOp;
 use pliron::builtin::types::{IntegerType, Signedness};
 use pliron::context::{Context, Ptr};
 use pliron::op::op_cast;
@@ -80,7 +83,7 @@ pub enum CmpPred {
 impl CmpPred {
     /// The opposite test: the one that is true exactly when this one is false.
     /// (`<` becomes `>=`, and so on.)
-    fn negate(self) -> CmpPred {
+    pub(crate) fn negate(self) -> CmpPred {
         match self {
             CmpPred::Lt => CmpPred::Ge,
             CmpPred::Le => CmpPred::Gt,
@@ -148,9 +151,13 @@ pub struct LoopRecurrences {
     pub trip_count: Option<u64>,
 }
 
-/// If `v` is a compile-time integer constant (a `mir.constant` op), return its
-/// mathematical value; `None` if `v` is computed at runtime or cannot fit in
-/// the analysis's `i128` representation.
+/// If `v` is a compile-time integer constant, return its mathematical value;
+/// `None` if `v` is computed at runtime or cannot fit in the analysis's `i128`
+/// representation.
+///
+/// The constant is either a `mir.constant` from the importer or a
+/// `builtin.constant` that `sccp` materialized for a folded expression, such
+/// as a loop bound written `N / 8` with a const generic `N`.
 ///
 /// APInt's `to_i128` sign-extends narrow values, so unsigned and signless
 /// constants must be zero-extended explicitly. Otherwise an unsigned `u8`
@@ -158,15 +165,22 @@ pub struct LoopRecurrences {
 /// trip count.
 pub(crate) fn const_i128(ctx: &Context, v: Value) -> Option<i128> {
     let def = v.defining_op()?;
-    let c = Operation::get_op::<MirConstantOp>(def, ctx)?;
-    let attr = c.get_attr_value(ctx)?;
+    let value = if let Some(c) = Operation::get_op::<MirConstantOp>(def, ctx) {
+        c.get_attr_value(ctx)?.value()
+    } else {
+        let c = Operation::get_op::<ConstantOp>(def, ctx)?;
+        let attr = c.get_value(ctx);
+        (&*attr as &dyn Attribute)
+            .downcast_ref::<IntegerAttr>()?
+            .value()
+    };
     let ty = TypedHandle::<IntegerType>::from_handle(v.get_type(ctx), ctx).ok()?;
     if ty.deref(ctx).width() > 128 {
         return None;
     }
     match ty.deref(ctx).signedness() {
-        Signedness::Signed => Some(attr.value().to_i128()),
-        Signedness::Unsigned | Signedness::Signless => i128::try_from(attr.value().to_u128()).ok(),
+        Signedness::Signed => Some(value.to_i128()),
+        Signedness::Unsigned | Signedness::Signless => i128::try_from(value.to_u128()).ok(),
     }
 }
 
@@ -191,7 +205,7 @@ pub(crate) fn edge_operands(
 /// value underneath and whether the number peeled off was odd (so `!!x` reports
 /// "not negated" and `!x` reports "negated"). Used so a guard written `!(i < n)`
 /// is understood the same as `i >= n`.
-fn unwrap_not(ctx: &Context, mut v: Value) -> (Value, bool) {
+pub(crate) fn unwrap_not(ctx: &Context, mut v: Value) -> (Value, bool) {
     let mut negated = false;
     while let Some(def) = v.defining_op() {
         if Operation::get_op::<MirNotOp>(def, ctx).is_some() {
@@ -206,7 +220,7 @@ fn unwrap_not(ctx: &Context, mut v: Value) -> (Value, bool) {
 
 /// If `op` is a comparison (`<`, `<=`, `>`, `>=`), return which one it is and
 /// its two sides (left, right); `None` for any other op.
-fn match_cmp(ctx: &Context, op: Ptr<Operation>) -> Option<(CmpPred, Value, Value)> {
+pub(crate) fn match_cmp(ctx: &Context, op: Ptr<Operation>) -> Option<(CmpPred, Value, Value)> {
     let pred = if Operation::get_op::<MirLtOp>(op, ctx).is_some() {
         CmpPred::Lt
     } else if Operation::get_op::<MirLeOp>(op, ctx).is_some() {

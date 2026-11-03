@@ -1,14 +1,15 @@
-name: Deploy cuda-oxide Book
+name: Deploy CUDA Rust Docs
 
+# Path-filtered lane: only documentation sources can change what this builds.
+# Self-hosted runners reject pull_request. copy-pr-bot mirrors trusted PRs to
+# pull-request/<n>, and the build job triggers on that push. `deploy` stays on
+# main: a mirror push is a push event, so an event-name check would publish it.
 on:
   push:
-    branches: [main]
-  # Validate the book on PRs too. The build job alone runs there; `deploy` is
-  # gated below, so a pull request never publishes. Without this the book was
-  # only ever built after merge, so a PR that broke it could not be caught by
-  # review or by CI.
-  pull_request:
-    branches: [main]
+    # No workflow-level paths: filter; the changes job below gates the jobs.
+    branches:
+      - main
+      - "pull-request/[0-9]+"
   workflow_dispatch:
 
 # Only checkout rights by default. The Pages deployment permissions live on
@@ -22,14 +23,52 @@ permissions:
 # Scope this to the ref, and keep the single-deploy guarantee on the deploy job
 # itself. Superseded PR runs are cancelled; pushes to main are not, so a
 # publish in flight is never interrupted.
+# The group deliberately has no commit SHA. Parallel builds on main would let
+# a slower older commit deploy after a newer one and replace the published site.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  # Path gate. copy-pr-bot creates pull-request/<n> at an existing SHA, and
+  # GitHub often treats that push as having no path changes, so a workflow-level
+  # `paths:` filter would skip the whole run. This job diffs against main
+  # instead, as cutile-rs.yml does, and every job below runs when no file diff
+  # is detected. Other events (schedule, workflow_dispatch) skip the gate.
+  changes:
+    if: github.event_name == 'push'
+    runs-on: linux-amd64-cpu4
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      relevant: ${{ steps.changes.outputs.relevant }}
+      any_changed: ${{ steps.changes.outputs.any_changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad  # v3.0.4
+        id: changes
+        with:
+          filters: |
+            relevant:
+              - 'cuda-oxide/cuda-oxide-book/**'
+              - 'cutile-rs/cutile-book/**'
+              - 'cutile-rs/scripts/build_versioned_book.sh'
+              - 'docs/**'
+              - '.github/workflows/book.yml'
+            # `*` covers a root file, `**` every nested path. Both false means
+            # no file diff was detected.
+            any_changed:
+              - '*'
+              - '**'
+
   build:
-    runs-on: ubuntu-latest
-    # Two Sphinx books (cuda-oxide plus versioned cutile-rs). Bound the job so a
+    needs: changes
+    if: ${{ !cancelled() && (github.event_name != 'push' || needs.changes.outputs.relevant == 'true' || needs.changes.outputs.any_changed != 'true') }}
+    runs-on: linux-amd64-cpu4
+    # An umbrella page plus two Sphinx books. Bound the job so a
     # wedged install or a sphinx that never returns fails instead of burning to
     # the 6-hour default.
     timeout-minutes: 20
@@ -54,51 +93,34 @@ jobs:
       - name: Install dependencies
         run: pip install -r cuda-oxide/cuda-oxide-book/requirements.txt
 
-      # `-W` matches the Rust docs gate, which builds under
-      # RUSTDOCFLAGS="-D warnings". Without it a broken cross-reference, a
-      # malformed directive or a page dropped from a toctree still exits 0 and
-      # publishes. `--keep-going` reports every warning in one run instead of
-      # stopping at the first.
-      - name: Build cuda-oxide Sphinx site
-        run: >-
-          sphinx-build -W --keep-going -b html
-          -d cuda-oxide/cuda-oxide-book/_build/doctrees
-          cuda-oxide/cuda-oxide-book _site
-
-      # GitHub Pages allows one artifact per repository. Nest the former
-      # cutile-rs Pages site under /cutile-rs/ so both books share one deploy.
-      # Project Pages live at /cuda-oxide/, so the Sphinx base URL includes
-      # that prefix. On PRs skip historical tags to keep the check fast.
-      - name: Build cutile-rs versioned book
-        env:
-          CUTILE_DOCS_SITE_DIR: ${{ github.workspace }}/_site/cutile-rs
-          CUTILE_DOCS_BASE_URL: /cuda-oxide/cutile-rs/
-          CUTILE_DOCS_MAIN_REF: HEAD
-          CUTILE_DOCS_TAG_PATTERN: "cutile-rs/v*"
+      # Build the landing page and both books into one Pages artifact. The
+      # script applies -W --keep-going to current docs and preserves the
+      # Tile version switcher and historical tags on main.
+      - name: Build CUDA Rust documentation
         run: |
           # Unset CUTILE_DOCS_TAGS → build every tag matching the pattern.
           # Empty CUTILE_DOCS_TAGS → current tree only (fast PR check).
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            export CUTILE_DOCS_TAGS=""
-          fi
-          cutile-rs/scripts/build_versioned_book.sh
+          case "${GITHUB_REF}" in
+            refs/heads/pull-request/*) export CUTILE_DOCS_TAGS="" ;;
+          esac
+          bash docs/build_all_docs.sh
 
       # Only `deploy` consumes this, and `deploy` is skipped on pull requests,
       # so uploading it there produces an artifact nothing can ever read. A PR's
       # job is to prove both Sphinx builds succeed, which the steps above already
       # did; gate the upload on the same condition `deploy` uses so the two
       # cannot drift apart.
-      - if: github.event_name != 'pull_request'
+      - if: github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v3
         with:
-          path: _site
+          path: docs/build/html
 
   deploy:
     needs: build
     # Publishing is for main only. A pull request builds the book to prove it
     # is sound and stops there; it never touches the Pages environment or
     # holds the deployment permissions below.
-    if: github.event_name != 'pull_request'
+    if: github.ref == 'refs/heads/main'
     permissions:
       pages: write
       id-token: write

@@ -1,0 +1,17 @@
+[package]
+name = "fmha_prefill_sm120a_cute"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "SM120a: FP16 prefill and FMHA with warp MMA and online softmax in cute-rs"
+
+[workspace]
+
+[dependencies]
+cute-rs = { path = "../../cute-rs" }
+ctm-rs = { path = "../../ctm-rs" }
+# CTM reexports kernel macros, whose expansions still name ::cuda_device.
+cuda-device = { path = "../../../crates/cuda-device" }
+cuda-host = { path = "../../../crates/cuda-host" }
+cuda-core = { path = "../../../../cuda-core", features = ["f16"] }
+serde_json = "1"

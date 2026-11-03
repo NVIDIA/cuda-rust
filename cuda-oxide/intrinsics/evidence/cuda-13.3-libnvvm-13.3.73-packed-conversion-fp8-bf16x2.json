@@ -1,0 +1,320 @@
+{
+  "schema": 6,
+  "backend_profile": "cuda-13.3-libnvvm-13.3.73",
+  "backend_kind": "lib_nvvm",
+  "llvm_revision": "not-applicable-libnvvm-ir-2.0",
+  "backend_version": "CUDA toolkit 13.3; nvcc/libNVVM release V13.3.73",
+  "backend_sha256": "e55af1135e987372355d19d66cb74e1a1e99c32ac98ffad14fb567eef16e4f77",
+  "artifact_path": "/usr/local/cuda-13.3/nvvm/lib64/libnvvm.so.4.0.0",
+  "build_id_prefix": "88b802",
+  "nvvm_ir_version": "2.0",
+  "debug_ir_version": "3.2",
+  "records": [
+    {
+      "id": "cvt_rn_satfinite_e4m3x2_bf16x2",
+      "source_record": "int_nvvm_bf16x2_to_e4m3x2_rn_satfinite",
+      "llvm_symbol": "llvm.nvvm.bf16x2.to.e4m3x2.rn.satfinite",
+      "llvm_arguments": [
+        "v2bf16"
+      ],
+      "llvm_results": [
+        "i16"
+      ],
+      "target_triple": "nvptx64-nvidia-cuda",
+      "gpu_target": "compute_120f",
+      "ptx_feature": "PTX ISA 9.1 minimum; CUDA 13.3 emits PTX 9.3",
+      "status": "validated",
+      "stages": [
+        {
+          "targets": [
+            "compute_120f",
+            "ptx93"
+          ],
+          "representation": "pure inline PTX with a single packed source operand",
+          "stage": "backend_codegen",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "detail": "CUDA 13.3 libNVVM compiled the 1,807-byte NVVM IR fixture (SHA-256 83e41481b170703c62b0ff63f647cb04b4e3e9b4c12b7c16a9fe6ad2d0a64bc9; four kernels pinned through llvm.used, each one inline-PTX call with a single packed i32 source operand) with -arch=compute_120f to 2,485-byte PTX (SHA-256 858cee379e200e21b36c1fbe0b76af425f37cc4057300ac9da7d0be9d873b62d; .version 9.3, .target sm_120f) retaining all four instructions verbatim, and with -gen-lto to 3,228-byte LTOIR (SHA-256 8c47b71a4f042ccb6713381bd52c58c4d05e74d910b16f19cade2d0c688e4ce4)."
+        },
+        {
+          "targets": [
+            "sm_120f",
+            "ptx93"
+          ],
+          "representation": "libNVVM-emitted bf16x2 to packed-FP8 PTX",
+          "stage": "ptx_assembly",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "CUDA 13.3 ptxas assembled the libNVVM PTX at sm_120f into a 13,768-byte cubin (SHA-256 f0a9b794cfd3da2368b5576e6bd99f747d82c0f2d7d60dfb5fa1c2241f925076) whose SASS holds one F2FP.SATFINITE[.RELU].{E4M3,E5M2}.BF16 per kernel, F2FP.SATFINITE.E4M3.BF16 for this form. The same fixture compiled for compute_120 is rejected at sm_120 with \"Feature 'cvt.e4m3x2.bf16x2' not supported on .target 'sm_120'\".",
+          "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+          "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+          "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+        },
+        {
+          "targets": [
+            "sm_120f",
+            "ptx93"
+          ],
+          "representation": "libNVVM LTOIR retaining all four bf16x2 to packed-FP8 conversions",
+          "stage": "device_link",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "CUDA 13.3 nvJitLink linked the sm_120f LTOIR with -lto into a 13,896-byte cubin (SHA-256 d11dba66e56c2124a3ce2b8f9ef6c5c54a8930a9ac20ec32735b64e3355d0b71) that keeps all four kernels and their F2FP instructions. Linking the same LTOIR for sm_120 fails with the ptxas feature error.",
+          "tool_path": "/usr/local/cuda-13.3/lib64/libnvJitLink.so.13.3.33",
+          "tool_version": "CUDA 13.3 nvJitLink 13.3.33",
+          "tool_sha256": "3ba1e744347cd68617b862eccfd98b125482e882b7a6319f42abc9a768513db8"
+        }
+      ],
+      "runtime_validation": "unexecuted",
+      "expected_ptx": {
+        "mnemonic": "cvt",
+        "modifiers": [
+          "rn",
+          "satfinite",
+          "e4m3x2",
+          "bf16x2"
+        ],
+        "operands": [
+          {
+            "kind": "register"
+          },
+          {
+            "kind": "register"
+          }
+        ]
+      }
+    },
+    {
+      "id": "cvt_rn_satfinite_relu_e4m3x2_bf16x2",
+      "source_record": "int_nvvm_bf16x2_to_e4m3x2_rn_relu_satfinite",
+      "llvm_symbol": "llvm.nvvm.bf16x2.to.e4m3x2.rn.relu.satfinite",
+      "llvm_arguments": [
+        "v2bf16"
+      ],
+      "llvm_results": [
+        "i16"
+      ],
+      "target_triple": "nvptx64-nvidia-cuda",
+      "gpu_target": "compute_120f",
+      "ptx_feature": "PTX ISA 9.1 minimum; CUDA 13.3 emits PTX 9.3",
+      "status": "validated",
+      "stages": [
+        {
+          "targets": [
+            "compute_120f",
+            "ptx93"
+          ],
+          "representation": "pure inline PTX with a single packed source operand",
+          "stage": "backend_codegen",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "detail": "CUDA 13.3 libNVVM compiled the 1,807-byte NVVM IR fixture (SHA-256 83e41481b170703c62b0ff63f647cb04b4e3e9b4c12b7c16a9fe6ad2d0a64bc9; four kernels pinned through llvm.used, each one inline-PTX call with a single packed i32 source operand) with -arch=compute_120f to 2,485-byte PTX (SHA-256 858cee379e200e21b36c1fbe0b76af425f37cc4057300ac9da7d0be9d873b62d; .version 9.3, .target sm_120f) retaining all four instructions verbatim, and with -gen-lto to 3,228-byte LTOIR (SHA-256 8c47b71a4f042ccb6713381bd52c58c4d05e74d910b16f19cade2d0c688e4ce4)."
+        },
+        {
+          "targets": [
+            "sm_120f",
+            "ptx93"
+          ],
+          "representation": "libNVVM-emitted bf16x2 to packed-FP8 PTX",
+          "stage": "ptx_assembly",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "CUDA 13.3 ptxas assembled the libNVVM PTX at sm_120f into a 13,768-byte cubin (SHA-256 f0a9b794cfd3da2368b5576e6bd99f747d82c0f2d7d60dfb5fa1c2241f925076) whose SASS holds one F2FP.SATFINITE[.RELU].{E4M3,E5M2}.BF16 per kernel, F2FP.SATFINITE.RELU.E4M3.BF16 for this form. The same fixture compiled for compute_120 is rejected at sm_120 with \"Feature 'cvt.e4m3x2.bf16x2' not supported on .target 'sm_120'\".",
+          "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+          "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+          "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+        },
+        {
+          "targets": [
+            "sm_120f",
+            "ptx93"
+          ],
+          "representation": "libNVVM LTOIR retaining all four bf16x2 to packed-FP8 conversions",
+          "stage": "device_link",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "CUDA 13.3 nvJitLink linked the sm_120f LTOIR with -lto into a 13,896-byte cubin (SHA-256 d11dba66e56c2124a3ce2b8f9ef6c5c54a8930a9ac20ec32735b64e3355d0b71) that keeps all four kernels and their F2FP instructions. Linking the same LTOIR for sm_120 fails with the ptxas feature error.",
+          "tool_path": "/usr/local/cuda-13.3/lib64/libnvJitLink.so.13.3.33",
+          "tool_version": "CUDA 13.3 nvJitLink 13.3.33",
+          "tool_sha256": "3ba1e744347cd68617b862eccfd98b125482e882b7a6319f42abc9a768513db8"
+        }
+      ],
+      "runtime_validation": "unexecuted",
+      "expected_ptx": {
+        "mnemonic": "cvt",
+        "modifiers": [
+          "rn",
+          "satfinite",
+          "relu",
+          "e4m3x2",
+          "bf16x2"
+        ],
+        "operands": [
+          {
+            "kind": "register"
+          },
+          {
+            "kind": "register"
+          }
+        ]
+      }
+    },
+    {
+      "id": "cvt_rn_satfinite_e5m2x2_bf16x2",
+      "source_record": "int_nvvm_bf16x2_to_e5m2x2_rn_satfinite",
+      "llvm_symbol": "llvm.nvvm.bf16x2.to.e5m2x2.rn.satfinite",
+      "llvm_arguments": [
+        "v2bf16"
+      ],
+      "llvm_results": [
+        "i16"
+      ],
+      "target_triple": "nvptx64-nvidia-cuda",
+      "gpu_target": "compute_120f",
+      "ptx_feature": "PTX ISA 9.1 minimum; CUDA 13.3 emits PTX 9.3",
+      "status": "validated",
+      "stages": [
+        {
+          "targets": [
+            "compute_120f",
+            "ptx93"
+          ],
+          "representation": "pure inline PTX with a single packed source operand",
+          "stage": "backend_codegen",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "detail": "CUDA 13.3 libNVVM compiled the 1,807-byte NVVM IR fixture (SHA-256 83e41481b170703c62b0ff63f647cb04b4e3e9b4c12b7c16a9fe6ad2d0a64bc9; four kernels pinned through llvm.used, each one inline-PTX call with a single packed i32 source operand) with -arch=compute_120f to 2,485-byte PTX (SHA-256 858cee379e200e21b36c1fbe0b76af425f37cc4057300ac9da7d0be9d873b62d; .version 9.3, .target sm_120f) retaining all four instructions verbatim, and with -gen-lto to 3,228-byte LTOIR (SHA-256 8c47b71a4f042ccb6713381bd52c58c4d05e74d910b16f19cade2d0c688e4ce4)."
+        },
+        {
+          "targets": [
+            "sm_120f",
+            "ptx93"
+          ],
+          "representation": "libNVVM-emitted bf16x2 to packed-FP8 PTX",
+          "stage": "ptx_assembly",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "CUDA 13.3 ptxas assembled the libNVVM PTX at sm_120f into a 13,768-byte cubin (SHA-256 f0a9b794cfd3da2368b5576e6bd99f747d82c0f2d7d60dfb5fa1c2241f925076) whose SASS holds one F2FP.SATFINITE[.RELU].{E4M3,E5M2}.BF16 per kernel, F2FP.SATFINITE.E5M2.BF16 for this form. The same fixture compiled for compute_120 is rejected at sm_120 with \"Feature 'cvt.e4m3x2.bf16x2' not supported on .target 'sm_120'\".",
+          "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+          "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+          "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+        },
+        {
+          "targets": [
+            "sm_120f",
+            "ptx93"
+          ],
+          "representation": "libNVVM LTOIR retaining all four bf16x2 to packed-FP8 conversions",
+          "stage": "device_link",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "CUDA 13.3 nvJitLink linked the sm_120f LTOIR with -lto into a 13,896-byte cubin (SHA-256 d11dba66e56c2124a3ce2b8f9ef6c5c54a8930a9ac20ec32735b64e3355d0b71) that keeps all four kernels and their F2FP instructions. Linking the same LTOIR for sm_120 fails with the ptxas feature error.",
+          "tool_path": "/usr/local/cuda-13.3/lib64/libnvJitLink.so.13.3.33",
+          "tool_version": "CUDA 13.3 nvJitLink 13.3.33",
+          "tool_sha256": "3ba1e744347cd68617b862eccfd98b125482e882b7a6319f42abc9a768513db8"
+        }
+      ],
+      "runtime_validation": "unexecuted",
+      "expected_ptx": {
+        "mnemonic": "cvt",
+        "modifiers": [
+          "rn",
+          "satfinite",
+          "e5m2x2",
+          "bf16x2"
+        ],
+        "operands": [
+          {
+            "kind": "register"
+          },
+          {
+            "kind": "register"
+          }
+        ]
+      }
+    },
+    {
+      "id": "cvt_rn_satfinite_relu_e5m2x2_bf16x2",
+      "source_record": "int_nvvm_bf16x2_to_e5m2x2_rn_relu_satfinite",
+      "llvm_symbol": "llvm.nvvm.bf16x2.to.e5m2x2.rn.relu.satfinite",
+      "llvm_arguments": [
+        "v2bf16"
+      ],
+      "llvm_results": [
+        "i16"
+      ],
+      "target_triple": "nvptx64-nvidia-cuda",
+      "gpu_target": "compute_120f",
+      "ptx_feature": "PTX ISA 9.1 minimum; CUDA 13.3 emits PTX 9.3",
+      "status": "validated",
+      "stages": [
+        {
+          "targets": [
+            "compute_120f",
+            "ptx93"
+          ],
+          "representation": "pure inline PTX with a single packed source operand",
+          "stage": "backend_codegen",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "detail": "CUDA 13.3 libNVVM compiled the 1,807-byte NVVM IR fixture (SHA-256 83e41481b170703c62b0ff63f647cb04b4e3e9b4c12b7c16a9fe6ad2d0a64bc9; four kernels pinned through llvm.used, each one inline-PTX call with a single packed i32 source operand) with -arch=compute_120f to 2,485-byte PTX (SHA-256 858cee379e200e21b36c1fbe0b76af425f37cc4057300ac9da7d0be9d873b62d; .version 9.3, .target sm_120f) retaining all four instructions verbatim, and with -gen-lto to 3,228-byte LTOIR (SHA-256 8c47b71a4f042ccb6713381bd52c58c4d05e74d910b16f19cade2d0c688e4ce4)."
+        },
+        {
+          "targets": [
+            "sm_120f",
+            "ptx93"
+          ],
+          "representation": "libNVVM-emitted bf16x2 to packed-FP8 PTX",
+          "stage": "ptx_assembly",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "CUDA 13.3 ptxas assembled the libNVVM PTX at sm_120f into a 13,768-byte cubin (SHA-256 f0a9b794cfd3da2368b5576e6bd99f747d82c0f2d7d60dfb5fa1c2241f925076) whose SASS holds one F2FP.SATFINITE[.RELU].{E4M3,E5M2}.BF16 per kernel, F2FP.SATFINITE.RELU.E5M2.BF16 for this form. The same fixture compiled for compute_120 is rejected at sm_120 with \"Feature 'cvt.e4m3x2.bf16x2' not supported on .target 'sm_120'\".",
+          "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+          "tool_version": "Cuda compilation tools, release 13.3, V13.3.73; build cuda_13.3.r13.3/compiler.38244171_0",
+          "tool_sha256": "afd8d1e1fa6e310f7faee44f6621e4c1315fb7fd6da7d4d87414358e12a651dc"
+        },
+        {
+          "targets": [
+            "sm_120f",
+            "ptx93"
+          ],
+          "representation": "libNVVM LTOIR retaining all four bf16x2 to packed-FP8 conversions",
+          "stage": "device_link",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "CUDA 13.3 nvJitLink linked the sm_120f LTOIR with -lto into a 13,896-byte cubin (SHA-256 d11dba66e56c2124a3ce2b8f9ef6c5c54a8930a9ac20ec32735b64e3355d0b71) that keeps all four kernels and their F2FP instructions. Linking the same LTOIR for sm_120 fails with the ptxas feature error.",
+          "tool_path": "/usr/local/cuda-13.3/lib64/libnvJitLink.so.13.3.33",
+          "tool_version": "CUDA 13.3 nvJitLink 13.3.33",
+          "tool_sha256": "3ba1e744347cd68617b862eccfd98b125482e882b7a6319f42abc9a768513db8"
+        }
+      ],
+      "runtime_validation": "unexecuted",
+      "expected_ptx": {
+        "mnemonic": "cvt",
+        "modifiers": [
+          "rn",
+          "satfinite",
+          "relu",
+          "e5m2x2",
+          "bf16x2"
+        ],
+        "operands": [
+          {
+            "kind": "register"
+          },
+          {
+            "kind": "register"
+          }
+        ]
+      }
+    }
+  ]
+}

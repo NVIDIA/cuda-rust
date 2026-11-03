@@ -376,7 +376,7 @@ for tiles, `ManagedBarrier` for synchronization, and the MMA APIs for
 compute.
 
 The [`gemm_sol`
-example](https://github.com/NVlabs/cuda-oxide/tree/main/cuda-oxide/crates/rustc-codegen-cuda/examples/gemm_sol)
+example](https://github.com/NVIDIA/cuda-rust/tree/main/cuda-oxide/crates/rustc-codegen-cuda/examples/gemm_sol)
 is the worked-out reference. Its 4-stage `cta_group::2` pipeline reaches
 **868 TFLOPS at 4096³ — 57.8 % of `cublasLtMatmul` SoL — on B200 (148 SMs)**.
 Absolute throughput scales with SM count on smaller Blackwell datacenter

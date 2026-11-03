@@ -33,8 +33,8 @@
 //! - **libNVVM**: `LIBNVVM_PATH`, then `<root>/nvvm/lib64/libnvvm.so` for
 //!   `<root>` in `CUDA_TOOLKIT_PATH`, `CUDA_HOME`, `CUDA_PATH`,
 //!   `/usr/local/cuda`, `/opt/cuda`, then the system loader.
-//! - **nvJitLink**: the same order, using `LIBNVJITLINK_PATH` and
-//!   `<root>/lib64/libnvJitLink.so`.
+//! - **nvJitLink**: the same order, using `LIBNVJITLINK_PATH`, then
+//!   `<root>/lib64/libnvJitLink.so` and `<root>/lib/libnvJitLink.so`.
 //! - **libdevice**: `CUDA_OXIDE_LIBDEVICE` env var, then
 //!   `<root>/nvvm/libdevice/libdevice.10.bc` for the same roots.
 //! - **Artifact target and options**: the emitted `<name>.target` records the

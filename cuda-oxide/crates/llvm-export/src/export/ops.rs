@@ -19,7 +19,6 @@ use pliron::{
         types::{FP32Type, FP64Type, IntegerType},
     },
     context::Ptr,
-    location::Located,
     op::Op,
     operation::Operation,
     value::Value,
@@ -486,10 +485,10 @@ impl<'a> ModuleExportState<'a> {
             Some(LlvmOp::Constant(op)) => self.emit_constant(op, value_names)?,
             Some(LlvmOp::AddressOf(op)) => self.emit_address_of(op, value_names, output)?,
             Some(LlvmOp::DebugValue(op)) => {
-                self.emit_debug_value(op, value_names, debug_scope, &op_loc, output)?
+                self.emit_debug_value(op, value_names, debug_scope, op_loc, output)?
             }
             Some(LlvmOp::DebugValueList(op)) => {
-                self.emit_debug_value_list(op, value_names, debug_scope, &op_loc, output)?
+                self.emit_debug_value_list(op, value_names, debug_scope, op_loc, output)?
             }
             // Unknown
             None if self.legacy_typed_pointers() => {
@@ -511,12 +510,12 @@ impl<'a> ModuleExportState<'a> {
                 output,
                 output_before,
                 debug_scope,
-                &op_loc,
+                op_loc,
                 allow_scope_debug_fallback,
             );
         }
         if let Some(alloca) = debug_alloca {
-            self.emit_debug_declare_for_alloca(alloca, value_names, debug_scope, &op_loc, output)?;
+            self.emit_debug_declare_for_alloca(alloca, value_names, debug_scope, op_loc, output)?;
         }
 
         Ok(())
@@ -669,7 +668,7 @@ impl<'a> ModuleExportState<'a> {
     }
 
     fn emit_br(
-        &self,
+        &mut self,
         op: &ops::BrOp,
         block_labels: &FxHashMap<Ptr<BasicBlock>, String>,
         output: &mut String,
@@ -677,7 +676,8 @@ impl<'a> ModuleExportState<'a> {
         let op_ref = op.get_operation().deref(self.ctx);
         let dest = op_ref.successors().next().unwrap();
         let label = block_labels.get(&dest).ok_or("Missing block label")?;
-        writeln!(output, "  br label %{label}").unwrap();
+        let loop_metadata = self.loop_metadata_suffix(op.get_operation());
+        writeln!(output, "  br label %{label}{loop_metadata}").unwrap();
         Ok(())
     }
 
@@ -698,7 +698,12 @@ impl<'a> ModuleExportState<'a> {
 
         write!(output, "  br i1 ").unwrap();
         self.export_value(cond, value_names, output)?;
-        writeln!(output, ", label %{true_label}, label %{false_label}").unwrap();
+        let loop_metadata = self.loop_metadata_suffix(op.get_operation());
+        writeln!(
+            output,
+            ", label %{true_label}, label %{false_label}{loop_metadata}"
+        )
+        .unwrap();
         Ok(())
     }
 

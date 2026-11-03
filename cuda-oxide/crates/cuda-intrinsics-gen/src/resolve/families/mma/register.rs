@@ -800,8 +800,13 @@ pub(in crate::resolve) fn register_mma_recipe(mma: &RegisterMma) -> Option<Regis
             llvm_results: &["v2f16", "v2f16"],
             adapter: C2U32A2U32B1U32ToD2U32,
             compatibility_source: RegisterMmaCompatibilitySource::GeneratedStub,
-            minimum_ptx: "7.0",
-            minimum_sm: "sm_80",
+            // PTX ISA floor: `.f16` m16n8k8 is PTX 6.5 / sm_75, while the
+            // `.bf16` and `.tf32` m16n8k8 forms and `.f16` m16n8k16 are
+            // PTX 7.0 / sm_80. LLVM's imported predicate admits all four
+            // m16n8k8 forms at sm_75, but ptxas rejects BF16 and TF32 there,
+            // so each recipe carries the ISA floor for its own form.
+            minimum_ptx: "6.5",
+            minimum_sm: "sm_75",
             ptx_modifiers: vec![
                 "sync", "aligned", "m16n8k8", "row", "col", "f16", "f16", "f16", "f16",
             ],
@@ -862,8 +867,9 @@ pub(in crate::resolve) fn register_mma_recipe(mma: &RegisterMma) -> Option<Regis
             llvm_results: &["f32", "f32", "f32", "f32"],
             adapter: C4F32A2U32B1U32ToD4F32,
             compatibility_source: RegisterMmaCompatibilitySource::GeneratedStub,
-            minimum_ptx: "7.0",
-            minimum_sm: "sm_80",
+            // Same ISA floor as mma_m16n8k8_f16_f16: `.f16` m16n8k8 is PTX 6.5 / sm_75.
+            minimum_ptx: "6.5",
+            minimum_sm: "sm_75",
             ptx_modifiers: vec![
                 "sync", "aligned", "m16n8k8", "row", "col", "f32", "f16", "f16", "f32",
             ],

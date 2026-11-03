@@ -379,9 +379,9 @@ fn main() -> Result<()> {
         args.timing_mode == TimingMode::Direct && args.warmup == 0 && args.iters == 1;
     let ctx = CudaContext::new(0)?;
     let capability = ctx.compute_capability()?;
-    if capability != (10, 0) {
+    if !matches!(capability, (10, 0) | (10, 3)) {
         return Err(format!(
-            "this example requires SM100; found sm_{}{}",
+            "this example requires SM100 or SM103; found sm_{}{}",
             capability.0, capability.1
         )
         .into());

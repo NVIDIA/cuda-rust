@@ -1,8 +1,8 @@
 # cute-rs: CuTe kernels in Rust (preview)
 
 > **Preview.** `cute-rs` compiles Rust CuTe kernels ahead of time through the pinned
-> CUTLASS 4.7 compiler for two targets, `sm_100a` (B200 class) and `sm_120a`
-> (RTX 50 series). Every other architecture is rejected before compilation. It covers
+> CUTLASS 4.7 compiler for three targets, `sm_100a` (B200 class), `sm_103a`
+> (B300 class) and `sm_120a` (RTX 50 series). Every other architecture is rejected before compilation. It covers
 > a validated subset of CuTeDSL 4.7, not feature parity; the
 > [support matrix](../cuda-oxide-book/cute/support-matrix.md) lists what is in and
 > what is not. APIs can change between releases.

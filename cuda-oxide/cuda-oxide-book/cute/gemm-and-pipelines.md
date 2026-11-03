@@ -91,6 +91,7 @@ if warp_id == 0 {
 | **Elementwise / SwiGLU / RMSNorm** | `cuda-oxide/cute-rs-preview/examples/{elementwise,swiglu,rmsnorm}_cute` | 1D tiling, register transforms, warp reductions, and ragged tails. |
 | **FFN & RoPE KV-Cache Attention** | `cuda-oxide/cute-rs-preview/examples/{ffn,rope_cache}_cute` | BF16 tensor-core projections, typed weight roles, and 128-wide GQA. |
 | **MXFP4 GEMV & Block-Scaled GEMM** | `cuda-oxide/cute-rs-preview/examples/{nvfp4_gemv,blockscale_gemm}_cute` | Packed FP4 + `Float8E8M0FNU` scales, 3-stage TMA pipelines, and `*_ctm` counterparts. |
-| **SM100a 2-CTA GEMM & Attention** | `cuda-oxide/cute-rs-preview/examples/{fp16_gemm_256x352,sm100_fmha_prefill,sm100_mla_decode_fp16}_cute` | Two-CTA cluster TMA, TMEM, A-collector reuse, and FlashAttention / MLA decode. |
+| **SM100a 2-CTA GEMM & Attention** | `cuda-oxide/cute-rs-preview/examples/{fp16_gemm_256x352,sm100_fmha_prefill,sm100_mla_decode_fp16,sm100_qkv_epilogue}_cute` | Two-CTA cluster TMA, 2-stage TMEM ping-pong, FlashAttention / MLA decode, and fused QKV + FP8 paged KV scatter. |
+| **Nemotron-3 NVFP4 ReLU² MoE** | `cuda-oxide/cute-rs-preview/models/nemotron3_moe_cute` | Hardware block-scaled NVFP4 (`tcgen05.mma...mxf4nvf4.block_scale`) grouped MoE on B200 (`sm_100a`). |
 | **Qwen3-8B (BF16 & NVFP4)** | `cuda-oxide/cute-rs-preview/models/qwen3_8b_cute` | 36-layer `Qwen/Qwen3-8B` (`H=4096, I=12288, GQA 32:8`) in BF16 and NVFP4 (`Float4E2M1FN` + `Float8E4M3FN`, `SF_VEC = 16`) on RTX 5090 (`visual.md`). |
 | **End-to-End Qwen3-TTS Model** | `cuda-oxide/cute-rs-preview/models/qwen_decoder_cute` | Complete Talker + Predictor speech synthesis on SM120a (see `visual.md` inside that folder for a visual tour). |

@@ -57,7 +57,7 @@
 
 use std::sync::Arc;
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaStream, DeviceBuffer};
 use cuda_device::atomic::{AtomicOrdering, DeviceAtomicU32, DeviceAtomicU64};
 use cuda_device::cooperative_groups::{ThreadGroup, WarpCollective, this_thread_block};
@@ -1069,13 +1069,13 @@ impl GpuSwissMap {
         let ctrl = DeviceBuffer::<u32>::zeroed(stream, capacity / GROUP)?;
         let slots = DeviceBuffer::<u64>::zeroed(stream, capacity)?;
         unsafe {
-            cuda_core::simt::memory::memset_d8_async(
+            cuda_core::memory::memset_d8_async(
                 ctrl.cu_deviceptr(),
                 0xFF,
                 ctrl.num_bytes(),
                 stream.cu_stream(),
             )?;
-            cuda_core::simt::memory::memset_d8_async(
+            cuda_core::memory::memset_d8_async(
                 slots.cu_deviceptr(),
                 0xFF,
                 slots.num_bytes(),
@@ -1085,8 +1085,8 @@ impl GpuSwissMap {
         // Reinterpret the allocations as slices of the atomic wrapper
         // (`#[repr(transparent)]`, identical layout). The memset above
         // is byte-level so it is unaffected by the element type.
-        let ctrl = ctrl.cast_elem::<DeviceAtomicU32>();
-        let slots = slots.cast_elem::<DeviceAtomicU64>();
+        let ctrl = ctrl.wrap_elem::<DeviceAtomicU32>();
+        let slots = slots.wrap_elem::<DeviceAtomicU64>();
 
         Ok(Self {
             ctrl,
@@ -1379,21 +1379,21 @@ impl GpuSwissMap {
         let new_ctrl = DeviceBuffer::<u32>::zeroed(stream, new_capacity / GROUP)?;
         let new_slots = DeviceBuffer::<u64>::zeroed(stream, new_capacity)?;
         unsafe {
-            cuda_core::simt::memory::memset_d8_async(
+            cuda_core::memory::memset_d8_async(
                 new_ctrl.cu_deviceptr(),
                 0xFF,
                 new_ctrl.num_bytes(),
                 stream.cu_stream(),
             )?;
-            cuda_core::simt::memory::memset_d8_async(
+            cuda_core::memory::memset_d8_async(
                 new_slots.cu_deviceptr(),
                 0xFF,
                 new_slots.num_bytes(),
                 stream.cu_stream(),
             )?;
         }
-        let new_ctrl = new_ctrl.cast_elem::<DeviceAtomicU32>();
-        let new_slots = new_slots.cast_elem::<DeviceAtomicU64>();
+        let new_ctrl = new_ctrl.wrap_elem::<DeviceAtomicU32>();
+        let new_slots = new_slots.wrap_elem::<DeviceAtomicU64>();
 
         let rehash_threads = self.capacity.min(REHASH_MAX_THREADS) as u32;
         let cfg = LaunchConfig::for_num_elems(rehash_threads);

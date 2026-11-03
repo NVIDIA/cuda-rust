@@ -11,7 +11,7 @@ use crate::generated_intrinsic_targets::{
     GeneratedHardwareAlternative, GeneratedHardwareTarget, GeneratedTargetContract,
     GeneratedTargetRequirement,
 };
-use cuda_target_spec::{CudaArch, PtxSpelling, recorded_ptx_floor};
+use cuda_target_spec::{CudaArch, PtxSpelling, is_known_nvvm_target};
 
 /// Convert catalog PTX floors to the discrete `llc` feature spellings this
 /// compiler supports. A floor between two spellings rounds upward; a future
@@ -175,7 +175,7 @@ fn resolved_hardware_satisfied(arch: &CudaArch, requirement: GeneratedResolvedRe
 
 fn generated_hardware_satisfied(arch: &CudaArch, hardware: GeneratedHardwareTarget) -> bool {
     let (capability, suffix) = (arch.capability(), arch.suffix());
-    if recorded_ptx_floor(arch).is_err() {
+    if !is_known_nvvm_target(arch) {
         return false;
     }
 
@@ -194,7 +194,7 @@ fn generated_hardware_satisfied(arch: &CudaArch, hardware: GeneratedHardwareTarg
 
 fn generated_contract_satisfied(arch: &CudaArch, contract: &GeneratedTargetContract) -> bool {
     let (capability, suffix) = (arch.capability(), arch.suffix());
-    recorded_ptx_floor(arch).is_ok()
+    is_known_nvvm_target(arch)
         && contract.alternatives.iter().any(|alternative| {
             generated_hardware_alternative_satisfied(capability, suffix, alternative.hardware)
         })
@@ -278,7 +278,7 @@ pub(super) fn generated_requirement_ptx_floor(
     requirement: GeneratedTargetRequirement,
 ) -> Option<u16> {
     let (capability, suffix) = (arch.capability(), arch.suffix());
-    if recorded_ptx_floor(arch).is_err() {
+    if !is_known_nvvm_target(arch) {
         return None;
     }
     match requirement.hardware {
@@ -310,7 +310,9 @@ fn resolved_requirement_ptx_floor(
         }
         GeneratedResolvedRequirement::Contract(contract) => {
             let (capability, suffix) = (arch.capability(), arch.suffix());
-            recorded_ptx_floor(arch).ok()?;
+            if !is_known_nvvm_target(arch) {
+                return None;
+            }
             contract
                 .alternatives
                 .iter()

@@ -201,6 +201,35 @@ pub fn translate_terminator(
             Ok(op)
         }
 
+        mir::TerminatorKind::InlineAsm {
+            template,
+            operands,
+            destination,
+            ..
+        } => {
+            if let Some(op) = intrinsics::float_math::try_translate_libm_inline_asm(
+                ctx,
+                body,
+                template,
+                operands,
+                destination,
+                block_ptr,
+                prev_op,
+                value_map,
+                block_map,
+                loc.clone(),
+            )? {
+                return Ok(op);
+            }
+            input_err!(
+                loc.clone(),
+                TranslationErr::unsupported(format!(
+                    "Terminator kind {:?} not yet implemented",
+                    term.kind
+                ))
+            )
+        }
+
         _ => input_err!(
             loc.clone(),
             TranslationErr::unsupported(format!(

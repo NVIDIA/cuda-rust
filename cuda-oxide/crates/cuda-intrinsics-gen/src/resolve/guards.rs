@@ -86,13 +86,18 @@ pub(super) fn selection_matches_policy(
             } else {
                 tcgen05_mma_valid_selection_asms(mma.form)
             };
+            let expected_predicates: &[&str] = if selection.asm.contains(".kind::i8.") {
+                &["Subtarget->hasTcgen05MMAI8Kind()"]
+            } else if tcgen05_mma_has_ptx88_predicate(mma.form) {
+                &[
+                    "Subtarget->getPTXVersion() >= 88",
+                    "Subtarget->hasTcgen05InstSupport()",
+                ]
+            } else {
+                &["Subtarget->hasTcgen05InstSupport()"]
+            };
             return Ok(expected.contains(&selection.asm)
-                && selection.predicates
-                    == [if selection.asm.contains(".kind::i8.") {
-                        "Subtarget->hasTcgen05MMAI8Kind()"
-                    } else {
-                        "Subtarget->hasTcgen05InstSupport()"
-                    }]
+                && selection.predicates == expected_predicates
                 && selection.constraints.is_empty());
         }
         if tcgen05.source_contract != Tcgen05SourceContract::ExactTablegenSelection {

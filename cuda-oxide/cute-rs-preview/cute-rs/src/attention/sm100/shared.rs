@@ -3,86 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! Shared layouts and tile arrays for independent attention MMA.
+//! Shared tile views and arrays for independent attention MMA.
+//!
+//! The canonical layout definitions ([`SharedLayout`] and [`SmemLayout`]) live in
+//! [`cute_layout`] and are re-exported here for convenience.
 
 use core::marker::PhantomData;
-
-/// Physical layout of a shared FP16 operand, with CuTe's tiled byte swizzle.
-mod sealed {
-    /// Marks only shared layouts recognized by the compiler.
-    pub trait Layout {}
-}
-
-/// Implemented only by the layouts whose structure the compiler recognizes.
-pub trait SmemLayout: sealed::Layout {
-    /// Evaluating this constant rejects an unsupported physical layout.
-    const VALID: ();
-    /// Logical MN extent.
-    const ROWS: u32;
-    /// Logical K extent.
-    const COLS: u32;
-    /// Whether the MN mode is contiguous.
-    const MN_MAJOR: bool;
-    /// Contiguous FP16 values in one swizzle atom.
-    const SPAN: u32;
-    /// Number of XOR bits in the shared-memory swizzle.
-    const SWIZZLE_BITS: u32;
-    /// Map a logical coordinate into shared storage in elements (CuTeDSL
-    /// `cute.crd2idx`).
-    fn crd2idx(row: u32, col: u32) -> usize;
-}
-
-/// Logical `(MN,K)` layout. `MN_MAJOR` selects the contiguous logical mode.
-/// Contiguous dimensions wider than 64 FP16 values are tiled in 128-byte chunks.
-///
-/// The contiguous extent must be 32 or a positive multiple of 64; the other
-/// extent must be a positive multiple of 8. Extents and offsets count FP16
-/// elements, not bytes. With `MN_MAJOR = false`, K is contiguous:
-///
-/// ```
-/// use cute_rs::attention::sm100::SharedLayout;
-/// type Tile = SharedLayout<64, 64>;
-/// assert_eq!(Tile::crd2idx(0, 1), 1);
-/// ```
-pub struct SharedLayout<const ROWS: u32, const COLS: u32, const MN_MAJOR: bool = false>;
-impl<const R: u32, const C: u32, const MN: bool> SharedLayout<R, C, MN> {
-    /// Reject unsupported contiguous swizzle spans and outer tile extents.
-    const VALID: () = {
-        let contiguous = if MN { R } else { C };
-        let outer = if MN { C } else { R };
-        assert!(contiguous >= 32 && contiguous.is_multiple_of(32));
-        assert!(outer > 0 && outer.is_multiple_of(8));
-        assert!(contiguous == 32 || contiguous.is_multiple_of(64));
-    };
-    /// Offset in FP16 elements from the start of this shared tile (CuTeDSL
-    /// `cute.crd2idx`).
-    #[inline(always)]
-    pub fn crd2idx(row: u32, col: u32) -> usize {
-        let () = Self::VALID;
-        let (inner, outer, outer_extent) = if MN { (row, col, C) } else { (col, row, R) };
-        let span = Self::SPAN;
-        let linear = (inner / span) * (span * outer_extent) + outer * span + inner % span;
-        let mask = (1u32 << Self::SWIZZLE_BITS) - 1;
-        (linear ^ (((linear >> 6) & mask) << 3)) as usize
-    }
-}
-impl<const R: u32, const C: u32, const MN: bool> sealed::Layout for SharedLayout<R, C, MN> {}
-impl<const R: u32, const C: u32, const MN: bool> SmemLayout for SharedLayout<R, C, MN> {
-    const VALID: () = SharedLayout::<R, C, MN>::VALID;
-    const ROWS: u32 = R;
-    const COLS: u32 = C;
-    const MN_MAJOR: bool = MN;
-    const SPAN: u32 = if (if MN { R } else { C }) == 32 {
-        32
-    } else {
-        64
-    };
-    const SWIZZLE_BITS: u32 = if Self::SPAN == 32 { 2 } else { 3 };
-    #[inline(always)]
-    fn crd2idx(row: u32, col: u32) -> usize {
-        Self::crd2idx(row, col)
-    }
-}
+pub use cute_layout::{SharedLayout, SmemLayout};
 
 /// Non-owning shared tile, typed by its physical layout and MMA operand role.
 pub struct SharedTile<L, Role> {

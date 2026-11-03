@@ -124,6 +124,121 @@ fn helper_instructions_keep_exact_lines_and_call_sites() {
 }
 
 #[test]
+fn entry_wrapper_and_assumptions_use_the_user_signature() {
+    common::with_test_stack(|| {
+        use cutile_ir::bytecode::Opcode;
+
+        let signature_line = source_line(
+            include_str!("debug_info.rs"),
+            "fn source_kernel<const S: [i32; 1]>(out: &mut Tensor<i32, S>, x: i32) {",
+        );
+        for level in [DebugInfoLevel::Line, DebugInfoLevel::Full] {
+            let artifacts = compile(level);
+            let mut wrapper_ops = 0;
+            let mut wrapper_assumes = 0;
+            let mut inline_ops = 0;
+            visit_ops(
+                artifacts.module(),
+                &artifacts.module().functions,
+                &mut |op| {
+                    let mut location = &op.location;
+                    while let Location::CallSite { caller, .. } = location {
+                        inline_ops += 1;
+                        location = caller;
+                    }
+                    // Constants built from synthesized types have a separate source
+                    // span path. This test covers generated syntax and inline callers.
+                    if op.opcode == Opcode::Constant
+                        && !matches!(op.location, Location::CallSite { .. })
+                    {
+                        return;
+                    }
+                    if let Location::FileLineCol { filename, line, .. } = location {
+                        assert!(filename.ends_with("debug_info.rs"), "{location:?}");
+                        assert_eq!(*line, signature_line, "{:?}: {location:?}", op.opcode);
+                        if !matches!(op.location, Location::CallSite { .. }) {
+                            wrapper_ops += 1;
+                            wrapper_assumes += usize::from(op.opcode == Opcode::Assume);
+                        }
+                    } else {
+                        panic!("missing wrapper origin: {location:?}");
+                    }
+                },
+            );
+            assert!(wrapper_ops > 1);
+            assert!(wrapper_assumes > 0);
+            assert!(inline_ops > 0);
+
+            // The wrapper origin must not replace the nested helper's own scope
+            // or either call site, including when the helper is in another file.
+            let helpers = include_str!("fixtures/debug_helpers.rs");
+            let offset_line = source_line(helpers, "x + 7");
+            let nested_line = source_line(helpers, "offset(x) * 2");
+            let kernel_line = source_line(include_str!("debug_info.rs"), "let value = nested(x);");
+            let mut nested_chain = false;
+            visit_ops(
+                artifacts.module(),
+                &artifacts.module().functions,
+                &mut |op| {
+                    let Location::CallSite { callee, caller } = &op.location else {
+                        return;
+                    };
+                    let Location::DebugInfo(info) = &**callee else {
+                        return;
+                    };
+                    let DebugScope::Subprogram(scope) = &info.scope else {
+                        return;
+                    };
+                    if scope.name != "offset" || info.line != offset_line {
+                        return;
+                    }
+                    assert!(info.filename.ends_with("fixtures/debug_helpers.rs"));
+                    let mut caller = &**caller;
+                    for (name, file, line) in [
+                        ("nested", "fixtures/debug_helpers.rs", nested_line),
+                        ("source_kernel", "tests/debug_info.rs", kernel_line),
+                    ] {
+                        let Location::CallSite {
+                            callee,
+                            caller: next,
+                        } = caller
+                        else {
+                            panic!("missing {name}: {caller:?}");
+                        };
+                        let Location::DebugInfo(info) = &**callee else {
+                            panic!("missing scope: {callee:?}");
+                        };
+                        let DebugScope::Subprogram(scope) = &info.scope else {
+                            panic!("missing subprogram: {info:?}");
+                        };
+                        assert_eq!(scope.name, name);
+                        assert!(info.filename.ends_with(file), "{info:?}");
+                        assert_eq!(info.line, line);
+                        caller = next;
+                    }
+                    assert!(
+                        matches!(caller, Location::FileLineCol { line, .. } if *line == signature_line)
+                    );
+                    nested_chain = true;
+                },
+            );
+            assert!(
+                nested_chain,
+                "missing exact nested helper chain in {level:?}"
+            );
+
+            let dump = cutile_ir::decode_bytecode(&artifacts.bytecode().unwrap()).unwrap();
+            assert!(
+                dump.contains(&format!(
+                "line={signature_line}, name=\"source_kernel\", linkage=\"source_kernel_entry\""
+            )),
+                "{dump}"
+            );
+        }
+    });
+}
+
+#[test]
 fn explicit_debug_modes_override_build_default_and_change_cache_keys() {
     use cutile_compiler::cuda_tile_runtime_utils::TileirasOptions;
     use std::collections::HashSet;
@@ -221,7 +336,12 @@ fn cubin_has_rust_lines_and_inline_frames() {
                 continue;
             }
             assert!(sections.contains(".debug_line"), "{sections}");
-            let sass = output(Command::new("nvdisasm").arg("--print-line-info").arg(&path));
+            let sass = output(
+                Command::new("nvdisasm")
+                    .arg("--print-code")
+                    .arg("--print-line-info")
+                    .arg(&path),
+            );
             assert!(sass.contains("debug_helpers.rs"), "{sass}");
             assert!(sass.contains("debug_info.rs"), "{sass}");
             assert!(!sass.contains("_core.rs"), "{sass}");
@@ -232,6 +352,57 @@ fn cubin_has_rust_lines_and_inline_frames() {
                     assert!(dwarf.contains(name), "missing {name} in {dwarf}");
                 }
             }
+        }
+    });
+}
+
+#[test]
+#[ignore = "requires tileiras and nvdisasm"]
+fn entry_setup_cubin_uses_signature_in_line_and_full_modes() {
+    common::with_test_stack(|| {
+        use cutile_compiler::cuda_tile_runtime_utils::{run_tileiras, TileirasOptions};
+        let signature = source_line(
+            include_str!("debug_info.rs"),
+            "fn source_kernel<const S: [i32; 1]>(out: &mut Tensor<i32, S>, x: i32) {",
+        );
+        let directory = CubinDirectory::new();
+        for level in [DebugInfoLevel::Line, DebugInfoLevel::Full] {
+            let artifacts = compile(level);
+            let flags =
+                TileirasOptions::from_compile_options(&CompileOptions::new().debug_info(level));
+            let cubin = run_tileiras(&artifacts.bytecode().unwrap(), "sm_120", &flags).unwrap();
+            let path = directory.0.join(format!("entry-{level:?}.cubin"));
+            std::fs::write(&path, cubin).unwrap();
+            let sass = output(
+                Command::new("nvdisasm")
+                    .arg("--print-code")
+                    .arg("--print-line-info")
+                    .arg(&path),
+            );
+            let mut location = None;
+            let mut entry_found = false;
+            for line in sass.lines() {
+                if let Some(row) = line.trim().strip_prefix("//## File \"") {
+                    let (file, line) = row.split_once("\", line ").unwrap();
+                    location = Some((file, line.trim().parse::<u32>().unwrap()));
+                }
+                if line.trim_start().starts_with("/*0000*/") {
+                    let (file, line) = location.unwrap_or_else(|| {
+                        panic!("{level:?}: entry instruction must have a source location\n{sass}")
+                    });
+                    assert!(
+                        file.ends_with("tests/debug_info.rs"),
+                        "{level:?}: {file}\n{sass}"
+                    );
+                    assert_eq!(
+                        line, signature,
+                        "{level:?}: entry setup must use the signature\n{sass}"
+                    );
+                    entry_found = true;
+                    break;
+                }
+            }
+            assert!(entry_found, "{level:?}: no entry instruction\n{sass}");
         }
     });
 }

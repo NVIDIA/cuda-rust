@@ -58,9 +58,9 @@ The figure at the top of the page is the feature table, with the cute-rs column 
 - Host: JIT, torch, JAX, AOT export: every example; fp16_gemm_256x352_cute for CUDA graphs
 - Autotuning, Task Scheduling, IKET: none
 - Verification before codegen: dialect-cute verify tests, 48 cute-rs and 30 ctm-rs compile-fail cases
-- Grouped, MoE, mixed-input, FP8: none
-- Shipped kernel examples: the 14 crates under cute-rs-preview/examples
-- End-to-end models: qwen_decoder_cute, qwen3_8b_cute
+- Grouped, MoE, mixed-input, FP8: nemotron3_moe_cute (NVFP4 ReLU² grouped MoE), sm100_qkv_epilogue_cute (fused QKV + RMSNorm + FP8 quant + paged KV scatter)
+- Shipped kernel examples: the 15 crates under cute-rs-preview/examples
+- End-to-end models: qwen_decoder_cute, qwen3_8b_cute, nemotron3_moe_cute
 
 :::{dropdown} Text version of the feature table
 
@@ -88,9 +88,9 @@ The figure at the top of the page is the feature table, with the cute-rs column 
 | Host: JIT, torch, JAX, AOT export | yes | partial | AOT cubin inside the Rust binary; no JIT, no Python interop |
 | Autotuning, Task Scheduling, IKET | yes | no | no autotuner, schedule checker or in-kernel tracing |
 | Verification before codegen | yes | yes | whole-module layout, pipeline and role checks; CuTeDSL checks at trace |
-| Grouped, MoE, mixed-input, FP8 | yes | no | dense kernels only |
-| Shipped kernel examples | yes | partial | 4 sm_100a and 10 sm_120a example crates versus 86 CuTeDSL kernel files |
-| End-to-end models | no | sm_100a no, sm_120a yes | Qwen3-TTS 1.7B and Qwen3-8B on sm_120a; CuTeDSL ships none |
+| Grouped, MoE, mixed-input, FP8 | yes | partial, sm_100a | NVFP4 grouped MoE (nemotron3_moe_cute) and FP8 QKV epilogue (sm100_qkv_epilogue_cute) |
+| Shipped kernel examples | yes | partial | 5 sm_100a and 10 sm_120a example crates versus 86 CuTeDSL kernel files |
+| End-to-end models | no | sm_100a + sm_120a | Nemotron-3 MoE (sm_100a), Qwen3-TTS 1.7B and Qwen3-8B (sm_120a); CuTeDSL ships none |
 
 :::
 

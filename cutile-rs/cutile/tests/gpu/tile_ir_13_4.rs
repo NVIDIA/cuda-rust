@@ -293,7 +293,7 @@ mod coverage {
 #[test]
 fn launch_opt_in_checks_capabilities_even_during_warmup() {
     crate::common::with_test_stack(|| {
-        let device = cuda_core::Device::new(0).unwrap();
+        let device = cuda_core::Context::new(0).unwrap();
         let stream = device.new_stream().unwrap();
         let caps = ToolkitCapabilities::for_device(0).unwrap();
         // The empty consumer has no predecessor-dependent accesses.
@@ -337,7 +337,7 @@ fn dependent_launch_waits_for_producer_data() {
         if !supports(&[Feature::ProgrammaticDependentLaunch]) {
             return;
         }
-        let device = cuda_core::Device::new(0).unwrap();
+        let device = cuda_core::Context::new(0).unwrap();
         let stream = device.new_stream().unwrap();
         let input = api::zeros::<i32>(&[1]).sync_on(&stream).unwrap();
         let output = api::zeros::<i32>(&[1]).sync_on(&stream).unwrap();

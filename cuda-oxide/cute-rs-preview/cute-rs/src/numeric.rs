@@ -109,6 +109,64 @@ unsafe impl cuda_core::DeviceCopy for BFloat16 {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Float4E2M1FN;
 
+impl Float4E2M1FN {
+    /// Compute `2^-126 / e4m3_to_f32(scale_code)` in IEEE 754 `f32` for round-to-nearest-even
+    /// `Float4E2M1FN` quantization without a hardware `div.rn.f32`.
+    #[must_use]
+    #[inline(always)]
+    pub fn exact_inv_scale(scale_code: u8) -> f32 {
+        let code = scale_code & 0x7F;
+        if code == 0 {
+            return 0.0;
+        }
+        let exp = (code >> 3) as u32;
+        let mant = (code & 7) as u32;
+        if exp == 0 {
+            let sub_bits = match mant {
+                1 => 0x0500_0000,
+                2 => 0x0480_0000,
+                3 => 0x042A_AAAB,
+                4 => 0x0400_0000,
+                5 => 0x03CC_CCCD,
+                6 => 0x03AA_AAAB,
+                _ => 0x0392_4925,
+            };
+            f32::from_bits(sub_bits)
+        } else {
+            let m_bits = match mant {
+                0 => 0x2000_0000,
+                1 => 0x1FE3_8E39,
+                2 => 0x1FCC_CCCD,
+                3 => 0x1FBA_2E8C,
+                4 => 0x1FAA_AAAB,
+                5 => 0x1F9D_89D9,
+                6 => 0x1F92_4925,
+                _ => 0x1F88_8889,
+            };
+            f32::from_bits(m_bits) * f32::from_bits((71 - exp) << 23)
+        }
+    }
+
+    /// Encode one non-negative `f32` value already pre-multiplied by [`Self::exact_inv_scale`]
+    /// into its 4-bit `Float4E2M1FN` nibble (`0..7`) using IEEE 754 round-to-nearest-even.
+    #[must_use]
+    #[inline(always)]
+    pub fn encode_non_neg_scaled(scaled_v: f32) -> u8 {
+        let bits = scaled_v.to_bits().min(0x01C0_0000);
+        (((bits + 0x001F_FFFF + ((bits >> 22) & 1)) >> 22) & 0x07) as u8
+    }
+
+    /// Encode one signed `f32` value already pre-multiplied by [`Self::exact_inv_scale`]
+    /// into its 4-bit `Float4E2M1FN` nibble (`0..15`) using IEEE 754 round-to-nearest-even.
+    #[must_use]
+    #[inline(always)]
+    pub fn encode_scaled(scaled_v: f32) -> u8 {
+        let sign = if scaled_v < 0.0 { 8u8 } else { 0u8 };
+        let abs_v = f32::from_bits(scaled_v.to_bits() & 0x7FFF_FFFF);
+        sign | Self::encode_non_neg_scaled(abs_v)
+    }
+}
+
 /// One unsigned `Float8E8M0FNU` scale, also called UE8M0.
 ///
 /// ```text
@@ -129,6 +187,26 @@ pub struct Float8E8M0FNU;
 /// block scale can represent fractional steps such as `1.5` (`max_val / 6.0`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Float8E4M3FN;
+
+impl Float8E4M3FN {
+    /// Encode one non-negative `f32` scale into `Float8E4M3FN` using hardware `cvt.rn.satfinite.e4m3x2.f32`.
+    #[must_use]
+    #[inline(always)]
+    pub fn encode_rne(value: f32) -> u8 {
+        let c = if value > 448.0 {
+            448.0
+        } else if value > 0.0 {
+            value
+        } else {
+            0.0
+        };
+        let scaled = c * f32::from_bits(7 << 23);
+        let bits = scaled.to_bits();
+        let lsb = (bits >> 20) & 1;
+        let code = ((bits + 0x7FFFF + lsb) >> 20) as u8;
+        if code > 0x7e { 0x7e } else { code }
+    }
+}
 
 /// Four neighboring [`Float8E8M0FNU`] scale bytes carried in one `u32`.
 ///

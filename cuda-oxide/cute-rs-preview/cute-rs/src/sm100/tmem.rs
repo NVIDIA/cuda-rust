@@ -896,4 +896,490 @@ impl<Layout: ReifySmem2D, const M: usize> Sm100TmemStagedEpilogue<Layout, M> {
             half_store!(1, true);
         }
     }
+
+    /// Unload `[limit, 128]` FP32 accumulators from `tmem_addr` across `Warps 0..3` (`128` threads),
+    /// apply `ReLU²(x * g_scale)`, stage into `[128, 128]` `f32` shared memory (`self.base`), and
+    /// requantize all 16-element groups across `0..limit` into `128`-row TMA burst layout with
+    /// `inter_bursts` `K = 512` bursts (`e.g. 3` bursts for `I = 1,536`).
+    ///
+    /// # Safety
+    /// All 128 threads of `Warps 0..3` must call this convergently after `mma_bar` completes.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    pub unsafe fn unload_relu2_and_quantize_active_128(
+        &self,
+        tmem_addr: u32,
+        warp_id: u32,
+        tid: usize,
+        limit: usize,
+        tile_m128: usize,
+        group: usize,
+        g_scale: f32,
+        inter_bursts: usize,
+        vals_u64_ptr: *mut u64,
+        scales_out: &mut crate::tensor::partition::StridedTensorMut<'_, u8>,
+        b_free_bar_ptr: *mut ctm_rs::mbarrier::Barrier,
+        signal_b_free: bool,
+    ) {
+        let tmem_row_base = tmem_addr + (warp_id << 21);
+        let col_perm = ((tid & 12) << 3) | ((tid >> 4) << 2) | (tid & 3);
+        let sub_tile16 = tid & 7;
+        let row_off16 = tid >> 3;
+        let grp = tile_m128 * 8 + sub_tile16;
+        let burst_inter = grp >> 5;
+        let s_in_burst = (grp >> 2) & 7;
+        let sub_u64_off = s_in_burst * 512 + ((grp >> 1) & 1) * 256 + (grp & 1);
+        let k_atom = grp >> 2;
+        let k_in_atom = grp & 3;
+        let inter_atoms = inter_bursts * 8;
+        unsafe {
+            ctm_rs::tcgen05::fence_after_thread_sync();
+            let mut n_base = 0usize;
+            while n_base < limit {
+                let regs =
+                    ctm_rs::tcgen05::tmem::load_32x32b_x16(tmem_row_base + (n_base as u32))
+                        .to_array();
+                macro_rules! st_relu2 {
+                    ($c:expr) => {{
+                        let n = n_base + $c;
+                        if n < limit {
+                            let a = f32::from_bits(regs[$c]) * g_scale;
+                            let u = if a > 0.0 { a } else { 0.0 };
+                            *self.base.add(n * 128 + col_perm) = u * u;
+                        }
+                    }};
+                }
+                st_relu2!(0);
+                st_relu2!(1);
+                st_relu2!(2);
+                st_relu2!(3);
+                st_relu2!(4);
+                st_relu2!(5);
+                st_relu2!(6);
+                st_relu2!(7);
+                st_relu2!(8);
+                st_relu2!(9);
+                st_relu2!(10);
+                st_relu2!(11);
+                st_relu2!(12);
+                st_relu2!(13);
+                st_relu2!(14);
+                st_relu2!(15);
+                n_base += 16;
+            }
+            ctm_rs::tcgen05::tmem::load_wait();
+            ctm_rs::tcgen05::fence_before_thread_sync();
+            ctm_rs::barrier::barrier_cta_sync(1, 128);
+
+            let mut n = row_off16;
+            while n < limit {
+                let row_u128 = self.group16_u128_ptr(n, sub_tile16);
+                let q0 = *row_u128;
+                let q1 = *row_u128.add(8);
+                let q2 = *row_u128.add(16);
+                let q3 = *row_u128.add(24);
+                let v0 = f32::from_bits((q0 & 0xFFFF_FFFF) as u32);
+                let v1 = f32::from_bits(((q0 >> 32) & 0xFFFF_FFFF) as u32);
+                let v2 = f32::from_bits(((q0 >> 64) & 0xFFFF_FFFF) as u32);
+                let v3 = f32::from_bits((q0 >> 96) as u32);
+                let v4 = f32::from_bits((q1 & 0xFFFF_FFFF) as u32);
+                let v5 = f32::from_bits(((q1 >> 32) & 0xFFFF_FFFF) as u32);
+                let v6 = f32::from_bits(((q1 >> 64) & 0xFFFF_FFFF) as u32);
+                let v7 = f32::from_bits((q1 >> 96) as u32);
+                let v8 = f32::from_bits((q2 & 0xFFFF_FFFF) as u32);
+                let v9 = f32::from_bits(((q2 >> 32) & 0xFFFF_FFFF) as u32);
+                let v10 = f32::from_bits(((q2 >> 64) & 0xFFFF_FFFF) as u32);
+                let v11 = f32::from_bits((q2 >> 96) as u32);
+                let v12 = f32::from_bits((q3 & 0xFFFF_FFFF) as u32);
+                let v13 = f32::from_bits(((q3 >> 32) & 0xFFFF_FFFF) as u32);
+                let v14 = f32::from_bits(((q3 >> 64) & 0xFFFF_FFFF) as u32);
+                let v15 = f32::from_bits((q3 >> 96) as u32);
+                let mut amax = v0;
+                macro_rules! max_v {
+                    ($v:ident) => {
+                        if $v > amax {
+                            amax = $v;
+                        }
+                    };
+                }
+                max_v!(v1);
+                max_v!(v2);
+                max_v!(v3);
+                max_v!(v4);
+                max_v!(v5);
+                max_v!(v6);
+                max_v!(v7);
+                max_v!(v8);
+                max_v!(v9);
+                max_v!(v10);
+                max_v!(v11);
+                max_v!(v12);
+                max_v!(v13);
+                max_v!(v14);
+                max_v!(v15);
+                let scale_code = crate::Float8E4M3FN::encode_rne(amax * (1.0f32 / 6.0f32));
+                let inv_scale = crate::Float4E2M1FN::exact_inv_scale(scale_code);
+                macro_rules! enc_pos {
+                    ($v:ident, $sh:expr) => {
+                        (crate::Float4E2M1FN::encode_non_neg_scaled($v * inv_scale) as u64) << $sh
+                    };
+                }
+                let packed_u64 = enc_pos!(v0, 0)
+                    | enc_pos!(v1, 4)
+                    | enc_pos!(v2, 8)
+                    | enc_pos!(v3, 12)
+                    | enc_pos!(v4, 16)
+                    | enc_pos!(v5, 20)
+                    | enc_pos!(v6, 24)
+                    | enc_pos!(v7, 28)
+                    | enc_pos!(v8, 32)
+                    | enc_pos!(v9, 36)
+                    | enc_pos!(v10, 40)
+                    | enc_pos!(v11, 44)
+                    | enc_pos!(v12, 48)
+                    | enc_pos!(v13, 52)
+                    | enc_pos!(v14, 56)
+                    | enc_pos!(v15, 60);
+                let u64_idx = (group * inter_bursts + burst_inter) * 4096 + sub_u64_off + n * 2;
+                let sfb_word = crate::block_scaled::Sm120ScaleAtom::word_offset(n);
+                let s_idx = (group * inter_atoms + k_atom) * 512 + sfb_word * 4 + k_in_atom;
+                *vals_u64_ptr.add(u64_idx) = packed_u64;
+                scales_out.store_at(s_idx, scale_code);
+                n += 16;
+            }
+            ctm_rs::fence::fence_proxy_async_shared_cta();
+            ctm_rs::barrier::barrier_cta_sync(1, 128);
+            if signal_b_free && tid == 0 {
+                let _ = ctm_rs::mbarrier::mbarrier_arrive(b_free_bar_ptr);
+                let _ = ctm_rs::mbarrier::mbarrier_arrive(b_free_bar_ptr.add(1));
+            }
+        }
+    }
+
+    /// Unload a Dual-M-Tile (`D0` at `tmem_addr` and `D1` at `tmem_addr + 128`) for `limit <= 16`
+    /// (`B <= 16`) across `Warps 0..3` (`128` threads) and fuse `routing_weight * g_scale` +
+    /// `atom_add_bf16x2` directly into `output_u32`.
+    ///
+    /// # Safety
+    /// All 128 threads of `Warps 0..3` must call this convergently after `mma_bar` completes.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    pub unsafe fn unload_dual_m_and_atomic_add_bf16x2_16(
+        &self,
+        epi1: &Self,
+        tmem_addr: u32,
+        warp_id: u32,
+        tid: usize,
+        limit: usize,
+        tile_m0: usize,
+        tile_m1: usize,
+        group: usize,
+        group_tile_rows: usize,
+        g_scale: f32,
+        group_routes: *const i32,
+        routing_weights: *const crate::BFloat16,
+        output_u32: *mut u32,
+        hidden_size: usize,
+        b_free_bar_ptr: *mut ctm_rs::mbarrier::Barrier,
+        signal_b_free: bool,
+    ) {
+        let tmem_row_base = tmem_addr + (warp_id << 21);
+        let smem_epi0_u32 = self.base.cast::<u32>();
+        let smem_epi0_u128 = self.base.cast_const().cast::<u128>();
+        let smem_epi1_u32 = epi1.base.cast::<u32>();
+        let smem_epi1_u128 = epi1.base.cast_const().cast::<u128>();
+        let col16 = tid & 15;
+        let row8 = tid >> 4;
+        let col_u32_0 = tile_m0 * 64 + col16 * 4;
+        let col_u32_1 = tile_m1 * 64 + col16 * 4;
+        let h_u32 = hidden_size >> 1;
+        unsafe {
+            ctm_rs::tcgen05::fence_after_thread_sync();
+            let r0 = ctm_rs::tcgen05::tmem::load_32x32b_x16(tmem_row_base).to_array();
+            let r1 = ctm_rs::tcgen05::tmem::load_32x32b_x16(tmem_row_base + 128).to_array();
+            macro_rules! st_raw16 {
+                ($c:expr) => {
+                    if $c < limit {
+                        *smem_epi0_u32.add($c * 128 + tid) = r0[$c];
+                        *smem_epi1_u32.add($c * 128 + tid) = r1[$c];
+                    }
+                };
+            }
+            st_raw16!(0);
+            st_raw16!(1);
+            st_raw16!(2);
+            st_raw16!(3);
+            st_raw16!(4);
+            st_raw16!(5);
+            st_raw16!(6);
+            st_raw16!(7);
+            st_raw16!(8);
+            st_raw16!(9);
+            st_raw16!(10);
+            st_raw16!(11);
+            st_raw16!(12);
+            st_raw16!(13);
+            st_raw16!(14);
+            st_raw16!(15);
+            ctm_rs::tcgen05::tmem::load_wait();
+            ctm_rs::tcgen05::fence_before_thread_sync();
+            ctm_rs::barrier::barrier_cta_sync(1, 128);
+
+            let mut n = row8;
+            while n < limit {
+                let route = *group_routes.add(group * group_tile_rows + n) as usize;
+                let token = route >> 2;
+                let sw = g_scale
+                    * f32::from_bits(((*routing_weights.add(route)).to_bits() as u32) << 16);
+                let q0_a = *smem_epi0_u128.add(n * 32 + col16 * 2);
+                let q0_b = *smem_epi0_u128.add(n * 32 + col16 * 2 + 1);
+                let q1_a = *smem_epi1_u128.add(n * 32 + col16 * 2);
+                let q1_b = *smem_epi1_u128.add(n * 32 + col16 * 2 + 1);
+                let d0 = output_u32.add(token * h_u32 + col_u32_0);
+                let d1 = output_u32.add(token * h_u32 + col_u32_1);
+
+                macro_rules! atomic_quad {
+                    ($q:ident, $dst:expr) => {{
+                        let v0 = (f32::from_bits(($q & 0xFFFF_FFFF) as u32) * sw).to_bits();
+                        let v1 = (f32::from_bits((($q >> 32) & 0xFFFF_FFFF) as u32) * sw).to_bits();
+                        let v2 = (f32::from_bits((($q >> 64) & 0xFFFF_FFFF) as u32) * sw).to_bits();
+                        let v3 = (f32::from_bits(($q >> 96) as u32) * sw).to_bits();
+                        let b0 = v0.wrapping_add(0x7FFF + ((v0 >> 16) & 1)) >> 16;
+                        let b1 = v1.wrapping_add(0x7FFF + ((v1 >> 16) & 1)) >> 16;
+                        let b2 = v2.wrapping_add(0x7FFF + ((v2 >> 16) & 1)) >> 16;
+                        let b3 = v3.wrapping_add(0x7FFF + ((v3 >> 16) & 1)) >> 16;
+                        let _ = ctm_rs::memory::atom_add_bf16x2($dst, b0 | (b1 << 16));
+                        let _ = ctm_rs::memory::atom_add_bf16x2(($dst).add(1), b2 | (b3 << 16));
+                    }};
+                }
+                atomic_quad!(q0_a, d0);
+                atomic_quad!(q0_b, d0.add(2));
+                atomic_quad!(q1_a, d1);
+                atomic_quad!(q1_b, d1.add(2));
+                n += 8;
+            }
+            ctm_rs::fence::fence_proxy_async_shared_cta();
+            ctm_rs::barrier::barrier_cta_sync(1, 128);
+            if signal_b_free && tid == 0 {
+                let _ = ctm_rs::mbarrier::mbarrier_arrive(b_free_bar_ptr);
+                let _ = ctm_rs::mbarrier::mbarrier_arrive(b_free_bar_ptr.add(1));
+            }
+        }
+    }
+
+    /// Unload a Dual-M-Tile (`D0` at `tmem_addr` and `D1` at `tmem_addr + 128`) across `0..limit`
+    /// in `Warps 0..3` (`128` threads), convert to `BFloat16` RNE in shared memory, and write
+    /// coalesced `u128` (`8 × bf16`) vectors to `grouped_out_u128`.
+    ///
+    /// # Safety
+    /// All 128 threads of `Warps 0..3` must call this convergently after `mma_bar` completes.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    pub unsafe fn unload_dual_m_to_grouped_bf16_128(
+        &self,
+        epi1: &Self,
+        tmem_addr: u32,
+        warp_id: u32,
+        tid: usize,
+        limit: usize,
+        tile_m0: usize,
+        tile_m1: usize,
+        group: usize,
+        group_tile_rows: usize,
+        g_scale: f32,
+        grouped_out_u128: *mut u128,
+        hidden_size: usize,
+        b_free_bar_ptr: *mut ctm_rs::mbarrier::Barrier,
+        signal_b_free: bool,
+    ) {
+        let tmem_row_base = tmem_addr + (warp_id << 21);
+        let smem_epi0_u16 = self.base.cast::<u16>();
+        let smem_epi0_u128 = self.base.cast_const().cast::<u128>();
+        let smem_epi1_u16 = epi1.base.cast::<u16>();
+        let smem_epi1_u128 = epi1.base.cast_const().cast::<u128>();
+        let col16 = tid & 15;
+        let row8 = tid >> 4;
+        let dst_col0_u128 = tile_m0 * 16 + col16;
+        let dst_col1_u128 = tile_m1 * 16 + col16;
+        let h_u128 = hidden_size >> 3;
+        unsafe {
+            ctm_rs::tcgen05::fence_after_thread_sync();
+            let mut n_base = 0usize;
+            while n_base < limit {
+                let r0 =
+                    ctm_rs::tcgen05::tmem::load_32x32b_x16(tmem_row_base + (n_base as u32))
+                        .to_array();
+                let r1 = ctm_rs::tcgen05::tmem::load_32x32b_x16(
+                    tmem_row_base + 128 + (n_base as u32),
+                )
+                .to_array();
+                macro_rules! st_dual16 {
+                    ($c:expr) => {{
+                        let n = n_base + $c;
+                        if n < limit {
+                            let v0 = (f32::from_bits(r0[$c]) * g_scale).to_bits();
+                            let v1 = (f32::from_bits(r1[$c]) * g_scale).to_bits();
+                            *smem_epi0_u16.add(n * 128 + tid) =
+                                (v0.wrapping_add(0x7FFF + ((v0 >> 16) & 1)) >> 16) as u16;
+                            *smem_epi1_u16.add(n * 128 + tid) =
+                                (v1.wrapping_add(0x7FFF + ((v1 >> 16) & 1)) >> 16) as u16;
+                        }
+                    }};
+                }
+                st_dual16!(0);
+                st_dual16!(1);
+                st_dual16!(2);
+                st_dual16!(3);
+                st_dual16!(4);
+                st_dual16!(5);
+                st_dual16!(6);
+                st_dual16!(7);
+                st_dual16!(8);
+                st_dual16!(9);
+                st_dual16!(10);
+                st_dual16!(11);
+                st_dual16!(12);
+                st_dual16!(13);
+                st_dual16!(14);
+                st_dual16!(15);
+                n_base += 16;
+            }
+            ctm_rs::tcgen05::tmem::load_wait();
+            ctm_rs::tcgen05::fence_before_thread_sync();
+            ctm_rs::barrier::barrier_cta_sync(1, 128);
+
+            let group_row_base = group * group_tile_rows;
+            let mut n = row8;
+            while n < limit {
+                let q0 = *smem_epi0_u128.add(n * 16 + col16);
+                let q1 = *smem_epi1_u128.add(n * 16 + col16);
+                let row_off = (group_row_base + n) * h_u128;
+                *grouped_out_u128.add(row_off + dst_col0_u128) = q0;
+                *grouped_out_u128.add(row_off + dst_col1_u128) = q1;
+                n += 8;
+            }
+            ctm_rs::fence::fence_proxy_async_shared_cta();
+            ctm_rs::barrier::barrier_cta_sync(1, 128);
+            if signal_b_free && tid == 0 {
+                let _ = ctm_rs::mbarrier::mbarrier_arrive(b_free_bar_ptr);
+                let _ = ctm_rs::mbarrier::mbarrier_arrive(b_free_bar_ptr.add(1));
+            }
+        }
+    }
+
+    /// Unload a Triple-M-Tile (`D0` at `tmem_addr`, `D1` at `tmem_addr + 128`, `D2` at `tmem_addr + 256`)
+    /// across `0..limit` in `Warps 0..3` (`128` threads), convert to `BFloat16` RNE in shared memory,
+    /// and write coalesced `u128` (`8 × bf16`) vectors to `grouped_out_u128`.
+    ///
+    /// # Safety
+    /// All 128 threads of `Warps 0..3` must call this convergently after `mma_bar` completes.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    pub unsafe fn unload_triple_m_to_grouped_bf16_128(
+        &self,
+        epi1: &Self,
+        epi2: &Self,
+        tmem_addr: u32,
+        warp_id: u32,
+        tid: usize,
+        limit: usize,
+        tile_m0: usize,
+        tile_m1: usize,
+        tile_m2: usize,
+        group: usize,
+        group_tile_rows: usize,
+        g_scale: f32,
+        grouped_out_u128: *mut u128,
+        hidden_size: usize,
+        a_free_bar_ptr: *mut ctm_rs::mbarrier::Barrier,
+        b_free_bar_ptr: *mut ctm_rs::mbarrier::Barrier,
+        signal_free: bool,
+    ) {
+        let tmem_row_base = tmem_addr + (warp_id << 21);
+        let smem_epi0_u16 = self.base.cast::<u16>();
+        let smem_epi0_u128 = self.base.cast_const().cast::<u128>();
+        let smem_epi1_u16 = epi1.base.cast::<u16>();
+        let smem_epi1_u128 = epi1.base.cast_const().cast::<u128>();
+        let smem_epi2_u16 = epi2.base.cast::<u16>();
+        let smem_epi2_u128 = epi2.base.cast_const().cast::<u128>();
+        let col16 = tid & 15;
+        let row8 = tid >> 4;
+        let dst_col0_u128 = tile_m0 * 16 + col16;
+        let dst_col1_u128 = tile_m1 * 16 + col16;
+        let dst_col2_u128 = tile_m2 * 16 + col16;
+        let h_u128 = hidden_size >> 3;
+        unsafe {
+            ctm_rs::tcgen05::fence_after_thread_sync();
+            let mut n_base = 0usize;
+            while n_base < limit {
+                let r0 =
+                    ctm_rs::tcgen05::tmem::load_32x32b_x16(tmem_row_base + (n_base as u32))
+                        .to_array();
+                let r1 = ctm_rs::tcgen05::tmem::load_32x32b_x16(
+                    tmem_row_base + 128 + (n_base as u32),
+                )
+                .to_array();
+                let r2 = ctm_rs::tcgen05::tmem::load_32x32b_x16(
+                    tmem_row_base + 256 + (n_base as u32),
+                )
+                .to_array();
+                macro_rules! st_triple16 {
+                    ($c:expr) => {{
+                        let n = n_base + $c;
+                        if n < limit {
+                            let v0 = (f32::from_bits(r0[$c]) * g_scale).to_bits();
+                            let v1 = (f32::from_bits(r1[$c]) * g_scale).to_bits();
+                            let v2 = (f32::from_bits(r2[$c]) * g_scale).to_bits();
+                            *smem_epi0_u16.add(n * 128 + tid) =
+                                (v0.wrapping_add(0x7FFF + ((v0 >> 16) & 1)) >> 16) as u16;
+                            *smem_epi1_u16.add(n * 128 + tid) =
+                                (v1.wrapping_add(0x7FFF + ((v1 >> 16) & 1)) >> 16) as u16;
+                            *smem_epi2_u16.add(n * 128 + tid) =
+                                (v2.wrapping_add(0x7FFF + ((v2 >> 16) & 1)) >> 16) as u16;
+                        }
+                    }};
+                }
+                st_triple16!(0);
+                st_triple16!(1);
+                st_triple16!(2);
+                st_triple16!(3);
+                st_triple16!(4);
+                st_triple16!(5);
+                st_triple16!(6);
+                st_triple16!(7);
+                st_triple16!(8);
+                st_triple16!(9);
+                st_triple16!(10);
+                st_triple16!(11);
+                st_triple16!(12);
+                st_triple16!(13);
+                st_triple16!(14);
+                st_triple16!(15);
+                n_base += 16;
+            }
+            ctm_rs::tcgen05::tmem::load_wait();
+            ctm_rs::tcgen05::fence_before_thread_sync();
+            ctm_rs::barrier::barrier_cta_sync(1, 128);
+
+            let group_row_base = group * group_tile_rows;
+            let mut n = row8;
+            while n < limit {
+                let q0 = *smem_epi0_u128.add(n * 16 + col16);
+                let q1 = *smem_epi1_u128.add(n * 16 + col16);
+                let q2 = *smem_epi2_u128.add(n * 16 + col16);
+                let row_off = (group_row_base + n) * h_u128;
+                *grouped_out_u128.add(row_off + dst_col0_u128) = q0;
+                *grouped_out_u128.add(row_off + dst_col1_u128) = q1;
+                *grouped_out_u128.add(row_off + dst_col2_u128) = q2;
+                n += 8;
+            }
+            ctm_rs::fence::fence_proxy_async_shared_cta();
+            ctm_rs::barrier::barrier_cta_sync(1, 128);
+            if signal_free && tid == 0 {
+                let _ = ctm_rs::mbarrier::mbarrier_arrive(a_free_bar_ptr);
+                let _ = ctm_rs::mbarrier::mbarrier_arrive(a_free_bar_ptr.add(1));
+                let _ = ctm_rs::mbarrier::mbarrier_arrive(b_free_bar_ptr);
+            }
+        }
+    }
 }

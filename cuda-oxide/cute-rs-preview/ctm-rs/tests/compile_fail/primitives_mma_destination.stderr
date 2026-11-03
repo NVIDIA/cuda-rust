@@ -1,0 +1,17 @@
+error[E0271]: type mismatch resolving `<impl TmemOperand<Group = CtaGroup2, Format = TmemF32<256, 160>> as TmemOperand>::Format == TmemF32<256, 192>`
+  --> tests/compile_fail/primitives_mma_destination.rs:14:41
+   |
+14 |  unsafe { mma::<L,collector_a::Discard>(d,a,b,&InstructionDescriptor::new(),false) };
+   |           ----------------------------- ^ expected `192`, found `160`
+   |           |
+   |           required by a bound introduced by this call
+   |
+   = note: expected struct `TmemF32<256, 192>`
+              found struct `TmemF32<256, 160>`
+note: required by a bound in `ctm_rs::tcgen05::mma::mma`
+  --> src/tcgen05/mma.rs
+   |
+   | pub unsafe fn mma<S, U>(
+   |               --- required by a bound in this function
+   |     dst: &impl TmemOperand<Group = S::Group, Format = S::DstFormat>,
+   |                                              ^^^^^^^^^^^^^^^^^^^^^ required by this bound in `mma`

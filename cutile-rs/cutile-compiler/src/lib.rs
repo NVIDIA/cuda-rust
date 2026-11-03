@@ -17,6 +17,7 @@ pub mod error;
 pub mod generics;
 pub mod hints;
 pub mod jit_cache;
+pub mod jit_env;
 mod kernel_entry_generator;
 pub mod kernel_naming;
 pub mod registry;

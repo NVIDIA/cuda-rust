@@ -48,8 +48,8 @@ fn overlay_manifest_loads_sorted_family_shards() {
     let (overlay, hash) =
         read_overlay(&repo_root, &repo_root.join("intrinsics/overlay.toml")).unwrap();
     assert_eq!(overlay.schema, OVERLAY_SCHEMA);
-    assert_eq!(overlay.shards.len(), 68);
-    assert_eq!(overlay.intrinsics.len(), 1046);
+    assert_eq!(overlay.shards.len(), 69);
+    assert_eq!(overlay.intrinsics.len(), 1066);
     assert_eq!(
         overlay
             .intrinsics
@@ -136,7 +136,7 @@ fn overlay_manifest_loads_sorted_family_shards() {
             .iter()
             .filter(|record| record.family == "register_mma")
             .count(),
-        154
+        155
     );
     assert_eq!(
         overlay
@@ -369,8 +369,7 @@ fn overlay_shard_schema_range_is_composable_and_new_fields_fail_closed() {
 
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let ampere_float_bytes =
-        std::fs::read(repo_root.join("intrinsics/overlay/sparse_mma_ordered_ampere_float.toml"))
-            .unwrap();
+        std::fs::read(repo_root.join("intrinsics/overlay/sparse_mma_ampere_float.toml")).unwrap();
     let mut sparse_ampere_float: OverlayShardFile = toml::from_slice(&ampere_float_bytes).unwrap();
     assert!(sparse_ampere_float.sparse_mma_ampere_float.is_some());
     assert_eq!(

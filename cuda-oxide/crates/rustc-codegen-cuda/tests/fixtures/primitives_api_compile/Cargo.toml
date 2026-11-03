@@ -1,0 +1,13 @@
+[package]
+name = "primitives_api_compile"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+ctm-rs = { path = "../../../../../cute-rs-preview/ctm-rs" }
+cuda-device = { path = "../../../../cuda-device" }
+cuda-host = { path = "../../../../cuda-host" }
+cuda-core = { path = "../../../../../../cuda-core" }

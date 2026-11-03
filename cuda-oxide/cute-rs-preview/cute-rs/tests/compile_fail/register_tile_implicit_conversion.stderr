@@ -1,0 +1,33 @@
+error[E0308]: mismatched types
+  --> tests/compile_fail/register_tile_implicit_conversion.rs:13:45
+   |
+13 |     let _ = half.zip_map(single, |a, b| a + b);
+   |                                             ^ expected `f16`, found `f32`
+
+error[E0277]: cannot add `f32` to `f16`
+  --> tests/compile_fail/register_tile_implicit_conversion.rs:13:43
+   |
+13 |     let _ = half.zip_map(single, |a, b| a + b);
+   |                                           ^ no implementation for `f16 + f32`
+   |
+   = help: the trait `Add<f32>` is not implemented for `f16`
+help: the following other types implement trait `Add<Rhs>`
+  --> $RUST/core/src/ops/arith.rs
+   |
+   |         const impl Add for $t {
+   |         ^^^^^^^^^^^^^^^^^^^^^ `f16` implements `Add`
+...
+   | add_impl! { usize u8 u16 u32 u64 u128 isize i8 i16 i32 i64 i128 f16 f32 f64 f128 }
+   | ---------------------------------------------------------------------------------- in this macro invocation
+   |
+  ::: $RUST/core/src/internal_macros.rs
+   |
+   |         const impl $imp<$u> for &$t {
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `&f16` implements `Add<f16>`
+...
+   |         const impl $imp<&$u> for $t {
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `f16` implements `Add<&f16>`
+...
+   |         const impl $imp<&$u> for &$t {
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `&f16` implements `Add`
+   = note: this error originates in the macro `add_impl` (in Nightly builds, run with -Z macro-backtrace for more info)

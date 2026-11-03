@@ -7,8 +7,8 @@ use crate::model::{
     CatalogFile, ClusterBarrierOrdering, ClusterMemoryOperation, CpAsyncControlOperation,
     CpAsyncMbarrierOperation, CpAsyncSourceSize, ExecutionControlOperation, LdmatrixParticipation,
     LdmatrixShape, MbarrierBasicOperation, MbarrierExtendedAdapter, RegisterMmaAdapter,
-    RegisterMmaOverflow, SparseMmaOverflow, Tcgen05LdShape, Tcgen05Operation, TmaAdapter,
-    WarpShuffleValueKind, WgmmaControlMode,
+    RegisterMmaKind, RegisterMmaOverflow, SparseMmaOverflow, Tcgen05LdShape, Tcgen05Operation,
+    TmaAdapter, WarpShuffleValueKind, WgmmaControlMode,
 };
 use crate::render::common::{hardware_target_label, rust_header, source_label};
 use crate::render::families::{
@@ -215,9 +215,13 @@ pub(super) fn render_raw_abi(catalog: &CatalogFile, hash: &str) -> Result<String
                 if mma.adapter == RegisterMmaAdapter::C4F32A4U32B2U32Scales2U32Selectors4U16ToD4F32
                 {
                     output.push_str(
-                        "/// `_arg3` and `_arg6` contain this lane's packed A and B scale data. `_arg4`/`_arg5` and `_arg7`/`_arg8` are the corresponding byte/thread selectors.\n\
-                         /// For `scale_vec::1X`, A and B byte selectors must be in `0..=3`, the A thread selector in `0..=1`, and the B thread selector in `0..=3`; other values make the PTX operation undefined.\n",
+                        "/// `_arg3` and `_arg6` contain this lane's packed A and B scale data. `_arg4`/`_arg5` and `_arg7`/`_arg8` are the corresponding byte/thread selectors.\n",
                     );
+                    output.push_str(if mma.kind == Some(RegisterMmaKind::Mxf4) {
+                        "/// For `scale_vec::2X`, A and B byte selectors must each be `0` or `2`, the A thread selector in `0..=1`, and the B thread selector in `0..=3`; other values make the PTX operation undefined.\n"
+                    } else {
+                        "/// For `scale_vec::1X`, A and B byte selectors must be in `0..=3`, the A thread selector in `0..=1`, and the B thread selector in `0..=3`; other values make the PTX operation undefined.\n"
+                    });
                 }
                 writeln!(
                     output,

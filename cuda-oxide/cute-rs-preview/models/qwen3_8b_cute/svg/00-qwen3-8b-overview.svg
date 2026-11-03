@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 440" width="100%">
+  <defs>
+    <style>
+      .bg { fill: #faf9f5; }
+      .panel { fill: #f3f1ea; stroke: #d4d1c7; }
+      .t  { font-family: system-ui, -apple-system, sans-serif; font-size: 14px; font-weight: 600; fill: #1c1c1a; }
+      .ts { font-family: system-ui, -apple-system, sans-serif; font-size: 12px; font-weight: 400; fill: #575652; }
+      .sec { font-family: system-ui, -apple-system, sans-serif; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; fill: #6b6963; }
+      .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: 12px; }
+      .c { text-anchor: middle; dominant-baseline: central; }
+      .l { text-anchor: start; dominant-baseline: central; }
+      .arr { stroke: #6b6963; stroke-width: 1.5; fill: none; }
+      .arr-head { fill: #6b6963; }
+      .c-teal   { fill: #e1f5ee; stroke: #0f6e56; }
+      .c-purple { fill: #eeedfe; stroke: #534ab7; }
+      .c-amber  { fill: #faeeda; stroke: #854f0b; }
+      .c-coral  { fill: #faece7; stroke: #993c1d; }
+      .tx-teal   { fill: #085041; }
+      .tx-purple { fill: #3c3489; }
+      .tx-amber  { fill: #633806; }
+      .tx-coral  { fill: #712b13; }
+      @media (prefers-color-scheme: dark) {
+        .bg { fill: #161618; }
+        .panel { fill: #1e1e21; stroke: #38383d; }
+        .t  { fill: #eae9e4; }
+        .ts { fill: #a6a49d; }
+        .sec { fill: #8f8d86; }
+        .arr { stroke: #9c9a92; }
+        .arr-head { fill: #9c9a92; }
+        .c-teal   { fill: #073328; stroke: #3ec9a7; }
+        .c-purple { fill: #242052; stroke: #9b93f3; }
+        .c-amber  { fill: #3b2205; stroke: #ef9f27; }
+        .c-coral  { fill: #3f180c; stroke: #f08868; }
+        .tx-teal   { fill: #9fe1cb; }
+        .tx-purple { fill: #cecbf6; }
+        .tx-amber  { fill: #fac775; }
+        .tx-coral  { fill: #f5c4b3; }
+      }
+    </style>
+    <marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M1 1.5L8 5L1 8.5" class="arr-head"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1040" height="440" rx="12"/>
+  <rect class="panel" x="16" y="16" width="1008" height="408" rx="10" stroke-width="1"/>
+  <text class="sec l" x="36" y="42">QWEN / QWEN3-8B IN CUTE-RS — DUAL-PRECISION ARCHITECTURE MAP (SM120A RTX 5090)</text>
+
+  <!-- Stage 1: Input Batch -->
+  <rect class="c-teal" x="36" y="76" width="190" height="170" rx="8" stroke-width="1"/>
+  <text class="t tx-teal c" x="131" y="106">Input Batch</text>
+  <text class="ts tx-teal c mono" x="131" y="132">Batch&lt;4096&gt;</text>
+  <text class="ts tx-teal c" x="131" y="158">Prefill: [P, 4096]</text>
+  <text class="ts tx-teal c" x="131" y="180">Decode:  [1, 4096]</text>
+  <text class="ts tx-teal c mono" x="131" y="210">1D RoPE (θ = 1e6)</text>
+
+  <line class="arr" x1="226" y1="161" x2="268" y2="161" marker-end="url(#ah)"/>
+
+  <!-- Stage 2: 36x Transformer Decoder Stack -->
+  <rect class="c-purple" x="272" y="68" width="490" height="186" rx="8" stroke-width="1.2"/>
+  <text class="t tx-purple c" x="517" y="96">36 × Qwen3-8B Decoder Layers (H = 4096, I = 12288)</text>
+  <text class="ts tx-purple c mono" x="517" y="124">1. RMSNorm(4096) ──► Q[4096] / K[1024] / V[1024] Projection</text>
+  <text class="ts tx-purple c mono" x="517" y="150">2. Per-Head QK-Norm(128) + RoPE ──► Causal GQA (32Q : 8KV)</text>
+  <text class="ts tx-purple c mono" x="517" y="176">3. O[4096] Projection + Residual Add</text>
+  <text class="ts tx-purple c mono" x="517" y="202">4. RMSNorm(4096) ──► Gate/Up[12288] ──► SwiGLU ──► Down[4096]</text>
+  <text class="ts tx-purple c" x="517" y="230">Selectable Linear Engine: BF16 Tensor Core vs. NVFP4 (E2M1 + E4M3)</text>
+
+  <line class="arr" x1="762" y1="161" x2="804" y2="161" marker-end="url(#ah)"/>
+
+  <!-- Stage 3: Final Norm & Output -->
+  <rect class="c-teal" x="808" y="76" width="196" height="170" rx="8" stroke-width="1"/>
+  <text class="t tx-teal c" x="906" y="106">Final Output</text>
+  <text class="ts tx-teal c mono" x="906" y="132">RMSNorm&lt;4096&gt;</text>
+  <text class="ts tx-teal c" x="906" y="158">Normalized Hidden</text>
+  <text class="ts tx-teal c mono" x="906" y="182">Batch&lt;4096&gt;</text>
+  <text class="ts tx-teal c" x="906" y="210">Ready for LM Head</text>
+
+  <!-- Bottom Comparison Cards -->
+  <rect class="c-amber" x="36" y="282" width="468" height="118" rx="8" stroke-width="1"/>
+  <text class="t tx-amber l" x="56" y="310">Mode A — BF16 Tensor Core (m16n8k16)</text>
+  <text class="ts tx-amber l mono" x="56" y="338">• Weights: 13,248.6 MiB (36 layers, 2 bytes/param)</text>
+  <text class="ts tx-amber l mono" x="56" y="362">• RTX 5090: 333.7 tok/s prefill | 69.8 tok/s decode</text>
+  <text class="ts tx-amber l" x="56" y="384">• Uses cute_rs::mma::bf16::Bf16Mma16x8x16 + FP32 accumulate</text>
+
+  <rect class="c-coral" x="536" y="282" width="468" height="118" rx="8" stroke-width="1"/>
+  <text class="t tx-coral l" x="556" y="310">Mode B — True NVFP4 (E2M1 + E4M3 Scale, SF_VEC = 16)</text>
+  <text class="ts tx-coral l mono" x="556" y="338">• Weights:  3,726.6 MiB (3.56x smaller than BF16!)</text>
+  <text class="ts tx-coral l mono" x="556" y="362">• RTX 5090: 632.8 tok/s prefill | 114.0 tok/s decode</text>
+  <text class="ts tx-coral l" x="556" y="384">• Hardware cute.scaled_view_load (nvgpu.cvt_fpext) + warp_sum</text>
+</svg>

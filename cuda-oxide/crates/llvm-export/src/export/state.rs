@@ -157,6 +157,12 @@ pub(super) struct ModuleExportState<'a> {
     /// used for NVVM annotations/version nodes; debug-info nodes will use the
     /// same counter so the exporter never has to guess which IDs are free.
     next_metadata_id: usize,
+    /// `distinct` `!llvm.loop` node of each loop whose latch branch asked to
+    /// stay rolled, in emission order.
+    pub(super) unroll_disabled_loops: Vec<usize>,
+    /// The `!{!"llvm.loop.unroll.disable"}` property node shared by every
+    /// entry of `unroll_disabled_loops`, allocated on first use.
+    pub(super) loop_unroll_disable_property: Option<usize>,
     /// Which debug metadata tier this export should emit.
     pub(super) debug_kind: DebugKind,
     /// Where function-local statics are retained (per the consuming LLVM).
@@ -258,6 +264,8 @@ impl<'a> ModuleExportState<'a> {
             global_symbols: FxHashMap::default(),
             global_sources: FxHashMap::default(),
             next_metadata_id: 0,
+            unroll_disabled_loops: Vec::new(),
+            loop_unroll_disable_property: None,
             debug_kind,
             debug_function_local_static_placement,
             nvvm_ir_dialect,

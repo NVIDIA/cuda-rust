@@ -587,7 +587,7 @@ that cuda-oxide emits.
 | 5th      | `llc-21` on `PATH`                                        | Distro / `apt.llvm.org` install of LLVM 21.                           |
 | 6th      | `llc` on `PATH`                                           | Reporting fallback only; rejected at runtime if older than LLVM 21.   |
 
-The pinned Rust toolchain (`nightly-2026-10-11`) ships LLVM 23 with NVPTX
+The pinned Rust toolchain (`1.99.1`) ships LLVM 23 with NVPTX
 enabled, so `rustup component add llvm-tools` is the recommended onboarding
 path. The PATH probes for `llc-23` / `llc-22` / `llc-21` are kept as a fallback for
 users with an existing LLVM install. If none of the probes succeed the
@@ -612,7 +612,10 @@ to the backend so the generated module is guaranteed to load on the local GPU.
 The full precedence is `--arch` > `CUDA_OXIDE_TARGET` > host CC (for `run`
 only) > backend feature-based default. `cargo oxide build` and
 `cargo oxide pipeline` deliberately skip the host-CC step so they remain
-usable for cross-compilation.
+usable for cross-compilation. Without an explicit target, a feature-based
+choice below the device-code floor -- `sm_80`, or the detected GPU if that is
+older -- is raised to it, so the module never targets less than
+the floor `cuda-device` primitives were lowered for.
 
 If the lowered module calls CUDA libdevice, cuda-oxide switches from `llc` to
 the NVVM path automatically. It resolves the target with the same precedence

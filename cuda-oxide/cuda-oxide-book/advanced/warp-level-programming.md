@@ -161,10 +161,20 @@ Three constraints:
   example does, on `ctx.compute_capability()`, or restrict the build to Ampere
   and newer.
 
-`warp_reduce` does not select this form for you today; making it do so
-automatically needs a way for device code to know its target architecture,
-which is the open question in
-[#811](https://github.com/NVlabs/cuda-oxide/issues/811).
+`warp_reduce` selects this form for you, for integer element types on a full
+32-lane tile, whenever the build's compute-capability floor is `sm_80` or
+newer. The compiler resolves that floor with the same rule the backend uses to
+choose a target. An explicit target (`--arch` or `CUDA_OXIDE_TARGET`) sets the
+floor. Without one it is `sm_80`, or the detected GPU
+(`CUDA_OXIDE_DEVICE_ARCH`) if that is older: a newer GPU never raises it,
+because the backend may still build for an older architecture the kernel
+needs. The branch is folded during MIR import before feature detection runs,
+so a build below the floor drops the `redux.sync` arm entirely and never emits
+an instruction it cannot assemble.
+
+Calling `redux_sync_add` and friends directly is still the right move when you
+want the single instruction regardless of the surrounding generic code, and it
+is the only option for a sub-warp tile.
 
 ### Floats on Blackwell: `redux.sync` for `f32`
 

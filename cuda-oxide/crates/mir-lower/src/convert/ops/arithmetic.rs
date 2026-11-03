@@ -13,7 +13,8 @@
 //! | Category      | MIR Operations                    | LLVM Operations                              |
 //! |---------------|-----------------------------------|----------------------------------------------|
 //! | Integer Arith | `add`, `sub`, `mul`, `div`, `rem` | `add`, `sub`, `mul`, `sdiv`/`udiv`, `srem`/`urem` |
-//! | Float Arith   | `add`, `sub`, `mul`, `div`, `rem` | `fadd`, `fsub`, `fmul`, `fdiv`, `frem`       |
+//! | Float Arith   | `add`, `sub`, `mul`, `div`        | `fadd`, `fsub`, `fmul`, `fdiv`               |
+//! | Float Rem     | `rem`                             | `call __nv_fmodf` / `call __nv_fmod`         |
 //! | Unary         | `neg`, `not`                      | `fneg` / `sub 0, x`, `xor`                   |
 //! | Bitwise       | `and`, `or`, `xor`, `not`         | `and`, `or`, `xor`                           |
 //! | Shifts        | `shl`, `shr`                      | `shl`, `lshr`/`ashr`                         |
@@ -30,6 +31,7 @@
 use crate::convert::intrinsics::common::call_intrinsic;
 use crate::convert::types::convert_type;
 use crate::convert::types::{StructLayoutInfo, build_struct_slot_map};
+use crate::helpers;
 use dialect_mir::types::MirTupleType;
 use llvm_export::attributes::{
     FCmpPredicateAttr, FastmathFlags, FastmathFlagsAttr, ICmpPredicateAttr,
@@ -39,6 +41,7 @@ use llvm_export::op_interfaces::{BinArithOp, CastOpInterface, IntBinArithOpWithO
 use llvm_export::ops as llvm;
 use llvm_export::types as llvm_types;
 use pliron::builtin::attributes::IntegerAttr;
+use pliron::builtin::op_interfaces::CallOpCallable;
 use pliron::builtin::types::{FP32Type, FP64Type, IntegerType, Signedness};
 use pliron::context::{Context, Ptr};
 use pliron::irbuild::dialect_conversion::{DialectConversionRewriter, OperandsInfo};
@@ -244,7 +247,8 @@ pub(crate) fn convert_div(
     Ok(())
 }
 
-/// Convert `mir.rem` to `llvm.srem` (signed), `llvm.urem` (unsigned), or `llvm.frem` (float).
+/// Convert `mir.rem` to `llvm.srem` (signed), `llvm.urem` (unsigned), or a
+/// libdevice `fmod` call (float).
 ///
 /// Uses pre-conversion MIR operand type signedness to select between signed
 /// and unsigned integer remainder.
@@ -256,11 +260,11 @@ pub(crate) fn convert_rem(
 ) -> Result<()> {
     let (lhs, rhs) = get_binary_operands(op, ctx)?;
 
-    let llvm_op = if is_float_type(ctx, lhs) {
-        let frem = llvm::FRemOp::new(ctx, lhs, rhs);
-        add_fastmath_flags(ctx, frem.get_operation());
-        frem.get_operation()
-    } else if is_signed_int_op(ctx, op, operands_info)? {
+    if is_float_type(ctx, lhs) {
+        return convert_float_rem(ctx, rewriter, op, lhs, rhs);
+    }
+
+    let llvm_op = if is_signed_int_op(ctx, op, operands_info)? {
         llvm::SRemOp::new(ctx, lhs, rhs).get_operation()
     } else {
         llvm::URemOp::new(ctx, lhs, rhs).get_operation()
@@ -269,6 +273,89 @@ pub(crate) fn convert_rem(
     rewriter.insert_operation(ctx, llvm_op);
     rewriter.replace_operation(ctx, op, llvm_op);
     Ok(())
+}
+
+/// libdevice entry point for `f64` remainder.
+pub const LIBDEVICE_FMOD_F64: &str = "__nv_fmod";
+/// libdevice entry point for `f32` remainder (also used for `f16` after widening).
+pub const LIBDEVICE_FMOD_F32: &str = "__nv_fmodf";
+
+/// Convert float `mir.rem` to a libdevice `fmod` call.
+///
+/// Rust float `%` is C `fmod`: exact for every finite operand pair, with
+/// the sign of the dividend. `llvm.frem` is not a usable lowering on NVPTX,
+/// whose backend expands it to `a - trunc(a / b) * b` in floating point.
+/// That drifts by whole multiples of `b` once `a / b` is too large to be an
+/// exact integer (`1e20_f64 % 7.0` gave `-6144.0` instead of `2.0`), loses
+/// the sign of a zero result, and overflows to infinity when `a / b` does.
+///
+/// `f16` has no libdevice entry. It widens to `f32`, where `fmod` of two
+/// `f16` values is still exact and its result is representable in `f16`,
+/// then narrows back.
+fn convert_float_rem(
+    ctx: &mut Context,
+    rewriter: &mut DialectConversionRewriter,
+    op: Ptr<Operation>,
+    lhs: Value,
+    rhs: Value,
+) -> Result<()> {
+    let loc = op.deref(ctx).loc().clone();
+    let value_ty = lhs.get_type(ctx);
+    let (callee, call_ty) = if value_ty.deref(ctx).is::<FP64Type>() {
+        (LIBDEVICE_FMOD_F64, value_ty)
+    } else {
+        (LIBDEVICE_FMOD_F32, FP32Type::get(ctx).into())
+    };
+    let widen = value_ty != call_ty;
+
+    let (a, b) = if widen {
+        let a = llvm::FPExtOp::new(ctx, lhs, call_ty).get_operation();
+        set_empty_fastmath_flags(ctx, a);
+        rewriter.insert_operation(ctx, a);
+        let b = llvm::FPExtOp::new(ctx, rhs, call_ty).get_operation();
+        set_empty_fastmath_flags(ctx, b);
+        rewriter.insert_operation(ctx, b);
+        (a.deref(ctx).get_result(0), b.deref(ctx).get_result(0))
+    } else {
+        (lhs, rhs)
+    };
+
+    let func_ty = llvm_types::FuncType::get(ctx, call_ty, vec![call_ty, call_ty], false);
+    let parent_block = op
+        .deref(ctx)
+        .get_parent_block()
+        .ok_or_else(|| pliron::input_error!(loc.clone(), "float rem has no parent block"))?;
+    helpers::ensure_intrinsic_declared(ctx, parent_block, callee, func_ty)
+        .map_err(|e| pliron::input_error!(loc.clone(), "Failed to declare {callee}: {e}"))?;
+    let sym_name: pliron::identifier::Identifier = callee
+        .try_into()
+        .map_err(|e| pliron::input_error!(loc.clone(), "Invalid callee name: {:?}", e))?;
+    let call = llvm::CallOp::new(ctx, CallOpCallable::Direct(sym_name), func_ty, vec![a, b])
+        .get_operation();
+    rewriter.insert_operation(ctx, call);
+
+    let result = if widen {
+        let wide_result = call.deref(ctx).get_result(0);
+        let narrow = llvm::FPTruncOp::new(ctx, wide_result, value_ty).get_operation();
+        set_empty_fastmath_flags(ctx, narrow);
+        rewriter.insert_operation(ctx, narrow);
+        narrow
+    } else {
+        call
+    };
+    rewriter.replace_operation(ctx, op, result);
+    Ok(())
+}
+
+/// Attach empty fast-math flags to a float cast.
+///
+/// The cast verifiers require the `llvm_fast_math_flags` attribute to be
+/// present; the widening around `fmod` must stay exact, so it is empty.
+fn set_empty_fastmath_flags(ctx: &mut Context, op: Ptr<Operation>) {
+    let key: pliron::identifier::Identifier = "llvm_fast_math_flags".try_into().unwrap();
+    op.deref_mut(ctx)
+        .attributes
+        .set(key, FastmathFlagsAttr::default());
 }
 
 // ============================================================================

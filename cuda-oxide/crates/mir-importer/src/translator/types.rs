@@ -364,14 +364,6 @@ fn translate_pointer_like(
             let elem = shared_array_element_type(ctx, &substs, "SharedArray")?;
             Ok(facts::mint_shared_ptr_type(ctx, elem, origin).into())
         }
-        rustc_public::ty::TyKind::RigidTy(rustc_public::ty::RigidTy::Adt(adt_def, substs))
-            if is_cuda_device_adt(&adt_def, "SharedSlot") =>
-        {
-            // `*mut SharedSlot<T>` is the field of `SharedPtr<T>`: a pointer
-            // to a `T` in CTA-shared memory, by its type.
-            let elem = shared_array_element_type(ctx, &substs, "SharedSlot")?;
-            Ok(facts::mint_shared_ptr_type(ctx, elem, origin).into())
-        }
         rustc_public::ty::TyKind::RigidTy(rustc_public::ty::RigidTy::Adt(adt_def, _substs))
             if is_cuda_device_adt(&adt_def, "Barrier") =>
         {
@@ -670,6 +662,29 @@ pub fn translate_type(
             translate_pointer_like(ctx, &pointee, origin)
         }
         rustc_public::ty::TyKind::RigidTy(rustc_public::ty::RigidTy::Adt(adt_def, substs)) => {
+            if let Some(result) =
+                crate::translator::cute::pipeline::try_translate_tma_load_pipeline_type(
+                    ctx, rust_ty,
+                )
+            {
+                return result;
+            }
+            if let Some(result) =
+                crate::translator::cute::scheduler::try_translate_work_tile_type(ctx, rust_ty)
+            {
+                return result;
+            }
+            if let Some(result) =
+                crate::translator::cute::block_scaled::try_translate_block_scaled_type(ctx, rust_ty)
+            {
+                return result;
+            }
+            if let Some(result) =
+                crate::translator::cute::tensor::try_translate_tensor_view_type(ctx, rust_ty)
+            {
+                return result;
+            }
+
             // Get the trimmed name (just the type name without path)
             let trimmed_name = adt_def.trimmed_name();
 
@@ -726,14 +741,6 @@ pub fn translate_type(
                 // ThreadIndex is a newtype around usize - translate to usize
                 // The type safety is enforced at the Rust level, not the IR level
                 Ok(get_usize_type(ctx).into())
-            } else if is_cuda_device_adt(&adt_def, "SharedPtr") {
-                // `SharedPtr<T> { ptr: *mut SharedSlot<T> }` is a scalar-lowered
-                // newtype: the value is its field, a CTA-shared (`addrspace(3)`)
-                // pointer to `T`. Params, returns, locals and fields of type
-                // `SharedPtr<T>` are therefore shared pointers by type, across
-                // function boundaries.
-                let elem = shared_array_element_type(ctx, &substs, "SharedPtr")?;
-                Ok(facts::mint_shared_ptr_type(ctx, elem, facts::abi_shared_ptr_field()).into())
             } else if is_cuda_device_adt(&adt_def, "RangeToken") {
                 Ok(dialect_iket::types::IketRangeTokenType::get(ctx).into())
             } else if is_cuda_device_adt(&adt_def, "SharedArray") {
@@ -764,7 +771,11 @@ pub fn translate_type(
                     64,
                     pliron::builtin::types::Signedness::Unsigned,
                 );
-                Ok(llvm_export::types::ArrayType::get(ctx, i64_ty.into(), 16).into())
+                // Keep the opaque storage in MIR until backend lowering. A
+                // typed transparent wrapper retains this as a nested field;
+                // injecting an LLVM array here bypasses MIR aggregate layout
+                // handling and breaks the explicit MLIR exporter.
+                Ok(dialect_mir::types::MirArrayType::get(ctx, i64_ty.into(), 16).into())
             } else {
                 // Generic ADT handling for user-defined structs and enums
                 let variants = adt_def.variants();
@@ -875,10 +886,8 @@ pub fn translate_type(
                             // Total struct size (bytes)
                             let size: u64 = shape.size.bytes() as u64;
                             let abi_kind = if adt_def.repr().flags.is_transparent
-                                && matches!(
-                                    &shape.value_repr,
-                                    rustc_public::abi::ValueRepr::Scalar(_)
-                                ) {
+                                && matches!(&shape.abi, rustc_public::abi::ValueAbi::Scalar(_))
+                            {
                                 StructAbiKind::TransparentScalar
                             } else {
                                 StructAbiKind::Aggregate

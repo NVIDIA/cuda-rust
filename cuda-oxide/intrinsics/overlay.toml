@@ -41,6 +41,7 @@ shards = [
     "overlay/register_mma_int4_m8.toml",
     "overlay/register_mma_int8.toml",
     "overlay/register_mma_int8_m8.toml",
+    "overlay/register_mma_mxf4_f32.toml",
     "overlay/register_mma_mxf8f6f4_f32.toml",
     "overlay/scalar_arithmetic.toml",
     "overlay/scalar_conversion.toml",

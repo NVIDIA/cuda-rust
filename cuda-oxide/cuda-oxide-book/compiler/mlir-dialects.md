@@ -83,13 +83,13 @@ the GPU memory hierarchy:
 
 ### Operations
 
-`dialect-mir` defines 62 operations across 12 categories, one per module under
+`dialect-mir` defines 63 operations across 12 categories, one per module under
 `cuda-oxide/crates/dialect-mir/src/ops/`:
 
 | Category     | Examples                                                                                                                                                                                            | Count |
 | :----------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----: |
 | Function     | `mir.func`                                                                                                                                                                                          |     1 |
-| Control flow | `mir.goto`, `mir.cond_br`, `mir.return`, `mir.assert`, `mir.unreachable`, `mir.unroll_hint`                                                                                                         |     6 |
+| Control flow | `mir.goto`, `mir.cond_br`, `mir.return`, `mir.assert`, `mir.unreachable`, `mir.unroll_hint`, `mir.nounroll_hint`                                                                                    |     7 |
 | Constants    | `mir.constant`, `mir.float_constant`, `mir.undef`                                                                                                                                                   |     3 |
 | Memory       | `mir.alloca`, `mir.load`, `mir.store`, `mir.assign`, `mir.ref`, `mir.ptr_offset`, `mir.memcpy`, `mir.memmove`, `mir.shared_alloc`, `mir.global_alloc`, `mir.extern_shared`                          |    11 |
 | Arithmetic   | `mir.add`, `mir.sub`, `mir.mul`, `mir.div`, `mir.rem`, `mir.checked_add`, `mir.checked_sub`, `mir.checked_mul`, `mir.neg`, `mir.not`, `mir.shr`, `mir.shl`, `mir.bitand`, `mir.bitor`, `mir.bitxor` |    15 |
@@ -312,7 +312,7 @@ catalog you are reading.
 
 **Hand-written**, directly under `cuda-oxide/crates/dialect-nvvm/src/ops/`. These are the
 ops with bespoke verification or lowering that the intrinsic catalog does not
-describe. There are seven modules and 26 operations:
+describe. There are seven modules and 27 operations:
 
 | Module    | Description                                                 | Ops |
 | :-------- | :---------------------------------------------------------- | --: |
@@ -321,7 +321,7 @@ describe. There are seven modules and 26 operations:
 | `cluster` | Cluster index and cluster-count registers                   |   2 |
 | `debug`   | `assertfail`, `vprintf`                                     |   2 |
 | `grid`    | Cooperative `grid_sync`                                     |   1 |
-| `memory`  | Generic-to-shared address conversion with a byte offset     |   1 |
+| `memory`  | Generic-to-shared address conversion and global stores     |   2 |
 | `wgmma`   | Warpgroup MMA descriptors; bf16/f16 at m64n64k16, bf16 at m64n128k16, tf32 at m64n64k8 |  14 |
 
 **Generated**, under `ops/generated/`, from `intrinsics/catalog.json` by
@@ -336,7 +336,7 @@ entries, since several intrinsics can share one structural op:
 | Tensor Memory Accelerator   | `tma`                                                                         | 116 |
 | Special registers           | `sreg`                                                                        |  44 |
 | Packed (SIMD-in-register)   | `packed_alu`, `packed_conversion`, `packed_atomic`                            |  55 |
-| Async copy and barriers     | `cp_async`, `mbarrier_extended`, `mbarrier_basic`, `sync`                     |  35 |
+| Async copy and barriers     | `cp_async`, `mbarrier_extended`, `mbarrier_basic`, `sync`                     |  38 |
 | Warp-level                  | `warp_shuffle`, `redux`, `vote`, `warp_match`, `warp_barrier`, `active_mask`, `elect` |  39 |
 | Matrix fragment movement    | `ldmatrix`, `register_mma`, `stmatrix`, `wgmma_control`, `movmatrix`, `sparse_mma` |  22 |
 | Execution and debug control | `execution_control`, `debug_control`                                          |  11 |

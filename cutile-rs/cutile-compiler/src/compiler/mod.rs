@@ -23,6 +23,7 @@ mod compile_global;
 mod compile_inline;
 mod compile_intrinsic;
 mod compile_type;
+mod launch_checks;
 pub mod optimization_hints;
 pub mod shared_types;
 pub mod shared_utils;

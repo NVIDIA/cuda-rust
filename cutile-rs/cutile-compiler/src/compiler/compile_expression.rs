@@ -1018,7 +1018,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 "`with_bounds` bound {axis}: the partitioned extent must be divisible by the tile \
                  extent {tile_dim}, or the declared bound undercounts the tiles on axis {axis}"
             );
-            if self.lower_obligation(divisibility, cause) {
+            if self.lower_obligation(divisibility, cause, span) {
                 return Ok(());
             }
         }
@@ -1056,8 +1056,8 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                         (c - 1) * tile_dim,
                         c * tile_dim
                     );
-                    if self.lower_obligation(above, cause.clone())
-                        && self.lower_obligation(not_above, cause)
+                    if self.lower_obligation(above, cause.clone(), span)
+                        && self.lower_obligation(not_above, cause, span)
                     {
                         return Ok(());
                     }
@@ -1357,7 +1357,13 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     }
                 }
                 if let (Some(receiver_name), Some(other_name)) = (&receiver_name, &other_name) {
-                    if self.resolve_dim_eq(receiver_name, axis, other_name, axis) {
+                    if self.resolve_dim_eq(
+                        receiver_name,
+                        axis,
+                        other_name,
+                        axis,
+                        &method_call.span(),
+                    ) {
                         self.check_stats
                             .discharged
                             .set(self.check_stats.discharged.get() + 1);

@@ -1,0 +1,9 @@
+/target/
+/.venv/
+/__pycache__/
+/comparison-results.json
+/validation-results.json
+/benchmark-results.json
+*.cubin
+*.ptx
+*.mlir

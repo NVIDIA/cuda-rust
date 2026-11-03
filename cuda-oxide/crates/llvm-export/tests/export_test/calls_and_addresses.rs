@@ -375,3 +375,66 @@ fn export_addressof_uses_symbol_when_definition_block_prints_later() {
     );
     assert_no_undefined_temporaries(&legacy);
 }
+
+#[test]
+fn mangled_array_from_fn_specializations_keep_distinct_definitions_and_references() {
+    // Actual try_from_fn::<_, 1, _> and try_from_fn::<_, 4, _> symbols from
+    // the rejected bending action. The device marker belongs to a closure
+    // type nested inside each mangling, not to the outer function's name.
+    const NAMES: [&str; 2] = [
+        "_RINvNtCsj07cU7DEYcL_4core5array11try_from_fnINtNtNtB4_3ops9try_trait17NeverShortCircuitfEKj1_NCINvMBJ_BG_10wrap_mut_1jNCINvNtNtNtCsfx7suP8A0eq_17cloth_solver_cuda9mechanics7bending11compensated62cuda_oxide_codegen_v1_cuda_oxide_device_246e25db_apply_factorsKB1q_E0E0EB23_",
+        "_RINvNtCsj07cU7DEYcL_4core5array11try_from_fnINtNtNtB4_3ops9try_trait17NeverShortCircuitfEKj4_NCINvMBJ_BG_10wrap_mut_1jNCINvNtNtNtCsfx7suP8A0eq_17cloth_solver_cuda9mechanics7bending11compensated62cuda_oxide_codegen_v1_cuda_oxide_device_246e25db_apply_factorsKB1q_E0E0EB23_",
+    ];
+    let mut ctx = Context::new();
+    let module = ModuleOp::new(&mut ctx, "mangled_arrays".try_into().unwrap());
+    let block = module_top_block(&mut ctx, &module);
+    let void_ty = VoidType::get(&ctx);
+    let ty = FuncType::get(&ctx, void_ty.into(), vec![], false);
+    let caller = FuncOp::new(&mut ctx, "caller".try_into().unwrap(), ty);
+    let entry = caller.get_or_create_entry_block(&mut ctx);
+    for name in NAMES {
+        CallOp::new(
+            &mut ctx,
+            CallOpCallable::Direct(name.try_into().unwrap()),
+            ty,
+            vec![],
+        )
+        .get_operation()
+        .insert_at_back(entry, &ctx);
+        let address = AddressOfOp::new(&mut ctx, name.try_into().unwrap(), 0);
+        let value = address.get_operation().deref(&ctx).get_result(0);
+        address.get_operation().insert_at_back(entry, &ctx);
+        CallOp::new(&mut ctx, CallOpCallable::Indirect(value), ty, vec![])
+            .get_operation()
+            .insert_at_back(entry, &ctx);
+        let target = FuncOp::new(&mut ctx, name.try_into().unwrap(), ty);
+        let target_entry = target.get_or_create_entry_block(&mut ctx);
+        ReturnOp::new(&mut ctx, None)
+            .get_operation()
+            .insert_at_back(target_entry, &ctx);
+        target.get_operation().insert_at_back(block, &ctx);
+    }
+    ReturnOp::new(&mut ctx, None)
+        .get_operation()
+        .insert_at_back(entry, &ctx);
+    caller.get_operation().insert_at_back(block, &ctx);
+    for dialect in [NvvmIrDialect::Modern, NvvmIrDialect::LegacyLlvm7] {
+        let ir =
+            export_module_to_string_with_config(&ctx, &module, &NvvmExportConfig::new(dialect))
+                .expect("mangled specializations must remain distinct");
+        for name in NAMES {
+            assert!(ir.contains(&format!("define void @{name}()")), "{ir}");
+            assert_eq!(
+                ir.matches(&format!("call void @{name}()")).count(),
+                1 + usize::from(dialect == NvvmIrDialect::Modern),
+                "{ir}"
+            );
+            if dialect == NvvmIrDialect::LegacyLlvm7 {
+                assert!(
+                    ir.contains(&format!("bitcast void ()* @{name} to i8*")),
+                    "{ir}"
+                );
+            }
+        }
+    }
+}

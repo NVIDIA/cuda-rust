@@ -10,6 +10,7 @@ use cutile::compile_api::{CheckPlacementCounts, KernelCompiler};
 use cutile_compiler::ast::Module;
 use cutile_compiler::compiler::utils::CompileOptions;
 use cutile_compiler::error::JITError;
+use cutile_compiler::jit_env::{JIT_DEBUG_ENV, JIT_OPT_LEVEL_ENV, JIT_SANITIZE_ENV};
 use cutile_compiler::specialization::{DivHint, SpecializationBits};
 
 /// Runtime prerequisites only. Failed discovery is a test failure; an
@@ -161,4 +162,36 @@ where
     compiler
         .compile()
         .map(|artifacts| (artifacts.ir_text(), artifacts.check_counts()))
+}
+
+/// Names the case a child process was spawned to run.
+const JIT_ENV_CASE: &str = "CUTILE_TEST_JIT_ENV_CASE";
+
+/// The case this process runs, when [`run_jit_env_case`] spawned it.
+#[allow(dead_code)]
+pub fn jit_env_case() -> Option<String> {
+    std::env::var(JIT_ENV_CASE).ok()
+}
+
+/// Runs `test` in a fresh process whose only `CUTILE_JIT_*` settings are the
+/// ones in `vars`, and returns its stdout and stderr. The overrides are read
+/// once per process, so each setting needs a process of its own.
+#[allow(dead_code)]
+pub fn run_jit_env_case(test: &str, case: &str, vars: &[(&str, &str)]) -> String {
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([test, "--exact", "--nocapture", "--test-threads=1"])
+        .env_remove(JIT_DEBUG_ENV)
+        .env_remove(JIT_OPT_LEVEL_ENV)
+        .env_remove(JIT_SANITIZE_ENV)
+        .envs(vars.iter().copied())
+        .env(JIT_ENV_CASE, case)
+        .output()
+        .expect("spawn child test process");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success() && stdout.contains("1 passed"),
+        "case {case} with {vars:?} failed.\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    format!("{stdout}{stderr}")
 }

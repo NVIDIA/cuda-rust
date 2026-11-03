@@ -1,0 +1,37 @@
+error[E0277]: the trait bound `Swizzled2D<128, 32, Swizzle64>: MmaInputFormat` is not satisfied
+  --> tests/compile_fail/primitives_mma_output_format.rs:13:47
+   |
+13 | fn wrong(a:&SharedRegion<F16TileC>) { let _ = SmemOperand::<OperandA,F16TileC>::from_region(a); }
+   |                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `MmaInputFormat` is not implemented for `Swizzled2D<128, 32, Swizzle64>`
+   |
+help: the following other types implement trait `MmaInputFormat`
+  --> src/tcgen05/descriptors.rs
+   |
+   | macro_rules! input { ($($f:ty),*) => { $(impl sealed::Input for $f {} impl MmaInputFormat for $f {})* }; }
+   |                                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |                                                                       |
+   |                                                                       `Swizzled2D<128, 64, Swizzle128>`
+   |                                                                       `Swizzled2D<80, 64, Swizzle128>`
+   |                                                                       `Swizzled2D<96, 64, Swizzle128>`
+   | input!(F16Tile128, F16TileB96, F16TileB80);
+   | ------------------------------------------ in this macro invocation
+note: required by a bound in `ctm_rs::tcgen05::descriptors::SmemOperand`
+  --> src/tcgen05/descriptors.rs
+   |
+   | pub struct SmemOperand<'s, R: OperandRole, F: MmaInputFormat> {
+   |                                               ^^^^^^^^^^^^^^ required by this bound in `SmemOperand`
+   = note: this error originates in the macro `input` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the associated function or constant `from_region` exists for struct `ctm_rs::tcgen05::descriptors::SmemOperand<'_, ctm_rs::tcgen05::descriptors::OperandA, Swizzled2D<128, 32, Swizzle64>>`, but its trait bounds were not satisfied
+  --> tests/compile_fail/primitives_mma_output_format.rs:13:81
+   |
+13 | fn wrong(a:&SharedRegion<F16TileC>) { let _ = SmemOperand::<OperandA,F16TileC>::from_region(a); }
+   |                                                                                 ^^^^^^^^^^^ associated function or constant cannot be called due to unsatisfied trait bounds
+   |
+  ::: src/memory.rs
+   |
+   | pub struct Swizzled2D<const ROWS: usize, const COLS: usize, Swizzle>(
+   | -------------------------------------------------------------------- doesn't satisfy `Swizzled2D<128, 32, Swizzle64>: MmaInputFormat`
+   |
+   = note: the following trait bounds were not satisfied:
+           `Swizzled2D<128, 32, Swizzle64>: MmaInputFormat`

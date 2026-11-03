@@ -604,6 +604,81 @@ fn validate_monomorphized_successors(
     Ok(())
 }
 
+/// Narrow `SwitchInt` terminators controlled by `__target_has_integer_redux_sync`
+/// to the single arm selected by the resolved target floor (`sm_80+` vs below).
+pub fn narrow_target_predicate_switches(
+    body: &mir::Body,
+    mono_successors: &[Vec<usize>],
+    has_integer_redux_sync: bool,
+) -> Vec<Vec<usize>> {
+    use rustc_public::mir::{Operand, StatementKind, TerminatorKind};
+    use rustc_public::ty::{RigidTy, TyKind};
+
+    let mut narrowed = mono_successors.to_vec();
+    for block in &body.blocks {
+        let TerminatorKind::Call {
+            func,
+            destination,
+            target: Some(next_bb),
+            ..
+        } = &block.terminator.kind
+        else {
+            continue;
+        };
+        if !destination.projection.is_empty() || *next_bb >= body.blocks.len() {
+            continue;
+        }
+        let is_redux_predicate = func.ty(body.locals()).ok().is_some_and(|ty| {
+            matches!(
+                ty.kind(),
+                TyKind::RigidTy(RigidTy::FnDef(def, _))
+                    if def.name() == "cuda_device::warp::__target_has_integer_redux_sync"
+                        || def.name().ends_with("::__target_has_integer_redux_sync")
+            )
+        });
+        if !is_redux_predicate {
+            continue;
+        }
+        let next_block = &body.blocks[*next_bb];
+        let overwritten = next_block.statements.iter().any(|stmt| {
+            matches!(
+                &stmt.kind,
+                StatementKind::Assign(place, _) if place.local == destination.local
+            )
+        });
+        if overwritten {
+            continue;
+        }
+        let TerminatorKind::SwitchInt {
+            discr: Operand::Move(place) | Operand::Copy(place),
+            targets,
+        } = &next_block.terminator.kind
+        else {
+            continue;
+        };
+        if !place.projection.is_empty() || place.local != destination.local {
+            continue;
+        }
+        let chosen = if has_integer_redux_sync {
+            targets
+                .branches()
+                .find(|(val, _)| *val == 1)
+                .map_or_else(|| targets.otherwise(), |(_, target)| target)
+        } else {
+            targets
+                .branches()
+                .find(|(val, _)| *val == 0)
+                .map_or_else(|| targets.otherwise(), |(_, target)| target)
+        };
+        if let Some(edges) = narrowed.get_mut(*next_bb)
+            && edges.contains(&chosen)
+        {
+            *edges = vec![chosen];
+        }
+    }
+    narrowed
+}
+
 /// BFS from the entry block following rustc's exact per-block monomorphized
 /// successors, intersected with the importer's existing non-unwind policy.
 ///
@@ -2154,8 +2229,9 @@ pub fn translate_body(
         for arg_idx in 0..num_args {
             let local = mir::Local::from(arg_idx + 1);
             let source_ty = &body.locals()[local].ty;
-            let Some(validity) = facts::reference_param_validity(source_ty, &fn_abi, arg_idx)
-                .map_err(|error| input_error_noloc!(TranslationErr::invalid_op(error)))?
+            let Some(validity) =
+                facts::reference_param_validity(instance, source_ty, &fn_abi, arg_idx)
+                    .map_err(|error| input_error_noloc!(TranslationErr::invalid_op(error)))?
             else {
                 continue;
             };
@@ -2375,7 +2451,7 @@ pub fn translate_body(
     }
 
     if let Some(scope_map) = debug_source_scopes
-        && debug_kind.variables_enabled()
+        && debug_kind.line_tables_enabled()
     {
         llvm_export::ops::set_debug_source_scope_map(ctx, op_ptr, scope_map);
     }
@@ -2740,6 +2816,138 @@ pub fn cuda_oxide_device_generated_kernel(mut wrapped: Wrapper<u16>) -> u32 {
                 "expected a Rust linkage symbol, got {mangled_name}"
             );
         }
+    }
+
+    /// Import a real MIR body with the source-scope sidecar supplied by the
+    /// codegen bridge, then verify its inline provenance survives MIR lowering.
+    /// Line tables need these scopes even when variable debug info is disabled.
+    #[test]
+    fn imported_inline_scopes_survive_lowering_in_line_table_and_full_modes() {
+        use llvm_export::ops::{DebugInlinedScope, DebugSourceScope};
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "cuda_oxide_inline_scopes_{}_{}",
+            std::process::id(),
+            unique
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let fixture = root.join("entry.rs");
+        std::fs::write(&fixture, "pub fn entry() {}\n").unwrap();
+        let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+        let sysroot = std::process::Command::new(rustc)
+            .args(["--print", "sysroot"])
+            .output()
+            .unwrap();
+        assert!(sysroot.status.success());
+        let args = vec![
+            "rustc".to_string(),
+            "--edition=2024".to_string(),
+            "--crate-type=rlib".to_string(),
+            "--emit=metadata".to_string(),
+            format!("--out-dir={}", root.display()),
+            format!(
+                "--sysroot={}",
+                String::from_utf8(sysroot.stdout).unwrap().trim()
+            ),
+            fixture.display().to_string(),
+        ];
+        let worker_root = root.clone();
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                rustc_public::run!(&args, || {
+                    let item = rustc_public::all_local_items()
+                        .into_iter()
+                        .find(|item| item.name().ends_with("::entry"))
+                        .unwrap();
+                    let instance = mono::Instance::try_from(item).unwrap();
+                    let body = instance.body().unwrap();
+                    let successors: Vec<_> = body
+                        .blocks
+                        .iter()
+                        .map(|block| block.terminator.successors())
+                        .collect();
+                    let caller = DebugSourcePosition {
+                        file: fixture,
+                        line: 1,
+                        column: 1,
+                    };
+                    let scopes = DebugSourceScopeMap {
+                        scopes: vec![
+                            DebugSourceScope {
+                                id: 0,
+                                parent: None,
+                                span: Some(caller.clone()),
+                                inlined: None,
+                            },
+                            DebugSourceScope {
+                                id: 1,
+                                parent: Some(0),
+                                span: Some(DebugSourcePosition {
+                                    file: worker_root.join("helper.rs"),
+                                    line: 279,
+                                    column: 5,
+                                }),
+                                inlined: Some(DebugInlinedScope {
+                                    callee_name: "helper::group_rank".to_string(),
+                                    callsite: Some(caller),
+                                }),
+                            },
+                        ],
+                        locations: vec![],
+                    };
+                    for kind in [DebugKind::Off, DebugKind::LineTables, DebugKind::Full] {
+                        let mut ctx = Context::new();
+                        crate::translator::register_dialects(&mut ctx);
+                        let module = ModuleOp::new(&mut ctx, "test".try_into().unwrap());
+                        let region = module.get_operation().deref(&ctx).get_region(0);
+                        let block = region.deref(&ctx).iter(&ctx).next().unwrap();
+                        let function = translate_body(
+                            &mut ctx,
+                            &body,
+                            &instance,
+                            body.blocks.len(),
+                            &successors,
+                            false,
+                            None,
+                            Some("entry"),
+                            &mut Legaliser::default(),
+                            kind,
+                            Some(&scopes),
+                            None,
+                        )
+                        .unwrap();
+                        function.insert_at_back(block, &ctx);
+                        mir_lower::register(&mut ctx);
+                        mir_lower::lower_mir_to_llvm(&mut ctx, module.get_operation()).unwrap();
+                        let lowered = block
+                            .deref(&ctx)
+                            .iter(&ctx)
+                            .find(|op| {
+                                Operation::get_op::<llvm_export::ops::FuncOp>(*op, &ctx).is_some()
+                            })
+                            .unwrap();
+                        let expected = match kind {
+                            DebugKind::Off => None,
+                            DebugKind::LineTables | DebugKind::Full => Some(scopes.clone()),
+                        };
+                        assert_eq!(
+                            llvm_export::ops::debug_source_scope_map(&ctx, lowered),
+                            expected
+                        );
+                    }
+                    std::ops::ControlFlow::<(), _>::Continue(())
+                })
+                .expect("fixture compilation succeeds");
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        std::fs::remove_dir_all(root).ok();
     }
 
     #[test]

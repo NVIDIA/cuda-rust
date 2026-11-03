@@ -407,7 +407,7 @@ fn generate_cuda_module_legacy_launch_method(kernel: &CudaModuleKernel) -> Token
         #vis unsafe fn #fn_name #impl_generics (
             &self,
             #stream: &::cuda_core::CudaStream,
-            #config: ::cuda_core::simt::LaunchConfig,
+            #config: ::cuda_core::LaunchConfig,
             #(#params),*
         ) -> ::core::result::Result<(), ::cuda_core::DriverError>
         #where_clause
@@ -493,7 +493,7 @@ fn generate_cuda_module_prepared_launch_method(kernel: &CudaModuleKernel) -> Tok
         #vis unsafe fn #unchecked_name #impl_generics (
             &self,
             #stream: &::cuda_core::CudaStream,
-            #config: ::cuda_core::simt::LaunchConfig,
+            #config: ::cuda_core::LaunchConfig,
             #(#params),*
         ) -> ::core::result::Result<(), ::cuda_core::DriverError>
         #where_clause
@@ -556,7 +556,7 @@ fn generate_cuda_module_legacy_async_launch_method(kernel: &CudaModuleKernel) ->
         #[allow(clippy::multiple_bound_locations, clippy::too_many_arguments)]
         #vis unsafe fn #fn_name #impl_generics (
             &self,
-            #config: ::cuda_core::simt::LaunchConfig,
+            #config: ::cuda_core::LaunchConfig,
             #(#params),*
         ) -> ::core::result::Result<::cuda_host::AsyncKernelLaunch<#async_lifetime>, ::cuda_core::DriverError>
         #where_clause
@@ -681,7 +681,7 @@ fn generate_cuda_module_prepared_async_launch_method(kernel: &CudaModuleKernel) 
         #[allow(clippy::multiple_bound_locations, clippy::too_many_arguments)]
         #vis unsafe fn #unchecked_name #impl_generics (
             &self,
-            #config: ::cuda_core::simt::LaunchConfig,
+            #config: ::cuda_core::LaunchConfig,
             #(#params),*
         ) -> ::core::result::Result<
             ::cuda_host::AsyncKernelLaunch<#async_lifetime>,
@@ -784,7 +784,7 @@ fn generate_cuda_module_legacy_owned_async_launch_method(
         #[allow(clippy::multiple_bound_locations, clippy::too_many_arguments)]
         #vis unsafe fn #fn_name #impl_generics (
             &self,
-            #config: ::cuda_core::simt::LaunchConfig,
+            #config: ::cuda_core::LaunchConfig,
             #(#params),*
         ) -> ::core::result::Result<::cuda_host::OwnedAsyncKernelLaunch<#resources_ty>, ::cuda_core::DriverError>
         #where_clause
@@ -955,7 +955,7 @@ fn generate_cuda_module_prepared_owned_async_launch_method(
         #[allow(clippy::multiple_bound_locations, clippy::too_many_arguments)]
         #vis unsafe fn #unchecked_name #impl_generics (
             &self,
-            #config: ::cuda_core::simt::LaunchConfig,
+            #config: ::cuda_core::LaunchConfig,
             #(#params),*
         ) -> ::core::result::Result<
             ::cuda_host::OwnedAsyncKernelLaunch<#resources_ty>,

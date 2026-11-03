@@ -5,8 +5,11 @@
 
 //! Backend configuration traits and built-in implementations.
 
-/// Minimal data layout for PTX mode (default behavior).
-pub(super) const NVPTX_DATALAYOUT_PTX: &str = "e-i64:64-i128:128-v16:16-v32:32-n16:32:64";
+/// Data layout for PTX mode (default behavior).
+///
+/// Matches `nvcc` and `libNVVM` (`NVPTX_DATALAYOUT_FULL`), declaring 32-bit
+/// shared-memory pointers (`p3:32:32:32`) and 64-bit generic/global pointers.
+pub(super) const NVPTX_DATALAYOUT_PTX: &str = NVPTX_DATALAYOUT_FULL;
 
 /// Full NVPTX data layout for libNVVM/LTOIR mode (Blackwell+, modern dialect).
 ///

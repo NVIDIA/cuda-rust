@@ -1111,6 +1111,14 @@ pub(super) fn validate_renderable(catalog: &CatalogFile) -> Result<()> {
                                     MbarrierExtendedAdapter::RawClusterAddressToVoid,
                                 ) => record.id == "mbarrier_arrive_cluster",
                                 (
+                                    MbarrierExtendedOperation::ArriveRemoteClusterRelaxed,
+                                    MbarrierExtendedAdapter::RawClusterAddressToVoid,
+                                ) => record.id == "mbarrier_arrive_cluster_relaxed",
+                                (
+                                    MbarrierExtendedOperation::TryWaitParityClusterRelaxed,
+                                    MbarrierExtendedAdapter::PointerParityToPredicate,
+                                ) => record.id == "mbarrier_try_wait_parity_cluster_relaxed",
+                                (
                                     MbarrierExtendedOperation::TryWaitTokenCta,
                                     MbarrierExtendedAdapter::PointerTokenToPredicate,
                                 ) => record.id == "mbarrier_try_wait",
@@ -1140,6 +1148,10 @@ pub(super) fn validate_renderable(catalog: &CatalogFile) -> Result<()> {
                                     MbarrierExtendedAdapter::ZeroOperandsToVoid,
                                 ) => record.id
                                     == "fence_proxy_async_generic_acquire_shared_cluster_cluster",
+                                (
+                                    MbarrierExtendedOperation::FenceAcquireSharedClusterCluster,
+                                    MbarrierExtendedAdapter::ZeroOperandsToVoid,
+                                ) => record.id == "fence_acquire_shared_cluster_cluster",
                                 (
                                     MbarrierExtendedOperation::Nanosleep,
                                     MbarrierExtendedAdapter::NanosecondsToVoid,

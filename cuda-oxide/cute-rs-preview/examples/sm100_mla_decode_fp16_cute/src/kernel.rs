@@ -261,7 +261,10 @@ unsafe fn load_qk(
     rank: u32,
     first: bool,
 ) {
-    let page = pages.wait_and_read_page_index(page_ticket, smem.add(PT));
+    pages.wait(page_ticket);
+    let page = *smem
+        .add(PT + (page_ticket as usize % 8) * 256)
+        .cast::<i32>();
     if first {
         query.acquire(q_ticket);
         if rank == 0 && elect_one_sync() {
@@ -330,7 +333,10 @@ unsafe fn load_v(
 ) {
     // Every lane now owns its page index in a register; release the slot
     // before issuing V copies so the page producer can advance.
-    let page = pages.read_page_index_and_release(page_ticket, smem.add(PT));
+    let page = *smem
+        .add(PT + (page_ticket as usize % 8) * 256)
+        .cast::<i32>();
+    pages.consumer_release(page_ticket);
     let mut kpart = 0;
     while kpart < 4 {
         let mut npart = 0;
@@ -440,7 +446,7 @@ unsafe fn softmax_tile<const LAST: bool>(
             wid,
             384 + (state.correction_ticket % 2) * 4,
         ));
-        correction.commit_local_tmem(state.correction_ticket);
+        correction.producer_commit(state.correction_ticket);
     }
     let row = lane + (wid % 2) * 32;
     let probabilities = SharedTileArray::<PLayout, OperandA, 8>::from_raw(smem.add(P).cast());
@@ -489,7 +495,7 @@ unsafe fn softmax_tile<const LAST: bool>(
             wid,
             384 + (state.correction_ticket % 2) * 4,
         ));
-        correction.commit_local_tmem(state.correction_ticket);
+        correction.producer_commit(state.correction_ticket);
     }
     fence_view_async_tmem_load();
     score.thread_empty(state.score_ticket);
@@ -594,13 +600,18 @@ pub mod kernels {
                     if count > 0 {
                         let mut tile = first_tile;
                         while tile < end_tile {
-                            pages.stage_page_index(
-                                page_ticket,
-                                smem.add(PT),
-                                page_table,
-                                (b * total_tiles + tile) as usize,
-                                lane,
-                            );
+                            pages.acquire(page_ticket);
+                            let dst = smem
+                                .add(PT + (page_ticket as usize % 8) * 256)
+                                .cast::<u32>();
+                            if lane == 0 {
+                                let src = page_table
+                                    .as_ptr()
+                                    .add((b * total_tiles + tile) as usize)
+                                    .cast::<u32>();
+                                cute_rs::arch::cp_async_shared_global(dst, src);
+                            }
+                            pages.producer_commit(page_ticket);
                             page_ticket += 1;
                             tile += 1;
                         }
@@ -784,7 +795,7 @@ pub mod kernels {
                                 cw,
                                 384 + (c_ticket % 2) * 4,
                             ));
-                            correction.release_local_tmem(c_ticket);
+                            correction.consumer_release(c_ticket);
                             c_ticket += 1;
                             if tile > 0 {
                                 output.wait(o_ticket);

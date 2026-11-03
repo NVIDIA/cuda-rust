@@ -980,3 +980,99 @@ pub fn fma_packed_f32x2(a: PackedF32x2, b: PackedF32x2, c: PackedF32x2) -> Packe
 pub fn cvt_f16x2_f32(lo: f32, hi: f32) -> u32 {
     ctm_rs::convert::cvt_f16x2_f32(lo, hi)
 }
+
+/// Convert two `f32` values to packed round-to-nearest-even saturating `e4m3x2` bits (`cvt.rn.satfinite.e4m3x2.f32`).
+///
+/// `lo` occupies bits `0..7` and `hi` occupies bits `8..15` of the returned `u16`.
+#[must_use]
+#[inline(always)]
+pub fn cvt_e4m3x2_f32(lo: f32, hi: f32) -> u16 {
+    ctm_rs::convert::cvt_rn_satfinite_e4m3x2_f32(lo, hi)
+}
+
+/// Initialize a CTA-shared `mbarrier` with expected arrival count `count` (`cute.arch.mbarrier_init`).
+///
+/// # Safety
+/// Call from one elected thread on an uninitialized or invalidated 8-byte-aligned shared barrier.
+#[inline(always)]
+pub unsafe fn mbarrier_init(bar: *mut ctm_rs::mbarrier::Barrier, count: u32) {
+    unsafe { ctm_rs::mbarrier::mbarrier_init(bar, count) }
+}
+
+/// Spin-wait on a CTA-shared `mbarrier` until it completes `phase` (`cute.arch.mbarrier_wait`).
+///
+/// # Safety
+/// `bar` must point to a live initialized CTA-shared barrier.
+#[inline(always)]
+pub unsafe fn mbarrier_wait(bar: *const ctm_rs::mbarrier::Barrier, phase: u32) {
+    while !unsafe { ctm_rs::mbarrier::mbarrier_try_wait_parity(bar, phase) } {}
+}
+
+/// Arrive once on a CTA-shared `mbarrier` (`cute.arch.mbarrier_arrive`).
+///
+/// # Safety
+/// `bar` must point to a live initialized CTA-shared barrier and the caller must be an expected participant.
+#[inline(always)]
+pub unsafe fn mbarrier_arrive(bar: *mut ctm_rs::mbarrier::Barrier) {
+    let _ = unsafe { ctm_rs::mbarrier::mbarrier_arrive(bar) };
+}
+
+/// Issue one 4-byte `cp.async.ca.shared.global` copy from `src` to `dst` (`cute.arch.cp_async_shared_global`).
+///
+/// # Safety
+/// `dst` and `src` must be 4-byte-aligned live shared and global addresses.
+#[inline(always)]
+pub unsafe fn cp_async_shared_global(dst: *mut u32, src: *const u32) {
+    unsafe {
+        ctm_rs::async_copy::cp_async_ca_4(SharedAddress::from_raw(dst), &*src);
+    }
+}
+
+/// Attach pending `cp.async` copies from this thread to `bar` without incrementing its count.
+///
+/// # Safety
+/// `bar` must point to a live initialized CTA-shared barrier.
+#[inline(always)]
+pub unsafe fn cp_async_mbarrier_arrive_noinc(bar: *mut ctm_rs::mbarrier::Barrier) {
+    unsafe {
+        ctm_rs::async_copy::cp_async_mbarrier_arrive_noinc(&ManagedBarrier::<
+            Ready,
+            ctm_rs::mbarrier::GeneralBarrier,
+        >::adopt_ready(bar));
+    }
+}
+
+/// Commit prior `tcgen05` operations issued by this thread to `bar` (`cute.nvgpu.tcgen05.commit`).
+///
+/// # Safety
+/// `bar` must point to a live initialized CTA-shared barrier.
+#[inline(always)]
+pub unsafe fn tcgen05_commit(bar: *mut ctm_rs::mbarrier::Barrier) {
+    unsafe { ctm_rs::tcgen05::commit_address(SharedAddress::from_raw(bar)) }
+}
+
+/// Order prior `tcgen05` TMEM accesses before a thread synchronization (`tcgen05.fence::before_thread_sync`).
+#[inline(always)]
+pub fn tcgen05_fence_before_thread_sync() {
+    ctm_rs::tcgen05::fence_before_thread_sync();
+}
+
+/// Order subsequent `tcgen05` TMEM accesses after a thread synchronization (`tcgen05.fence::after_thread_sync`).
+#[inline(always)]
+pub fn tcgen05_fence_after_thread_sync() {
+    ctm_rs::tcgen05::fence_after_thread_sync();
+}
+
+/// Atomically add two adjacent `BFloat16` values `(lo, hi)` to `*dst` and `*dst.add(1)` (`cute.arch.atomic_add`).
+///
+/// # Safety
+/// `dst` must be 4-byte aligned and point to two writable `BFloat16` values in global memory.
+#[inline(always)]
+pub unsafe fn atomic_add_bf16x2(
+    dst: *mut crate::BFloat16,
+    lo: crate::BFloat16,
+    hi: crate::BFloat16,
+) {
+    let packed = (lo.to_bits() as u32) | ((hi.to_bits() as u32) << 16);
+    let _ = unsafe { ctm_rs::memory::atom_add_bf16x2(dst.cast::<u32>(), packed) };
+}

@@ -250,6 +250,36 @@ pub const fn sm1xx_block_scale_crd2idx(
     crd2idx_row_major_2d(atom_idx, byte_in_atom, 512)
 }
 
+/// Allocation-free `u64` offset for a `tcgen05` `SWIZZLE_NONE` (`LBO = rows * 16, SBO = 128`)
+/// `K = 512` (`32` scale groups of `16` FP4 elements) burst tile with `ROWS` (`128` or `256`) rows:
+///
+/// ```text
+/// Hierarchical layout over 8-byte (16-FP4) `u64` elements per burst:
+///   Shape  = (ROWS, (2_u64s_per_16B, 2_halves_per_K64, 8_K64_steps_per_burst))
+///   Stride = (   2, (             1,         ROWS * 2,              ROWS * 4))
+/// ```
+///
+/// Decomposes `scale_group` into `(grp_in_burst 0..32, burst)` and `(u64_in_16b, half_k64, step_k64)`
+/// using [`idx2crd_col_major_2d`] and evaluates the hierarchical stride via [`crd2idx_row_major_2d`].
+#[must_use]
+#[inline(always)]
+pub const fn sm100_noswizzle_burst_u64_crd2idx<const ROWS: usize>(
+    group_batch: usize,
+    row_in_tile: usize,
+    scale_group: usize,
+    k_bursts: usize,
+) -> usize {
+    let (grp_in_burst, burst) = idx2crd_col_major_2d(scale_group as u32, 32);
+    let (u64_in_16b, half_and_step) = idx2crd_col_major_2d(grp_in_burst, 2);
+    let (half_k64, step_k64) = idx2crd_col_major_2d(half_and_step, 2);
+    let burst_idx = crd2idx_row_major_2d(group_batch, burst as usize, k_bursts);
+    let sub_u64 = (step_k64 as usize) * (ROWS * 4)
+        + (half_k64 as usize) * (ROWS * 2)
+        + (row_in_tile * 2)
+        + (u64_in_16b as usize);
+    crd2idx_row_major_2d(burst_idx, sub_u64, ROWS * 32)
+}
+
 /// Sealed supertrait restricting [`SmemLayout`] to canonical `cute-layout` definitions.
 mod sealed_smem {
     /// Marks only shared layouts recognized by the compiler.

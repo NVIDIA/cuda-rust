@@ -117,6 +117,16 @@ where
             }
         }
     }
+
+    /// Bind the shared `u32` TMEM address slot at `smem_base + byte_offset` (`TmemAllocator.create`).
+    ///
+    /// # Safety
+    /// `smem_base.add(byte_offset)` must be 4-byte aligned and point to a valid shared `u32` slot.
+    #[must_use]
+    #[inline(always)]
+    pub const unsafe fn from_raw_bytes(smem_base: *mut u8, byte_offset: usize) -> *mut u32 {
+        unsafe { smem_base.add(byte_offset).cast::<u32>() }
+    }
 }
 
 /// Warp-collective 32-data-path TMEM register fragment, one row per lane.
@@ -126,7 +136,7 @@ pub struct TmemFragment<const REGS: usize> {
 }
 /// Implement one native TMEM register width with explicit load/store completion variants.
 macro_rules! fragment {
-    ($n:literal,$load:ident,$store:ident) => {
+    ($n:literal,$load:ident,$store:ident, [$($idx:literal),+]) => {
         impl TmemFragment<$n> {
             /// Load a fragment and wait for the warp's preceding TMEM loads.
             /// # Safety
@@ -149,14 +159,9 @@ macro_rules! fragment {
             #[inline(always)]
             pub unsafe fn load_deferred(address: u32) -> Self {
                 let raw = unsafe { tmem::$load(address) }.to_array();
-                let mut values = [0.0; $n];
-                let mut i = 0;
-                while i < $n {
-                    thread::__unroll_config::<0>();
-                    values[i] = f32::from_bits(raw[i]);
-                    i += 1;
+                Self {
+                    values: [$(f32::from_bits(raw[$idx])),+],
                 }
-                Self { values }
             }
             /// Store a fragment and wait for the warp's preceding TMEM stores.
             /// # Safety
@@ -175,13 +180,7 @@ macro_rules! fragment {
             /// or completion handoffs, with the required thread-sync fence.
             #[inline(always)]
             pub unsafe fn store_deferred(&self, address: u32) {
-                let mut raw = [0u32; $n];
-                let mut i = 0;
-                while i < $n {
-                    thread::__unroll_config::<0>();
-                    raw[i] = self.values[i].to_bits();
-                    i += 1;
-                }
+                let raw = [$(self.values[$idx].to_bits()),+];
                 unsafe { Self::store_packed_deferred(address, raw) }
             }
             /// Store packed words unchanged (low FP16 lane in the low 16 bits).
@@ -204,11 +203,24 @@ macro_rules! fragment {
         }
     };
 }
-fragment!(2, load_32x32b_x2, store_32x32b_x2);
-fragment!(4, load_32x32b_x4, store_32x32b_x4);
-fragment!(8, load_32x32b_x8, store_32x32b_x8);
-fragment!(16, load_32x32b_x16, store_32x32b_x16);
-fragment!(32, load_32x32b_x32, store_32x32b_x32);
+fragment!(2, load_32x32b_x2, store_32x32b_x2, [0, 1]);
+fragment!(4, load_32x32b_x4, store_32x32b_x4, [0, 1, 2, 3]);
+fragment!(8, load_32x32b_x8, store_32x32b_x8, [0, 1, 2, 3, 4, 5, 6, 7]);
+fragment!(
+    16,
+    load_32x32b_x16,
+    store_32x32b_x16,
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+);
+fragment!(
+    32,
+    load_32x32b_x32,
+    store_32x32b_x32,
+    [
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+        25, 26, 27, 28, 29, 30, 31
+    ]
+);
 // The attention references transfer larger logical fragments as repeated x32
 // instructions. Wide native transfers pass standalone probes but fail in the
 // full attention compilation context with the pinned compiler.
@@ -305,84 +317,3 @@ macro_rules! chunked_fragment {
 }
 chunked_fragment!(64; 0 => a, 32 => b);
 chunked_fragment!(128; 0 => a, 32 => b, 64 => c, 96 => d);
-
-impl TmemFragment<128> {
-    /// Compute the per-head reciprocal root-mean-square scale `1 / sqrt(mean(x^2) + eps)`
-    /// across all 128 FP32 columns (`ColMajor<32, 4>`) of this thread's row fragment
-    /// using `cute.arch.rsqrt`.
-    #[must_use]
-    #[inline(always)]
-    pub fn rms_inv_std(&self, eps: f32) -> f32 {
-        let mut sum_sq = 0.0f32;
-        let mut j = 0u32;
-        while j < 32 {
-            thread::__unroll_config::<0>();
-            let v0 = self.values[cute_layout::crd2idx_col_major_2d(j, 0, 32) as usize];
-            let v1 = self.values[cute_layout::crd2idx_col_major_2d(j, 1, 32) as usize];
-            let v2 = self.values[cute_layout::crd2idx_col_major_2d(j, 2, 32) as usize];
-            let v3 = self.values[cute_layout::crd2idx_col_major_2d(j, 3, 32) as usize];
-            sum_sq += v0 * v0 + v1 * v1 + v2 * v2 + v3 * v3;
-            j += 1;
-        }
-        crate::arch::rsqrt_f32(sum_sq * (1.0f32 / 128.0f32) + eps)
-    }
-
-    /// Scale all 128 FP32 columns by `scale` (and optional per-column `gamma` weights),
-    /// quantize pairs to `Float8E4M3FN` (`cvt.rn.satfinite.e4m3x2.f32`), and issue four
-    /// 256-bit (`32`-byte) `L1::no_allocate` global stores (`cute.copy`).
-    ///
-    /// # Safety
-    /// `dst` must be 32-byte aligned and point to 128 writable bytes in global memory.
-    /// When `gamma` is `Some(ptr)`, `ptr` must point to 128 readable `f32` values.
-    #[inline(always)]
-    pub unsafe fn quantize_and_store_e4m3_no_allocate(
-        &self,
-        scale: f32,
-        gamma: Option<*const f32>,
-        dst: *mut u8,
-    ) {
-        let gamma_view = gamma.map(|ptr| unsafe {
-            crate::tensor::partition::StridedTensor::from_raw_parts(ptr, 128, 1)
-        });
-        let dst_u32 = dst.cast::<u32>();
-        let mut chunk = 0usize;
-        while chunk < 4 {
-            thread::__unroll_config::<0>();
-            let mut packed = [0u32; 8];
-            let mut w = 0usize;
-            while w < 8 {
-                thread::__unroll_config::<0>();
-                let idx = cute_layout::crd2idx_row_major_3d(chunk, w, 0, 8, 4);
-                let (v0, v1, v2, v3) = if let Some(g_view) = gamma_view {
-                    unsafe {
-                        (
-                            self.values[idx] * scale * g_view.get_unchecked(idx),
-                            self.values[idx + 1] * scale * g_view.get_unchecked(idx + 1),
-                            self.values[idx + 2] * scale * g_view.get_unchecked(idx + 2),
-                            self.values[idx + 3] * scale * g_view.get_unchecked(idx + 3),
-                        )
-                    }
-                } else {
-                    (
-                        self.values[idx] * scale,
-                        self.values[idx + 1] * scale,
-                        self.values[idx + 2] * scale,
-                        self.values[idx + 3] * scale,
-                    )
-                };
-                let lo16 = ctm_rs::convert::cvt_rn_satfinite_e4m3x2_f32(v0, v1) as u32;
-                let hi16 = ctm_rs::convert::cvt_rn_satfinite_e4m3x2_f32(v2, v3) as u32;
-                packed[w] = lo16 | (hi16 << 16);
-                w += 1;
-            }
-            let chunk_offset = cute_layout::crd2idx_row_major_2d(chunk, 0, 8);
-            unsafe {
-                crate::store_global_no_allocate(
-                    dst_u32.add(chunk_offset),
-                    &crate::GlobalStoreTile(packed),
-                );
-            }
-            chunk += 1;
-        }
-    }
-}

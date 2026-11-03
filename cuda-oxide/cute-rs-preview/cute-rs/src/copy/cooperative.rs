@@ -106,6 +106,30 @@ impl<T, Layout> Clone for SmemTile<T, Layout> {
     }
 }
 
+impl<T, Layout: crate::markers::ReifySmem2D> SmemTile<T, Layout> {
+    /// Bind stage `slot` of a shared-memory ring starting at `smem_base + stage_offset_bytes`,
+    /// deriving the per-stage byte stride and element capacity directly from `(T, Layout)` at compile time.
+    ///
+    /// # Safety
+    /// `smem_base.add(stage_offset_bytes + slot * stage_bytes)` must point to live, properly aligned
+    /// CTA-shared memory covering at least `size_in_bytes::<T, Layout>()` bytes.
+    #[must_use]
+    #[inline(always)]
+    pub const unsafe fn from_stage_bytes(
+        smem_base: *mut u8,
+        stage_offset_bytes: usize,
+        slot: usize,
+    ) -> Self {
+        let stage_bytes = crate::copy::tma::size_in_bytes::<T, Layout>() as usize;
+        let capacity = stage_bytes / core::mem::size_of::<T>();
+        Self {
+            base: unsafe { smem_base.add(stage_offset_bytes + slot * stage_bytes) }.cast::<T>(),
+            capacity,
+            layout: PhantomData,
+        }
+    }
+}
+
 /// A borrowed fixed-size logical row in a typed shared-memory tile.
 ///
 /// This view contains coordinates and a borrow, not loaded values. Reductions

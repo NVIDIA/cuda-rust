@@ -189,6 +189,26 @@ impl<T: Copy, const N: usize> RegisterTile<T, N> {
         }
         let first = f(0);
         let mut values = [first; N];
+        if N == 1 {
+            return Self(values);
+        } else if N == 2 {
+            values[1] = f(1);
+            return Self(values);
+        } else if N == 4 {
+            values[1] = f(1);
+            values[2] = f(2);
+            values[3] = f(3);
+            return Self(values);
+        } else if N == 8 {
+            values[1] = f(1);
+            values[2] = f(2);
+            values[3] = f(3);
+            values[4] = f(4);
+            values[5] = f(5);
+            values[6] = f(6);
+            values[7] = f(7);
+            return Self(values);
+        }
         let mut i = 1;
         while i < N {
             ctm_rs::thread::__unroll_config::<0>();
@@ -206,7 +226,38 @@ impl<T: Copy, const N: usize> RegisterTile<T, N> {
     #[must_use]
     #[inline(always)]
     pub fn map<U: Copy>(self, mut f: impl FnMut(T) -> U) -> RegisterTile<U, N> {
-        RegisterTile::from_fn(|i| f(self.0[i]))
+        if N == 0 {
+            return RegisterTile::from_fn(|i| f(self.0[i]));
+        }
+        let first = f(self.0[0]);
+        let mut values = [first; N];
+        if N == 1 {
+            return RegisterTile(values);
+        } else if N == 2 {
+            values[1] = f(self.0[1]);
+            return RegisterTile(values);
+        } else if N == 4 {
+            values[1] = f(self.0[1]);
+            values[2] = f(self.0[2]);
+            values[3] = f(self.0[3]);
+            return RegisterTile(values);
+        } else if N == 8 {
+            values[1] = f(self.0[1]);
+            values[2] = f(self.0[2]);
+            values[3] = f(self.0[3]);
+            values[4] = f(self.0[4]);
+            values[5] = f(self.0[5]);
+            values[6] = f(self.0[6]);
+            values[7] = f(self.0[7]);
+            return RegisterTile(values);
+        }
+        let mut i = 1;
+        while i < N {
+            ctm_rs::thread::__unroll_config::<0>();
+            values[i] = f(self.0[i]);
+            i += 1;
+        }
+        RegisterTile(values)
     }
 
     /// Transform corresponding values of two equally sized register tiles.
@@ -221,7 +272,38 @@ impl<T: Copy, const N: usize> RegisterTile<T, N> {
         rhs: RegisterTile<U, N>,
         mut f: impl FnMut(T, U) -> V,
     ) -> RegisterTile<V, N> {
-        RegisterTile::from_fn(|i| f(self.0[i], rhs.0[i]))
+        if N == 0 {
+            return RegisterTile::from_fn(|i| f(self.0[i], rhs.0[i]));
+        }
+        let first = f(self.0[0], rhs.0[0]);
+        let mut values = [first; N];
+        if N == 1 {
+            return RegisterTile(values);
+        } else if N == 2 {
+            values[1] = f(self.0[1], rhs.0[1]);
+            return RegisterTile(values);
+        } else if N == 4 {
+            values[1] = f(self.0[1], rhs.0[1]);
+            values[2] = f(self.0[2], rhs.0[2]);
+            values[3] = f(self.0[3], rhs.0[3]);
+            return RegisterTile(values);
+        } else if N == 8 {
+            values[1] = f(self.0[1], rhs.0[1]);
+            values[2] = f(self.0[2], rhs.0[2]);
+            values[3] = f(self.0[3], rhs.0[3]);
+            values[4] = f(self.0[4], rhs.0[4]);
+            values[5] = f(self.0[5], rhs.0[5]);
+            values[6] = f(self.0[6], rhs.0[6]);
+            values[7] = f(self.0[7], rhs.0[7]);
+            return RegisterTile(values);
+        }
+        let mut i = 1;
+        while i < N {
+            ctm_rs::thread::__unroll_config::<0>();
+            values[i] = f(self.0[i], rhs.0[i]);
+            i += 1;
+        }
+        RegisterTile(values)
     }
 
     /// Reduce this thread's registers in increasing element order.
@@ -232,6 +314,28 @@ impl<T: Copy, const N: usize> RegisterTile<T, N> {
     #[must_use]
     #[inline(always)]
     pub fn fold<U>(self, initial: U, mut f: impl FnMut(U, T) -> U) -> U {
+        if N == 0 {
+            return initial;
+        } else if N == 1 {
+            return f(initial, self.0[0]);
+        } else if N == 2 {
+            let a0 = f(initial, self.0[0]);
+            return f(a0, self.0[1]);
+        } else if N == 4 {
+            let a0 = f(initial, self.0[0]);
+            let a1 = f(a0, self.0[1]);
+            let a2 = f(a1, self.0[2]);
+            return f(a2, self.0[3]);
+        } else if N == 8 {
+            let a0 = f(initial, self.0[0]);
+            let a1 = f(a0, self.0[1]);
+            let a2 = f(a1, self.0[2]);
+            let a3 = f(a2, self.0[3]);
+            let a4 = f(a3, self.0[4]);
+            let a5 = f(a4, self.0[5]);
+            let a6 = f(a5, self.0[6]);
+            return f(a6, self.0[7]);
+        }
         let mut accumulator = initial;
         let mut i = 0;
         while i < N {

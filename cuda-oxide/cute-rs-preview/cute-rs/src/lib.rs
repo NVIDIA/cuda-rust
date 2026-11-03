@@ -105,7 +105,8 @@ pub use copy::vector::{
 pub use cute_layout as layout;
 pub use cute_layout::{
     crd2idx_col_major_2d, crd2idx_col_major_3d, crd2idx_row_major_2d, crd2idx_row_major_3d,
-    idx2crd_col_major_2d, idx2crd_grouped_2d, idx2crd_row_major_2d,
+    idx2crd_col_major_2d, idx2crd_grouped_2d, idx2crd_row_major_2d, sm1xx_block_scale_crd2idx,
+    sm1xx_scale_atom_word_offset, sm100_noswizzle_burst_u64_crd2idx,
 };
 pub use epilogue::{
     SM120_EPILOGUE_BYTES, SM120_EPILOGUE_COLS, SM120_EPILOGUE_ELEMENTS, SM120_EPILOGUE_HALF_BYTES,
@@ -133,7 +134,7 @@ pub use scheduler::{PersistentTileSchedulerParams, StaticPersistentTileScheduler
 pub use sm100::{
     OperandA, OperandB, PipelineTmaUmma, PipelineUmmaAsync, Sm100BlockScaledTiledMma,
     Sm100ClusterTmaCopy, Sm100DeallocBarrier, Sm100ScaleTile, Sm100SharedTile, Sm100TiledMma,
-    Sm100Tmem, Sm100TmemEpilogue, Sm100TmemStagedEpilogue,
+    Sm100Tmem, Sm100TmemEpilogue,
 };
 pub use static_layout::{crd2idx_2d, idx2crd_2d};
 pub use tensor::{Contiguous1D, RegisterTile, Tensor, TensorElement, TensorMut, Tile1D, Zipped1D};

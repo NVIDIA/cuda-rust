@@ -25,7 +25,7 @@ use crate::encode_tma_2d;
 use cuda_core::{
     CudaContext, CudaStream, DeviceBuffer, IntoResult, LaunchConfig, LaunchConfig1D, sys,
 };
-use cuda_device::atomic::{ AtomicOrdering, BlockAtomicU32, atom_add_bf16x2 };
+use cuda_device::atomic::{AtomicOrdering, BlockAtomicU32, atom_add_bf16x2};
 use cuda_device::barrier::{
     Barrier, barrier_cta_sync, fence_proxy_async_shared_cta, mbarrier_arrive_expect_tx,
     mbarrier_init, mbarrier_inval, mbarrier_try_wait_parity,
@@ -33,16 +33,16 @@ use cuda_device::barrier::{
 use cuda_device::convert::{
     bf16_to_f32, cvt_bf16x2_f32, cvt_f32x2_f16x2, cvt_rn_f16x2_e4m3x2, f32_to_bf16_rne,
 };
-use cuda_device::shared::{ DynamicSharedArray, cvta_generic_to_shared_offset };
+use cuda_device::shared::{DynamicSharedArray, cvta_generic_to_shared_offset};
 use cuda_device::tcgen05::{
     tcgen05_alloc, tcgen05_commit_shared_cluster, tcgen05_cp_32x128b_warpx4, tcgen05_dealloc,
     tcgen05_fence_after_thread_sync, tcgen05_fence_before_thread_sync, tcgen05_ld_32x32b_x16_raw,
     tcgen05_load_wait, tcgen05_mma_shared_mxf4nvf4_block_scale_block16,
 };
-use cuda_device::tma::{ TmaDescriptor, cp_async_bulk_tensor_2d_g2s_cta };
-use cuda_device::{ DisjointSlice, kernel, launch_bounds, launch_contract, thread, warp };
+use cuda_device::tma::{TmaDescriptor, cp_async_bulk_tensor_2d_g2s_cta};
+use cuda_device::{DisjointSlice, kernel, launch_bounds, launch_contract, thread, warp};
 use cuda_host::cuda_module;
-use half::{ bf16, f16 };
+use half::{bf16, f16};
 use std::mem::MaybeUninit;
 use std::sync::Arc;
 
@@ -141,6 +141,18 @@ const TMEM192_SFA_COL: u32 = 128;
 /// Starting TMEM column (`192`) reserved for the 2-stage `SFB` block scales (`2 × 32 = 64` columns).
 /// Fits within the `256`-column per-CTA TMEM budget so `2` CTAs share each SM's `512` TMEM columns.
 const TMEM192_SFB_COL: u32 = 192;
+
+/// Compile-time layout, shared-memory offset, and TMA transaction byte invariants for `moe_192e`.
+const _: () = {
+    assert!(WEIGHT_BURST_BYTES == 32_768);
+    assert!(ACT64_BURST_BYTES == 32_768);
+    assert!(SCALE_BURST_BYTES == 4_096);
+    assert!(STAGE_TX_BYTES_192E == 73_728);
+    assert!(STAGE_TX_BYTES_FC2_192E == 110_592);
+    assert!(STAGE_TX_BYTES_FC2_M384 == 147_456);
+    assert!(DYNAMIC_SMEM_192E == 148_480);
+    assert!(DYNAMIC_SMEM_FC2_192E == 222_208);
+};
 
 /// Untimed CUDA Graph replay warmups before each timing sample (`50` replays).
 /// Matches the evaluation protocol across all compared implementations.
@@ -245,6 +257,132 @@ pub mod kernels_192e {
         (bits + 0x001F_FFFF + ((bits >> 22) & 1)) >> 22
     }
 
+    /// Bind a mutable typed pointer `*mut T` at `smem_base + byte_offset` in dynamic shared memory.
+    #[inline(always)]
+    unsafe fn shared_at<T>(smem_base: *mut u8, byte_offset: usize) -> *mut T {
+        unsafe { smem_base.add(byte_offset).cast::<T>() }
+    }
+
+    /// Bind a const typed pointer `*const T` at `smem_base + byte_offset` in dynamic shared memory.
+    #[inline(always)]
+    unsafe fn shared_const_at<T>(smem_base: *mut u8, byte_offset: usize) -> *const T {
+        unsafe { smem_base.add(byte_offset).cast_const().cast::<T>() }
+    }
+
+    /// Reinterpret a borrowed slice `&[S]` as a const pointer `*const T` for vectorized loads.
+    #[inline(always)]
+    fn slice_as<T, S>(slice: &[S]) -> *const T {
+        slice.as_ptr().cast::<T>()
+    }
+
+    /// Reinterpret a mutable `DisjointSlice<S>` as a mutable pointer `*mut T` for vectorized stores.
+    #[inline(always)]
+    fn disjoint_as_mut<T, S>(slice: &mut DisjointSlice<S>) -> *mut T {
+        slice.as_mut_ptr().cast::<T>()
+    }
+
+    /// Reinterpret a `DisjointSlice<S>` as a const pointer `*const T` for vectorized reads.
+    #[inline(always)]
+    fn disjoint_as_const<T, S>(slice: &mut DisjointSlice<S>) -> *const T {
+        slice.as_mut_ptr().cast_const().cast::<T>()
+    }
+
+    /// Read element `idx` from `slice` without bounds checks.
+    #[inline(always)]
+    unsafe fn slice_read<T: Copy>(slice: &[T], idx: usize) -> T {
+        unsafe { *slice.get_unchecked(idx) }
+    }
+
+    /// Write `val` to element `idx` of a `DisjointSlice<T>`.
+    #[inline(always)]
+    unsafe fn disjoint_write<T>(slice: &mut DisjointSlice<T>, idx: usize, val: T) {
+        unsafe {
+            *slice.as_mut_ptr().add(idx) = val;
+        }
+    }
+
+    /// Commit an asynchronous `tcgen05` operation to a shared-memory `Barrier`.
+    #[inline(always)]
+    unsafe fn commit_shared_barrier(bar_ptr: *mut Barrier) {
+        unsafe { tcgen05_commit_shared_cluster(bar_ptr.cast::<u64>()) };
+    }
+
+    /// Partition a 5-barrier (`2` TMA + `2` stage-free + `1` MMA done + `tmem_slot`) shared-memory control block.
+    #[allow(clippy::type_complexity)]
+    #[inline(always)]
+    unsafe fn partition_smem_barriers(
+        smem_base: *mut u8,
+        bar_offset: usize,
+    ) -> (
+        *mut Barrier,
+        *const Barrier,
+        *mut Barrier,
+        *const Barrier,
+        *mut Barrier,
+        *const Barrier,
+        *mut u32,
+    ) {
+        unsafe {
+            let tma_bar_ptr = shared_at::<Barrier>(smem_base, bar_offset);
+            let tma_bar_const = tma_bar_ptr.cast_const();
+            let b_free_bar_ptr = tma_bar_ptr.add(2);
+            let b_free_bar_const = b_free_bar_ptr.cast_const();
+            let mma_bar_ptr = b_free_bar_ptr.add(2);
+            let mma_bar_const = mma_bar_ptr.cast_const();
+            let tmem_slot_ptr = mma_bar_ptr.add(1).cast::<u32>();
+            (
+                tma_bar_ptr,
+                tma_bar_const,
+                b_free_bar_ptr,
+                b_free_bar_const,
+                mma_bar_ptr,
+                mma_bar_const,
+                tmem_slot_ptr,
+            )
+        }
+    }
+
+    /// Partition a 6-barrier (`2` TMA + `2` A-free + `1` B-free + `1` MMA done + `tmem_slot`) shared-memory control block.
+    #[allow(clippy::type_complexity)]
+    #[inline(always)]
+    unsafe fn partition_triple_m_barriers(
+        smem_base: *mut u8,
+        bar_offset: usize,
+    ) -> (
+        *mut Barrier,
+        *const Barrier,
+        *mut Barrier,
+        *const Barrier,
+        *mut Barrier,
+        *const Barrier,
+        *mut Barrier,
+        *const Barrier,
+        *mut u32,
+    ) {
+        unsafe {
+            let tma_bar_ptr = shared_at::<Barrier>(smem_base, bar_offset);
+            let tma_bar_const = tma_bar_ptr.cast_const();
+            let a_free_bar_ptr = tma_bar_ptr.add(2);
+            let a_free_bar_const = a_free_bar_ptr.cast_const();
+            let b_free_bar_ptr = a_free_bar_ptr.add(2);
+            let b_free_bar_const = b_free_bar_ptr.cast_const();
+            let mma_bar_ptr = b_free_bar_ptr.add(1);
+            let mma_bar_const = mma_bar_ptr.cast_const();
+            let tmem_slot_ptr = mma_bar_ptr.add(1).cast::<u32>();
+            (
+                tma_bar_ptr,
+                tma_bar_const,
+                a_free_bar_ptr,
+                a_free_bar_const,
+                b_free_bar_ptr,
+                b_free_bar_const,
+                mma_bar_ptr,
+                mma_bar_const,
+                tmem_slot_ptr,
+            )
+        }
+    }
+
     /// Stage 1 (`K1`): Single-CTA (`256` threads = `8` warps) shared-memory route histogram,
     /// parallel power-of-two bit-shift prefix scan, and group/permutation table builder.
     ///
@@ -273,18 +411,18 @@ pub mod kernels_192e {
 
         unsafe {
             let dyn_smem = DynamicSharedArray::<u8, 16>::get_raw();
-            let counts_ptr = dyn_smem.cast::<u32>();
-            let offsets_ptr = dyn_smem.add(1024).cast::<u32>();
-            let ranks_ptr = dyn_smem.add(2048).cast::<u16>();
-            let exp_ptr = dyn_smem.add(4096).cast::<u16>();
-            let warp_sums_ptr = dyn_smem.add(6144).cast::<u32>();
+            let counts_ptr = shared_at::<u32>(dyn_smem, 0);
+            let offsets_ptr = shared_at::<u32>(dyn_smem, 1024);
+            let ranks_ptr = shared_at::<u16>(dyn_smem, 2048);
+            let exp_ptr = shared_at::<u16>(dyn_smem, 4096);
+            let warp_sums_ptr = shared_at::<u32>(dyn_smem, 6144);
 
             *counts_ptr.add(tid) = 0;
             thread::sync_threads();
 
             let mut r = tid;
             while r < routes {
-                let exp = *expert_ids.as_ptr().add(r) as u32;
+                let exp = slice_read(expert_ids, r) as u32;
                 let atom = BlockAtomicU32::from_ptr(counts_ptr.add(exp as usize));
                 let rank = atom.fetch_add(1, AtomicOrdering::Relaxed);
                 *exp_ptr.add(r) = exp as u16;
@@ -343,15 +481,15 @@ pub mod kernels_192e {
             *offsets_ptr.add(tid) = group_base as u32;
 
             if tid == 255 {
-                *group_count.as_mut_ptr() = (warp_base + prefix) as i32;
+                disjoint_write(&mut group_count, 0, (warp_base + prefix) as i32);
             }
             if tid < NUM_EXPERTS_192E && groups > 0 {
                 let mut g = 0u32;
                 while g < groups {
                     let rem = count - g * tn;
                     let lim = if rem < tn { rem } else { tn };
-                    *group_experts.as_mut_ptr().add(group_base + g as usize) = tid as i32;
-                    *group_limits.as_mut_ptr().add(group_base + g as usize) = lim as i32;
+                    disjoint_write(&mut group_experts, group_base + g as usize, tid as i32);
+                    disjoint_write(&mut group_limits, group_base + g as usize, lim as i32);
                     g += 1;
                 }
             }
@@ -363,10 +501,12 @@ pub mod kernels_192e {
                 let rank = *ranks_ptr.add(r2) as u32;
                 let g = *offsets_ptr.add(exp) + (rank >> tn_shift);
                 let row = rank & tn_mask;
-                *tok_to_perm.as_mut_ptr().add(r2) = ((g << 8) | row) as i32;
-                *group_routes
-                    .as_mut_ptr()
-                    .add((g as usize) * GROUP_TILE_ROWS + (row as usize)) = r2 as i32;
+                disjoint_write(&mut tok_to_perm, r2, ((g << 8) | row) as i32);
+                disjoint_write(
+                    &mut group_routes,
+                    (g as usize) * GROUP_TILE_ROWS + (row as usize),
+                    r2 as i32,
+                );
                 r2 += 256;
             }
         }
@@ -403,7 +543,7 @@ pub mod kernels_192e {
         let grp = idx % scale_groups_per_row;
 
         if zero_out != 0 && idx < total_groups {
-            let out_u128_ptr = output.as_mut_ptr().cast::<u128>();
+            let out_u128_ptr = disjoint_as_mut::<u128, u16>(&mut output);
             unsafe {
                 *out_u128_ptr.add(idx * 2) = 0;
                 *out_u128_ptr.add(idx * 2 + 1) = 0;
@@ -414,12 +554,13 @@ pub mod kernels_192e {
             let routes = (num_tokens as usize) * TOP_K_192E;
             unsafe {
                 let smem = DynamicSharedArray::<u8, 16>::get_raw();
-                let s_ids = smem.cast::<i32>();
-                let s_first = smem.add(256).cast::<i32>();
-                let s_perm = smem.add(512).cast::<i32>();
+                let s_ids = shared_at::<i32>(smem, 0);
+                let s_first = shared_at::<i32>(smem, 256);
+                let s_perm = shared_at::<i32>(smem, 512);
+                let s_perm_u128 = shared_const_at::<u128>(smem, 512);
 
                 if tid < routes {
-                    *s_ids.add(tid) = *expert_ids.as_ptr().add(tid);
+                    *s_ids.add(tid) = slice_read(expert_ids, tid);
                 }
                 thread::sync_threads();
 
@@ -459,17 +600,18 @@ pub mod kernels_192e {
                         }
                         let perm = (my_group << 8) | my_rank;
                         *s_perm.add(tid) = perm;
-                        *tok_to_perm.as_mut_ptr().add(tid) = perm;
-                        *group_routes
-                            .as_mut_ptr()
-                            .add((my_group as usize) * GROUP_TILE_ROWS + (my_rank as usize)) =
-                            tid as i32;
+                        disjoint_write(&mut tok_to_perm, tid, perm);
+                        disjoint_write(
+                            &mut group_routes,
+                            (my_group as usize) * GROUP_TILE_ROWS + (my_rank as usize),
+                            tid as i32,
+                        );
                         if my_rank == 0 {
-                            *group_experts.as_mut_ptr().add(my_group as usize) = my_exp;
-                            *group_limits.as_mut_ptr().add(my_group as usize) = my_count;
+                            disjoint_write(&mut group_experts, my_group as usize, my_exp);
+                            disjoint_write(&mut group_limits, my_group as usize, my_count);
                         }
                         if tid == 0 {
-                            *group_count.as_mut_ptr() = total_g;
+                            disjoint_write(&mut group_count, 0, total_g);
                         }
                     }
                 } else {
@@ -489,13 +631,14 @@ pub mod kernels_192e {
                 }
                 thread::sync_threads();
                 if idx < total_groups {
-                    *s_perm.cast_const().cast::<u128>().add(row)
+                    *s_perm_u128.add(row)
                 } else {
                     0u128
                 }
             }
         } else if idx < total_groups {
-            unsafe { *tok_to_perm.as_mut_ptr().cast_const().cast::<u128>().add(row) }
+            let perm_u128_ptr = disjoint_as_const::<u128, i32>(&mut tok_to_perm);
+            unsafe { *perm_u128_ptr.add(row) }
         } else {
             0u128
         };
@@ -504,7 +647,7 @@ pub mod kernels_192e {
             return;
         }
 
-        let in_u128_ptr = hidden.as_ptr().cast::<u128>();
+        let in_u128_ptr = slice_as::<u128, u16>(hidden);
         let (q0, q1) = unsafe { (*in_u128_ptr.add(idx * 2), *in_u128_ptr.add(idx * 2 + 1)) };
         let raw_u32 = [
             (q0 & 0xFFFF_FFFF) as u32,
@@ -546,7 +689,7 @@ pub mod kernels_192e {
             packed_u64 |= nib << (i * 4);
         }
 
-        let b_u64_ptr = b_up_vals.as_mut_ptr().cast::<u64>();
+        let b_u64_ptr = disjoint_as_mut::<u64, u8>(&mut b_up_vals);
         let sfb_ptr = sfb_up_scales.as_mut_ptr();
         let k_bursts = HIDDEN_192E / 512; // 12
         let k_atoms = HIDDEN_192E / 64; // 96
@@ -622,13 +765,15 @@ pub mod kernels_192e {
         let smem_b_ptr = unsafe { dyn_smem.add(SMEM192_B_OFFSET) };
         let smem_sfa_ptr = unsafe { dyn_smem.add(SMEM192_SFA_OFFSET) };
         let smem_sfb_ptr = unsafe { dyn_smem.add(SMEM192_SFB_OFFSET) };
-        let tma_bar_ptr = unsafe { dyn_smem.add(SMEM192_BAR_OFFSET).cast::<Barrier>() };
-        let tma_bar_const = tma_bar_ptr.cast_const();
-        let b_free_bar_ptr = unsafe { tma_bar_ptr.add(2) };
-        let b_free_bar_const = b_free_bar_ptr.cast_const();
-        let mma_bar_ptr = unsafe { b_free_bar_ptr.add(2) };
-        let mma_bar_const = mma_bar_ptr.cast_const();
-        let tmem_slot_ptr = unsafe { mma_bar_ptr.add(1).cast::<u32>() };
+        let (
+            tma_bar_ptr,
+            tma_bar_const,
+            b_free_bar_ptr,
+            b_free_bar_const,
+            mma_bar_ptr,
+            mma_bar_const,
+            tmem_slot_ptr,
+        ) = unsafe { partition_smem_barriers(dyn_smem, SMEM192_BAR_OFFSET) };
 
         unsafe {
             if tid < 5 {
@@ -648,14 +793,15 @@ pub mod kernels_192e {
                 let mut step = 0usize;
                 let mut group = group_start;
                 while group < group_end {
-                    let expert = *group_experts.as_ptr().add(group) as usize;
+                    let expert = slice_read(group_experts, group) as usize;
                     let w_outer = expert * m_tiles + tile_m128;
                     let mut burst = 0usize;
                     while burst < k_bursts {
                         let slot = step & 1;
                         let phase = ((step >> 1) & 1) as u32;
                         if step >= 2 {
-                            while !mbarrier_try_wait_parity(b_free_bar_const.add(slot), phase ^ 1) {}
+                            while !mbarrier_try_wait_parity(b_free_bar_const.add(slot), phase ^ 1) {
+                            }
                         }
                         let bar = tma_bar_ptr.add(slot);
                         let _ = mbarrier_arrive_expect_tx(bar, 1, STAGE_TX_BYTES_192E);
@@ -710,20 +856,20 @@ pub mod kernels_192e {
                 let k_in_atom = grp & 3;
                 let inter_bursts = INTERMEDIATE_192E / 512; // 3
                 let inter_atoms = INTERMEDIATE_192E / 64; // 24
-                let inter_u64_ptr = inter_vals.as_mut_ptr().cast::<u64>();
+                let inter_u64_ptr = disjoint_as_mut::<u64, u8>(&mut inter_vals);
                 let inter_scales_ptr = inter_scales.as_mut_ptr();
-                let smem_epi_f32 = smem_a_ptr.cast::<f32>();
-                let smem_epi_u128 = smem_a_ptr.cast_const().cast::<u128>();
+                let smem_epi_f32 = shared_at::<f32>(smem_a_ptr, 0);
+                let smem_epi_u128 = shared_const_at::<u128>(smem_a_ptr, 0);
 
                 let mut step = 0usize;
                 let mut g_idx = 0usize;
                 let mut group = group_start;
                 while group < group_end {
-                    let expert = *group_experts.as_ptr().add(group) as usize;
-                    let limit = *group_limits.as_ptr().add(group) as usize;
+                    let expert = slice_read(group_experts, group) as usize;
+                    let limit = slice_read(group_limits, group) as usize;
                     let valid_n = ((limit + 15) & !15).max(16);
                     let idesc = encode_idesc_192e(valid_n as u32);
-                    let global_scale = *w_up_global.as_ptr().add(expert);
+                    let global_scale = slice_read(w_up_global, expert);
 
                     if tid == 0 {
                         let mut burst = 0usize;
@@ -770,13 +916,12 @@ pub mod kernels_192e {
                                 );
                             }
                             if burst + 2 < k_bursts {
-                                tcgen05_commit_shared_cluster(
-                                    b_free_bar_ptr.add(slot).cast::<u64>(),
-                                );
+                                commit_shared_barrier(b_free_bar_ptr.add(slot));
                             }
                             if burst + 1 == k_bursts {
-                                tcgen05_commit_shared_cluster(mma_bar_ptr.cast::<u64>());
-                                while !mbarrier_try_wait_parity(mma_bar_const, (g_idx & 1) as u32) {}
+                                commit_shared_barrier(mma_bar_ptr);
+                                while !mbarrier_try_wait_parity(mma_bar_const, (g_idx & 1) as u32) {
+                                }
                             }
                             step += 1;
                             burst += 1;
@@ -849,8 +994,7 @@ pub mod kernels_192e {
                         let u64_idx =
                             (group * inter_bursts + burst_inter) * 4096 + sub_u64_off + n * 2;
                         let sfb_word = scale_atom_word_192e(n);
-                        let s_idx =
-                            (group * inter_atoms + k_atom) * 512 + sfb_word * 4 + k_in_atom;
+                        let s_idx = (group * inter_atoms + k_atom) * 512 + sfb_word * 4 + k_in_atom;
                         *inter_u64_ptr.add(u64_idx) = packed_u64;
                         *inter_scales_ptr.add(s_idx) = scale_code;
                         n += 16;
@@ -932,13 +1076,15 @@ pub mod kernels_192e {
         let smem_sfa0_ptr = unsafe { dyn_smem.add(SMEM_FC2_SFA0_OFFSET) };
         let smem_sfa1_ptr = unsafe { dyn_smem.add(SMEM_FC2_SFA1_OFFSET) };
         let smem_sfb_ptr = unsafe { dyn_smem.add(SMEM_FC2_SFB_OFFSET) };
-        let tma_bar_ptr = unsafe { dyn_smem.add(SMEM_FC2_BAR_OFFSET).cast::<Barrier>() };
-        let tma_bar_const = tma_bar_ptr.cast_const();
-        let b_free_bar_ptr = unsafe { tma_bar_ptr.add(2) };
-        let b_free_bar_const = b_free_bar_ptr.cast_const();
-        let mma_bar_ptr = unsafe { b_free_bar_ptr.add(2) };
-        let mma_bar_const = mma_bar_ptr.cast_const();
-        let tmem_slot_ptr = unsafe { mma_bar_ptr.add(1).cast::<u32>() };
+        let (
+            tma_bar_ptr,
+            tma_bar_const,
+            b_free_bar_ptr,
+            b_free_bar_const,
+            mma_bar_ptr,
+            mma_bar_const,
+            tmem_slot_ptr,
+        ) = unsafe { partition_smem_barriers(dyn_smem, SMEM_FC2_BAR_OFFSET) };
 
         unsafe {
             if tid < 5 {
@@ -958,7 +1104,7 @@ pub mod kernels_192e {
                 let mut step = 0usize;
                 let mut group = group_start;
                 while group < group_end {
-                    let expert = *group_experts.as_ptr().add(group) as usize;
+                    let expert = slice_read(group_experts, group) as usize;
                     let w_outer0 = expert * m128_tiles + tile_m0;
                     let w_outer1 = expert * m128_tiles + tile_m1;
                     let mut burst = 0usize;
@@ -966,7 +1112,8 @@ pub mod kernels_192e {
                         let slot = step & 1;
                         let phase = ((step >> 1) & 1) as u32;
                         if step >= 2 {
-                            while !mbarrier_try_wait_parity(b_free_bar_const.add(slot), phase ^ 1) {}
+                            while !mbarrier_try_wait_parity(b_free_bar_const.add(slot), phase ^ 1) {
+                            }
                         }
                         let bar = tma_bar_ptr.add(slot);
                         let _ = mbarrier_arrive_expect_tx(bar, 1, STAGE_TX_BYTES_FC2_192E);
@@ -1026,11 +1173,11 @@ pub mod kernels_192e {
                 let smem_sfa1_base0 = smem_a0_base0 + (SMEM_FC2_SFA1_OFFSET as u64);
                 let smem_sfb_base0 = smem_a0_base0 + (SMEM_FC2_SFB_OFFSET as u64);
                 let tmem_row_base = tmem_addr + (warp_id << 21);
-                let out_u32_ptr = output.as_mut_ptr().cast::<u32>();
-                let smem_epi0_u32 = smem_a0_ptr.cast::<u32>();
-                let smem_epi0_u128 = smem_a0_ptr.cast_const().cast::<u128>();
-                let smem_epi1_u32 = smem_a1_ptr.cast::<u32>();
-                let smem_epi1_u128 = smem_a1_ptr.cast_const().cast::<u128>();
+                let out_u32_ptr = disjoint_as_mut::<u32, u16>(&mut output);
+                let smem_epi0_u32 = shared_at::<u32>(smem_a0_ptr, 0);
+                let smem_epi0_u128 = shared_const_at::<u128>(smem_a0_ptr, 0);
+                let smem_epi1_u32 = shared_at::<u32>(smem_a1_ptr, 0);
+                let smem_epi1_u128 = shared_const_at::<u128>(smem_a1_ptr, 0);
                 let col16 = tid & 15;
                 let row8 = tid >> 4;
                 let col_u32_0 = tile_m0 * 64 + col16 * 4;
@@ -1042,9 +1189,9 @@ pub mod kernels_192e {
                 let mut g_idx = 0usize;
                 let mut group = group_start;
                 while group < group_end {
-                    let expert = *group_experts.as_ptr().add(group) as usize;
-                    let limit = *group_limits.as_ptr().add(group) as usize;
-                    let global_scale = *w_down_global.as_ptr().add(expert);
+                    let expert = slice_read(group_experts, group) as usize;
+                    let limit = slice_read(group_limits, group) as usize;
+                    let global_scale = slice_read(w_down_global, expert);
 
                     if tid == 0 {
                         let mut burst = 0usize;
@@ -1113,13 +1260,12 @@ pub mod kernels_192e {
                                 );
                             }
                             if burst + 2 < k_bursts {
-                                tcgen05_commit_shared_cluster(
-                                    b_free_bar_ptr.add(slot).cast::<u64>(),
-                                );
+                                commit_shared_barrier(b_free_bar_ptr.add(slot));
                             }
                             if burst + 1 == k_bursts {
-                                tcgen05_commit_shared_cluster(mma_bar_ptr.cast::<u64>());
-                                while !mbarrier_try_wait_parity(mma_bar_const, (g_idx & 1) as u32) {}
+                                commit_shared_barrier(mma_bar_ptr);
+                                while !mbarrier_try_wait_parity(mma_bar_const, (g_idx & 1) as u32) {
+                                }
                             }
                             step += 1;
                             burst += 1;
@@ -1145,13 +1291,10 @@ pub mod kernels_192e {
 
                     let mut n = row8;
                     while n < limit {
-                        let route = *group_routes
-                            .as_ptr()
-                            .add(group * GROUP_TILE_ROWS + n)
-                            as usize;
+                        let route =
+                            slice_read(group_routes, group * GROUP_TILE_ROWS + n) as usize;
                         let token = route >> 2;
-                        let sw =
-                            global_scale * bf16_to_f32(*routing_weights.as_ptr().add(route));
+                        let sw = global_scale * bf16_to_f32(slice_read(routing_weights, route));
                         let q0_a = *smem_epi0_u128.add(n * 32 + col16 * 2);
                         let q0_b = *smem_epi0_u128.add(n * 32 + col16 * 2 + 1);
                         let q1_a = *smem_epi1_u128.add(n * 32 + col16 * 2);
@@ -1250,13 +1393,15 @@ pub mod kernels_192e {
         let smem_sfa0_ptr = unsafe { dyn_smem.add(SMEM_FC2_SFA0_OFFSET) };
         let smem_sfa1_ptr = unsafe { dyn_smem.add(SMEM_FC2_SFA1_OFFSET) };
         let smem_sfb_ptr = unsafe { dyn_smem.add(SMEM_FC2_SFB_OFFSET) };
-        let tma_bar_ptr = unsafe { dyn_smem.add(SMEM_FC2_BAR_OFFSET).cast::<Barrier>() };
-        let tma_bar_const = tma_bar_ptr.cast_const();
-        let b_free_bar_ptr = unsafe { tma_bar_ptr.add(2) };
-        let b_free_bar_const = b_free_bar_ptr.cast_const();
-        let mma_bar_ptr = unsafe { b_free_bar_ptr.add(2) };
-        let mma_bar_const = mma_bar_ptr.cast_const();
-        let tmem_slot_ptr = unsafe { mma_bar_ptr.add(1).cast::<u32>() };
+        let (
+            tma_bar_ptr,
+            tma_bar_const,
+            b_free_bar_ptr,
+            b_free_bar_const,
+            mma_bar_ptr,
+            mma_bar_const,
+            tmem_slot_ptr,
+        ) = unsafe { partition_smem_barriers(dyn_smem, SMEM_FC2_BAR_OFFSET) };
 
         unsafe {
             if tid < 5 {
@@ -1276,7 +1421,7 @@ pub mod kernels_192e {
                 let mut step = 0usize;
                 let mut group = group_start;
                 while group < group_end {
-                    let expert = *group_experts.as_ptr().add(group) as usize;
+                    let expert = slice_read(group_experts, group) as usize;
                     let w_outer0 = expert * m128_tiles + tile_m0;
                     let w_outer1 = expert * m128_tiles + tile_m1;
                     let mut burst = 0usize;
@@ -1284,7 +1429,8 @@ pub mod kernels_192e {
                         let slot = step & 1;
                         let phase = ((step >> 1) & 1) as u32;
                         if step >= 2 {
-                            while !mbarrier_try_wait_parity(b_free_bar_const.add(slot), phase ^ 1) {}
+                            while !mbarrier_try_wait_parity(b_free_bar_const.add(slot), phase ^ 1) {
+                            }
                         }
                         let bar = tma_bar_ptr.add(slot);
                         let _ = mbarrier_arrive_expect_tx(bar, 1, STAGE_TX_BYTES_FC2_192E);
@@ -1344,11 +1490,11 @@ pub mod kernels_192e {
                 let smem_sfa1_base0 = smem_a0_base0 + (SMEM_FC2_SFA1_OFFSET as u64);
                 let smem_sfb_base0 = smem_a0_base0 + (SMEM_FC2_SFB_OFFSET as u64);
                 let tmem_row_base = tmem_addr + (warp_id << 21);
-                let out_u128_ptr = grouped_out.as_mut_ptr().cast::<u128>();
-                let smem_epi0_u16 = smem_a0_ptr.cast::<u16>();
-                let smem_epi0_u128 = smem_a0_ptr.cast_const().cast::<u128>();
-                let smem_epi1_u16 = smem_a1_ptr.cast::<u16>();
-                let smem_epi1_u128 = smem_a1_ptr.cast_const().cast::<u128>();
+                let out_u128_ptr = disjoint_as_mut::<u128, u16>(&mut grouped_out);
+                let smem_epi0_u16 = shared_at::<u16>(smem_a0_ptr, 0);
+                let smem_epi0_u128 = shared_const_at::<u128>(smem_a0_ptr, 0);
+                let smem_epi1_u16 = shared_at::<u16>(smem_a1_ptr, 0);
+                let smem_epi1_u128 = shared_const_at::<u128>(smem_a1_ptr, 0);
                 let col16 = tid & 15;
                 let row8 = tid >> 4;
                 let dst_col0_u128 = tile_m0 * 16 + col16;
@@ -1359,11 +1505,11 @@ pub mod kernels_192e {
                 let mut g_idx = 0usize;
                 let mut group = group_start;
                 while group < group_end {
-                    let expert = *group_experts.as_ptr().add(group) as usize;
-                    let limit = *group_limits.as_ptr().add(group) as usize;
+                    let expert = slice_read(group_experts, group) as usize;
+                    let limit = slice_read(group_limits, group) as usize;
                     let valid_n = ((limit + 15) & !15).max(16);
                     let idesc = encode_idesc_192e(valid_n as u32);
-                    let global_scale = *w_down_global.as_ptr().add(expert);
+                    let global_scale = slice_read(w_down_global, expert);
 
                     if tid == 0 {
                         let mut burst = 0usize;
@@ -1432,13 +1578,12 @@ pub mod kernels_192e {
                                 );
                             }
                             if burst + 2 < k_bursts {
-                                tcgen05_commit_shared_cluster(
-                                    b_free_bar_ptr.add(slot).cast::<u64>(),
-                                );
+                                commit_shared_barrier(b_free_bar_ptr.add(slot));
                             }
                             if burst + 1 == k_bursts {
-                                tcgen05_commit_shared_cluster(mma_bar_ptr.cast::<u64>());
-                                while !mbarrier_try_wait_parity(mma_bar_const, (g_idx & 1) as u32) {}
+                                commit_shared_barrier(mma_bar_ptr);
+                                while !mbarrier_try_wait_parity(mma_bar_const, (g_idx & 1) as u32) {
+                                }
                             }
                             step += 1;
                             burst += 1;
@@ -1451,11 +1596,10 @@ pub mod kernels_192e {
 
                     let mut n_base = 0usize;
                     while n_base < limit {
-                        let r0 = tcgen05_ld_32x32b_x16_raw(tmem_row_base + (n_base as u32))
+                        let r0 =
+                            tcgen05_ld_32x32b_x16_raw(tmem_row_base + (n_base as u32)).to_array();
+                        let r1 = tcgen05_ld_32x32b_x16_raw(tmem_row_base + 128 + (n_base as u32))
                             .to_array();
-                        let r1 =
-                            tcgen05_ld_32x32b_x16_raw(tmem_row_base + 128 + (n_base as u32))
-                                .to_array();
                         #[unroll]
                         for c in 0..16 {
                             let n = n_base + c;
@@ -1560,15 +1704,17 @@ pub mod kernels_192e {
         let smem_sfa1_ptr = unsafe { dyn_smem.add(204_800) }; // 200..208KB (2 stages)
         let smem_sfa2_ptr = unsafe { dyn_smem.add(212_992) }; // 208..212KB (1 stage)
         let smem_sfb_ptr = unsafe { dyn_smem.add(217_088) }; // 212..216KB (1 stage)
-        let tma_bar_ptr = unsafe { dyn_smem.add(221_184).cast::<Barrier>() };
-        let tma_bar_const = tma_bar_ptr.cast_const();
-        let a_free_bar_ptr = unsafe { tma_bar_ptr.add(2) };
-        let a_free_bar_const = a_free_bar_ptr.cast_const();
-        let b_free_bar_ptr = unsafe { a_free_bar_ptr.add(2) };
-        let b_free_bar_const = b_free_bar_ptr.cast_const();
-        let mma_bar_ptr = unsafe { b_free_bar_ptr.add(1) };
-        let mma_bar_const = mma_bar_ptr.cast_const();
-        let tmem_slot_ptr = unsafe { mma_bar_ptr.add(1).cast::<u32>() };
+        let (
+            tma_bar_ptr,
+            tma_bar_const,
+            a_free_bar_ptr,
+            a_free_bar_const,
+            b_free_bar_ptr,
+            b_free_bar_const,
+            mma_bar_ptr,
+            mma_bar_const,
+            tmem_slot_ptr,
+        ) = unsafe { partition_triple_m_barriers(dyn_smem, 221_184) };
 
         unsafe {
             if tid < 6 {
@@ -1588,7 +1734,7 @@ pub mod kernels_192e {
                 let mut step = 0usize;
                 let mut group = group_start;
                 while group < group_end {
-                    let expert = *group_experts.as_ptr().add(group) as usize;
+                    let expert = slice_read(group_experts, group) as usize;
                     let w_outer0 = expert * m128_tiles + tile_m0;
                     let w_outer1 = expert * m128_tiles + tile_m1;
                     let w_outer2 = expert * m128_tiles + tile_m2;
@@ -1597,7 +1743,8 @@ pub mod kernels_192e {
                         let slot = step & 1;
                         let phase = ((step >> 1) & 1) as u32;
                         if step >= 2 {
-                            while !mbarrier_try_wait_parity(a_free_bar_const.add(slot), phase ^ 1) {}
+                            while !mbarrier_try_wait_parity(a_free_bar_const.add(slot), phase ^ 1) {
+                            }
                         }
                         let bar = tma_bar_ptr.add(slot);
                         let _ = mbarrier_arrive_expect_tx(bar, 1, STAGE_TX_BYTES_FC2_M384);
@@ -1677,13 +1824,13 @@ pub mod kernels_192e {
                 let sb_desc0 = build_smem_desc_192e(smem_a0_base + 217_088, 2048, 128);
 
                 let tmem_row_base = tmem_addr + (warp_id << 21);
-                let out_u128_ptr = grouped_out.as_mut_ptr().cast::<u128>();
-                let smem_epi0_u16 = smem_a0_ptr.cast::<u16>();
-                let smem_epi0_u128 = smem_a0_ptr.cast_const().cast::<u128>();
-                let smem_epi1_u16 = smem_a1_ptr.cast::<u16>();
-                let smem_epi1_u128 = smem_a1_ptr.cast_const().cast::<u128>();
-                let smem_epi2_u16 = smem_a2_ptr.cast::<u16>();
-                let smem_epi2_u128 = smem_a2_ptr.cast_const().cast::<u128>();
+                let out_u128_ptr = disjoint_as_mut::<u128, u16>(&mut grouped_out);
+                let smem_epi0_u16 = shared_at::<u16>(smem_a0_ptr, 0);
+                let smem_epi0_u128 = shared_const_at::<u128>(smem_a0_ptr, 0);
+                let smem_epi1_u16 = shared_at::<u16>(smem_a1_ptr, 0);
+                let smem_epi1_u128 = shared_const_at::<u128>(smem_a1_ptr, 0);
+                let smem_epi2_u16 = shared_at::<u16>(smem_a2_ptr, 0);
+                let smem_epi2_u128 = shared_const_at::<u128>(smem_a2_ptr, 0);
                 let col16 = tid & 15;
                 let row8 = tid >> 4;
                 let dst_col0_u128 = tile_m0 * 16 + col16;
@@ -1695,11 +1842,11 @@ pub mod kernels_192e {
                 let mut g_idx = 0usize;
                 let mut group = group_start;
                 while group < group_end {
-                    let expert = *group_experts.as_ptr().add(group) as usize;
-                    let limit = *group_limits.as_ptr().add(group) as usize;
+                    let expert = slice_read(group_experts, group) as usize;
+                    let limit = slice_read(group_limits, group) as usize;
                     let valid_n = ((limit + 15) & !15).max(16);
                     let idesc = encode_idesc_192e(valid_n as u32);
-                    let global_scale = *w_down_global.as_ptr().add(expert);
+                    let global_scale = slice_read(w_down_global, expert);
 
                     if tid == 0 {
                         let sfa0_tmem_b = tmem_addr + 384;
@@ -1770,16 +1917,15 @@ pub mod kernels_192e {
                                 );
                             }
                             if burst + 1 < k_bursts {
-                                tcgen05_commit_shared_cluster(b_free_bar_ptr.cast::<u64>());
+                                commit_shared_barrier(b_free_bar_ptr);
                             }
                             if burst == 0 {
-                                tcgen05_commit_shared_cluster(
-                                    a_free_bar_ptr.add(slot).cast::<u64>(),
-                                );
+                                commit_shared_barrier(a_free_bar_ptr.add(slot));
                             }
                             if burst + 1 == k_bursts {
-                                tcgen05_commit_shared_cluster(mma_bar_ptr.cast::<u64>());
-                                while !mbarrier_try_wait_parity(mma_bar_const, (g_idx & 1) as u32) {}
+                                commit_shared_barrier(mma_bar_ptr);
+                                while !mbarrier_try_wait_parity(mma_bar_const, (g_idx & 1) as u32) {
+                                }
                             }
                             step += 1;
                             burst += 1;
@@ -1871,8 +2017,10 @@ pub mod kernels_192e {
         let col_u128 = idx % h_u128;
 
         unsafe {
-            let gp128 = *tok_to_perm.as_ptr().cast::<u128>().add(token);
-            let w64 = *routing_weights.as_ptr().cast::<u64>().add(token);
+            let perm_u128 = slice_as::<u128, i32>(tok_to_perm);
+            let rw_u64 = slice_as::<u64, u16>(routing_weights);
+            let gp128 = *perm_u128.add(token);
+            let w64 = *rw_u64.add(token);
 
             let decode_row = |gp: u32| -> usize {
                 let g = (gp >> 8) as usize;
@@ -1889,7 +2037,7 @@ pub mod kernels_192e {
             let s2 = f32::from_bits((((w64 >> 32) & 0xFFFF) as u32) << 16);
             let s3 = f32::from_bits((((w64 >> 48) & 0xFFFF) as u32) << 16);
 
-            let grouped_u128 = grouped_out.as_ptr().cast::<u128>();
+            let grouped_u128 = slice_as::<u128, u16>(grouped_out);
             let q0 = *grouped_u128.add(r0);
             let q1 = *grouped_u128.add(r1);
             let q2 = *grouped_u128.add(r2);
@@ -1919,10 +2067,9 @@ pub mod kernels_192e {
             let p1 = cvt_bf16x2_f32(acc[2], acc[3]);
             let p2 = cvt_bf16x2_f32(acc[4], acc[5]);
             let p3 = cvt_bf16x2_f32(acc[6], acc[7]);
-            *output.as_mut_ptr().cast::<u128>().add(idx) = (p0 as u128)
-                | ((p1 as u128) << 32)
-                | ((p2 as u128) << 64)
-                | ((p3 as u128) << 96);
+            let out_u128 = disjoint_as_mut::<u128, u16>(&mut output);
+            *out_u128.add(idx) =
+                (p0 as u128) | ((p1 as u128) << 32) | ((p2 as u128) << 64) | ((p3 as u128) << 96);
         }
     }
 }
@@ -1942,8 +2089,10 @@ fn pack_expert_tma_weights(logical: &[u8], rows: usize, k: usize, out: &mut [u8]
                         let src_col = kb * 256 + s * 32 + half_s * 16;
                         let dst_off =
                             ((((mt * k_bursts + kb) * 8 + s) * 2 + half_s) * 128 + r) * 16;
-                        out[dst_off..dst_off + 16]
-                            .copy_from_slice(&logical[src_row * packed_k + src_col..src_row * packed_k + src_col + 16]);
+                        out[dst_off..dst_off + 16].copy_from_slice(
+                            &logical
+                                [src_row * packed_k + src_col..src_row * packed_k + src_col + 16],
+                        );
                     }
                 }
             }
@@ -2083,8 +2232,7 @@ fn allocate_192e(
         .collect();
 
     let w_up_bytes = NUM_EXPERTS_192E * INTERMEDIATE_192E * (HIDDEN_192E / 2);
-    let w_up_scale_bytes =
-        NUM_EXPERTS_192E * (INTERMEDIATE_192E / 128) * (HIDDEN_192E / 64) * 512;
+    let w_up_scale_bytes = NUM_EXPERTS_192E * (INTERMEDIATE_192E / 128) * (HIDDEN_192E / 64) * 512;
     let w_down_bytes = NUM_EXPERTS_192E * HIDDEN_192E * (INTERMEDIATE_192E / 2);
     let w_down_scale_bytes =
         NUM_EXPERTS_192E * (HIDDEN_192E / 128) * (INTERMEDIATE_192E / 64) * 512;
@@ -2411,14 +2559,18 @@ fn check_output_192e(
     for (idx, (&bits, &exp)) in actual_bits.iter().zip(expected.iter()).enumerate() {
         let act = bf16::from_bits(bits).to_f32();
         if !act.is_finite() || !exp.is_finite() {
-            return Err(format!("non-finite element at {idx}: actual={act}, expected={exp}").into());
+            return Err(
+                format!("non-finite element at {idx}: actual={act}, expected={exp}").into(),
+            );
         }
         max_abs = max_abs.max((act - exp).abs());
         max_ref = max_ref.max(exp.abs());
     }
     let norm_err = max_abs / max_ref;
     if norm_err > 0.01 {
-        return Err(format!("output check failed: norm_err={norm_err:.6}, max_abs={max_abs:.6}").into());
+        return Err(
+            format!("output check failed: norm_err={norm_err:.6}, max_abs={max_abs:.6}").into(),
+        );
     }
     Ok(norm_err)
 }
@@ -2465,7 +2617,11 @@ fn host_quant_dequant_nvfp4(x: &[f32], rows: usize, cols: usize) -> Vec<f32> {
             let sc_code = host_f32_to_e4m3_rne(amax / 6.0);
             let sc_val = host_e4m3_to_f32(sc_code);
             for i in 0..16 {
-                let v = if sc_val > 0.0 { x[base + i] / sc_val } else { 0.0 };
+                let v = if sc_val > 0.0 {
+                    x[base + i] / sc_val
+                } else {
+                    0.0
+                };
                 let abs_v = v.abs();
                 let mut code = 0u8;
                 for (bi, &b) in BOUNDS.iter().enumerate() {
@@ -2492,7 +2648,14 @@ fn build_nonuniform_case(
     const LUT: [f32; 16] = [
         0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0,
     ];
-    let pool = [0i32, 4, (NUM_EXPERTS_192E - 2) as i32, (NUM_EXPERTS_192E - 1) as i32, 2, 5];
+    let pool = [
+        0i32,
+        4,
+        (NUM_EXPERTS_192E - 2) as i32,
+        (NUM_EXPERTS_192E - 1) as i32,
+        2,
+        5,
+    ];
     let mut hidden_fp16 = vec![0u16; batch * HIDDEN_192E];
     let mut hidden_f32 = vec![0.0f32; batch * HIDDEN_192E];
     let mut ids = vec![0i32; batch * TOP_K_192E];
@@ -2502,7 +2665,11 @@ fn build_nonuniform_case(
         let base_mag = crate::hidden_value(t);
         for c in 0..HIDDEN_192E {
             let factor = 0.5 + (((c * 7 + t * 3) % 19) as f32) / 16.0;
-            let sign = if (c + 3 * t).is_multiple_of(11) { -1.0 } else { 1.0 };
+            let sign = if (c + 3 * t).is_multiple_of(11) {
+                -1.0
+            } else {
+                1.0
+            };
             let h16 = f16::from_f32(base_mag * factor * sign);
             hidden_fp16[t * HIDDEN_192E + c] = h16.to_bits();
             hidden_f32[t * HIDDEN_192E + c] = h16.to_f32();
@@ -2557,7 +2724,11 @@ fn build_nonuniform_case(
         for r in 0..INTERMEDIATE_192E {
             for col in 0..HIDDEN_192E {
                 let mag = 1 + (r * 3 + col * 5 + expert) % 6;
-                let sign = if (r + col + expert).is_multiple_of(13) { 8 } else { 0 };
+                let sign = if (r + col + expert).is_multiple_of(13) {
+                    8
+                } else {
+                    0
+                };
                 let sc_code = (0x30 + ((r + (col / 16) * 3 + expert) % 3) * 8) as u8;
                 let w_val = LUT[mag | sign] * host_e4m3_to_f32(sc_code);
                 for (ti, &(tok, _)) in routes_for_exp.iter().enumerate() {
@@ -2575,7 +2746,11 @@ fn build_nonuniform_case(
         for r in 0..HIDDEN_192E {
             for col in 0..INTERMEDIATE_192E {
                 let mag = 1 + (r * 3 + col * 5 + expert) % 6;
-                let sign = if (r + col + expert).is_multiple_of(13) { 8 } else { 0 };
+                let sign = if (r + col + expert).is_multiple_of(13) {
+                    8
+                } else {
+                    0
+                };
                 let sc_code = (0x30 + ((r + (col / 16) * 3 + expert) % 3) * 8) as u8;
                 let w_val = LUT[mag | sign] * host_e4m3_to_f32(sc_code);
                 for ti in 0..n_tok {
@@ -2615,7 +2790,16 @@ fn upload_nonuniform_weights_192e(
     let mut w2_all = vec![0x22u8; NUM_EXPERTS_192E * w2_expert_bytes];
     let mut s2_all = vec![0x38u8; NUM_EXPERTS_192E * s2_expert_bytes];
 
-    for &expert in &[0usize, 1, 2, 3, 4, 5, NUM_EXPERTS_192E - 2, NUM_EXPERTS_192E - 1] {
+    for &expert in &[
+        0usize,
+        1,
+        2,
+        3,
+        4,
+        5,
+        NUM_EXPERTS_192E - 2,
+        NUM_EXPERTS_192E - 1,
+    ] {
         let mut w1_log = vec![0u8; w1_expert_bytes];
         let mut s1_log = vec![0u8; s1_expert_bytes];
         for r in 0..INTERMEDIATE_192E {
@@ -2623,9 +2807,17 @@ fn upload_nonuniform_weights_192e(
                 let c0 = col_pair * 2;
                 let c1 = c0 + 1;
                 let m0 = (1 + (r * 3 + c0 * 5 + expert) % 6) as u8
-                    | if (r + c0 + expert).is_multiple_of(13) { 8 } else { 0 };
+                    | if (r + c0 + expert).is_multiple_of(13) {
+                        8
+                    } else {
+                        0
+                    };
                 let m1 = (1 + (r * 3 + c1 * 5 + expert) % 6) as u8
-                    | if (r + c1 + expert).is_multiple_of(13) { 8 } else { 0 };
+                    | if (r + c1 + expert).is_multiple_of(13) {
+                        8
+                    } else {
+                        0
+                    };
                 w1_log[r * (HIDDEN_192E / 2) + col_pair] = m0 | (m1 << 4);
             }
             for g in 0..(HIDDEN_192E / 16) {
@@ -2652,9 +2844,17 @@ fn upload_nonuniform_weights_192e(
                 let c0 = col_pair * 2;
                 let c1 = c0 + 1;
                 let m0 = (1 + (r * 3 + c0 * 5 + expert) % 6) as u8
-                    | if (r + c0 + expert).is_multiple_of(13) { 8 } else { 0 };
+                    | if (r + c0 + expert).is_multiple_of(13) {
+                        8
+                    } else {
+                        0
+                    };
                 let m1 = (1 + (r * 3 + c1 * 5 + expert) % 6) as u8
-                    | if (r + c1 + expert).is_multiple_of(13) { 8 } else { 0 };
+                    | if (r + c1 + expert).is_multiple_of(13) {
+                        8
+                    } else {
+                        0
+                    };
                 w2_log[r * (INTERMEDIATE_192E / 2) + col_pair] = m0 | (m1 << 4);
             }
             for g in 0..(INTERMEDIATE_192E / 16) {

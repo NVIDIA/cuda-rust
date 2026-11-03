@@ -161,6 +161,23 @@ and Blackwell SOTA benchmarks highlight four practical rules for agents:
    * Verify every kernel change against a CPU or reference oracle (`normalized_max_error`),
      check register/spill counts with `ptxas -v`, and run an A/B timing comparison.
 
+5. **Beautiful Rust in both Native SIMT (`cuda-oxide`) and `cute-rs` — with GPU codegen caveats (hard rule).**
+   * **No raw pointer casts or ad-hoc pointer indexing in kernel bodies:** Do not scatter
+     `.as_ptr().cast::<...>()`, `.as_mut_ptr().cast::<...>()`, or raw `.as_ptr().add(...)`
+     across kernel code. Use typed tensor/slice views (`StridedTensor`, `StridedTensorMut`,
+     `SharedTensor`, `Sm100SharedTile`, `Sm100ScaleTile`, `SmemTile`, or typed slice/shared
+     wrappers) and `const _: () = assert!(...)` compile-time layout invariants.
+   * **Be careful with CPU-oriented Clippy/style rewrites (such as `clippy::collapsible_if`):**
+     Use Beautiful Rust as a structural reference, **but never blindly apply style lints that
+     alter GPU warp specialization, predication, convergence, or register pressure**. For
+     example, collapsing `if warp_id == 0 { if tid == 0 { ... } }` or
+     `if warp_id == 4 { if elect_one_sync() { ... } }` into `if a && b` to satisfy
+     `clippy::collapsible_if` can redirect non-leader threads into an `else` branch, place a
+     warp collective inside short-circuit evaluation, or defeat uniform-warp analysis in
+     `dialect-cute`, `mir-transforms`, and `ptxas` — costing significant performance. When a
+     lint conflicts with GPU control flow, preserve the two-level guard and annotate it with
+     `#[allow(clippy::collapsible_if)]` and a short explanation.
+
 ---
 
 ## 4. Documentation style: simple, short, jargon-free, visual, and 100% complete (public + private)

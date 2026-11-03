@@ -51,6 +51,22 @@ impl<Layout: ReifySmem2D, Role> Sm100SharedTile<Layout, Role> {
         }
     }
 
+    /// Bind stage `slot` of a byte-addressed shared-memory ring at `smem_base + stage_offset_bytes`,
+    /// deriving the per-stage byte stride from `Layout` (`size_in_bytes::<u8, Layout>()`).
+    ///
+    /// # Safety
+    /// `smem_base.add(stage_offset_bytes + slot * stage_bytes)` must point to live, aligned shared memory.
+    #[must_use]
+    #[inline(always)]
+    pub const unsafe fn from_stage_bytes(
+        smem_base: *mut u8,
+        stage_offset_bytes: usize,
+        slot: usize,
+    ) -> Self {
+        let stage_bytes = crate::copy::tma::size_in_bytes::<u8, Layout>() as usize;
+        unsafe { Self::from_raw_bytes(smem_base.add(stage_offset_bytes + slot * stage_bytes)) }
+    }
+
     /// Return the CTA-shared byte offset of this tile's base pointer.
     /// Used by `Sm100BlockScaledTiledMma` to encode hardware `Tcgen05SmemDescriptor`s.
     ///
@@ -87,6 +103,28 @@ impl<Role> Sm100ScaleTile<Role> {
         Self {
             base,
             marker: PhantomData,
+        }
+    }
+
+    /// Bind stage `slot` of a shared-memory scale ring at `smem_base + stage_offset_bytes`,
+    /// deriving the per-stage byte stride (`stage_bytes`) at compile time.
+    ///
+    /// # Safety
+    /// `smem_base.add(stage_offset_bytes + slot * stage_bytes)` must be 128-byte aligned in shared memory.
+    #[must_use]
+    #[inline(always)]
+    pub const unsafe fn from_stage_bytes(
+        smem_base: *mut u8,
+        stage_offset_bytes: usize,
+        stage_bytes: usize,
+        slot: usize,
+    ) -> Self {
+        unsafe {
+            Self::from_raw(
+                smem_base
+                    .add(stage_offset_bytes + slot * stage_bytes)
+                    .cast::<u32>(),
+            )
         }
     }
 

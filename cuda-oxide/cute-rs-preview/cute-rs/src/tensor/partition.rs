@@ -183,6 +183,19 @@ impl<'a, T: Copy + TensorElement<T>> StridedTensor<'a, T> {
             .base();
         unsafe { Self::from_raw_parts(storage.as_ptr(), storage.len(), 1) }
     }
+    /// Reinterpret a borrowed slice `&[S]` as a contiguous `StridedTensor<'a, T>` of
+    /// `(storage.len() * size_of::<S>()) / size_of::<T>()` elements (for example, viewing
+    /// `&[u16]` or `&[BFloat16]` as `StridedTensor<u128>` for vectorized 128-bit loads).
+    ///
+    /// # Safety
+    /// `storage.as_ptr()` must be aligned to `align_of::<T>()` and the total byte length
+    /// must be an exact multiple of `size_of::<T>()`.
+    #[allow(clippy::manual_slice_size_calculation)]
+    #[inline(always)]
+    pub unsafe fn from_slice_as<S: Copy>(storage: &'a [S]) -> Self {
+        let len = (storage.len() * core::mem::size_of::<S>()) / core::mem::size_of::<T>();
+        unsafe { Self::from_raw_parts(storage.as_ptr().cast::<T>(), len, 1) }
+    }
     /// Borrow the logical elements of a strided storage range.
     ///
     /// # Safety
@@ -197,6 +210,20 @@ impl<'a, T: Copy + TensorElement<T>> StridedTensor<'a, T> {
             layout: Strided1D { len, stride },
             borrow: PhantomData,
         }
+    }
+
+    /// Borrow a contiguous `len`-element read-only shared-memory view starting at `smem_base + byte_offset`.
+    ///
+    /// # Safety
+    /// `smem_base.add(byte_offset)` must be aligned to `align_of::<T>()` and cover `len` initialized `T` elements.
+    #[must_use]
+    #[inline(always)]
+    pub const unsafe fn from_shared_bytes(
+        smem_base: *const u8,
+        byte_offset: usize,
+        len: usize,
+    ) -> Self {
+        unsafe { Self::from_raw_parts(smem_base.add(byte_offset).cast::<T>(), len, 1) }
     }
 }
 impl<'a, Element: TensorElement<Storage>, Storage: Copy>
@@ -246,6 +273,24 @@ impl<'a, T: Copy + TensorElement<T>> StridedTensor<'a, T, Strided1D, T> {
     }
 }
 
+impl<'a> StridedTensor<'a, u128, Strided1D, u128> {
+    /// Load one 16-byte (`128`-bit) element at `index` as a 4-lane [`super::RegisterTile<f32, 4>`].
+    ///
+    /// # Safety
+    /// `index < self.len()` must hold and the underlying pointer must be 16-byte aligned.
+    #[must_use]
+    #[inline(always)]
+    pub unsafe fn load_f32x4(&self, index: usize) -> super::RegisterTile<f32, 4> {
+        let q = unsafe { self.get_unchecked(index) };
+        super::RegisterTile::from_array([
+            f32::from_bits((q & 0xFFFF_FFFF) as u32),
+            f32::from_bits(((q >> 32) & 0xFFFF_FFFF) as u32),
+            f32::from_bits(((q >> 64) & 0xFFFF_FFFF) as u32),
+            f32::from_bits((q >> 96) as u32),
+        ])
+    }
+}
+
 impl<'a, T: Copy + TensorElement<T>> StridedTensorMut<'a, T, Strided1D, T> {
     /// Advance the mutable base pointer by `start * stride` elements and bound the view to `len` elements.
     ///
@@ -271,6 +316,25 @@ impl<'a, T: Copy + TensorElement<T>> StridedTensorMut<'a, T, Strided1D, T> {
     #[inline(always)]
     pub unsafe fn write_at(&self, index: usize, value: T) {
         unsafe { self.base.add(index * self.layout.stride).write(value) }
+    }
+}
+
+impl<'a> StridedTensorMut<'a, crate::numeric::BFloat16, Strided1D, crate::numeric::BFloat16> {
+    /// Atomically add a packed `(lo, hi)` `BFloat16` pair into `(row, col)` of a 2D row-major matrix.
+    ///
+    /// # Safety
+    /// `row * row_stride + col + 1 < self.len()` must hold and the target address must be 4-byte aligned.
+    #[inline(always)]
+    pub unsafe fn atomic_add_bf16x2_at_2d(
+        &self,
+        row: usize,
+        col: usize,
+        row_stride: usize,
+        lo: crate::numeric::BFloat16,
+        hi: crate::numeric::BFloat16,
+    ) {
+        let ptr = unsafe { self.ptr_at_2d_unchecked(row, col, row_stride) };
+        unsafe { crate::arch::atomic_add_bf16x2(ptr, lo, hi) };
     }
 }
 
@@ -483,6 +547,18 @@ impl<'a, T: Copy + TensorElement<T>> StridedTensorMut<'a, T> {
             .base();
         unsafe { Self::from_raw_parts(ptr, len, 1) }
     }
+    /// Reinterpret a writable `DisjointSlice<'_, S>` as a contiguous `StridedTensorMut<'a, T>` of
+    /// `(storage.len() * size_of::<S>()) / size_of::<T>()` elements (for example, viewing
+    /// `DisjointSlice<u8>` as `StridedTensorMut<u64>` or `DisjointSlice<BFloat16>` as `StridedTensorMut<u128>`).
+    ///
+    /// # Safety
+    /// `storage.as_mut_ptr()` must be aligned to `align_of::<T>()` and the total byte length
+    /// must be an exact multiple of `size_of::<T>()`.
+    #[inline(always)]
+    pub unsafe fn from_disjoint_slice_as<S: Copy>(storage: &'a mut DisjointSlice<'_, S>) -> Self {
+        let len = (storage.len() * core::mem::size_of::<S>()) / core::mem::size_of::<T>();
+        unsafe { Self::from_raw_parts(storage.as_mut_ptr().cast::<T>(), len, 1) }
+    }
     /// Borrow writable strided storage with an externally established extent.
     /// # Safety
     /// `stride` is positive. Each `base.add(i*stride)`, `i < len`, must be live,
@@ -496,6 +572,20 @@ impl<'a, T: Copy + TensorElement<T>> StridedTensorMut<'a, T> {
             layout: Strided1D { len, stride },
             borrow: PhantomData,
         }
+    }
+
+    /// Borrow a contiguous `len`-element writable shared-memory view starting at `smem_base + byte_offset`.
+    ///
+    /// # Safety
+    /// `smem_base.add(byte_offset)` must be aligned to `align_of::<T>()` and cover `len` writable `T` elements.
+    #[must_use]
+    #[inline(always)]
+    pub const unsafe fn from_shared_bytes(
+        smem_base: *mut u8,
+        byte_offset: usize,
+        len: usize,
+    ) -> Self {
+        unsafe { Self::from_raw_parts(smem_base.add(byte_offset).cast::<T>(), len, 1) }
     }
 }
 impl<'a, Element: TensorElement<Storage>, Layout: IndexLayout, Storage: Copy>

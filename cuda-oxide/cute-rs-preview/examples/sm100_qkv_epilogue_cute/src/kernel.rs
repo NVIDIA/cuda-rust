@@ -48,9 +48,9 @@ use ctm_rs::mbarrier::Barrier;
 use ctm_rs::memory::DynamicSharedArray;
 use ctm_rs::{cluster_launch, cuda_module, kernel, launch_bounds, launch_contract};
 use cute_rs::arch::{
-    NamedBarrier, block_idx_in_cluster, cluster_arrive_relaxed, cluster_wait, elect_one_sync,
-    make_warp_uniform, mbarrier_init_fence, setmaxregister_decrease, setmaxregister_increase,
-    thread_idx, warp_idx,
+    NamedBarrier, block_idx_in_cluster, cluster_arrive_relaxed, cluster_wait, cvt_e4m3x2_f32,
+    elect_one_sync, make_warp_uniform, mbarrier_init_fence, rsqrt_f32, setmaxregister_decrease,
+    setmaxregister_increase, tcgen05_fence_before_thread_sync, thread_idx, warp_idx,
 };
 use cute_rs::attention::sm100::pipeline::{
     AsyncCompletion, AsyncCopyReuse, Consumer, Producer, RingCursor, TensorMemory, TwoCtaRing,
@@ -61,8 +61,9 @@ use cute_rs::attention::sm100::{
 use cute_rs::sm100::{Sm100DeallocBarrier, Sm100Tmem};
 use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
 use cute_rs::{
-    ColMajor, ComposedLayout, OperandA, OperandB, PersistentTileSchedulerParams, RowMajor, Swizzle,
-    TensorMap, size_in_bytes,
+    ColMajor, ComposedLayout, GlobalStoreTile, OperandA, OperandB, PersistentTileSchedulerParams,
+    RowMajor, Swizzle, TensorMap, crd2idx_col_major_2d, crd2idx_row_major_2d, crd2idx_row_major_3d,
+    size_in_bytes, store_global_no_allocate,
 };
 
 /// Per-CTA `64 × 64` FP16 K-major `X` activation tile with 128-byte swizzle (`8,192` bytes per stage).
@@ -375,11 +376,25 @@ unsafe fn run_qkv_epilogue_schedule<const OVERLAP_EPILOGUE: bool>(
             let tmem_row = tmem_row_address(tmem, warp_id, acc_idx * 128);
             let fragment = TmemFragment::<128>::load(tmem_row);
             if OVERLAP_EPILOGUE {
-                acc_ring.release_epilogue_cursor::<1, 128>(acc_cursor, tid);
+                tcgen05_fence_before_thread_sync();
+                NamedBarrier::<1, 128>::sync();
+                if tid == 0 {
+                    acc_ring.thread_empty_cursor(acc_cursor);
+                }
             }
 
             let (scale, gamma_ptr) = if head_idx < qk_heads {
-                let inv_rms = fragment.rms_inv_std(rms_eps);
+                let mut sum_sq = 0.0f32;
+                let mut j = 0u32;
+                while j < 32 {
+                    let v0 = fragment.values[crd2idx_col_major_2d(j, 0, 32) as usize];
+                    let v1 = fragment.values[crd2idx_col_major_2d(j, 1, 32) as usize];
+                    let v2 = fragment.values[crd2idx_col_major_2d(j, 2, 32) as usize];
+                    let v3 = fragment.values[crd2idx_col_major_2d(j, 3, 32) as usize];
+                    sum_sq += v0 * v0 + v1 * v1 + v2 * v2 + v3 * v3;
+                    j += 1;
+                }
+                let inv_rms = rsqrt_f32(sum_sq * (1.0f32 / 128.0f32) + rms_eps);
                 let g_ptr = if head_idx < num_q_heads {
                     smem_gq_view.ptr_at_unchecked(0)
                 } else {
@@ -402,10 +417,45 @@ unsafe fn run_qkv_epilogue_schedule<const OVERLAP_EPILOGUE: bool>(
                 v_view.ptr_at_2d_unchecked(slot_idx, kv_head, num_kv_heads as usize)
             };
 
-            fragment.quantize_and_store_e4m3_no_allocate(scale, gamma_ptr, dst_ptr);
+            let gamma_view = gamma_ptr.map(|ptr| StridedTensor::from_raw_parts(ptr, 128, 1));
+            let dst_u32 = dst_ptr.cast::<u32>();
+            let mut chunk = 0usize;
+            while chunk < 4 {
+                let mut packed = [0u32; 8];
+                let mut w = 0usize;
+                while w < 8 {
+                    let idx = crd2idx_row_major_3d(chunk, w, 0, 8, 4);
+                    let (v0, v1, v2, v3) = if let Some(g_view) = gamma_view {
+                        (
+                            fragment.values[idx] * scale * g_view.get_unchecked(idx),
+                            fragment.values[idx + 1] * scale * g_view.get_unchecked(idx + 1),
+                            fragment.values[idx + 2] * scale * g_view.get_unchecked(idx + 2),
+                            fragment.values[idx + 3] * scale * g_view.get_unchecked(idx + 3),
+                        )
+                    } else {
+                        (
+                            fragment.values[idx] * scale,
+                            fragment.values[idx + 1] * scale,
+                            fragment.values[idx + 2] * scale,
+                            fragment.values[idx + 3] * scale,
+                        )
+                    };
+                    let lo16 = cvt_e4m3x2_f32(v0, v1) as u32;
+                    let hi16 = cvt_e4m3x2_f32(v2, v3) as u32;
+                    packed[w] = lo16 | (hi16 << 16);
+                    w += 1;
+                }
+                let chunk_offset = crd2idx_row_major_2d(chunk, 0, 8);
+                store_global_no_allocate(dst_u32.add(chunk_offset), &GlobalStoreTile(packed));
+                chunk += 1;
+            }
 
             if !OVERLAP_EPILOGUE {
-                acc_ring_1.release_epilogue_cursor::<1, 128>(acc_cursor_1, tid);
+                tcgen05_fence_before_thread_sync();
+                NamedBarrier::<1, 128>::sync();
+                if tid == 0 {
+                    acc_ring_1.thread_empty_cursor(acc_cursor_1);
+                }
                 acc_cursor_1.advance();
             } else {
                 acc_cursor.advance();

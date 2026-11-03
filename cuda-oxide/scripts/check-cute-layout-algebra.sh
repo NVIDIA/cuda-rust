@@ -43,6 +43,7 @@ format_parse_pattern='format!\("(\(\(|\{shape\}:\{stride\}|\(\{rows\},\{columns\
 layout_def_outside_pattern='pub[[:space:]]+(struct[[:space:]]+(SharedLayout|RowMajor|ColMajor|ComposedLayout)|trait[[:space:]]+(SmemLayout|StaticLayout|ReifySmem2D))\b'
 kernel_hand_math_pattern='(fn[[:space:]]+swizzle_tile\b|\([[:space:]]*tid[[:space:]]*(&|>>)[[:space:]]*6[34]?\)|\([[:space:]]*warp[_a-z0-9]*[[:space:]]*\*[[:space:]]*32[[:space:]]*\)[[:space:]]*<<[[:space:]]*16|\b(q_out|k_cache|v_cache)\.add\()'
 kernel_untyped_op_pattern='(\bcuda_device::|\bctm_rs::(tma|mma|tcgen05|async_copy|barrier|cluster|fence|groups|convert|float)\b|\bcp_async_bulk_tensor_|\bmbarrier_(init|try_wait|arrive)\b|\btcgen05_(mma|ld|st|cp|alloc|dealloc|wait|fence|commit)\b)'
+moe192_raw_cast_pattern='(\.(as_ptr|as_mut_ptr)\(\)\.(cast::<|add\()|\.cast::<|\.add\()'
 
 # Canary self-test: prove each regex matches a known violation before scanning.
 canary="$(mktemp -d)"
@@ -133,7 +134,113 @@ untyped_hits="$(grep -rEn --include='*.rs' "${kernel_untyped_op_pattern}" \
     "${cute_kernel_dirs[@]}" |
     grep -v 'cute_boundary\.rs:' |
     grep -vE ':[0-9]+:[[:space:]]*//' || true)"
+moe192_cast_hits="$(grep -En "${moe192_raw_cast_pattern}" \
+    cuda-oxide/cute-rs-preview/models/nemotron3_moe_cute/src/main.rs \
+    cuda-oxide/cute-rs-preview/models/nemotron3_moe_cute/src/moe_192e.rs |
+    grep -vE ':[0-9]+:[[:space:]]*//' || true)"
 set -e
+
+if [ -n "${moe192_cast_hits}" ]; then
+    status=1
+    echo "error: raw .as_ptr().cast::<...> found in moe_192e.rs kernel body (use typed StridedTensor / StridedTensorMut / slice views):" >&2
+    printf '%s\n' "${moe192_cast_hits}" | sed 's/^/  /' >&2
+    echo >&2
+fi
+
+# 4. Direct CuTeDSL Python AST symbol & purity check across `cute-rs/src/` and `nemotron3_moe_cute`.
+if command -v python3 >/dev/null 2>&1; then
+    python3 - <<'PY' || status=1
+import ast
+import glob
+import os
+import re
+import sys
+
+cutedsl_candidates = [
+    "cuda-oxide/cute-rs-preview/.venv/lib/python3.12/site-packages/nvidia_cutlass_dsl/dsl_packages/cutlass",
+    os.path.expanduser("~/cudagym-env/lib/python3.12/site-packages/nvidia_cutlass_dsl/dsl_packages/cutlass"),
+]
+cutedsl_root = next((p for p in cutedsl_candidates if os.path.isdir(p)), None)
+
+cutedsl_symbols = set()
+if cutedsl_root is not None:
+    for sub in ("cute", "pipeline", "utils"):
+        for path in glob.glob(os.path.join(cutedsl_root, sub, "**", "*.py"), recursive=True):
+            with open(path, encoding="utf-8") as f:
+                tree = ast.parse(f.read(), filename=path)
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    if not node.name.startswith("_"):
+                        cutedsl_symbols.add(node.name)
+                elif isinstance(node, ast.Assign):
+                    for t in node.targets:
+                        if isinstance(t, ast.Name) and t.id == "__all__" and isinstance(node.value, (ast.List, ast.Tuple)):
+                            for elt in node.value.elts:
+                                if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                                    cutedsl_symbols.add(elt.value)
+    if len(cutedsl_symbols) < 500:
+        sys.exit(f"error: CuTeDSL AST extraction self-test failed ({len(cutedsl_symbols)} symbols)")
+
+# Documented Rust constructors/idioms from cuda-oxide-book/cute/cutedsl-comparison.md
+rust_idiom_allowlist = {
+    "new", "new_with_lbo", "from_raw", "from_raw_bytes", "from_stage_bytes",
+    "shared_offset", "as_ptr", "tile_unchecked", "tmem_row_address",
+    "slice_address", "store_async", "sync_cluster", "alloc", "dealloc",
+    "load", "load_deferred", "store", "store_deferred", "store_packed",
+    "store_packed_deferred", "store_packed_8", "create_tensor_map_tiled",
+    "init", "producer_expect_tx", "acquire", "wait", "full_at", "empty_at",
+    "full_ptr", "mma_full", "mma_empty", "thread_full", "thread_empty",
+    "full_at_cursor", "empty_at_cursor", "acquire_cursor", "wait_cursor",
+    "producer_expect_tx_cursor", "mma_full_cursor", "mma_empty_cursor",
+    "thread_full_cursor", "thread_empty_cursor", "commit_threads",
+    "release_threads", "commit_mma", "release_mma",
+}
+
+pub_fn_re = re.compile(r"^\s*pub\s+(?:const\s+)?(?:unsafe\s+)?fn\s+([a-zA-Z0-9_]+)")
+forbidden_cute_rs_re = re.compile(
+    r"\b(route_histogram|route_and_load|store_routed_token|unload_relu2|unload_dual_m|unload_triple_m|copy_scales_and_gemm|copy_b_scales_and_gemm|load_stationary_weights|stage_page_index|wait_and_read_page_index|read_page_index_and_release|rms_inv_std|quantize_and_store_e4m3|partition_pipeline_barriers|partition_triple_m_barriers)\b"
+)
+
+errors = []
+for root_dir in ("cuda-oxide/cute-rs-preview/cute-rs/src/sm100", "cuda-oxide/cute-rs-preview/cute-rs/src/attention/sm100"):
+    for path in sorted(glob.glob(os.path.join(root_dir, "**", "*.rs"), recursive=True)):
+        if path.endswith("__compiler.rs") or path.endswith("tests.rs"):
+            continue
+        with open(path, encoding="utf-8") as f:
+            for lineno, line in enumerate(f, 1):
+                if forbidden_cute_rs_re.search(line):
+                    errors.append(f"{path}:{lineno}: workload-specific helper forbidden in cute-rs: {line.strip()}")
+                m = pub_fn_re.match(line)
+                if m and cutedsl_symbols:
+                    fn_name = m.group(1)
+                    if fn_name not in cutedsl_symbols and fn_name not in rust_idiom_allowlist:
+                        errors.append(
+                            f"{path}:{lineno}: public function `{fn_name}` does not exist in CuTeDSL AST or cutedsl-comparison.md"
+                        )
+
+moe_cute_path = "cuda-oxide/cute-rs-preview/models/nemotron3_moe_cute/src/moe_192e.rs"
+if os.path.isfile(moe_cute_path):
+    subword_unpack_re = re.compile(r"(>>\s*(?:16|32|48|64|80|96|112)\b|0xFFFF_FFFF|0xFFFF_0000)")
+    with open(moe_cute_path, encoding="utf-8") as f:
+        in_device_mod = False
+        for lineno, line in enumerate(f, 1):
+            if "pub mod kernels_192e" in line:
+                in_device_mod = True
+            elif in_device_mod and line.startswith("}"):
+                in_device_mod = False
+            if in_device_mod and not line.lstrip().startswith("//"):
+                if subword_unpack_re.search(line):
+                    errors.append(
+                        f"{moe_cute_path}:{lineno}: sub-word bit-unpacking in *_cute kernel (use Tensor::local_tile / zipped_divide + RegisterTile): {line.strip()}"
+                    )
+
+if errors:
+    print("error: CuTeDSL source AST & cute-rs purity check failed:", file=sys.stderr)
+    for err in errors:
+        print(f"  {err}", file=sys.stderr)
+    sys.exit(1)
+PY
+fi
 
 if [ -n "${kernel_hits}" ]; then
     status=1

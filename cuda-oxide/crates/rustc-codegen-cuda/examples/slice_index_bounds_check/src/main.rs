@@ -14,7 +14,7 @@
 //! or the launch must fail (thread trapped).
 //! If the sentinel is overwritten, the kernel performed an out-of-bounds global read.
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer};
 use cuda_device::{DisjointSlice, kernel, thread};
 use cuda_host::cuda_module;

@@ -2,10 +2,10 @@
 
 :::{admonition} Preview
 :class: warning
-cute-rs compiles for two targets, `sm_100a` and `sm_120a`, through the pinned CUTLASS 4.7 compiler, and covers a validated subset of CuTeDSL 4.7 on them. The [support matrix](support-matrix.md) lists what is supported, what is partial and what is missing. Expect API changes between releases.
+cute-rs compiles for three targets, `sm_100a`, `sm_103a` and `sm_120a`, through the pinned CUTLASS 4.7 compiler, and covers a validated subset of CuTeDSL 4.7 on them. The [support matrix](support-matrix.md) lists what is supported, what is partial and what is missing. Expect API changes between releases.
 :::
 
-**cute-rs** brings CUTLASS CuTe's layout algebra, partitions, TMA transfers, pipelines, and tensor-core MMA operations into Rust's type system for two Blackwell targets, without a Python interpreter or runtime JIT tracer.
+**cute-rs** brings CUTLASS CuTe's layout algebra, partitions, TMA transfers, pipelines, and tensor-core MMA operations into Rust's type system for three Blackwell targets, without a Python interpreter or runtime JIT tracer.
 
 ```{figure} images/cute-rs-preview-stack-and-flow.svg
 :align: center

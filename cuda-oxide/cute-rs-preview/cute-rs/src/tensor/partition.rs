@@ -16,7 +16,11 @@ use crate::tensor::{RegisterTile, TensorElement};
 use core::marker::PhantomData;
 use ctm_rs::memory::DisjointSlice;
 
+/// Sealed supertrait module preventing external crates from implementing [`IndexLayout`].
+/// Ensures every [`IndexLayout`] upholds the originating storage bounds proof.
 mod sealed {
+    /// Marker trait implemented only by verified coordinate maps in this module.
+    /// Guarantees that `crd2idx` only produces offsets covered by the parent view.
     pub trait Sealed {}
 }
 
@@ -42,7 +46,11 @@ pub trait IndexLayout: sealed::Sealed + Copy {
 /// One-dimensional shape and positive physical element stride.
 #[derive(Clone, Copy)]
 pub struct Strided1D {
+    /// Number of logical coordinates (`0..len`) in this 1D view.
+    /// Bounds all safe indexing and subview operations.
     len: usize,
+    /// Physical storage elements skipped when the logical index increases by `1`.
+    /// Equal to `1` for contiguous slices.
     stride: usize,
 }
 impl sealed::Sealed for Strided1D {}
@@ -60,8 +68,14 @@ impl IndexLayout for Strided1D {
 /// A contiguous logical interval of a parent coordinate map.
 #[derive(Clone, Copy)]
 pub struct Subrange<Parent: IndexLayout> {
+    /// Underlying coordinate map whose logical domain is being sliced.
+    /// Translates `start + index` to a physical storage offset.
     parent: Parent,
+    /// Starting logical coordinate in `parent` corresponding to index `0`.
+    /// Added before delegating to `parent.crd2idx`.
     start: usize,
+    /// Number of logical elements exposed by this subrange.
+    /// Satisfies `start + len <= parent.len()`.
     len: usize,
 }
 impl<Parent: IndexLayout> sealed::Sealed for Subrange<Parent> {}
@@ -82,8 +96,14 @@ impl<Parent: IndexLayout> IndexLayout for Subrange<Parent> {
 /// count remains in the type even after further slicing or partitioning.
 #[derive(Clone, Copy)]
 pub struct Cyclic<Parent: IndexLayout, const PARTS: usize> {
+    /// Parent coordinate map being split across `PARTS` cyclic lanes.
+    ///Evaluates `part + index * PARTS` to a physical storage offset.
     parent: Parent,
+    /// Lane or partition index in `0..PARTS` owned by the caller.
+    /// Selects the starting offset of the cyclic sequence.
     part: usize,
+    /// Number of elements in this partition (`0` when `part >= parent.len()`).
+    /// Handles ragged tails without reading past the parent view.
     len: usize,
 }
 impl<Parent: IndexLayout, const PARTS: usize> sealed::Sealed for Cyclic<Parent, PARTS> {}
@@ -98,6 +118,8 @@ impl<Parent: IndexLayout, const PARTS: usize> IndexLayout for Cyclic<Parent, PAR
     }
 }
 
+/// Construct cyclic partition `part` (`0..PARTS`) of `layout` and compute its exact element count.
+/// Ragged tails give higher `part` indices one fewer element instead of reading out of bounds.
 #[inline(always)]
 fn partition<Layout: IndexLayout, const PARTS: usize>(
     layout: Layout,
@@ -130,8 +152,14 @@ where
     Layout: IndexLayout,
     Storage: Copy,
 {
+    /// Non-owning read-only base pointer to the underlying storage buffer.
+    /// Indexed only at offsets produced by `layout.crd2idx`.
     base: *const Storage,
+    /// Composable logical-to-physical coordinate map for this tensor view.
+    /// Tracks length, stride, subranges, and cyclic thread partitions.
     layout: Layout,
+    /// Zero-sized lifetime and logical-element marker tying the view to `'a`.
+    /// Prevents the borrowed storage from being mutated or dropped while live.
     borrow: PhantomData<(&'a [Storage], Element)>,
 }
 impl<Element: TensorElement<Storage>, Layout: IndexLayout, Storage: Copy> Copy
@@ -325,6 +353,15 @@ impl<'a, Element: TensorElement<Storage>, Layout: IndexLayout, Storage: Copy>
     pub unsafe fn get_unchecked(&self, index: usize) -> Storage {
         unsafe { self.base.add(self.layout.crd2idx(index)).read() }
     }
+    /// Return a const pointer to the storage element at logical coordinate `index`
+    /// using the view's `crd2idx` coordinate map.
+    /// # Safety
+    /// `index < self.len()` and the addressed storage must be live for `'a`.
+    #[must_use]
+    #[inline(always)]
+    pub unsafe fn ptr_at_unchecked(&self, index: usize) -> *const Storage {
+        unsafe { self.base.add(self.layout.crd2idx(index)) }
+    }
     /// Reduce logical coordinates in increasing order without reassociation.
     #[inline(always)]
     pub fn fold<U>(self, initial: U, mut f: impl FnMut(U, Storage) -> U) -> U {
@@ -419,8 +456,14 @@ where
     Layout: IndexLayout,
     Storage: Copy,
 {
+    /// Non-owning mutable base pointer to the underlying storage buffer.
+    /// Indexed only at offsets produced by `layout.crd2idx`.
     base: *mut Storage,
+    /// Composable logical-to-physical coordinate map for this writable view.
+    /// Tracks length, stride, subranges, and cyclic thread partitions.
     layout: Layout,
+    /// Zero-sized exclusive borrow and logical-element marker for `'a`.
+    /// Prevents aliasing mutable views in safe Rust code.
     borrow: PhantomData<(&'a mut [Storage], Element)>,
 }
 impl<'a, T: Copy + TensorElement<T>> StridedTensorMut<'a, T> {
@@ -529,6 +572,31 @@ impl<'a, Element: TensorElement<Storage>, Layout: IndexLayout, Storage: Copy>
             borrow: PhantomData,
         }
     }
+    /// Return a mutable pointer to the storage element at logical coordinate `index`
+    /// using the view's `crd2idx` coordinate map.
+    ///
+    /// # Safety
+    /// `index < self.len()` and the caller must uphold exclusive access for the
+    /// addressed storage slice.
+    #[must_use]
+    #[inline(always)]
+    pub unsafe fn ptr_at_unchecked(&self, index: usize) -> *mut Storage {
+        unsafe { self.base.add(self.layout.crd2idx(index)) }
+    }
+
+    /// Return a mutable pointer to the storage element at 2D row-major coordinate
+    /// `(row, col)` (with `cols` columns per row), composed with this view's `crd2idx`.
+    ///
+    /// # Safety
+    /// `row * cols + col < self.len()` and the caller must uphold exclusive access
+    /// for the addressed storage slice.
+    #[must_use]
+    #[inline(always)]
+    pub unsafe fn ptr_at_2d_unchecked(&self, row: usize, col: usize, cols: usize) -> *mut Storage {
+        let flat = cute_layout::crd2idx_row_major_2d(row, col, cols);
+        unsafe { self.ptr_at_unchecked(flat) }
+    }
+
     /// Store one logical coordinate using the composed coordinate map.
     /// # Safety
     /// `index < self.len()` and no conflicting access to this coordinate may

@@ -1,8 +1,8 @@
 # cute-rs: CuTe kernels in Rust (preview)
 
 > **Preview.** `cute-rs` compiles Rust CuTe kernels ahead of time through the pinned
-> CUTLASS 4.7 compiler for two targets, `sm_100a` (B200 class) and `sm_120a`
-> (RTX 50 series). Every other architecture is rejected before compilation. It covers
+> CUTLASS 4.7 compiler for three targets, `sm_100a` (B200 class), `sm_103a`
+> (B300 class) and `sm_120a` (RTX 50 series). Every other architecture is rejected before compilation. It covers
 > a validated subset of CuTeDSL 4.7, not feature parity; the
 > [support matrix](../cuda-oxide-book/cute/support-matrix.md) lists what is in and
 > what is not. APIs can change between releases.
@@ -58,6 +58,7 @@ the options and the failure rules.
 | --- | --- | --- |
 | [`qwen_decoder_cute`](models/qwen_decoder_cute) | `sm_120a` | Qwen3-TTS 1.7B end to end, text in and waveform out ([visual guide](models/qwen_decoder_cute/visual.md)) |
 | [`qwen3_8b_cute`](models/qwen3_8b_cute) | `sm_120a` | 36-layer Qwen3-8B decoder in BF16 and NVFP4 ([visual guide](models/qwen3_8b_cute/visual.md)) |
+| [`nemotron3_moe_cute`](models/nemotron3_moe_cute) | `sm_100a` | Nemotron-3 NVFP4 `ReLU²` MoE layer (`B = 1 .. 16,384`) with 5th-Gen `tcgen05` Tensor Cores |
 
 `cargo oxide list` prints both tables. Each README gives the device requirement, one
 command and the expected result; the `reference/` folders hold the comparison

@@ -67,6 +67,7 @@ cuda-rust/
 ├── cuda-bindings/      runtime — CUDA driver API bindings
 ├── cuda-core/          runtime — contexts, streams, memory, modules, events, launch
 ├── cuda-core-derive/   runtime — derive macros for cuda-core
+├── cuda-repr/          shared no_std host/device representation contracts
 ├── cuda-async/         runtime — lazy ops, futures, streams, graphs
 ├── cuda-oxide/         SIMT model — compiler, device crates, cuda-oxide-book
 └── cutile-rs/          Tile model — compiler, tile crates, cutile-book

@@ -46,11 +46,13 @@ impl TensorElement<u8> for u8 {}
 impl TensorElement<u16> for u16 {}
 impl TensorElement<u32> for u32 {}
 impl TensorElement<u64> for u64 {}
+impl TensorElement<u128> for u128 {}
 impl TensorElement<usize> for usize {}
 impl TensorElement<i8> for i8 {}
 impl TensorElement<i16> for i16 {}
 impl TensorElement<i32> for i32 {}
 impl TensorElement<i64> for i64 {}
+impl TensorElement<i128> for i128 {}
 impl TensorElement<isize> for isize {}
 
 /// One line of adjacent elements.

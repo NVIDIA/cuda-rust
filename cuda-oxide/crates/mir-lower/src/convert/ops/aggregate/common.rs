@@ -32,9 +32,10 @@ pub(super) fn anyhow_to_pliron(e: anyhow::Error) -> pliron::result::Error {
 ///
 /// The alloca and store initially land at the use site, same as
 /// [`convert_extract_array_element`](super::array_extract::convert_extract_array_element).
-/// NVVM normalization hoists eligible fixed slots into the true entry block,
-/// leaving initialization here. This exposes static storage to NVVM even
-/// when the optional `opt -O2` / SROA pass is disabled.
+/// Post-conversion [`crate::entry_allocas::hoist_fixed_allocas`] moves eligible
+/// fixed-size slots into the function's true entry block while leaving the
+/// store initialization here, so both the LLVM NVPTX (`opt -O2` / `llc`) and
+/// `libNVVM` routes see static entry-block storage.
 pub(super) fn spill_enum_value(
     ctx: &mut Context,
     rewriter: &mut DialectConversionRewriter,

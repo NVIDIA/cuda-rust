@@ -3,11 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! Normalize fixed scratch slots after LLVM dialect legalization for NVVM.
+//! Normalize fixed-size scratch slots into each LLVM function's entry block.
 //!
-//! Non-entry allocas can introduce dynamic-stack restoration when helpers are
-//! inlined. Moving eligible storage into entry lets NVVM use static slots.
-//! Initialization and memory operations stay at their original control-flow sites.
+//! `convert_func` places an aggregate-reconstructing `entry` prologue ahead of
+//! the original MIR entry block (`bb0`), and several op converters (`mir.ref`,
+//! enum payload spills, dynamic array extracts, memory transmutes) materialize
+//! fixed-size `llvm.alloca` slots at their use sites. LLVM treats any `alloca`
+//! outside `entry` as dynamic, which blocks cost-driven inlining (`#1687`) and
+//! introduces `stacksave`/`stackrestore` frames after forced inlining (`#1681`,
+//! `#1590`). Moving eligible fixed-size storage into `entry` exposes static
+//! stack slots to both the default LLVM NVPTX (`opt`/`llc`) and `libNVVM`
+//! pipelines while keeping initialization at the original control-flow sites.
 
 use std::collections::HashSet;
 
@@ -22,10 +28,12 @@ use pliron::{
     value::Value,
 };
 
-/// Normalize every LLVM function in the module, leaving declarations alone.
-/// The function-local analysis runs after all other NVVM compatibility rewrites
-/// and updates the same IR that the pipeline subsequently verifies and exports.
-pub(super) fn hoist_fixed_allocas(ctx: &mut Context, module: Ptr<Operation>) {
+/// Normalize every LLVM function in `module`, moving eligible fixed-size
+/// `llvm.alloca` operations into each function's entry block.
+///
+/// Runs at the end of [`crate::lower_mir_to_llvm_with_options`] after
+/// unreachable blocks are removed and aggregate block arguments are scalarized.
+pub fn hoist_fixed_allocas(ctx: &mut Context, module: Ptr<Operation>) {
     let functions: Vec<_> = module
         .deref(ctx)
         .regions()
@@ -78,6 +86,9 @@ fn hoist_function_allocas(ctx: &mut Context, function: &FuncOp) {
         .filter(|component| component.is_cyclic)
         .flat_map(|component| component.nodes)
         .collect();
+    if cyclic_blocks.contains(&entry) {
+        return;
+    }
     let eligible: Vec<_> = candidates
         .into_iter()
         .filter(|(block, op, _)| {

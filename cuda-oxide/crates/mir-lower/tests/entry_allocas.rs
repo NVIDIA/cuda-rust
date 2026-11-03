@@ -205,6 +205,11 @@ fn address_use_fixture(
     (module, slot.get_operation(), entry, body)
 }
 
+/// Verify that inside both single-block and multi-block loops, only purely
+/// load/store local scratch (`AddressUse::Local`) is hoisted to `entry`, while
+/// any address use that can observe or retain pointer identity across
+/// iterations (`Call`, `Phi`, `Compare`, `Convert`, `Return`, `Store`, `Select`)
+/// fails closed and remains in the loop body.
 #[test]
 fn loop_address_uses_fail_closed_through_pointer_views_in_both_dialects() {
     for dialect in [NvvmIrDialect::Modern, NvvmIrDialect::LegacyLlvm7] {
@@ -238,6 +243,9 @@ fn loop_address_uses_fail_closed_through_pointer_views_in_both_dialects() {
     }
 }
 
+/// Verify that fixed-size scratch slots in acyclic blocks execute at most once
+/// per call and are therefore hoisted to `entry` even when their addresses
+/// escape to calls, comparisons, conversions, returns, stores, or selects.
 #[test]
 fn once_only_slots_can_hoist_even_when_their_addresses_are_observable() {
     for dialect in [NvvmIrDialect::Modern, NvvmIrDialect::LegacyLlvm7] {
@@ -261,14 +269,15 @@ fn once_only_slots_can_hoist_even_when_their_addresses_are_observable() {
     }
 }
 
-/// Exercise the public normalization entry point and verify the mutated IR.
-/// Running twice also checks that already-normalized slots and counts stay put.
-fn normalize(ctx: &mut Context, module: &ModuleOp, dialect: NvvmIrDialect) {
+/// Exercise `mir_lower::entry_allocas::hoist_fixed_allocas` and verify the
+/// mutated IR. Running twice checks that already-normalized slots and counts
+/// stay put.
+fn normalize(ctx: &mut Context, module: &ModuleOp, _dialect: NvvmIrDialect) {
     module.get_operation().deref(ctx).verify(ctx).unwrap();
-    nvvm_transforms::legalize_for_nvvm(ctx, module.get_operation(), dialect, 90).unwrap();
+    mir_lower::entry_allocas::hoist_fixed_allocas(ctx, module.get_operation());
     module.get_operation().deref(ctx).verify(ctx).unwrap();
     let once = module.get_operation().deref(ctx).disp(ctx).to_string();
-    nvvm_transforms::legalize_for_nvvm(ctx, module.get_operation(), dialect, 90).unwrap();
+    mir_lower::entry_allocas::hoist_fixed_allocas(ctx, module.get_operation());
     module.get_operation().deref(ctx).verify(ctx).unwrap();
     assert_eq!(
         once,
@@ -287,6 +296,9 @@ fn one(ctx: &mut Context, block: Ptr<BasicBlock>) -> Value {
     op.get_operation().deref(ctx).get_result(0)
 }
 
+/// Verify that hoisting a fixed slot out of a block with block arguments (PHIs)
+/// moves only the count constant and `alloca` into `entry` while keeping the
+/// `store` initialization and `load` after the body's PHI nodes.
 #[test]
 fn fixed_slot_precedes_body_phis_but_initialization_stays_in_body() {
     let mut ctx = Context::new();
@@ -384,6 +396,8 @@ fn fixed_slot_precedes_body_phis_but_initialization_stays_in_body() {
     }
 }
 
+/// Verify that an `alloca` with a runtime (non-constant) element count is left
+/// in its original basic block rather than hoisted into `entry`.
 #[test]
 fn dynamic_alloca_count_stays_in_its_original_block() {
     let mut ctx = Context::new();
@@ -421,6 +435,9 @@ fn dynamic_alloca_count_stays_in_its_original_block() {
     assert!(body.contains(" = alloca i32, i32 %v0"), "{ir}");
 }
 
+/// Verify that hoisting a multi-element `alloca` (`count > 1`) preserves the
+/// count's integer bit width and value, preserves the `alloca` alignment, and
+/// leaves the original constant intact for other body users.
 #[test]
 fn hoisting_preserves_nonunit_count_width_alignment_and_body_uses() {
     for dialect in [NvvmIrDialect::Modern, NvvmIrDialect::LegacyLlvm7] {
@@ -477,6 +494,9 @@ fn hoisting_preserves_nonunit_count_width_alignment_and_body_uses() {
     }
 }
 
+/// Verify that a single-block self-loop (`body -> body`) hoists its fixed
+/// `alloca` when used only for loads/stores through a GEP, and keeps it in
+/// `body` when the pointer is stored into an escaping destination.
 #[test]
 fn loop_scratch_hoists_only_when_its_address_does_not_escape() {
     for escapes in [false, true] {

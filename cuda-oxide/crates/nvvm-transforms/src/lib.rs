@@ -12,7 +12,6 @@
 
 #![warn(missing_docs)]
 
-mod entry_allocas;
 mod helpers;
 mod legalize;
 
@@ -31,8 +30,6 @@ use pliron::{
 /// compatibility pass. Modern modules retain modern operations but still
 /// rewrite integer widths that libNVVM does not accept in bit-manipulation
 /// intrinsics.
-/// Finally, eligible fixed scratch allocations move into each function's entry
-/// block so NVVM can use static storage without dynamic-stack restoration.
 ///
 /// `capability` is the numeric compute capability of the build target
 /// (`52`, `86`, `90`, ...). The legacy pass uses it to reject rewrites whose
@@ -48,7 +45,5 @@ pub fn legalize_for_nvvm(
     match dialect {
         NvvmIrDialect::LegacyLlvm7 => legalize::legalize_for_legacy_nvvm(ctx, module, capability),
         NvvmIrDialect::Modern => legalize::legalize_nvvm_bit_intrinsics(ctx, module),
-    }?;
-    entry_allocas::hoist_fixed_allocas(ctx, module);
-    Ok(())
+    }
 }

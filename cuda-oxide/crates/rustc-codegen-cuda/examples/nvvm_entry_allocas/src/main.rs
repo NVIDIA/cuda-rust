@@ -3,17 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! Regression for entry placement of fixed scratch in NVVM IR.
+//! Regression for entry-block placement of fixed scratch allocations across
+//! both `branch_scratch` (#1681) and `core_zip` (#1687).
 //!
-//! Input enum -> payload scratch -> scalar read -> aggregate call -> output.
-//! NVVM normalization should place fixed allocas in each function's true entry
-//! block. The companion `verify-code-shape.sh` checks this IR invariant and
-//! checks that extended split compilation emits no dynamic-stack instructions
-//! while retaining the aggregate call and its 128-bit argument stores.
-//!
-//! The host verifies every GPU result independently. On CUDA 13.4, numerical
-//! results can remain correct when the placement check fails; this example has
-//! not demonstrated a misaligned access.
+//! `mir-lower` hoists eligible fixed-size `llvm.alloca` slots into each
+//! function's `entry` block while keeping initialization at the use site.
+//! The companion `verify-code-shape.sh` checks that every `alloca` in
+//! `nvvm_entry_allocas.ll` sits in `entry:`, that extended split compilation
+//! emits no dynamic-stack instructions while retaining `branch_scratch`'s
+//! aggregate `consume` call and 128-bit parameter stores, and that `core_zip`
+//! inlines `<ZipImpl as Iterator>::next` with zero `call` instructions and
+//! zero `.local` stack frame.
 //!
 //! Run from `cuda-oxide/`:
 //! ```text
@@ -21,24 +21,24 @@
 //! bash crates/rustc-codegen-cuda/examples/nvvm_entry_allocas/verify-code-shape.sh
 //! ```
 
-use cuda_core::simt::LaunchConfig;
-use cuda_core::{CudaContext, DeviceBuffer};
-use cuda_device::{DisjointSlice, kernel, thread};
+use cuda_core::{CudaContext, DeviceBuffer, LaunchConfig, LaunchConfig1D};
+use cuda_device::view::MatrixView32;
+use cuda_device::{DisjointSlice, kernel, launch_bounds, launch_contract, thread};
 use cuda_host::cuda_module;
 use libnvvm_sys::{LibNvvm, Program};
 use nvjitlink_sys::{InputType, LibNvJitLink, Linker};
 
 /// Compile this example's emitted NVVM IR with extended split compilation.
-/// It also writes PTX for the code-shape check beside the emitted IR.
-/// Both links use the same LTOIR and extended split compilation options.
+/// Writes `nvvm_entry_allocas.ptx` and `nvvm_entry_allocas.cubin` beside the
+/// emitted IR for the code-shape check.
 fn compile_split_cubin() -> Vec<u8> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let arch = std::fs::read_to_string(root.join("nvvm_entry_allocas.target"))
-        .expect("read target sidecar; run cargo oxide with --emit-nvvm-ir --arch sm_120");
+        .expect("read target file; run cargo oxide with --emit-nvvm-ir --arch sm_120");
     let arch = arch
         .lines()
         .next()
-        .expect("target sidecar has an architecture")
+        .expect("target file has an architecture")
         .trim();
     let compute = arch.replacen("sm_", "compute_", 1);
     let ir = std::fs::read(root.join("nvvm_entry_allocas.ll")).expect("read emitted NVVM IR");
@@ -120,7 +120,7 @@ fn consume(prefix: u64, value: Lanes) -> f32 {
 /// Loading it by value lets enum lowering introduce a temporary payload slot.
 #[derive(Clone, Copy)]
 #[repr(C)]
-enum Packet {
+pub enum Packet {
     /// Three lanes occupy 12 bytes and need four-byte alignment.
     /// Dynamic indexing keeps the payload read addressable.
     Data([f32; 3]),
@@ -142,7 +142,7 @@ fn read_scratch(values: &[f32; 3], lane: usize) -> f32 {
 }
 
 /// Extract a tagged payload into scratch in a conditional block.
-/// Keeping this helper until LLVM inlining exercises NVVM entry normalization.
+/// Keeping this helper until LLVM inlining exercises entry normalization.
 #[inline(always)]
 fn read_packet(packet: Packet, lane: usize) -> f32 {
     match packet {
@@ -151,14 +151,13 @@ fn read_packet(packet: Packet, lane: usize) -> f32 {
     }
 }
 
-/// One independent output per thread, including both sides of a branch.
-/// Every scratch slot is private; the kernel has no shared-memory operations.
+/// Kernels exercising entry-block scratch placement (#1681 and #1687).
 #[cuda_module]
 mod kernels {
     use super::*;
 
-    /// Invoke the inlined scratch helper after a data-dependent branch.
-    /// Each active thread owns exactly one output slot through DisjointSlice.
+    /// Invoke the inlined scratch helper after a data-dependent branch (#1681).
+    /// Each active thread owns one output slot through `DisjointSlice`.
     #[kernel]
     pub fn branch_scratch(input: &[Packet], mut output: DisjointSlice<f32>) {
         let index = thread::index_1d();
@@ -182,10 +181,32 @@ mod kernels {
             *slot = sum;
         }
     }
+
+    /// Column dot product `out[c] = sum_r w[r] * x[r, c]` using `core::iter::Zip`
+    /// over a slice iterator and a `ColView32` iterator (#1687).
+    #[kernel(launch_context = lc)]
+    #[launch_bounds(64)]
+    #[launch_contract(domain = 1, coordinates = u32, block = (64, 1, 1))]
+    pub fn core_zip(mut out: DisjointSlice<f32>, x: &[f32], w: &[f32]) {
+        let t = thread::index_1d_u32(lc);
+        let cols = out.len() as u32;
+        let c = t.get();
+        let Some(mut o) = out.element_thread32(t) else {
+            return;
+        };
+        let Some(col) = MatrixView32::new(x, cols).col(c, w.len() as u32) else {
+            return;
+        };
+        let mut acc = 0.0;
+        for (a, b) in w.iter().zip(col.iter()) {
+            acc += a * b;
+        }
+        o.write(acc);
+    }
 }
 
-/// Launch enough threads to cover both variants and both selected scratch indices.
-/// Compare every result with scalar host arithmetic before printing SUCCESS.
+/// Launch both `branch_scratch` and `core_zip` and verify their outputs
+/// against host reference calculations.
 fn main() {
     let context = CudaContext::new(0).expect("create CUDA context");
     let stream = context.default_stream();
@@ -205,9 +226,12 @@ fn main() {
     let module = context
         .load_module_from_image(&cubin)
         .expect("load extended split cubin");
-    let module = kernels::from_module(module).expect("load typed nvvm_entry_allocas module");
+    // SAFETY: `cubin` was compiled from this crate's own `nvvm_entry_allocas.ll`,
+    // whose kernel entry signatures match `kernels`.
+    let module =
+        unsafe { kernels::from_module(module) }.expect("load typed nvvm_entry_allocas module");
     // SAFETY: both buffers cover the launch, and each active thread writes
-    // exactly its own output element and reads the corresponding input.
+    // its own output element and reads the corresponding input.
     unsafe {
         module.branch_scratch(
             &stream,
@@ -237,8 +261,31 @@ fn main() {
             .sum();
         assert_eq!(got, expected, "branch_scratch element {i}");
     }
+
+    const ROWS: usize = 16;
+    const COLS: usize = 64;
+    let w_host: Vec<f32> = (0..ROWS).map(|r| (r + 1) as f32 * 0.25).collect();
+    let x_host: Vec<f32> = (0..ROWS * COLS)
+        .map(|idx| ((idx % 17) as f32) - 4.0)
+        .collect();
+    let w_dev = DeviceBuffer::from_host(&stream, &w_host).expect("copy w");
+    let x_dev = DeviceBuffer::from_host(&stream, &x_host).expect("copy x");
+    let mut zip_out = DeviceBuffer::<f32>::zeroed(&stream, COLS).expect("allocate zip_out");
+    let zip_launch = module
+        .prepare_core_zip(LaunchConfig1D::new(1, COLS as u32, 0))
+        .expect("prepare core_zip");
+    module
+        .core_zip(&stream, &zip_launch, &mut zip_out, &x_dev, &w_dev)
+        .expect("launch core_zip");
+    let zip_actual = zip_out.to_host_vec(&stream).expect("copy zip_out");
+    for (col, &got) in zip_actual.iter().enumerate() {
+        let expected: f32 = (0..ROWS).map(|r| w_host[r] * x_host[r * COLS + col]).sum();
+        assert_eq!(got, expected, "core_zip col {col}");
+    }
+
     println!(
-        "SUCCESS: nvvm_entry_allocas verified {} elements",
-        actual.len()
+        "SUCCESS: nvvm_entry_allocas verified {} elements and {} zip columns",
+        actual.len(),
+        zip_actual.len()
     );
 }

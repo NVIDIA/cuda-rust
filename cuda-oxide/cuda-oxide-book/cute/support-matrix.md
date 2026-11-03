@@ -6,7 +6,7 @@ cute-rs is a **preview**. It compiles Rust CuTe kernels ahead of time through th
 :align: center
 :width: 100%
 
-One glance: CuTeDSL 4.7 across its architectures against the cute-rs preview on its targets (the image predates `sm_103a`).
+One glance: CuTeDSL 4.7 across its architectures against the cute-rs preview on its three targets.
 ```
 
 ## Targets
@@ -15,7 +15,7 @@ One glance: CuTeDSL 4.7 across its architectures against the cute-rs preview on 
 :align: center
 :width: 100%
 
-The targets the preview compiles for, and the ones it rejects (the image predates `sm_103a`, which now compiles like `sm_100a`).
+The three targets the preview compiles for, and the ones it rejects.
 ```
 
 :::{dropdown} Text version
@@ -75,15 +75,15 @@ The figure at the top of the page is the feature table, with the cute-rs column 
 | TMA copies | yes | partial | 2D tile load and store, two-CTA load; no im2col, reduce-store, multicast |
 | cp.async, bulk, DSMEM copies | yes | partial | cooperative cp.async with a coverage proof; no bulk or DSMEM data copies |
 | ldmatrix, stmatrix, atomics | yes | partial | ldmatrix x4 and x2.trans (f16 and BFloat16), stmatrix x2, no-allocate stores; no atomics |
-| tcgen05 MMA kinds | yes | partial, sm_100a only | 1 of 11 kinds: F16 in, F32 accumulate, one or two CTAs |
+| tcgen05 MMA kinds | yes | partial, sm_100a/sm_103a | 1 of 11 kinds: F16 in, F32 accumulate, one or two CTAs |
 | Warp MMA kinds (mma.sync) | yes | partial | 4 of 7 kinds: MXF4 with UE8M0 scales, NVFP4 with E4M3 scales (sm_120a), F16, BF16 |
 | NVFP4 tensor cores (E4M3 scales) | yes | partial, sm_120a only | SM120 m16n8k64 E2M1 with E4M3 scales (SF_VEC=16) in Nvfp4TiledMma and qwen3_8b_cute |
 | wgmma (Hopper) | yes | n/a | no sm_90a target |
-| TMEM | yes | partial, sm_100a only | `Sm100Tmem`, `TmemAllocator`, 32x32b load and store (`TmemFragment`), FP32 to FP16 epilogues; no 16xNb, LdRed or S2T |
+| TMEM | yes | partial, sm_100a/sm_103a | `Sm100Tmem`, `TmemAllocator`, 32x32b load and store (`TmemFragment`), FP32 to FP16 epilogues; no 16xNb, LdRed or S2T |
 | Pipelines and barriers | yes | partial | typed 1-CTA (`PipelineTmaAsync`, `PipelineTmaStore`, `PipelineTmaUmma`, `PipelineUmmaAsync`, `PipelineAsyncUmma`, `PipelineAsync`) and 2-CTA (`TwoCtaRing`) pipelines; no CLC |
 | Schedulers, persistence, PDL | yes | partial | one static 1D persistent scheduler; no grouped, CLC or stream-K |
-| Clusters and multicast | yes | partial, sm_100a only | two-CTA clusters validated; no N-CTA multicast plan |
-| Epilogue fusion (EFC) | yes | partial | two fixed FP16 epilogues, bias on sm_100a; activations fused by hand |
+| Clusters and multicast | yes | partial, sm_100a/sm_103a | two-CTA clusters validated; no N-CTA multicast plan |
+| Epilogue fusion (EFC) | yes | partial | two fixed FP16 epilogues, bias on sm_100a/sm_103a; activations fused by hand |
 | Numerics and intrinsics | yes | partial | f16, f32 native; BF16 and FP4 carriers; no inline PTX or libdevice |
 | Control flow, printf, debugging | yes | partial | full Rust control flow and traps, MLIR dumps; no device printf |
 | Host: JIT, torch, JAX, AOT export | yes | partial | AOT cubin inside the Rust binary; no JIT, no Python interop |
@@ -108,7 +108,7 @@ What a CuTeDSL user relies on beyond the per-architecture atoms, and what the pr
 
 | Feature | CuTeDSL 4.7 | cute-rs preview | Status |
 | :--- | :--- | :--- | :--- |
-| Epilogue fusion (EFC) | A Python epilogue function over the accumulator and extra tensors; the GEMM stages its inputs through TMA, runs it per sub-tile with built-in activations, alpha, beta and bias, and stores every output. | Two fixed epilogues: FP32 to FP16 with a row bias on sm_100a, FP32 to FP16 through stmatrix on sm_120a. Activations are fused by hand in register code (swiglu_cute, ffn_cute). No user hook. | partial |
+| Epilogue fusion (EFC) | A Python epilogue function over the accumulator and extra tensors; the GEMM stages its inputs through TMA, runs it per sub-tile with built-in activations, alpha, beta and bias, and stores every output. | Two fixed epilogues: FP32 to FP16 with a row bias on sm_100a/sm_103a, FP32 to FP16 through stmatrix on sm_120a. Activations are fused by hand in register code (swiglu_cute, ffn_cute). No user hook. | partial |
 | Dynamic layouts | Fully dynamic layouts; one compiled kernel serves any shape. | Runtime lengths and one runtime row pitch; tile sizes, strides and swizzles are types. One binary covers any M, N, K the static tile divides. | partial |
 | JIT and caching | Trace and compile at call time with an on-disk cache. | Ahead of time through rustc and Cargo; nothing to JIT. | n/a |
 | AOT export | Export a kernel as a .so plus C header; aarch64 cross build. | The cubin is embedded in the Rust binary. No C export; write an extern C wrapper by hand. | partial |

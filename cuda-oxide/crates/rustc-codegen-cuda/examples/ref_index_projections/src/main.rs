@@ -144,7 +144,11 @@ pub struct NestedPaddedOuter<T: ?Sized> {
 /// the importer borrows a copy instead (issue #1698).
 #[derive(Copy, Clone)]
 pub enum Flag {
+    /// Carries the `bool` the kernels borrow. Its byte is stored as an `i8`
+    /// in enum storage, which is what makes the walker decline the address.
     Value(bool),
+    /// No payload. The kernels place it after `Value` so a runtime index
+    /// picks between a borrowable payload and none.
     Empty,
 }
 
@@ -153,7 +157,11 @@ pub enum Flag {
 /// value-copy fallback as a `bool` payload (issue #1698).
 #[derive(Copy, Clone)]
 pub enum Stage {
+    /// Carries an `addrspace(3)` pointer to a shared array. Enum storage
+    /// holds it as a generic address, so the walker declines the address.
     Array(*mut SharedArray<f32, N>),
+    /// No payload. Pairs with `Array` so a runtime index picks between a
+    /// borrowable payload and none.
     Empty,
 }
 
@@ -1164,7 +1172,12 @@ mod kernels {
     /// +5; the fallback points at `ZEROS`.
     #[kernel]
     pub fn test_shared_array_payload_borrow(input: &[[f32; 2]], mut out: DisjointSlice<f32>) {
+        // per-thread `+5` differences, one `f32` per input row; the
+        // `Stage::Array` payload points here, so reading through the
+        // borrowed payload must land on these values
         static mut DIFFS: SharedArray<f32, N> = SharedArray::UNINIT;
+        // per-thread zeros, one `f32` per input row; the fallback reference
+        // points here, so a lost borrow reads `0.0`
         static mut ZEROS: SharedArray<f32, N> = SharedArray::UNINIT;
 
         let idx = thread::index_1d();
@@ -1178,8 +1191,9 @@ mod kernels {
         // no barrier is needed
         let diffs = &raw mut DIFFS;
         let zeros = &raw mut ZEROS;
-        // SAFETY: the harness runs one thread per input, so `i < N`, and no
-        // other thread touches element `i`
+        // SAFETY: the early return above keeps only threads with
+        // `i < input.len()`, and the harness passes `N` inputs, so `i < N`;
+        // no other thread touches element `i`
         unsafe {
             SharedArray::as_raw_mut_ptr(diffs)
                 .add(i)

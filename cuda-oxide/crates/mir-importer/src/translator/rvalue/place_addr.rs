@@ -1539,6 +1539,9 @@ mod tests {
         (block, value_map, body, rust_ty)
     }
 
+    /// Append an unused `u32` constant to `block` and return it. The rollback
+    /// tests use these as fixed neighbours, so any op a walk leaves behind
+    /// shows up between them.
     fn placeholder_op(ctx: &mut Context, block: Ptr<BasicBlock>) -> Ptr<Operation> {
         let u32_ty = IntegerType::get(ctx, 32, Signedness::Unsigned);
         let op = Operation::new(
@@ -1553,6 +1556,8 @@ mod tests {
         op
     }
 
+    /// Snapshot `block`'s ops in order. The rollback tests compare these
+    /// snapshots to check that a punting walk left the block unchanged.
     fn block_ops(ctx: &Context, block: Ptr<BasicBlock>) -> Vec<Ptr<Operation>> {
         block.deref(ctx).iter(ctx).collect()
     }

@@ -25,9 +25,7 @@ note: erroneous constant encountered
   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 note: the above error was encountered while instantiating `fn __unroll_config::<1>`
-  --> tests/compile_fail/policy_config_invalid_unroll.rs:12:1
+  --> tests/compile_fail/policy_config_invalid_unroll.rs:15:5
    |
-12 | #[kernel]
-   | ^^^^^^^^^
-   |
-   = note: this note originates in the attribute macro `kernel` (in Nightly builds, run with -Z macro-backtrace for more info)
+15 |     #[unroll(Invalid::UNROLL)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^

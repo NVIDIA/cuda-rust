@@ -15,6 +15,6 @@ license = "Apache-2.0"
 [dependencies]
 cuda-device = { path = "../../../cuda-device" }
 cuda-host = { path = "../../../cuda-host", features = ["async"] }
-cuda-core = { path = "../../../../../cuda-core", version = "0.4.0" }
-cuda-async = { path = "../../../../../cuda-async", version = "0.4.0" }
+cuda-core = { path = "../../../../../cuda-core" }
+cuda-async = { path = "../../../../../cuda-async" }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }

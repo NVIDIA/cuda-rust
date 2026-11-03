@@ -26,6 +26,68 @@ use crate::resolve::guards::*;
 use crate::resolve::overlay::*;
 
 #[test]
+fn dense_mxf4_k64_preserves_selector_abi_and_rejects_contract_drift() {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let (overlay, _) =
+        read_overlay(&repo_root, &repo_root.join("intrinsics/overlay.toml")).unwrap();
+    let policy = overlay
+        .intrinsics
+        .iter()
+        .find(|record| record.id == "mma_m16n8k64_mxf4_f32")
+        .expect("canonical dense MXF4 K64 admission");
+    let imported: ImportedFile = read_json(&repo_root.join("intrinsics/imported.json")).unwrap();
+    let declaration = imported
+        .intrinsics
+        .iter()
+        .find(|record| Some(&record.source_record) == policy.source_record.as_ref())
+        .unwrap();
+    validate_register_mma_policy(policy, declaration).unwrap();
+    resolve_candidate(
+        &repo_root,
+        &policy.id,
+        "test-llvm",
+        &"a".repeat(64),
+        "sm_120a",
+        "+ptx87",
+    )
+    .unwrap();
+    assert_eq!(policy.abi_id, "i1039");
+    assert_eq!(
+        policy.rust_arguments,
+        [
+            "[f32; 4]", "[u32; 4]", "[u32; 2]", "u32", "u16", "u16", "u32", "u16", "u16"
+        ]
+    );
+    assert_eq!(
+        policy.expected_ptx.modifiers,
+        [
+            "sync",
+            "aligned",
+            "m16n8k64",
+            "row",
+            "col",
+            "kind::mxf4",
+            "block_scale",
+            "scale_vec::2X",
+            "f32",
+            "e2m1",
+            "e2m1",
+            "f32",
+            "ue8m0"
+        ]
+    );
+    let mut wrong_shape = policy.clone();
+    wrong_shape.register_mma.as_mut().unwrap().shape = RegisterMmaShape::M16n8k32;
+    assert!(validate_register_mma_policy(&wrong_shape, declaration).is_err());
+    let mut wrong_selector = policy.clone();
+    wrong_selector.rust_arguments[4] = "u32".into();
+    assert!(validate_register_mma_policy(&wrong_selector, declaration).is_err());
+    let mut wrong_scale = policy.clone();
+    wrong_scale.expected_ptx.modifiers[7] = "scale_vec::4X".into();
+    assert!(validate_register_mma_policy(&wrong_scale, declaration).is_err());
+}
+
+#[test]
 fn stmatrix_admission_is_closed_and_uses_schema_35() {
     let shard = |schema| {
         toml::from_str::<OverlayShardFile>(&format!(
@@ -629,6 +691,18 @@ fn compact_standard_fp8_admission_is_closed_and_ordered() {
     assert!(expand_register_mma_fp8_admission(&wrong).is_err());
 }
 
+/// PTX ISA floor for each Ampere floating-point MMA form; the FP16 m16n8k8
+/// forms date from Turing while the others need Ampere
+fn ampere_float_mma_floor(id: &str) -> (&'static str, &'static str) {
+    match id {
+        "mma_m16n8k8_f16_f16" | "mma_m16n8k8_f32_f16" => ("6.5", "sm_75"),
+        "mma_m16n8k4_f32_tf32" | "mma_m16n8k8_f32_bf16" | "mma_m16n8k16_f16_f16" => {
+            ("7.0", "sm_80")
+        }
+        other => panic!("{other} is not an Ampere floating-point MMA form"),
+    }
+}
+
 #[test]
 fn compact_ampere_float_mma_admission_is_closed_and_ordered() {
     let admission = test_register_mma_ampere_float_admission();
@@ -653,13 +727,14 @@ fn compact_ampere_float_mma_admission_is_closed_and_ordered() {
         ]
     );
     for record in &records {
-        assert_eq!(record.minimum_ptx, "7.0");
-        assert_eq!(record.minimum_sm.as_deref(), Some("sm_80"));
+        let (minimum_ptx, minimum_sm) = ampere_float_mma_floor(&record.id);
+        assert_eq!(record.minimum_ptx, minimum_ptx);
+        assert_eq!(record.minimum_sm.as_deref(), Some(minimum_sm));
         assert_eq!(record.backend_lowerings.len(), 2);
         assert!(record.backend_lowerings.iter().all(|lowering| {
             lowering.mechanism == BackendLoweringMechanism::InlinePtx
-                && lowering.minimum_ptx.as_deref() == Some("7.0")
-                && lowering.minimum_sm.as_deref() == Some("sm_80")
+                && lowering.minimum_ptx.as_deref() == Some(minimum_ptx)
+                && lowering.minimum_sm.as_deref() == Some(minimum_sm)
         }));
         let mma = record.register_mma.as_ref().unwrap();
         assert_eq!(mma.kind, None);
@@ -734,8 +809,23 @@ fn ampere_float_mma_policies_match_llvm_and_fail_closed() {
             ],
         };
         assert_eq!(declaration.selections[0].predicates, expected_predicates);
-        assert_eq!(record.minimum_ptx, "7.0");
-        assert_eq!(record.minimum_sm.as_deref(), Some("sm_80"));
+        let (minimum_ptx, minimum_sm) = ampere_float_mma_floor(&record.id);
+        assert_eq!(record.minimum_ptx, minimum_ptx);
+        assert_eq!(record.minimum_sm.as_deref(), Some(minimum_sm));
+    }
+
+    // the FP16 m16n8k8 forms reject the old family-wide sm_80 floor
+    for fp16 in records.iter().filter(|record| {
+        matches!(
+            record.id.as_str(),
+            "mma_m16n8k8_f16_f16" | "mma_m16n8k8_f32_f16"
+        )
+    }) {
+        let declaration = declarations[fp16.source_record.as_deref().unwrap()];
+        let mut wrong = fp16.clone();
+        wrong.minimum_ptx = "7.0".into();
+        wrong.minimum_sm = Some("sm_80".into());
+        assert!(validate_imported_policy(&wrong, declaration).is_err());
     }
 
     let valid = &records[2];
@@ -756,6 +846,11 @@ fn ampere_float_mma_policies_match_llvm_and_fail_closed() {
     let declaration = declarations[valid.source_record.as_deref().unwrap()];
     let mut wrong = valid.clone();
     wrong.minimum_ptx = "6.5".into();
+    assert!(validate_imported_policy(&wrong, declaration).is_err());
+    // LLVM selects BF16 at sm_75, but the PTX ISA requires sm_80
+    let mut wrong = valid.clone();
+    wrong.minimum_ptx = "6.5".into();
+    wrong.minimum_sm = Some("sm_75".into());
     assert!(validate_imported_policy(&wrong, declaration).is_err());
     let mut wrong = valid.clone();
     wrong.register_mma.as_mut().unwrap().adapter = RegisterMmaAdapter::C4F32A4U32B2U32ToD4F32;
@@ -969,7 +1064,7 @@ fn standard_fp8_resolves_exact_routes_and_target_floors() {
         (
             IntrinsicBackend::LlvmNvptx,
             BackendLoweringMechanism::InlinePtx,
-            "rust-llvm-23.1.0-16696adc",
+            "rust-llvm-23.1.3-aab11ee0",
         ),
         (
             IntrinsicBackend::LibNvvm,
@@ -1028,7 +1123,11 @@ fn standard_fp8_resolves_exact_routes_and_target_floors() {
             assert!(llvm_route.stages.iter().any(|stage| {
                 stage.stage == EvidenceStageKind::PtxAssembly
                     && stage.mechanism == Some(BackendLoweringMechanism::InlinePtx)
-                    && stage.outcome == "failed"
+                    && stage.outcome == "not_revalidated"
+                    && stage.detail.contains("Original outcome: failed.")
+                    && stage
+                        .detail
+                        .contains("e457a7b0d326d67b4322ef0d11bd715cfaeda48f")
                     && stage.targets == ["sm_89", "ptx86"]
             }));
         }
@@ -1097,7 +1196,7 @@ fn pinned_register_mma_records_match_the_closed_recipes_and_fail_closed() {
         .iter()
         .filter(|record| record.family == "register_mma")
         .collect();
-    assert_eq!(records.len(), 154);
+    assert_eq!(records.len(), 155);
 
     let dense_f8f6f4_records = records
         .iter()

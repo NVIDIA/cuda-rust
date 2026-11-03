@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://nvlabs.github.io/cutile-rs/sitemap.xml
+Sitemap: https://nvidia.github.io/cuda-rust/cutile/sitemap.xml

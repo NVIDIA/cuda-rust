@@ -17,14 +17,14 @@
 //! dependency instead of from a separately cloned `main`:
 //!
 //! ```text
-//! Cargo.lock   cuda-device = git+https://github.com/NVlabs/cuda-oxide.git#<sha>
+//! Cargo.lock   cuda-device = git+https://github.com/NVIDIA/cuda-rust.git#<sha>
 //!                  │  cargo metadata: package.manifest_path
 //!                  ▼
-//! ~/.cargo/git/checkouts/cuda-oxide-<hash>/<sha>/crates/cuda-device/Cargo.toml
-//!                  │  walk up to the repository root
+//! ~/.cargo/git/checkouts/cuda-rust-<hash>/<sha>/cuda-oxide/crates/cuda-device/Cargo.toml
+//!                  │  walk up to the checkout root that holds the backend crate
 //!                  ▼
-//! ~/.cargo/git/checkouts/cuda-oxide-<hash>/<sha>/crates/rustc-codegen-cuda   built
-//! ~/.cargo/git/checkouts/cuda-oxide-<hash>/<sha>/rust-toolchain.toml         nightly it needs
+//! ~/.cargo/git/checkouts/cuda-rust-<hash>/<sha>/cuda-oxide/crates/rustc-codegen-cuda   built
+//! ~/.cargo/git/checkouts/cuda-rust-<hash>/<sha>/cuda-oxide/rust-toolchain.toml         nightly it needs
 //! ```
 //!
 //! The checkout's `rust-toolchain.toml` matters as much as the code: the
@@ -316,7 +316,7 @@ mod tests {
     use serde_json::json;
     use std::time::SystemTime;
 
-    const REPO: &str = "https://github.com/NVlabs/cuda-oxide.git";
+    const REPO: &str = "https://github.com/NVIDIA/cuda-rust.git";
     const SHA: &str = "a1b4f11882592fae9d022c86a9d8d1a4c9426980";
 
     /// Lays out what Cargo's checkout of the repository looks like: the crate

@@ -40,6 +40,20 @@
 #                   Blackwell+ (CC >= 10.0) and requires full execution
 #                   there; elsewhere compiles for the sm_100 floor and
 #                   requires the NVVM IR (`.ll`) plus its `.target` sidecar.
+#   tilelib      -- a tile library written in Rust (`#[tile_export]`).
+#                   `cargo oxide tilelib <ex> --arch=<host> --library-optional`
+#                   must exit 0 and leave the LTOIR, the interface and the
+#                   implementation bytecode (`.iface.tilebc`, `.impl.tilebc`)
+#                   and the readable `.tilelib.mlir`. cargo-oxide decides
+#                   itself whether the installed tileiras can build the
+#                   `.tilelib` (it lists bytecode 13.5, CUDA 13.5+) and ends
+#                   its summary with one of two lines: after "Tile library
+#                   written to" the `.tilelib` must exist too, after "Tile
+#                   library skipped" it is not required; neither line fails
+#                   the lane. Then the example's host program runs through
+#                   `cargo oxide run --emit-nvvm-ir --arch=<host>` and must
+#                   print the SUCCESS marker, or opt out with `skipping:`.
+#                   --compile-only stops after the first step.
 #   auto-nvvm    -- runs without NVVM or architecture flags to check automatic
 #                   libdevice and target selection. Compile-only CI supplies a
 #                   target because no GPU is available.
@@ -73,17 +87,18 @@ set -uo pipefail
 
 # ---- Example categorization ---------------------------------------------
 
-TCGEN05_EXAMPLES=(gemm_sol gemm_sol_final tcgen05 tcgen05_matmul)
+TCGEN05_EXAMPLES=(gemm_sol tcgen05 tcgen05_matmul)
 WGMMA_EXAMPLES=(wgmma)
 BLACKWELL_MMA_EXAMPLES=(mma_mxf8f6f4)
-LTOIR_EXAMPLES=(addressof_sharedarray cpp_consumes_rust_device device_ffi_test legacy_atomic_fadd legacy_atomic_rmw_cas legacy_nvvm_pointer_shapes manual_launch_libdevice mathdx_ffi_test primitive_stress)
-LTOIR_MODERN_EXAMPLES=(small_type_ffi_test)
+LTOIR_EXAMPLES=(addressof_sharedarray constant_memory cpp_consumes_rust_device device_ffi_test legacy_atomic_fadd legacy_atomic_rmw_cas legacy_nvvm_pointer_shapes manual_launch_libdevice mathdx_ffi_test primitive_stress)
+LTOIR_MODERN_EXAMPLES=(small_type_ffi_test nvvm_entry_allocas)
+TILELIB_EXAMPLES=(tilelib_relu)
 AUTO_NVVM_EXAMPLES=(libdevice_math)
 IKET_EXAMPLES=(iket_trace)
 BLACKWELL_COMPILE_EXAMPLES=(generated_intrinsics_blackwell)
 SM100_COMPILE_EXAMPLES=(redux_f32)
-NVVM_VERIFY_EXAMPLES=(cp_async_small device_global enum_constant_provenance ex2_approx_f16 generated_intrinsics generated_intrinsics_blackwell generated_ldmatrix kernel_reference_validity legacy_atomic_fadd legacy_atomic_rmw_cas libdevice_math legacy_nvvm_pointer_shapes packed_atomic_add primitive_stress scoped_atomic_load_store shuffle_64 tcgen05 tuple_constant_provenance wgmma_mma_bf16)
-ERROR_EXAMPLES=(error error_set_discriminant_uninhabited error_enum_bool_payload_addr error_enum_pointer_overlap error_enum_shared_pointer_layout error_heap_alloc error_host_arch_intrinsic error_host_target_feature error_kernel_shared_param error_missing_device_attr error_generated_intrinsic_abi error_generated_intrinsic_unknown_id error_generated_intrinsic_fn_pointer error_generated_intrinsic_callable)
+NVVM_VERIFY_EXAMPLES=(array_from_fn constant_memory cp_async_small device_global enum_constant_provenance ex2_approx_f16 generated_intrinsics generated_intrinsics_blackwell generated_ldmatrix kernel_reference_validity legacy_atomic_fadd legacy_atomic_rmw_cas libdevice_math legacy_nvvm_pointer_shapes packed_atomic_add primitive_stress scoped_atomic_load_store shuffle_64 tcgen05 tuple_constant_provenance wgmma_mma_bf16)
+ERROR_EXAMPLES=(error error_set_discriminant_uninhabited error_enum_bool_payload_addr error_enum_pointer_overlap error_enum_shared_pointer_layout error_heap_alloc error_host_arch_intrinsic error_host_target_feature error_kernel_shared_param error_missing_device_attr error_generated_intrinsic_abi error_generated_intrinsic_unknown_id error_generated_intrinsic_fn_pointer error_generated_intrinsic_callable error_union_shared_pointer_addr error_union_shared_pointer_layout)
 
 # Per-example rustc flags policy: an example that needs a special rustc flag
 # (e.g. disjoint_slice_len needs -Zinline-mir=no to keep its regression
@@ -103,12 +118,13 @@ ERROR_EXAMPLES=(error error_set_discriminant_uninhabited error_enum_bool_payload
 # verified results.
 NO_LAUNCH_EXAMPLES=(wgmma_mma_bf16)
 
-# Examples whose verify-code-shape.sh asserts on `#[inline(never)]` marker
-# symbols. Those markers are private, so once the middle end inlines them into
-# their single caller it deletes them, and they survive only in the
-# unoptimized IR. The optimized build still runs and still decides the verdict;
-# these get one extra CUDA_OXIDE_NO_OPT=1 build afterwards purely to produce
-# artifacts the shape check can read.
+# Examples whose verify-code-shape.sh reads unoptimized artifacts. Their
+# `#[inline(never)]` marker symbols reach LLVM as `noinline`, so most of them
+# now survive -O2 as real functions, but these scripts assert which markers
+# the frontend reaches in which branch, and that is written against the text
+# emitted before opt folds and reorders it. The optimized build still runs and
+# still decides the verdict; these get one extra CUDA_OXIDE_NO_OPT=1 build
+# afterwards purely to produce the artifacts the shape check reads.
 NO_OPT_SHAPE_EXAMPLES=(const_bool_dead_branch)
 
 # This example intentionally configures a cubin artifact in Cargo metadata.
@@ -126,6 +142,7 @@ classify() {
     for cat in "${BLACKWELL_MMA_EXAMPLES[@]}"; do [[ "$ex" == "$cat" ]] && { echo blackwell-mma; return; }; done
     for cat in "${LTOIR_EXAMPLES[@]}";       do [[ "$ex" == "$cat" ]] && { echo ltoir;       return; }; done
     for cat in "${LTOIR_MODERN_EXAMPLES[@]}"; do [[ "$ex" == "$cat" ]] && { echo ltoir-modern; return; }; done
+    for cat in "${TILELIB_EXAMPLES[@]}";     do [[ "$ex" == "$cat" ]] && { echo tilelib;     return; }; done
     for cat in "${AUTO_NVVM_EXAMPLES[@]}";   do [[ "$ex" == "$cat" ]] && { echo auto-nvvm;   return; }; done
     for cat in "${IKET_EXAMPLES[@]}";        do [[ "$ex" == "$cat" ]] && { echo iket;        return; }; done
     for cat in "${BLACKWELL_COMPILE_EXAMPLES[@]}"; do [[ "$ex" == "$cat" ]] && { echo blackwell-compile; return; }; done
@@ -150,6 +167,45 @@ example_never_launches() {
     return 1
 }
 
+example_is_tilelib() {
+    local ex="$1" candidate
+    for candidate in "${TILELIB_EXAMPLES[@]}"; do
+        [[ "${ex}" == "${candidate}" ]] && return 0
+    done
+    return 1
+}
+
+# The two summary lines `cargo oxide tilelib` ends with, one of which every
+# successful run prints: the library was written, or skipped because the
+# resolved tileiras cannot build one. They are constants in
+# crates/cargo-oxide/src/commands/tilelib.rs (LIBRARY_WRITTEN_MARKER,
+# LIBRARY_SKIPPED_MARKER) and a unit test there pins the text grepped here.
+# cargo-oxide resolves tileiras and reads its `--list-versions` itself, so the
+# lane takes its verdict from the log instead of probing the assembler a
+# second time with a search order of its own.
+tilelib_library_written() {
+    grep -qF 'Tile library written to' "$1"
+}
+
+tilelib_library_skipped() {
+    grep -qF 'Tile library skipped' "$1"
+}
+
+# Names, space separated, of the tilelib artifacts `cargo oxide tilelib` must
+# have left for ${1} given its log ${2}; empty when every one is present. The
+# LTOIR, the two bytecode halves and the readable dump are always required;
+# the `.tilelib` itself when the log says it was written.
+tilelib_missing_artifacts() {
+    local ex_dir="crates/rustc-codegen-cuda/examples/$1" artifact="${1//-/_}" log="$2" missing="" file
+    for file in "${artifact}.ltoir" "${artifact}.iface.tilebc" "${artifact}.impl.tilebc" "${artifact}.tilelib.mlir"; do
+        [[ -s "${ex_dir}/${file}" ]] || missing="${missing} ${file}"
+    done
+    if tilelib_library_written "${log}" && [[ ! -s "${ex_dir}/${artifact}.tilelib" ]]; then
+        missing="${missing} ${artifact}.tilelib"
+    fi
+    printf '%s' "${missing# }"
+}
+
 full_debug_uses_configured_route() {
     local ex="$1" candidate
     for candidate in "${FULL_DEBUG_CONFIGURED_ROUTE_EXAMPLES[@]}"; do
@@ -171,7 +227,7 @@ nvvm_verify_arch() {
             ;;
         cp_async_small) floor=80 ;;
         ex2_approx_f16) floor=75 ;;
-        generated_intrinsics) floor=80 ;;
+        generated_intrinsics) floor=86 ;;
         generated_ldmatrix) floor=75 ;;
         packed_atomic_add) floor=90 ;;
         shuffle_64) floor=75 ;;
@@ -418,6 +474,12 @@ IKET_EXEC=0
 IKET_ARCH="sm_90"
 if [[ "${host_cc}" =~ ^([0-9]+)\.[0-9]+$ ]] && [[ $((10#${BASH_REMATCH[1]})) -ge 9 ]]; then
     IKET_ARCH="${LTOIR_ARCH}"
+    # The pinned LLVM 23 `llc` used by the direct PTX path does not yet have an
+    # `-mcpu=sm_107` processor entry; use the sm_100 family baseline, which has
+    # the identical SM10x IKET placeholder ABI and JIT-loads on sm_107.
+    if [[ "${IKET_ARCH}" == "sm_107" ]]; then
+        IKET_ARCH="sm_100"
+    fi
     IKET_EXEC=1
 fi
 
@@ -625,6 +687,21 @@ verdict_error() {
                 return 1
             fi
             ;;
+        error_union_shared_pointer_addr)
+            if ! grep -Fq 'in-place address of union field' "${log}" \
+                || ! grep -Fq 'canonical storage type' "${log}"; then
+                echo "FAIL (missing shared-pointer union field-address diagnostic)"
+                return 1
+            fi
+            ;;
+        error_union_shared_pointer_layout)
+            # The `union field storage:` prefix keeps this marker distinct from
+            # the enum fixture's, which carries `enum payload storage:`.
+            if ! grep -Fq 'union field storage: arrays containing shared-memory pointers are not supported' "${log}"; then
+                echo "FAIL (missing shared-pointer union array layout diagnostic)"
+                return 1
+            fi
+            ;;
         error_kernel_shared_param)
             if ! grep -Fq 'is a pointer into shared memory' "${log}"; then
                 echo "FAIL (missing shared-memory kernel-parameter diagnostic)"
@@ -746,10 +823,18 @@ verdict_tcgen05() {
 
 verdict_wgmma() {
     local ex="$1" log="$2" ec="$3"
+    local ptx="crates/rustc-codegen-cuda/examples/${ex}/${ex//-/_}.ptx"
     if [[ ${ec} -gt 128 ]]; then echo "FAIL (crashed, signal $((ec - 128)))"; return 1; fi
+    if [[ ${ec} -ne 0 ]]; then echo "FAIL (wgmma, exit=${ec})"; return 1; fi
     if grep -qE 'WARNING: WGMMA requires|WGMMA is Hopper-only|PTX load failed \(expected on non-Hopper\)|PTX module loaded' "${log}"; then
         if grep -qE 'PTX written|PTX Verification|PTX file generated|inspect generated PTX|\.ptx' "${log}"; then
-            if ! ptxas_verify "crates/rustc-codegen-cuda/examples/${ex}/${ex//-/_}.ptx"; then
+            # ptxas_verify may skip missing files; that is not evidence that
+            # the PTX-only fallback actually produced a device artifact.
+            if [[ ! -s "${ptx}" ]]; then
+                echo "FAIL (wgmma, PTX missing or empty: ${ptx})"
+                return 1
+            fi
+            if ! ptxas_verify "${ptx}"; then
                 echo "FAIL (wgmma, ${PTXAS_NOTE})"
                 return 1
             fi
@@ -759,7 +844,6 @@ verdict_wgmma() {
         echo "FAIL (wgmma, PTX not generated)"
         return 1
     fi
-    if [[ ${ec} -ne 0 ]]; then echo "FAIL (wgmma, exit=${ec})"; return 1; fi
     if grep_failure_markers "${log}"; then
         echo "FAIL (wgmma, failure marker in output)"
         return 1
@@ -854,6 +938,40 @@ verdict_ltoir_modern() {
         return 0
     fi
     echo "FAIL (LTOIR modern, no NVVM IR for the ${LTOIR_MODERN_ARCH} floor)"
+    return 1
+}
+
+verdict_tilelib() {
+    local ex="$1" log="$2" ec="$3"
+    if [[ ${ec} -gt 128 ]]; then echo "FAIL (crashed, signal $((ec - 128)))"; return 1; fi
+    # The descriptions come first. `cargo oxide tilelib` prints this line
+    # once both bytecode halves are on disk, and run_tilelib records a
+    # missing artifact in the log with a failing exit code, so the marker is
+    # the proof that the library half finished before the host program ran.
+    if ! grep -qF 'Tile library descriptions written' "${log}"; then
+        echo "FAIL (tilelib, descriptions not written)"
+        return 1
+    fi
+    if [[ ${ec} -ne 0 ]]; then echo "FAIL (tilelib, exit=${ec})"; return 1; fi
+    # The host program opts out without nvcc or a matching GPU; the
+    # descriptions still had to be written.
+    if grep -qE '^[[:space:]]*skipping:' "${log}"; then
+        echo "PASS (tilelib, descriptions written, host check skipped)"
+        return 0
+    fi
+    if grep_failure_markers "${log}"; then
+        echo "FAIL (tilelib, failure marker in output)"
+        return 1
+    fi
+    if grep -qE 'SUCCESS|PASS|Complete' "${log}"; then
+        if tilelib_library_written "${log}"; then
+            echo "PASS (tilelib, .tilelib built, ABI verified on ${LTOIR_ARCH})"
+        else
+            echo "PASS (tilelib, descriptions written, ABI verified on ${LTOIR_ARCH})"
+        fi
+        return 0
+    fi
+    echo "FAIL (tilelib, no success marker)"
     return 1
 }
 
@@ -959,6 +1077,24 @@ verdict_compile() {
         fi
         echo "FAIL (libNVVM compile produced no fresh LTOIR)"
         return 1
+    fi
+    if [[ ${FULL_DEBUG} -eq 0 ]] && example_is_tilelib "${ex}"; then
+        # run_tilelib ran the library step only. It already failed the exit
+        # code on a missing artifact or a missing summary line; naming the
+        # artifacts here tells a built library apart from descriptions alone
+        # in the summary, with cargo-oxide's own reason for skipping it.
+        local missing
+        missing="$(tilelib_missing_artifacts "${ex}" "${log}")"
+        if [[ -n "${missing}" ]]; then
+            echo "FAIL (tilelib, missing ${missing})"
+            return 1
+        fi
+        if tilelib_library_written "${log}"; then
+            echo "PASS (tilelib descriptions and .tilelib for ${LTOIR_ARCH})"
+        else
+            echo "PASS (tilelib descriptions for ${LTOIR_ARCH}; $(grep -F 'Tile library skipped' "${log}" | head -1))"
+        fi
+        return 0
     fi
     if [[ -s "${ex_dir}/${artifact}.ptx" ]]; then
         # Nothing executes in compile-only mode, so every emitted PTX must
@@ -1213,6 +1349,7 @@ run_full_debug_build() {
         blackwell-mma)    arch="sm_120a" ;;
         ltoir)            arch="${LTOIR_ARCH}" ;;
         ltoir-modern)     arch="${LTOIR_MODERN_ARCH}" ;;
+        tilelib)          arch="${LTOIR_ARCH}" ;;
         auto-nvvm)        arch="${LTOIR_ARCH}" ;;
         iket)             arch="sm_90" ;;
         blackwell-compile) arch="sm_120a" ;;
@@ -1332,6 +1469,7 @@ run_cargo() {
         local unresolved_sparse_f16_re='llvm\.nvvm\.mma\.sp\.ordered\.metadata\.m16n8k64\.row\.col\.kind\.f8f6f4\.f16\.'
         local unresolved_standard_fp8_re='llvm\.nvvm\.mma\.m16n8k(16|32)\.row\.col\.f(16|32)\.(e4m3|e5m2)\.'
         local fp8_re='cvt\.rn\.satfinite(\.relu)?\.(e4m3x2|e5m2x2)\.f32'
+        local bf16x2_fp8_re='cvt\.rn\.satfinite(\.relu)?\.(e4m3x2|e5m2x2)\.bf16x2'
         local tf32_re='cvt\.(rna|rn|rz)(\.relu)?(\.satfinite)?\.tf32\.f32'
         local ldmatrix_re='ldmatrix\.sync\.aligned\.(m16n16\.x(1|2)\.trans\.shared\.(b8|b8x16\.(b4x16_p64|b6x16_p32))|m8n16\.x(1|2|4)\.shared\.b8x16\.(b4x16_p64|b6x16_p32))'
         local instruction_count unique_instruction_count
@@ -1341,6 +1479,7 @@ run_cargo() {
         local standard_fp8_f32_instruction_count unique_standard_fp8_f32_instruction_count
         local standard_fp8_f16_instruction_count unique_standard_fp8_f16_instruction_count
         local fp8_count unique_fp8_count
+        local bf16x2_fp8_count unique_bf16x2_fp8_count
         local tf32_count unique_tf32_count
         local ldmatrix_count unique_ldmatrix_count
         instruction_count="$(grep -oE "${instruction_re}" "${llvm_ptx}" 2>/dev/null | wc -l)"
@@ -1357,12 +1496,17 @@ run_cargo() {
         unique_standard_fp8_f16_instruction_count="$(grep -oE "${standard_fp8_f16_instruction_re}" "${llvm_ptx}" 2>/dev/null | sort -u | wc -l)"
         fp8_count="$(grep -oE "${fp8_re}" "${llvm_ptx}" 2>/dev/null | wc -l)"
         unique_fp8_count="$(grep -oE "${fp8_re}" "${llvm_ptx}" 2>/dev/null | sort -u | wc -l)"
+        bf16x2_fp8_count="$(grep -oE "${bf16x2_fp8_re}" "${llvm_ptx}" 2>/dev/null | wc -l)"
+        unique_bf16x2_fp8_count="$(grep -oE "${bf16x2_fp8_re}" "${llvm_ptx}" 2>/dev/null | sort -u | wc -l)"
         tf32_count="$(grep -oE "${tf32_re}" "${llvm_ptx}" 2>/dev/null | wc -l)"
         unique_tf32_count="$(grep -oE "${tf32_re}" "${llvm_ptx}" 2>/dev/null | sort -u | wc -l)"
         ldmatrix_count="$(grep -oE "${ldmatrix_re}" "${llvm_ptx}" 2>/dev/null | wc -l)"
         unique_ldmatrix_count="$(grep -oE "${ldmatrix_re}" "${llvm_ptx}" 2>/dev/null | sort -u | wc -l)"
+        # The header's .version is the floor of the newest form in the
+        # module: PTX 9.1 since the bf16x2 to packed-FP8 conversions joined
+        # the example (the ldmatrix and kind::f8f6f4 MMA forms need 8.7).
         if [[ ! -s "${llvm_ptx}" ]] \
-            || ! grep -qx '\.version 8\.7' "${llvm_ptx}" \
+            || ! grep -qx '\.version 9\.1' "${llvm_ptx}" \
             || ! grep -qx '\.target sm_120a' "${llvm_ptx}" \
             || [[ ${instruction_count} -ne 25 || ${unique_instruction_count} -ne 25 ]] \
             || [[ ${sparse_f16_instruction_count} -ne 25 || ${unique_sparse_f16_instruction_count} -ne 25 ]] \
@@ -1371,6 +1515,7 @@ run_cargo() {
             || [[ ${standard_fp8_f32_instruction_count} -ne 8 || ${unique_standard_fp8_f32_instruction_count} -ne 8 ]] \
             || [[ ${standard_fp8_f16_instruction_count} -ne 8 || ${unique_standard_fp8_f16_instruction_count} -ne 8 ]] \
             || [[ ${fp8_count} -ne 4 || ${unique_fp8_count} -ne 4 ]] \
+            || [[ ${bf16x2_fp8_count} -ne 4 || ${unique_bf16x2_fp8_count} -ne 4 ]] \
             || [[ ${tf32_count} -ne 10 || ${unique_tf32_count} -ne 10 ]] \
             || [[ ${ldmatrix_count} -ne 12 || ${unique_ldmatrix_count} -ne 12 ]] \
             || grep -qE "${unresolved_sparse_f16_re}|${unresolved_dense_f32_re}|${unresolved_dense_f16_re}|${unresolved_standard_fp8_re}" "${llvm_ptx}"; then
@@ -1393,8 +1538,10 @@ run_cargo() {
         fi
         local nvvm_ll="crates/rustc-codegen-cuda/examples/${ex}/${ex}.ll"
         local inline_fp8_re='call i16 asm "cvt\.rn\.satfinite(\.relu)?\.(e4m3x2|e5m2x2)\.f32 \$0, \$2, \$1;", "=h,f,f"'
+        local inline_bf16x2_fp8_re='call i16 asm "cvt\.rn\.satfinite(\.relu)?\.(e4m3x2|e5m2x2)\.bf16x2 \$0, \$1;", "=h,r"'
         local inline_tf32_re='call i32 asm "cvt\.(rna|rn|rz)(\.relu)?(\.satfinite)?\.tf32\.f32 \$0, \$1;", "=r,f"'
         local inline_fp8_count unique_inline_fp8_count
+        local inline_bf16x2_fp8_count unique_inline_bf16x2_fp8_count
         local inline_tf32_count unique_inline_tf32_count
         local inline_ldmatrix_count unique_inline_ldmatrix_count
         local inline_sparse_f16_count unique_inline_sparse_f16_count
@@ -1404,6 +1551,8 @@ run_cargo() {
         local inline_standard_fp8_f16_count unique_inline_standard_fp8_f16_count
         inline_fp8_count="$(grep -oE "${inline_fp8_re}" "${nvvm_ll}" 2>/dev/null | wc -l)"
         unique_inline_fp8_count="$(grep -oE "${inline_fp8_re}" "${nvvm_ll}" 2>/dev/null | sort -u | wc -l)"
+        inline_bf16x2_fp8_count="$(grep -oE "${inline_bf16x2_fp8_re}" "${nvvm_ll}" 2>/dev/null | wc -l)"
+        unique_inline_bf16x2_fp8_count="$(grep -oE "${inline_bf16x2_fp8_re}" "${nvvm_ll}" 2>/dev/null | sort -u | wc -l)"
         inline_tf32_count="$(grep -oE "${inline_tf32_re}" "${nvvm_ll}" 2>/dev/null | wc -l)"
         unique_inline_tf32_count="$(grep -oE "${inline_tf32_re}" "${nvvm_ll}" 2>/dev/null | sort -u | wc -l)"
         inline_ldmatrix_count="$(grep -oE "${ldmatrix_re}" "${nvvm_ll}" 2>/dev/null | wc -l)"
@@ -1420,6 +1569,7 @@ run_cargo() {
         unique_inline_standard_fp8_f16_count="$(grep -oE "${standard_fp8_f16_instruction_re}" "${nvvm_ll}" 2>/dev/null | sort -u | wc -l)"
         if [[ ! -s "${nvvm_ll}" ]] \
             || [[ ${inline_fp8_count} -ne 4 || ${unique_inline_fp8_count} -ne 4 ]] \
+            || [[ ${inline_bf16x2_fp8_count} -ne 4 || ${unique_inline_bf16x2_fp8_count} -ne 4 ]] \
             || [[ ${inline_tf32_count} -ne 10 || ${unique_inline_tf32_count} -ne 10 ]] \
             || [[ ${inline_ldmatrix_count} -ne 12 || ${unique_inline_ldmatrix_count} -ne 12 ]] \
             || [[ ${inline_sparse_f16_count} -ne 25 || ${unique_inline_sparse_f16_count} -ne 25 ]] \
@@ -2020,6 +2170,12 @@ run_cargo() {
         return
     fi
 
+    # Tile libraries have their own two-step lane in every mode.
+    if [[ "${cat}" == "tilelib" ]]; then
+        run_tilelib "${ex}" "${log}"
+        return
+    fi
+
     # Designated NVVM examples use `emit-ltoir` in compile-only mode so CI
     # checks both textual export and real libNVVM compilation. Other examples
     # use `build`.
@@ -2129,6 +2285,22 @@ run_cargo() {
             CARGO_EC=1
         fi
     fi
+    # Loop-hint warnings are rustc diagnostics, so cargo counts every one of
+    # them. A warning printed around rustc leaves no summary to count it.
+    # unroll_smoke exists to produce them, so it may not come back empty.
+    if [[ ${CARGO_EC} -eq 0 ]]; then
+        local hint_warnings counted_warnings
+        hint_warnings=$(grep -cE '^warning: .* requested but the loop (was not unrolled|may still be unrolled)' "${log}" || true)
+        counted_warnings=$(grep -oE 'generated [0-9]+ warnings?' "${log}" | awk '{ sum += $2 } END { print sum + 0 }')
+        if [[ "${ex}" == "unroll_smoke" && ${hint_warnings} -eq 0 ]]; then
+            printf '%s produced no loop-hint warnings\n' "${ex}" >>"${log}"
+            CARGO_EC=1
+        elif [[ ${counted_warnings} -lt ${hint_warnings} ]]; then
+            printf '%s printed %d loop-hint warnings but cargo counted %d warnings\n' \
+                "${ex}" "${hint_warnings}" "${counted_warnings}" >>"${log}"
+            CARGO_EC=1
+        fi
+    fi
     if [[ ${CARGO_EC} -eq 0 && ${COMPILE_ONLY} -eq 1 && "${ex}" == "helper_fn" ]]; then
         local ptx="crates/rustc-codegen-cuda/examples/${ex}/${ex}.ptx"
         local llvm="crates/rustc-codegen-cuda/examples/${ex}/${ex}.ll"
@@ -2208,6 +2380,59 @@ run_cargo() {
     fi
 }
 
+# The tilelib lane: the library half first, then the example's own host
+# program, both through `cargo oxide` the way the example's README runs
+# them. `--library-optional` lets the first step exit 0 on a toolkit whose
+# tileiras cannot build a `.tilelib`; whether that step had to leave one is
+# read from its own summary line (tilelib_library_written). The second step
+# rebuilds the device half, and a rebuild clears every generated artifact,
+# so the artifacts are checked in between and a gap is recorded in the log
+# with a failing CARGO_EC, as the other lanes do.
+run_tilelib() {
+    local ex="$1" log="$2" note=""
+    local -a args=("tilelib" "${ex}" "--arch=${LTOIR_ARCH}" "--library-optional")
+    if [[ ${VERBOSE} -eq 1 ]]; then
+        cargo oxide "${args[@]}" 2>&1 | tee "${log}"
+        CARGO_EC=${PIPESTATUS[0]}
+    else
+        cargo oxide "${args[@]}" >"${log}" 2>&1
+        CARGO_EC=$?
+    fi
+    if [[ ${CARGO_EC} -ne 0 ]]; then
+        return
+    fi
+    # Exit 0 without either summary line means the command's contract
+    # changed under this lane, not that a library is optional.
+    if ! tilelib_library_written "${log}" && ! tilelib_library_skipped "${log}"; then
+        note="${ex}: cargo oxide tilelib --library-optional exited 0 without reporting the tile library as written or skipped"
+    else
+        local missing
+        missing="$(tilelib_missing_artifacts "${ex}" "${log}")"
+        if [[ -n "${missing}" ]]; then
+            note="${ex}: cargo oxide tilelib --library-optional exited 0 but left no ${missing}"
+        fi
+    fi
+    if [[ -n "${note}" ]]; then
+        printf '%s\n' "${note}" >>"${log}"
+        if [[ ${VERBOSE} -eq 1 ]]; then
+            printf '%s\n' "${note}"
+        fi
+        CARGO_EC=1
+        return
+    fi
+    if [[ ${COMPILE_ONLY} -eq 1 ]]; then
+        return
+    fi
+    local -a run_args=("run" "${ex}" "--emit-nvvm-ir" "--arch=${LTOIR_ARCH}")
+    if [[ ${VERBOSE} -eq 1 ]]; then
+        cargo oxide "${run_args[@]}" 2>&1 | tee -a "${log}"
+        CARGO_EC=${PIPESTATUS[0]}
+    else
+        cargo oxide "${run_args[@]}" >>"${log}" 2>&1
+        CARGO_EC=$?
+    fi
+}
+
 # ---- Shared example target dir -------------------------------------------
 #
 # Each example under crates/rustc-codegen-cuda/examples/ is its own standalone
@@ -2218,7 +2443,7 @@ run_cargo() {
 # dominant cost of this script. Point all example builds at one shared
 # CARGO_TARGET_DIR: cargo fingerprints each unit by package + features +
 # workspace_root + toolchain, so identical deps built with the same pinned
-# nightly + backend RUSTFLAGS compile exactly once and are reused across every
+# toolchain + backend RUSTFLAGS compile exactly once and are reused across every
 # example. (Same trick the clippy CI job uses for these workspaces.)
 #
 # The codegen backend .so is built FIRST, with CARGO_TARGET_DIR explicitly
@@ -2317,6 +2542,7 @@ for ex in "${selected[@]}"; do
             blackwell-mma) verdict="$(verdict_blackwell_mma "${ex}" "${log}" "${ec}")" && status=0 || status=$? ;;
             ltoir)       verdict="$(verdict_ltoir       "${ex}" "${log}" "${ec}")" && status=0 || status=$? ;;
             ltoir-modern) verdict="$(verdict_ltoir_modern "${ex}" "${log}" "${ec}")" && status=0 || status=$? ;;
+            tilelib)     verdict="$(verdict_tilelib     "${ex}" "${log}" "${ec}")" && status=0 || status=$? ;;
             auto-nvvm)   verdict="$(verdict_ltoir       "${ex}" "${log}" "${ec}")" && status=0 || status=$? ;;
             iket)        verdict="$(verdict_iket        "${ex}" "${log}" "${ec}")" && status=0 || status=$? ;;
             standard)    verdict="$(verdict_standard    "${log}" "${ec}" "${ex}")" && status=0 || status=$? ;;

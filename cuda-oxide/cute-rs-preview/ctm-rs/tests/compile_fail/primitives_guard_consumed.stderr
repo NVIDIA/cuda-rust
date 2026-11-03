@@ -1,0 +1,14 @@
+error[E0382]: borrow of moved value: `g`
+ --> tests/compile_fail/primitives_guard_consumed.rs:8:101
+  |
+8 | fn wrong(g:TmemGuard<TmemReady,512,CtaGroup2>) { let _ = unsafe { g.dealloc_collective() }; let _ = g.raw_address(); }
+  |          -                                                          --------------------            ^ value borrowed here after move
+  |          |                                                          |
+  |          |                                                          `g` moved due to this method call
+  |          move occurs because `g` has type `TmemGuard<TmemReady, 512, CtaGroup2>`, which does not implement the `Copy` trait
+  |
+note: `ctm_rs::tcgen05::tmem::TmemGuard::<ctm_rs::tcgen05::tmem::TmemReady, N, G>::dealloc_collective` takes ownership of the receiver `self`, which moves `g`
+ --> src/tcgen05/tmem.rs
+  |
+  |     pub unsafe fn dealloc_collective(self) -> TmemGuard<TmemDeallocated, N, G> {
+  |                                      ^^^^

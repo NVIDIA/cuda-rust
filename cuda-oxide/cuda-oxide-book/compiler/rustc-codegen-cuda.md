@@ -215,7 +215,7 @@ takes the `#[kernel]` macro's base name and, for generic and closure-
 generic instantiations, appends `_TID_<hex32>` where `<hex32>` is
 rustc's 128-bit type-id hash of the concrete generated kernel function item.
 That `FnDef` contains ordered type and const arguments. The host launcher
-computes the same hash through the `core::intrinsics::type_id` intrinsic
+computes the same hash through the `core::intrinsics::reflection::type_id` intrinsic
 (wrapped by `cuda_host::type_id_u128_of_val`), so both sides agree
 byte-for-byte within one unified build. Non-generic kernels keep their bare
 base name.
@@ -411,7 +411,10 @@ without fighting the compiler driver's flag plumbing.
 `CUDA_OXIDE_TARGET` sits in the middle of a precedence chain that
 `cargo oxide` honours: explicit `--arch` wins, then `CUDA_OXIDE_TARGET`,
 then `cargo oxide run`'s host-CC auto-detect (only for `run`, not `build`
-or `pipeline`), and finally the backend's feature-based default.
+or `pipeline`), and finally the backend's feature-based default. That default
+is raised to the device-code floor -- `sm_80`, or the detected GPU if that is
+older -- so the target never falls below the floor `cuda-device` primitives
+were lowered for.
 
 ```{note}
 `CUDA_OXIDE_VERBOSE=1 cargo oxide build` is your best friend when debugging

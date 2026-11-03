@@ -11,29 +11,56 @@
 //! # Design
 //!
 //! The `gpu_printf!` macro:
-//! 1. Parses Rust-style format string (`{}`, `{:x}`, `{:.2}`, etc.)
-//! 2. Translates to C format string (`%d`, `%x`, `%.2f`, etc.)
-//! 3. Generates a `#[repr(C)]` struct for argument packing
-//! 4. Calls `__gpu_vprintf(format_ptr, args_ptr)` which the compiler recognizes
+//! 1. Parses the Rust-style format string (`{}`, `{:x}`, `{:.2}`, and so on)
+//! 2. Evaluates every argument, in order, into a local binding
+//! 3. Packs the bindings into a `#[repr(C)]` struct
+//! 4. Calls `__gpu_vprintf(format_ptr, args_ptr)`, which the compiler lowers
+//!    to `vprintf`
 //!
-//! # C Vararg Promotion Rules
+//! # Choosing the C conversion
+//!
+//! A placeholder with a type character (`{:x}`, `{:.2f}`, `{:d}`, `{:c}`, ...)
+//! has a fixed conversion. The macro casts the argument to the matching C
+//! vararg type (`as u64`, `as f64`, `as i64`, `as i32`) and, when every
+//! placeholder is of this kind, writes the whole format string as a byte
+//! string literal.
+//!
+//! A placeholder without a type character (`{}`, `{:8}`, `{:08}`, `{:.2}`)
+//! takes the conversion from the argument's type through
+//! `cuda_device::debug::GpuPrintfArg`: `%d` or `%lld` for signed integers,
+//! `%u` or `%llu` for unsigned ones, `%f` for floats, `%d` for `bool` and `%p`
+//! for raw pointers. The macro cannot see that type, so it emits a generic
+//! helper with one `GpuPrintfArg` parameter per such placeholder. An inline
+//! const inside the helper calls `cuda_device::debug::__gpu_printf_format`
+//! with the literal text and the per-placeholder specs as data, and the
+//! trait's constants pick the type character after monomorphization. The
+//! helper returns `&'static [u8; N]`, the pointer-to-array constant the device
+//! importer accepts. `N` is computed here from the same data and leaves room
+//! for an `ll` modifier on every typed placeholder.
+//!
+//! # C vararg promotion rules
 //!
 //! Arguments are promoted following C vararg rules:
 //! - `i8`, `i16` → `i32`
 //! - `u8`, `u16` → `u32`
-//! - `f32` → `f64` (critical!)
+//! - `f32` → `f64`
 //! - `bool` → `i32` (0 or 1)
-//! - pointers/references → `u64` (64-bit)
+//! - pointers → `u64`
 
-use proc_macro2::TokenStream as TokenStream2;
+use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use syn::{
-    Expr, LitStr, Token,
+    Expr, LitByteStr, LitStr, Token,
     parse::{Parse, ParseStream},
 };
 
 /// Maximum number of printf arguments (CUDA limitation)
 const MAX_PRINTF_ARGS: usize = 32;
+
+/// Bytes a typed conversion needs beyond its prefix: `%`, `ll` and the type
+/// character. The builder writes `ll` only for 64-bit integers; the rest of
+/// the room stays zero after the NUL.
+const TYPED_SPEC_OVERHEAD: usize = 4;
 
 /// Input to gpu_printf! macro: format string followed by arguments
 pub struct GpuPrintfInput {
@@ -86,8 +113,9 @@ struct FormatSpec {
     zero_pad: bool,
     /// Minimum width (None = no width specified)
     width: Option<Width>,
-    /// Precision (None = no precision specified)
-    precision: Option<Precision>,
+    /// Literal precision (None = no precision specified). Device printf
+    /// accepts digits only here, so there is no runtime form.
+    precision: Option<usize>,
     /// Format type character (x, X, o, e, E, f, g, G, a, A, p, c, s, d, etc.)
     format_type: Option<char>,
 }
@@ -98,15 +126,6 @@ enum Width {
     /// Literal width value
     Literal(usize),
     /// Runtime width (`*`)
-    Runtime,
-}
-
-/// Precision specification
-#[derive(Debug, Clone)]
-enum Precision {
-    /// Literal precision value
-    Literal(usize),
-    /// Runtime precision (`.*`)
     Runtime,
 }
 
@@ -209,21 +228,24 @@ fn parse_format_spec(chars: &[char], mut i: usize, spec: &mut FormatSpec) -> Res
         }
     }
 
-    // Parse precision
+    // Parse precision. CUDA device printf takes `*` for the width only; a
+    // runtime precision prints its own specifier text instead of a value.
     if i < chars.len() && chars[i] == '.' {
         i += 1; // Skip `.`
-        if i < chars.len() {
-            if chars[i] == '*' {
-                spec.precision = Some(Precision::Runtime);
-                i += 1;
-            } else if chars[i].is_ascii_digit() {
-                let (prec, new_i) = parse_number(chars, i);
-                spec.precision = Some(Precision::Literal(prec));
-                i = new_i;
-            } else {
-                // `.` without number means precision 0
-                spec.precision = Some(Precision::Literal(0));
-            }
+        if i < chars.len() && chars[i] == '*' {
+            return Err(
+                "runtime precision `.*` is not supported by CUDA device printf; \
+                 use a literal precision such as `{:.2}`"
+                    .to_string(),
+            );
+        }
+        if i < chars.len() && chars[i].is_ascii_digit() {
+            let (prec, new_i) = parse_number(chars, i);
+            spec.precision = Some(prec);
+            i = new_i;
+        } else {
+            // `.` without number means precision 0
+            spec.precision = Some(0);
         }
     }
 
@@ -266,161 +288,113 @@ fn parse_number(chars: &[char], mut i: usize) -> (usize, usize) {
     (num, i)
 }
 
-/// Count how many extra arguments are needed for runtime width/precision
-fn count_runtime_args(spec: &FormatSpec) -> usize {
-    let mut count = 0;
-    if matches!(spec.width, Some(Width::Runtime)) {
-        count += 1;
+/// Literal text around the placeholders, with `%` doubled and `{{` / `}}`
+/// unescaped. Returns one more part than there are placeholders.
+fn literal_parts(format: &str, placeholders: &[Placeholder]) -> Vec<String> {
+    let chars: Vec<char> = format.chars().collect();
+    let mut parts = Vec::with_capacity(placeholders.len() + 1);
+    let mut last_end = 0;
+    for placeholder in placeholders {
+        parts.push(unescape_literal(&chars[last_end..placeholder.start]));
+        last_end = placeholder.end;
     }
-    if matches!(spec.precision, Some(Precision::Runtime)) {
-        count += 1;
-    }
-    count
+    parts.push(unescape_literal(&chars[last_end..]));
+    parts
 }
 
-/// Build the C format string from Rust format string
-fn build_c_format_string(format: &str, placeholders: &[Placeholder]) -> String {
+/// One run of literal text, converted to C printf text.
+fn unescape_literal(chars: &[char]) -> String {
     let mut result = String::new();
-    let chars: Vec<char> = format.chars().collect();
-    let mut last_end = 0;
-
-    for placeholder in placeholders {
-        // Add literal text before this placeholder
-        let mut i = last_end;
-        while i < placeholder.start {
-            if chars[i] == '{' && i + 1 < chars.len() && chars[i + 1] == '{' {
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '{' if i + 1 < chars.len() && chars[i + 1] == '{' => {
                 result.push('{');
                 i += 2;
-            } else if chars[i] == '}' && i + 1 < chars.len() && chars[i + 1] == '}' {
+            }
+            '}' if i + 1 < chars.len() && chars[i + 1] == '}' => {
                 result.push('}');
                 i += 2;
-            } else if chars[i] == '%' {
+            }
+            '%' => {
                 // Escape literal % as %%
                 result.push_str("%%");
                 i += 1;
-            } else {
-                result.push(chars[i]);
+            }
+            c => {
+                result.push(c);
                 i += 1;
             }
         }
-
-        // Add placeholder as %... (will be filled in by generate_c_specifier)
-        // For now, add a marker that we'll replace
-        result.push_str("__PLACEHOLDER__");
-
-        last_end = placeholder.end;
     }
-
-    // Add remaining literal text
-    let mut i = last_end;
-    while i < chars.len() {
-        if chars[i] == '{' && i + 1 < chars.len() && chars[i + 1] == '{' {
-            result.push('{');
-            i += 2;
-        } else if chars[i] == '}' && i + 1 < chars.len() && chars[i + 1] == '}' {
-            result.push('}');
-            i += 2;
-        } else if chars[i] == '%' {
-            result.push_str("%%");
-            i += 1;
-        } else {
-            result.push(chars[i]);
-            i += 1;
-        }
-    }
-
     result
 }
 
-/// Generate C format specifier from FormatSpec.
-fn generate_c_specifier(
+/// Flags, width and precision of a placeholder, as they appear between the
+/// `%` and the type character.
+fn spec_prefix(spec: &FormatSpec) -> String {
+    let mut prefix = String::new();
+    if spec.left_justify {
+        prefix.push('-');
+    }
+    if spec.always_sign {
+        prefix.push('+');
+    }
+    if spec.space_sign {
+        prefix.push(' ');
+    }
+    if spec.alternate {
+        prefix.push('#');
+    }
+    if spec.zero_pad {
+        prefix.push('0');
+    }
+    match &spec.width {
+        Some(Width::Literal(w)) => prefix.push_str(&w.to_string()),
+        Some(Width::Runtime) => prefix.push('*'),
+        None => {}
+    }
+    if let Some(p) = spec.precision {
+        prefix.push('.');
+        prefix.push_str(&p.to_string());
+    }
+    prefix
+}
+
+/// The complete C conversion of a placeholder with an explicit type character.
+fn fixed_specifier(
     spec: &FormatSpec,
+    type_char: char,
     is_64bit: bool,
     is_float: bool,
     is_string: bool,
 ) -> String {
     let mut result = String::from("%");
-
-    // Add flags
-    if spec.left_justify {
-        result.push('-');
-    }
-    if spec.always_sign {
-        result.push('+');
-    }
-    if spec.space_sign {
-        result.push(' ');
-    }
-    if spec.alternate {
-        result.push('#');
-    }
-    if spec.zero_pad {
-        result.push('0');
-    }
-
-    // Add width
-    match &spec.width {
-        Some(Width::Literal(w)) => result.push_str(&w.to_string()),
-        Some(Width::Runtime) => result.push('*'),
-        None => {}
-    }
-
-    // Add precision
-    match &spec.precision {
-        Some(Precision::Literal(p)) => {
-            result.push('.');
-            result.push_str(&p.to_string());
-        }
-        Some(Precision::Runtime) => result.push_str(".*"),
-        None => {}
-    }
+    result.push_str(&spec_prefix(spec));
 
     // Add size modifier for 64-bit integers
     if is_64bit && !is_float && !is_string {
         result.push_str("ll");
     }
 
-    // Add type character
-    let type_char = match spec.format_type {
-        Some('c') => 'c',
-        Some('s') => 's',
-        Some('d') | Some('i') => 'd',
-        Some('o') => 'o',
-        Some('x') => 'x',
-        Some('X') => 'X',
-        Some('e') => 'e',
-        Some('E') => 'E',
-        Some('f') => 'f',
-        Some('g') => 'g',
-        Some('G') => 'G',
-        Some('a') => 'a',
-        Some('A') => 'A',
-        Some('p') => 'p',
-        Some('b') => 'b', // Binary - we'll handle this specially
-        Some(_) => {
-            // Unknown format specifier - fall back to default
-            if is_string {
-                's'
-            } else if is_float {
-                'f'
-            } else {
-                'd'
-            }
-        }
-        None => {
-            // Default type based on argument type
-            if is_string {
-                's'
-            } else if is_float {
-                'f'
-            } else {
-                'd' // Will be 'u' for unsigned, handled at arg level
-            }
-        }
-    };
-    result.push(type_char);
-
+    result.push(if type_char == 'i' { 'd' } else { type_char });
     result
+}
+
+/// A NUL-terminated byte string literal: the form of a static format string
+/// the device accepts (a `str` would not be).
+fn c_string_literal(text: &str) -> LitByteStr {
+    LitByteStr::new(format!("{text}\0").as_bytes(), Span::call_site())
+}
+
+/// How one placeholder prints its argument.
+enum Conversion {
+    /// Explicit type character: the macro knows the whole C conversion.
+    Fixed(String),
+    /// No type character: the argument's `GpuPrintfArg` impl supplies the
+    /// type character after monomorphization. `prefix` is the text between
+    /// the `%` and that character, `ty` the helper's type parameter.
+    Typed { prefix: String, ty: syn::Ident },
 }
 
 /// Main proc macro implementation (called from lib.rs)
@@ -435,12 +409,11 @@ pub fn gpu_printf_impl(input: GpuPrintfInput) -> TokenStream2 {
         }
     };
 
-    // Count total expected arguments (including runtime width/precision)
-    let mut expected_args = 0;
-    for p in &placeholders {
-        expected_args += 1; // The value itself
-        expected_args += count_runtime_args(&p.spec);
-    }
+    // Count total expected arguments (including runtime width)
+    let expected_args: usize = placeholders
+        .iter()
+        .map(|p| 1 + usize::from(matches!(p.spec.width, Some(Width::Runtime))))
+        .sum();
 
     // Validate argument count
     if input.args.len() != expected_args {
@@ -468,18 +441,14 @@ pub fn gpu_printf_impl(input: GpuPrintfInput) -> TokenStream2 {
         .to_compile_error();
     }
 
+    let parts = literal_parts(&format_str, &placeholders);
+
     // If no arguments, simple case
     if placeholders.is_empty() {
-        let c_format = build_c_format_string(&format_str, &placeholders);
-        // Create byte string literal for format string (avoids str type)
-        let format_with_null = format!("{}\0", c_format);
-        let format_lit =
-            syn::LitByteStr::new(format_with_null.as_bytes(), proc_macro2::Span::call_site());
-
+        let format_lit = c_string_literal(&parts[0]);
         return quote! {
             {
                 // No arguments - pass null for args pointer
-                // Use byte string literal directly (avoids str type which GPU doesn't support)
                 cuda_device::debug::__gpu_vprintf(
                     #format_lit.as_ptr(),
                     core::ptr::null()
@@ -488,10 +457,16 @@ pub fn gpu_printf_impl(input: GpuPrintfInput) -> TokenStream2 {
         };
     }
 
-    // Generate the argument struct fields and initializers
+    // Every argument is evaluated into a local, in source order, before the
+    // packing struct is built. The locals carry mixed-site spans so a later
+    // argument expression cannot see an earlier binding.
+    let mut hoisted: Vec<TokenStream2> = Vec::new();
     let mut field_defs: Vec<TokenStream2> = Vec::new();
     let mut field_inits: Vec<TokenStream2> = Vec::new();
-    let mut c_specifiers: Vec<String> = Vec::new();
+    let mut conversions: Vec<Conversion> = Vec::new();
+    let mut typed_params: Vec<syn::Ident> = Vec::new();
+    let mut promoted_params: Vec<syn::Ident> = Vec::new();
+    let mut typed_values: Vec<syn::Ident> = Vec::new();
     let mut arg_idx = 0;
 
     for (placeholder_idx, placeholder) in placeholders.iter().enumerate() {
@@ -499,129 +474,185 @@ pub fn gpu_printf_impl(input: GpuPrintfInput) -> TokenStream2 {
 
         // Handle runtime width
         if matches!(spec.width, Some(Width::Runtime)) {
-            let field_name = format_ident!("__width_{}", placeholder_idx);
+            let value = format_ident!("__val_{}", arg_idx, span = Span::mixed_site());
+            let field = format_ident!("__width_{}", placeholder_idx);
             let arg = &input.args[arg_idx];
-            field_defs.push(quote! { #field_name: i32 });
-            field_inits.push(quote! { #field_name: (#arg) as i32 });
-            arg_idx += 1;
-        }
-
-        // Handle runtime precision
-        if matches!(spec.precision, Some(Precision::Runtime)) {
-            let field_name = format_ident!("__prec_{}", placeholder_idx);
-            let arg = &input.args[arg_idx];
-            field_defs.push(quote! { #field_name: i32 });
-            field_inits.push(quote! { #field_name: (#arg) as i32 });
+            hoisted.push(quote! { let #value = (#arg) as i32; });
+            field_defs.push(quote! { #field: i32 });
+            field_inits.push(quote! { #field: #value });
             arg_idx += 1;
         }
 
         // Handle the value argument
-        let field_name = format_ident!("__arg_{}", placeholder_idx);
+        let value = format_ident!("__val_{}", arg_idx, span = Span::mixed_site());
+        let field = format_ident!("__arg_{}", placeholder_idx);
         let arg = &input.args[arg_idx];
         arg_idx += 1;
 
-        // Generate field type and initialization based on format specifier
-        // Use concrete types - C vararg promotion rules apply:
-        // - f32 → f64 (always)
-        // - i8, i16 → i32; u8, u16 → u32
-        // - i32, u32, i64, u64 → unchanged
-        // We use i64/u64 as the default to handle all integer sizes safely
-        let (field_ty, field_init, is_64bit, is_float, is_string) = match spec.format_type {
-            Some('c') => {
-                // Character: promote to i32
-                (
-                    quote! { i32 },
-                    quote! { (#arg) as i32 },
-                    false,
-                    false,
-                    false,
-                )
-            }
-            Some('s') => {
-                // String: pass pointer
-                (
-                    quote! { *const u8 },
-                    quote! { {
-                        // Ensure string is null-terminated
-                        const __STR: &str = concat!(#arg, "\0");
-                        __STR.as_ptr()
-                    }},
-                    false,
-                    false,
-                    true,
-                )
-            }
-            Some('p') => {
-                // Pointer
-                (quote! { u64 }, quote! { (#arg) as u64 }, true, false, false)
-            }
-            Some('e') | Some('E') | Some('f') | Some('g') | Some('G') | Some('a') | Some('A') => {
-                // Float: always promote to f64
-                (quote! { f64 }, quote! { (#arg) as f64 }, false, true, false)
-            }
-            Some('x') | Some('X') | Some('o') | Some('b') => {
-                // Hex/octal/binary: use u64 to handle all unsigned integer sizes
-                (quote! { u64 }, quote! { (#arg) as u64 }, true, false, false)
-            }
-            Some('d') | Some('i') => {
-                // Signed integer: use i64 to handle all signed integer sizes
-                (quote! { i64 }, quote! { (#arg) as i64 }, true, false, false)
-            }
+        match spec.format_type {
             None => {
-                // Default format - use i64 for integers (most common case)
-                // The C format string will be %lld
-                (quote! { i64 }, quote! { (#arg) as i64 }, true, false, false)
+                let ty = format_ident!("__T{}", typed_params.len());
+                let promoted = format_ident!("__P{}", typed_params.len());
+                hoisted.push(quote! { let #value = #arg; });
+                field_defs.push(quote! { #field: #promoted });
+                field_inits.push(quote! {
+                    #field: cuda_device::debug::GpuPrintfArg::promote(#value)
+                });
+                typed_params.push(ty.clone());
+                promoted_params.push(promoted);
+                typed_values.push(value);
+                conversions.push(Conversion::Typed {
+                    prefix: spec_prefix(spec),
+                    ty,
+                });
             }
-            _ => {
-                // Fallback to i64
-                (quote! { i64 }, quote! { (#arg) as i64 }, true, false, false)
+            Some(type_char) => {
+                // Explicit type character: cast to the C vararg type.
+                // - f32 → f64 (always)
+                // - integers → i64 or u64, so every width fits
+                let (field_ty, init, is_64bit, is_float, is_string) = match type_char {
+                    'c' => (
+                        quote! { i32 },
+                        quote! { (#arg) as i32 },
+                        false,
+                        false,
+                        false,
+                    ),
+                    's' => (
+                        quote! { *const u8 },
+                        quote! { {
+                            // Ensure string is null-terminated
+                            const __STR: &str = concat!(#arg, "\0");
+                            __STR.as_ptr()
+                        } },
+                        false,
+                        false,
+                        true,
+                    ),
+                    'p' => (quote! { u64 }, quote! { (#arg) as u64 }, true, false, false),
+                    'e' | 'E' | 'f' | 'g' | 'G' | 'a' | 'A' => {
+                        (quote! { f64 }, quote! { (#arg) as f64 }, false, true, false)
+                    }
+                    'x' | 'X' | 'o' | 'b' => {
+                        (quote! { u64 }, quote! { (#arg) as u64 }, true, false, false)
+                    }
+                    // `d`, `i` and anything else the parser accepts
+                    _ => (quote! { i64 }, quote! { (#arg) as i64 }, true, false, false),
+                };
+                hoisted.push(quote! { let #value = #init; });
+                field_defs.push(quote! { #field: #field_ty });
+                field_inits.push(quote! { #field: #value });
+                conversions.push(Conversion::Fixed(fixed_specifier(
+                    spec, type_char, is_64bit, is_float, is_string,
+                )));
+            }
+        }
+    }
+
+    let args_ident = format_ident!("__args", span = Span::mixed_site());
+
+    if typed_params.is_empty() {
+        // Every conversion is known here: emit the format string as a literal.
+        let mut c_format = String::new();
+        for (part, conversion) in parts.iter().zip(&conversions) {
+            c_format.push_str(part);
+            match conversion {
+                Conversion::Fixed(spec) => c_format.push_str(spec),
+                Conversion::Typed { .. } => unreachable!("no typed placeholders on this route"),
+            }
+        }
+        c_format.push_str(&parts[conversions.len()]);
+        let format_lit = c_string_literal(&c_format);
+
+        return quote! {
+            {
+                // Argument packing struct with C-compatible layout
+                #[repr(C)]
+                struct __GpuPrintfArgs {
+                    #(#field_defs),*
+                }
+
+                #(#hoisted)*
+
+                let #args_ident = __GpuPrintfArgs {
+                    #(#field_inits),*
+                };
+
+                cuda_device::debug::__gpu_vprintf(
+                    #format_lit.as_ptr(),
+                    &#args_ident as *const __GpuPrintfArgs as *const u8
+                )
             }
         };
-
-        field_defs.push(quote! { #field_name: #field_ty });
-        field_inits.push(quote! { #field_name: #field_init });
-
-        // Generate C format specifier
-        // For trait-based types, we use a placeholder that gets resolved at compile time
-        let c_spec = generate_c_specifier(spec, is_64bit, is_float, is_string);
-        c_specifiers.push(c_spec);
     }
 
-    // Build the final C format string
-    let mut c_format = build_c_format_string(&format_str, &placeholders);
-    for c_spec in &c_specifiers {
-        c_format = c_format.replacen("__PLACEHOLDER__", c_spec, 1);
+    // At least one conversion depends on an argument type. Hand the literal
+    // text and the specs to the builder in cuda-device; its result is sized
+    // from the same data.
+    let part_lits: Vec<LitByteStr> = parts
+        .iter()
+        .map(|part| LitByteStr::new(part.as_bytes(), Span::call_site()))
+        .collect();
+    let mut buf_len = parts.iter().map(String::len).sum::<usize>() + 1;
+    let mut spec_exprs: Vec<TokenStream2> = Vec::new();
+    for conversion in &conversions {
+        match conversion {
+            Conversion::Fixed(spec) => {
+                buf_len += spec.len();
+                let lit = LitByteStr::new(spec.as_bytes(), Span::call_site());
+                spec_exprs.push(quote! { cuda_device::debug::__GpuPrintfSpec::Fixed(#lit) });
+            }
+            Conversion::Typed { prefix, ty } => {
+                buf_len += prefix.len() + TYPED_SPEC_OVERHEAD;
+                let lit = LitByteStr::new(prefix.as_bytes(), Span::call_site());
+                spec_exprs.push(quote! {
+                    cuda_device::debug::__GpuPrintfSpec::Typed {
+                        prefix: #lit,
+                        format_char: <#ty as cuda_device::debug::GpuPrintfArg>::FORMAT_CHAR,
+                        is_64bit: <#ty as cuda_device::debug::GpuPrintfArg>::IS_64BIT,
+                        is_float: <#ty as cuda_device::debug::GpuPrintfArg>::IS_FLOAT,
+                    }
+                });
+            }
+        }
     }
+    let fmt_ident = format_ident!("__fmt", span = Span::mixed_site());
 
-    // Generate unique struct name
-    let struct_name = format_ident!("__GpuPrintfArgs");
-
-    // Create byte string literal for format string (avoids str type)
-    let format_with_null = format!("{}\0", c_format);
-    let format_lit =
-        syn::LitByteStr::new(format_with_null.as_bytes(), proc_macro2::Span::call_site());
-
-    let expanded = quote! {
+    quote! {
         {
-            // Argument packing struct with C-compatible layout
+            // The format string of this call site, built once per
+            // instantiation. The sized array is the constant form the
+            // device importer accepts.
+            #[inline(always)]
+            fn __oxide_gpu_printf_format<#(#typed_params: cuda_device::debug::GpuPrintfArg),*>(
+                #(_: &#typed_params),*
+            ) -> &'static [u8; #buf_len] {
+                const {
+                    &cuda_device::debug::__gpu_printf_format::<#buf_len>(
+                        &[#(#part_lits),*],
+                        &[#(#spec_exprs),*],
+                    )
+                }
+            }
+
+            // Argument packing struct with C-compatible layout. Typed slots
+            // hold the `GpuPrintfArg` promoted type.
             #[repr(C)]
-            struct #struct_name {
+            struct __GpuPrintfArgs<#(#promoted_params),*> {
                 #(#field_defs),*
             }
 
-            // Pack arguments
-            let __args = #struct_name {
+            #(#hoisted)*
+
+            let #fmt_ident = __oxide_gpu_printf_format(#(&#typed_values),*);
+            let #args_ident = __GpuPrintfArgs {
                 #(#field_inits),*
             };
 
-            // Call vprintf intrinsic
-            // Use byte string literal directly (avoids str type which GPU doesn't support)
             cuda_device::debug::__gpu_vprintf(
-                #format_lit.as_ptr(),
-                &__args as *const #struct_name as *const u8
+                #fmt_ident.as_ptr(),
+                &#args_ident as *const _ as *const u8
             )
         }
-    };
-
-    expanded
+    }
 }

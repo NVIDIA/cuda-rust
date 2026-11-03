@@ -19,7 +19,7 @@ use pliron::builtin::types::IntegerType;
 use pliron::common_traits::Verify;
 use pliron::context::{Context, Ptr};
 use pliron::input_err;
-use pliron::location::{Located, Location};
+use pliron::location::Location;
 use pliron::op::Op;
 use pliron::operation::Operation;
 use pliron::r#type::Typed;
@@ -708,6 +708,10 @@ fn emit_pointer_expose_address(
     cast_op
 }
 
+/// Materializes an integer constant `value` of type `ty` as a [`MirConstantOp`]
+/// inserted immediately after `insert_after`.
+///
+/// Fails closed if `value` does not fit in a signed 64-bit integer.
 fn emit_integer_constant(
     ctx: &mut Context,
     ty: pliron::r#type::TypedHandle<IntegerType>,
@@ -740,19 +744,18 @@ fn emit_integer_constant(
     Ok(const_op)
 }
 
-/// Emits `SharedArray::index()`: Compute pointer to element in shared memory.
-///
-/// Computes `base_ptr + index` to get a pointer to the indexed element.
-/// The result is a shared memory pointer (address space 3).
+/// Emits `SharedArray::index()` / `IndexMut::index_mut()`: bounds-checks
+/// `index < N` (unless `value_map.unchecked_indexing()` is set) and computes
+/// `base_ptr + index` in shared memory (`addrspace(3)`).
 ///
 /// # Arguments
 ///
-/// - `args[0]`: `&mut SharedArray<T, N>` - Reference to the shared array
-/// - `args[1]`: `usize` - Index into the array
+/// - `args[0]`: `&SharedArray<T, N>`, `&mut SharedArray<T, N>`, or `*mut SharedArray<T, N>`
+/// - `args[1]`: `usize` - Element index into the shared array
 ///
 /// # Returns
 ///
-/// `*mut T` (addrspace=3) - Pointer to the element in shared memory
+/// `*mut T` (`addrspace(3)`) - Pointer to the indexed element in shared memory.
 pub fn emit_shared_array_index(
     ctx: &mut Context,
     body: &mir::Body,
@@ -806,6 +809,21 @@ pub fn emit_shared_array_index(
         last_op,
         loc.clone(),
     )?;
+    // Trap if `index >= N`, same as normal array indexing.
+    // `#[kernel(unchecked_indexing)]` skips it, same as for slices.
+    let last_op_after_index = if value_map.unchecked_indexing() {
+        last_op_after_index
+    } else {
+        let len = shared_array_len(body, &args[0], loc.clone())?;
+        Some(emit_index_bounds_check(
+            ctx,
+            index_val,
+            len,
+            block_ptr,
+            last_op_after_index,
+            loc.clone(),
+        )?)
+    };
     let (prepared_destination, last_op) = helpers::prepare_destination_write(
         ctx,
         body,
@@ -851,6 +869,117 @@ pub fn emit_shared_array_index(
         loc,
         "SharedArray::index call without target block",
     )
+}
+
+/// Extracts the compile-time element count `N` from a `SharedArray<T, N, ALIGN>`
+/// receiver operand (`&SharedArray`, `&mut SharedArray`, or `*mut SharedArray`).
+///
+/// Fails closed if `operand` does not point to `cuda_device::SharedArray` or if
+/// the `N` const generic cannot be evaluated to a target `usize`.
+fn shared_array_len(
+    body: &mir::Body,
+    operand: &mir::Operand,
+    loc: Location,
+) -> TranslationResult<u64> {
+    use rustc_public::ty::{GenericArgKind, RigidTy, TyKind};
+
+    let operand_ty = match operand {
+        mir::Operand::Copy(place) | mir::Operand::Move(place) => place.ty(body.locals()).ok(),
+        mir::Operand::Constant(constant) => Some(constant.const_.ty()),
+        mir::Operand::RuntimeChecks(_) => None,
+    };
+    let array_ty = match operand_ty.map(|ty| ty.kind()) {
+        Some(TyKind::RigidTy(RigidTy::RawPtr(pointee, _)))
+        | Some(TyKind::RigidTy(RigidTy::Ref(_, pointee, _))) => pointee,
+        other => {
+            return input_err!(
+                loc,
+                TranslationErr::unsupported(format!(
+                    "SharedArray::index: expected a reference to the array, got {other:?}"
+                ))
+            );
+        }
+    };
+    match array_ty.kind() {
+        TyKind::RigidTy(RigidTy::Adt(adt_def, args))
+            if types::is_cuda_device_adt(&adt_def, "SharedArray") =>
+        {
+            let Some(GenericArgKind::Const(len_const)) = args.0.get(1) else {
+                return input_err!(
+                    loc,
+                    TranslationErr::unsupported(format!(
+                        "SharedArray::index: cannot determine the array length of {array_ty:?}"
+                    ))
+                );
+            };
+            facts::eval_usize_const(len_const, "SharedArray N", Some(&loc))
+        }
+        _ => input_err!(
+            loc,
+            TranslationErr::unsupported(format!(
+                "SharedArray::index: cannot determine the array length of {array_ty:?}"
+            ))
+        ),
+    }
+}
+
+/// Emits an unsigned bounds check `assert(index < len)` after `prev_op` and
+/// returns the inserted [`MirAssertOp`].
+///
+/// Lowers to the same `MirConstantOp(len)` + `MirLtOp` + `MirAssertOp` sequence
+/// that `translate_assert` produces for slice and array bounds checks.
+fn emit_index_bounds_check(
+    ctx: &mut Context,
+    index: Value,
+    len: u64,
+    block_ptr: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    loc: Location,
+) -> TranslationResult<Ptr<Operation>> {
+    use dialect_mir::ops::{MirAssertOp, MirLtOp};
+
+    let usize_ty = types::get_usize_type(ctx);
+    if index.get_type(ctx) != usize_ty.into() {
+        return input_err!(
+            loc,
+            TranslationErr::type_error("SharedArray::index expects a usize index")
+        );
+    }
+    let usize_bits = usize_ty.deref(ctx).width() as usize;
+    let len_op = Operation::new(
+        ctx,
+        MirConstantOp::get_concrete_op_info(),
+        vec![usize_ty.into()],
+        vec![],
+        vec![],
+        0,
+    );
+    len_op.deref_mut(ctx).set_loc(loc.clone());
+    let len_attr = IntegerAttr::new(
+        usize_ty,
+        APInt::from_u64(len, NonZeroUsize::new(usize_bits).unwrap()),
+    );
+    MirConstantOp::new(len_op).set_attr_value(ctx, len_attr);
+    helpers::insert_op(ctx, len_op, block_ptr, prev_op);
+
+    let len_val = len_op.deref(ctx).get_result(0);
+    let bool_ty = types::get_bool_type(ctx).into();
+    let in_bounds = Operation::new(
+        ctx,
+        MirLtOp::get_concrete_op_info(),
+        vec![bool_ty],
+        vec![index, len_val],
+        vec![],
+        0,
+    );
+    in_bounds.deref_mut(ctx).set_loc(loc.clone());
+    in_bounds.insert_after(ctx, len_op);
+
+    let cond = in_bounds.deref(ctx).get_result(0);
+    let assert_op = MirAssertOp::new(ctx, cond).get_operation();
+    assert_op.deref_mut(ctx).set_loc(loc);
+    assert_op.insert_after(ctx, in_bounds);
+    Ok(assert_op)
 }
 
 /// Emits a public `SharedArray` pointer conversion.
@@ -1311,8 +1440,9 @@ pub fn emit_cvta_generic_to_shared_offset(
     block_map: &[Ptr<BasicBlock>],
     loc: Location,
     result_width: u32,
+    cluster: bool,
 ) -> TranslationResult<Ptr<Operation>> {
-    use dialect_nvvm::ops::CvtaGenericToSharedOffsetOp;
+    use dialect_nvvm::ops::{CvtaGenericToClusterSharedOffsetOp, CvtaGenericToSharedOffsetOp};
     use pliron::builtin::types::Signedness;
 
     if args.len() != 1 {
@@ -1348,7 +1478,11 @@ pub fn emit_cvta_generic_to_shared_offset(
     let result_ty = IntegerType::get(ctx, result_width, Signedness::Unsigned);
     let cvta_op = Operation::new(
         ctx,
-        CvtaGenericToSharedOffsetOp::get_concrete_op_info(),
+        if cluster {
+            CvtaGenericToClusterSharedOffsetOp::get_concrete_op_info()
+        } else {
+            CvtaGenericToSharedOffsetOp::get_concrete_op_info()
+        },
         vec![result_ty.into()],
         vec![ptr_val],
         vec![],

@@ -19,6 +19,8 @@ If you are unsure whether something is worth a full issue or PR, the Discord
 - [Signing Your Commits](#signing-your-commits)
 - [Contribution Process](#contribution-process)
 - [Code Requirements](#code-requirements)
+- [Continuous Integration](#continuous-integration)
+- [AI-Assisted Contributions](#ai-assisted-contributions)
 - [IP Review Process](#ip-review-process)
 
 ## Developer Certificate of Origin
@@ -68,6 +70,21 @@ By making a contribution to this project, I certify that:
 
 ## Signing Your Commits
 
+Every commit needs two different things. They are easy to mix up, and one does
+not replace the other:
+
+| | DCO sign-off | Cryptographic signature |
+| --- | --- | --- |
+| What it is | A `Signed-off-by:` line in the commit message | An SSH or GPG signature on the commit, shown as **Verified** on GitHub |
+| Command | `git commit -s` | `git commit -S` |
+| What it does | Certifies the DCO above | Proves who made the commit |
+| If it is missing | The pull request is not merged | The bot holds the pull request for validation instead of starting CI |
+
+`-s` does not sign the commit and `-S` does not add the `Signed-off-by` line, so
+use both: `git commit -s -S`.
+
+### DCO sign-off
+
 Every commit in your pull request must include a `Signed-off-by` line.
 This certifies that you agree to the DCO above.
 
@@ -97,12 +114,40 @@ git rebase --signoff main
 Your `Signed-off-by` name and email must match your Git configuration
 (`user.name` and `user.email`).
 
+### Cryptographic signature
+
+Sign every commit with an SSH or GPG key, so that GitHub shows it as
+**Verified**. A pull request with unsigned commits is held for validation (see
+[Continuous Integration](#continuous-integration)).
+
+Set up signing once, following GitHub's
+[guide to commit signature verification](https://docs.github.com/en/authentication/managing-commit-signature-verification/about-commit-signature-verification),
+and add the public key to your GitHub account as a **Signing key**. Then sign
+every commit, or have Git do it by default:
+
+```bash
+git commit -S -s -m "Description of change"
+
+# Sign every commit
+git config --global commit.gpgsign true
+```
+
+Rewriting history (`rebase`, `commit --amend`, `filter-branch`) drops the
+signature of every commit it rewrites. Re-sign and sign off together when you
+rebase, and force-push the result:
+
+```bash
+git rebase --signoff -S main
+```
+
+`git log --show-signature` shows whether each commit is signed.
+
 ## Contribution Process
 
 1. **Open an issue** describing the bug or feature you want to work on.
 2. **Fork the repository** and create a feature branch from `main`.
 3. **Implement your changes** following the code requirements below.
-4. **Sign all commits** using `git commit -s` (see above).
+4. **Sign off and sign all commits** using `git commit -s -S` (see above).
 5. **Submit a pull request** against the `main` branch with a clear
    description of the changes and their motivation.
 6. **Respond to review feedback.** All submissions require review before
@@ -111,22 +156,46 @@ Your `Signed-off-by` name and email must match your Git configuration
 Pull requests that do not meet the requirements below or lack proper DCO
 sign-off will not be merged.
 
+### Branch and pull request naming
+
+Prefix branches and pull request titles with the kind of change. Branches use
+`/` as the separator and titles use `:`, lowercase: `fix/kernel-launch-sync`
+and `fix: resolve kernel launch sync race`.
+
+| Prefix | Use for |
+| --- | --- |
+| `feat` | New features |
+| `fix` | Bug fixes |
+| `docs` | Documentation changes |
+| `refactor` | Code changes with no behavior change |
+| `perf` | Performance improvements with no functional change |
+| `test` | Test additions or changes |
+| `build` | Build system and dependency changes |
+| `ci` | CI changes |
+| `chore` | Maintenance tasks |
+
+A scope in parentheses is welcome when a change is confined to one component,
+for example `docs(cutile-rs): ...`.
+
 ## Code Requirements
 
 ### Toolchains
 
 The shared host crates at the repository root use the root stable pin.
 Each product has its own workspace and toolchain under `cuda-oxide/` or
-`cutile-rs/`. For Tile development, see [cutile-rs/CONTRIBUTING.md](cutile-rs/CONTRIBUTING.md).
-The setup and validation commands below cover cuda-oxide.
+`cutile-rs/`. The setup commands below cover cuda-oxide; the Tile checks have
+their own section further down.
 
-cuda-oxide requires the Rust nightly toolchain with `rustc_private` support.
-See the [README](README.md) for setup instructions.
+cuda-oxide pins its stable Rust toolchain (`1.99.1`) and required `rustc-dev`
+and `llvm-tools` components in `cuda-oxide/rust-toolchain.toml` (with
+`RUSTC_BOOTSTRAP=1` configured via `cuda-oxide/.cargo/config.toml` and
+`cargo-oxide`). See the [cuda-oxide README](cuda-oxide/README.md) for setup
+instructions.
 
-`cuda-oxide/flake.nix` provides the CUDA 13, LLVM 22, Clang, and pinned nightly
-development environment. From the repository root, run `cd cuda-oxide` and
-then `nix develop` with flakes enabled. Container setup is documented in
-[cuda-oxide/.devcontainer/README.md](cuda-oxide/.devcontainer/README.md).
+`cuda-oxide/flake.nix` provides the CUDA 13, Clang/libclang, and pinned Rust
+(with LLVM 23 `llvm-tools`) development environment. From the repository root,
+run `cd cuda-oxide` and then `nix develop` with flakes enabled. Container setup
+is documented in [cuda-oxide/.devcontainer/README.md](cuda-oxide/.devcontainer/README.md).
 
 ### Running the cuda-oxide checks
 
@@ -149,6 +218,38 @@ codegen backend, a Python virtualenv, or GitHub's own infrastructure. The
 `check` recipe's comment in the `Justfile` names them, and is the place kept in
 step when a workflow changes; the commands below are the ones worth knowing by
 hand even so.
+
+### Running the cutile-rs checks
+
+cutile-rs builds on the stable toolchain pinned in `cutile-rs/rust-toolchain.toml`
+and needs a CUDA 13.2 or newer toolkit with the Tile IR assembler, `tileiras`;
+the [cutile-rs book](https://nvidia.github.io/cuda-rust/cutile/) covers setup.
+Its test scripts locate the Tile workspace from their own path and reach the
+shared host crates at the repository root on their own, so they can be run
+from anywhere:
+
+```bash
+cutile-rs/scripts/run_cpu_tests.sh   # CPU and assembler tests; needs the toolkit, not a GPU
+cutile-rs/scripts/run_gpu_tests.sh   # GPU integration tests
+cutile-rs/scripts/run_all.sh         # both of the above, then the examples and benchmarks
+```
+
+Run `cutile-rs/scripts/run_all.sh` before marking a Tile pull request ready
+for review.
+
+The GPU script also accepts `--archive-dir DIR` to run prebuilt tests without
+Cargo or a Rust toolchain. The directory must contain `cargo-nextest`,
+`tile-tests.tar.zst`, and `host-tests.tar.zst`, as bundled by CI. This mode runs
+tests serially and uses the checkout for source fixtures.
+See the archive, bundle, and extract steps in
+[the Tile CI workflow](.github/workflows/cutile-rs.yml) for how to produce this
+directory. Extract `cutile-gpu-tests.tar` first and use a checkout matching its
+`revision.txt`; `cargo-nextest` must be executable. The script's opening comments
+describe the directory layout and the contents of each test archive.
+
+CI runs the same suites in `.github/workflows/cutile-rs.yml`; see
+[Continuous Integration](#continuous-integration) for how it is triggered on
+pull requests.
 
 ### Formatting and Style
 
@@ -246,6 +347,62 @@ error's `Display` names the library candidates the loader tried.
   `cargo deny check` does not resolve it; the script reads the example lock
   files directly and asks for a row per third-party crate. Examples that
   depend only on first-party crates by path need nothing.
+
+## Continuous Integration
+
+**All pull request CI goes through [copy-pr-bot](.github/copy-pr-bot.yaml).**
+CI runs on NVIDIA self-hosted runners, and those runners reject workflows
+triggered by `pull_request`. Instead, copy-pr-bot mirrors the head of your pull
+request to a `pull-request/<n>` branch in `NVIDIA/cuda-rust`, and the workflows
+run on `push` to that branch (and to `main`). The results show on your pull
+request as usual; the runs themselves belong to the `pull-request/<n>` branch.
+cutile-rs (Tile) CI already worked this way; it now applies to every workflow.
+The bot's own [documentation](https://docs.gha-runners.nvidia.com/apps/copy-pr-bot/)
+needs an NVIDIA login.
+
+### When `/ok to test <SHA>` is needed
+
+- **The author is not a member of the NVIDIA GitHub organization.** The bot
+  trusts only members of the organization, so a pull request from anyone else is
+  not mirrored, and no CI runs, until an NVIDIA employee has reviewed the change
+  and comments `/ok to test <full commit SHA>` on it. If you are an external
+  contributor, ask a maintainer on the pull request.
+- **Only the full SHA works**, and **each new commit needs a new approval.** A
+  fix-up push waits for another `/ok to test`.
+- **Not needed** for members of the NVIDIA organization: every push to the pull
+  request is mirrored on its own, except for drafts (see below).
+- **Unsigned commits hold the pull request for validation**, whoever the author
+  is. Sign the commits (see
+  [Cryptographic signature](#cryptographic-signature)) and push; the bot then
+  mirrors the new head without an approval.
+
+### Other things you will notice
+
+- **Draft pull requests** are not mirrored automatically. CI starts when the
+  pull request is marked ready for review.
+- **Forks.** A pull request from a fork runs in `NVIDIA/cuda-rust` on
+  `pull-request/<n>`, not in your fork. A push to your fork's own `main` (for
+  example a fork sync) still starts the workflows there. Jobs that need an
+  NVIDIA runner label stay queued, because a fork has none; ignore them.
+- **Skipped jobs.** Several workflows gate their jobs on a `changes` job that
+  compares the diff with `main`, so a job can be skipped when the diff does not
+  touch its paths. The jobs run when the diff cannot be detected.
+
+### Adding or changing a workflow
+
+Use the runner labels the existing workflows use (`linux-amd64-cpu4` for what
+used to run on `ubuntu-latest`, `linux-amd64-cpu16` for the Tile test jobs) and
+trigger on `push` to `main` and `pull-request/[0-9]+`, not on `pull_request`.
+The one job that stays on `ubuntu-latest` is the GitHub Pages `deploy` in
+`book.yml`, which `actions/deploy-pages` requires.
+
+## AI-Assisted Contributions
+
+- **You are responsible:** Review and understand all AI-generated code before submitting it.
+- **Verify correctness:** AI-generated code may contain bugs or security issues. Run the applicable tests and review the diff carefully.
+- **No AI-generated sensitive content:** Do not use AI to generate security policies, legal, or license text.
+
+See [AGENTS.md](AGENTS.md) for instructions for coding agents working in this repository.
 
 ## IP Review Process
 

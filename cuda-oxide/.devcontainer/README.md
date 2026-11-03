@@ -6,7 +6,7 @@ This dev container provides the toolchain expected by cuda-oxide:
 - CUDA Toolkit 13.0
 - LLVM 21 with NVPTX support
 - Clang 21 resource headers for `bindgen`
-- Rust `nightly-2026-08-28` with `rust-src`, `rustc-dev`, `rust-analyzer`,
+- Rust `1.99.1` with `rust-src`, `rustc-dev`, `rust-analyzer`,
   `rustfmt` and `clippy`. `llvm-tools` is not preinstalled in the image;
   rustup adds it on your first cargo command under `cuda-oxide/`, because
   `cuda-oxide/rust-toolchain.toml` names it. The image ships LLVM 21 and

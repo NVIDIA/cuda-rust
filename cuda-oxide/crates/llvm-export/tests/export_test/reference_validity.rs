@@ -62,13 +62,13 @@ fn kernel_reference_validity_exports_nonnull_and_alignment() {
         &mut ctx,
         func.get_operation(),
         0,
-        KernelReferenceParamValidityAttr(4),
+        KernelReferenceParamValidityAttr::new(4),
     );
     set_kernel_reference_param_validity(
         &mut ctx,
         func.get_operation(),
         1,
-        KernelReferenceParamValidityAttr(1),
+        KernelReferenceParamValidityAttr::new(1),
     );
     func.get_operation().insert_at_back(module_block, &ctx);
 
@@ -93,7 +93,7 @@ fn legacy_kernel_reference_validity_follows_typed_pointer_spelling() {
         &mut ctx,
         func.get_operation(),
         0,
-        KernelReferenceParamValidityAttr(4),
+        KernelReferenceParamValidityAttr::new(4),
     );
     func.get_operation().insert_at_back(module_block, &ctx);
 
@@ -116,7 +116,7 @@ fn reference_validity_rejects_non_kernel_non_pointer_and_out_of_range() {
         &mut ctx,
         non_kernel.get_operation(),
         0,
-        KernelReferenceParamValidityAttr(4),
+        KernelReferenceParamValidityAttr::new(4),
     );
     non_kernel
         .get_operation()
@@ -132,7 +132,7 @@ fn reference_validity_rejects_non_kernel_non_pointer_and_out_of_range() {
         &mut ctx,
         scalar.get_operation(),
         0,
-        KernelReferenceParamValidityAttr(4),
+        KernelReferenceParamValidityAttr::new(4),
     );
     scalar.get_operation().insert_at_back(scalar_block, &ctx);
     let error = export_module_to_string_with_config(&ctx, &scalar_module, &PtxExportConfig)
@@ -146,7 +146,7 @@ fn reference_validity_rejects_non_kernel_non_pointer_and_out_of_range() {
         &mut ctx,
         range.get_operation(),
         3,
-        KernelReferenceParamValidityAttr(4),
+        KernelReferenceParamValidityAttr::new(4),
     );
     range.get_operation().insert_at_back(range_block, &ctx);
     let error = export_module_to_string_with_config(&ctx, &range_module, &PtxExportConfig)
@@ -165,13 +165,98 @@ fn reference_validity_rejects_malformed_marker_indices() {
         let ptr = PointerType::get(&ctx, 0);
         let func = kernel_with_params(&mut ctx, "malformed_marker", vec![ptr.into()], true);
         let key = format!("{KERNEL_REFERENCE_PARAM_VALIDITY_KEY_PREFIX}{suffix}");
-        func.get_operation()
-            .deref_mut(&ctx)
-            .attributes
-            .set(key.try_into().unwrap(), KernelReferenceParamValidityAttr(4));
+        func.get_operation().deref_mut(&ctx).attributes.set(
+            key.try_into().unwrap(),
+            KernelReferenceParamValidityAttr::new(4),
+        );
         func.get_operation().insert_at_back(module_block, &ctx);
         let error = export_module_to_string_with_config(&ctx, &module, &PtxExportConfig)
             .expect_err("malformed reference-validity marker must fail");
         assert!(error.contains("invalid parameter index"), "{error}");
+    }
+}
+
+#[test]
+fn reference_validity_exports_each_fact_independently_in_all_dialects() {
+    use llvm_export::export::ExportBackendConfig;
+
+    let modern_nvvm = NvvmExportConfig::new(NvvmIrDialect::Modern);
+    let legacy_nvvm = NvvmExportConfig::new(NvvmIrDialect::LegacyLlvm7);
+    let configs: [&dyn ExportBackendConfig; 3] = [&PtxExportConfig, &modern_nvvm, &legacy_nvvm];
+    for (config, pointer) in configs.into_iter().zip(["ptr", "ptr", "i8*"]) {
+        // Cover definitions, declarations, and declarations with an empty region.
+        for shape in 0..3 {
+            let definition = shape == 0;
+            let mut ctx = Context::new();
+            let module = ModuleOp::new(&mut ctx, "independent_facts".try_into().unwrap());
+            let module_block = module_top_block(&mut ctx, &module);
+            let ptr = PointerType::get(&ctx, 0);
+            let integer = IntegerType::get(&ctx, 64, Signedness::Signless);
+            let mut params = vec![ptr.into(); 6];
+            params.push(integer.into());
+            let func = if definition {
+                kernel_with_params(&mut ctx, "independent_facts", params, true)
+            } else {
+                let ty = FuncType::get(&ctx, VoidType::get(&ctx).into(), params, false);
+                let func = FuncOp::new(&mut ctx, "independent_facts".try_into().unwrap(), ty);
+                if shape == 2 {
+                    pliron::operation::Operation::add_region(func.get_operation(), &mut ctx);
+                }
+                func.get_operation().deref_mut(&ctx).attributes.set(
+                    "gpu_kernel".try_into().unwrap(),
+                    StringAttr::new("true".to_string()),
+                );
+                func
+            };
+            for (index, (alignment, no_alias, bytes)) in [
+                (4, true, 4),
+                (8, true, 8),
+                (1, false, 0),
+                (16, false, 128),
+                (4, true, 0),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                set_kernel_reference_param_validity(
+                    &mut ctx,
+                    func.get_operation(),
+                    index,
+                    KernelReferenceParamValidityAttr {
+                        pointee_alignment: alignment,
+                        no_alias,
+                        dereferenceable_bytes: bytes,
+                    },
+                );
+            }
+            func.get_operation().insert_at_back(module_block, &ctx);
+            let ir = export_module_to_string_with_config(&ctx, &module, config).unwrap();
+            assert!(!ir.contains(" readonly"), "{ir}");
+            let expected = [
+                format!("{pointer} nonnull align 4 noalias dereferenceable(4)"),
+                format!("{pointer} nonnull align 8 noalias dereferenceable(8)"),
+                format!("{pointer} nonnull"),
+                format!("{pointer} nonnull align 16 dereferenceable(128)"),
+                format!("{pointer} nonnull align 4 noalias"),
+                pointer.to_string(),
+                "i64".to_string(),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(index, parameter)| {
+                if definition {
+                    format!("{parameter} %v{index}")
+                } else {
+                    parameter
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+            assert!(
+                ir.contains(&format!("@independent_facts({expected})")),
+                "{ir}"
+            );
+            assert!(!ir.contains("dereferenceable(0)"), "{ir}");
+        }
     }
 }

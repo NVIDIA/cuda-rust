@@ -1,0 +1,5 @@
+error: #[tile_export]: `out` and `inout` parameters must be one contiguous run, but `b` is `in` and sits between `a` and `split_out`; move `in` parameters before the `&mut` ones
+ --> tests/compile_fail/tile_export_outputs_split.rs:8:8
+  |
+8 | pub fn split(a: &mut f32, b: f32) -> f32 {
+  |        ^^^^^

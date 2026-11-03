@@ -7,7 +7,7 @@ use dialect_nvvm::ops as nvvm;
 use llvm_export::ops as llvm;
 use pliron::builtin::op_interfaces::SymbolOpInterface;
 use pliron::linked_list::ContainsLinkedList;
-use pliron::location::{Located, Location};
+use pliron::location::Location;
 use pliron::op::Op;
 use pliron::operation::Operation;
 
@@ -194,7 +194,7 @@ fn test_multi_result_inline_ptx_lowers_to_struct_asm_and_extractvalues() -> Resu
         if let Some(inline_asm) = Operation::get_op::<llvm::InlineAsmOp>(op, &ctx) {
             assert_eq!(
                 inline_asm.get_operation().deref(&ctx).loc(),
-                expected_location
+                &expected_location
             );
             assert_eq!(
                 inline_asm
@@ -230,7 +230,10 @@ fn test_multi_result_inline_ptx_lowers_to_struct_asm_and_extractvalues() -> Resu
             }
             asm_result = Some(result);
         } else if let Some(extract) = Operation::get_op::<llvm::ExtractValueOp>(op, &ctx) {
-            assert_eq!(extract.get_operation().deref(&ctx).loc(), expected_location);
+            assert_eq!(
+                extract.get_operation().deref(&ctx).loc(),
+                &expected_location
+            );
             let aggregate = extract.get_operation().deref(&ctx).get_operand(0);
             assert_eq!(
                 Some(aggregate),

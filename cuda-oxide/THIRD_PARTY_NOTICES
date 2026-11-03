@@ -4,10 +4,62 @@ THIRD PARTY NOTICES
 This file attributes third-party open source software whose source code is
 embedded in cuda-oxide.
 
-cuda-oxide's own code is licensed under Apache-2.0 (see LICENSE). Third-party
+cuda-oxide's own code is licensed under Apache-2.0 (see the LICENSE at the
+repository root). Third-party
 crates that cuda-oxide merely depends on through Cargo are not redistributed
 here and are therefore not listed below; their licenses are recorded in
 `dependency-licenses.csv` and enforced by `deny.toml`.
+
+--------------------------------------------------------------------------------
+CUTLASS CuTeDSL block-scaled GEMM reference
+--------------------------------------------------------------------------------
+
+Location in cuda-oxide:      cute-rs-preview/examples/blockscale_gemm_cute/reference/
+Upstream project:            https://github.com/NVIDIA/cutlass
+Upstream revision:           v4.6.2 (6c65a175668952f09bcbf66cb97a8de1b734b4a0)
+Copyright:                   (c) 2026 NVIDIA CORPORATION & AFFILIATES
+License:                     BSD-3-Clause
+
+The unmodified files `dense_blockscaled_gemm_persistent_cooperative.py` and
+`blockscaled_gemm_dispatch.py` come from
+`examples/python/CuTeDSL/cute/blackwell_geforce/kernel/blockscaled_gemm/`.
+Each retains the complete upstream copyright, license conditions, and disclaimer.
+The adjacent `benchmark.py` and `cpp/` reference are cuda-oxide code under
+Apache-2.0; they are not part of the vendored CUTLASS source.
+
+--------------------------------------------------------------------------------
+CUTLASS CuTeDSL FlashAttention v2 reference
+--------------------------------------------------------------------------------
+
+Location in cuda-oxide:      cute-rs-preview/examples/fmha_prefill_sm120a_cute/reference/flash_attention_v2.py
+Upstream project:            https://github.com/NVIDIA/cutlass
+Upstream revision:           v4.7.0 (dcf215af68a2d08d305076c152a06f201728cd53)
+Copyright:                   (c) 2025 - 2026 NVIDIA CORPORATION & AFFILIATES
+License:                     BSD-3-Clause
+
+The unmodified file comes from
+`examples/python/CuTeDSL/cute/ampere/kernel/attention/flash_attention_v2.py`.
+It retains the complete upstream copyright, license conditions, and disclaimer.
+The adjacent launch, validation and benchmark helpers are cuda-oxide code under
+Apache-2.0. The separately authored CuTeDSL decode reference is also cuda-oxide
+code under Apache-2.0; it is not part of this vendored CUTLASS source.
+
+--------------------------------------------------------------------------------
+CUTLASS CuTeDSL datacenter Blackwell attention references
+--------------------------------------------------------------------------------
+
+Locations in cuda-oxide:    cute-rs-preview/examples/sm100_fmha_prefill_cute/reference/
+                            cute-rs-preview/examples/sm100_mla_decode_fp16_cute/reference/
+Upstream project:           https://github.com/NVIDIA/cutlass
+Upstream revision:          v4.7.0 (dcf215af68a2d08d305076c152a06f201728cd53)
+Copyright:                  (c) 2025 - 2026 NVIDIA CORPORATION & AFFILIATES
+License:                    BSD-3-Clause
+
+The unchanged FMHA source, fmha_helpers.py and helpers/__init__.py, and the
+unchanged MLA decode source and mla_helpers.py retain their complete upstream
+BSD notices. Each reference/SOURCE.md records original paths and SHA-256 hashes.
+The adjacent Rust examples and Python comparison adapters are cuda-oxide code
+under Apache-2.0.
 
 --------------------------------------------------------------------------------
 1. Rustlantis
@@ -29,7 +81,7 @@ The upstream license texts are retained in place at
 carries its own identical copies at
 `crates/fuzzer/rustlantis/rangemap/LICENSE-APACHE` and
 `crates/fuzzer/rustlantis/rangemap/LICENSE-MIT`. The Apache-2.0 text is
-identical to the one in this directory (LICENSE). The MIT text is
+identical to the repository's root LICENSE. The MIT text is
 reproduced here:
 
     Permission is hereby granted, free of charge, to any

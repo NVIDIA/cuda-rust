@@ -20,6 +20,7 @@
 //! permuted case is only reachable through loads.
 
 use cutile_compiler::compiler::utils::CompileOptions;
+use cutile_compiler::hints::DebugInfoLevel;
 
 mod common;
 
@@ -120,7 +121,7 @@ fn compile_mlir(
         &[],
         &[],
         None,
-        &CompileOptions::default().device_debug(false),
+        &CompileOptions::default().debug_info(DebugInfoLevel::None),
     )
     .map_err(|err| err.to_string())
 }
@@ -139,7 +140,7 @@ fn artifacts(
     .target("sm_120")
     .generics(generics)
     .strides(strides)
-    .options(CompileOptions::default().device_debug(false))
+    .options(CompileOptions::default().debug_info(DebugInfoLevel::None))
     .compile()
     .unwrap_or_else(|e| panic!("compile {name}: {e}"))
 }

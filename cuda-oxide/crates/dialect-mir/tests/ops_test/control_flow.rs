@@ -7,8 +7,10 @@ use dialect_mir::ops::{MirAssertOp, MirCondBranchOp, MirFuncOp, MirGotoOp, MirRe
 use pliron::{
     basic_block::BasicBlock,
     builtin::{
-        attributes::TypeAttr,
-        op_interfaces::OperandSegmentInterface,
+        attributes::{OperandSegmentSizesAttr, StringAttr, TypeAttr},
+        op_interfaces::{
+            ATTR_KEY_OPERAND_SEGMENT_SIZES, BranchOpInterface, OperandSegmentInterface,
+        },
         types::{FP32Type, FunctionType, IntegerType, Signedness},
     },
     common_traits::Verify,
@@ -170,4 +172,249 @@ fn test_mir_control_flow_verify() {
             "Assertions must have exactly one condition and no successors"
         );
     }
+}
+
+/// Conditional branches must reject malformed segment metadata before indexing it.
+#[test]
+fn test_mir_cond_branch_rejects_malformed_segments() {
+    let mut ctx = Context::new();
+    dialect_mir::register(&mut ctx);
+    let i1_ty = IntegerType::get(&ctx, 1, Signedness::Signless);
+    let i32_ty = IntegerType::get(&ctx, 32, Signedness::Signed);
+    let source = BasicBlock::new(&mut ctx, None, vec![i1_ty.into(), i32_ty.into()]);
+    let condition = source.deref(&ctx).get_argument(0);
+    let value = source.deref(&ctx).get_argument(1);
+    let true_block = BasicBlock::new(&mut ctx, None, vec![i32_ty.into()]);
+    let false_block = BasicBlock::new(&mut ctx, None, vec![]);
+    let branch = MirCondBranchOp::new(Operation::new(
+        &mut ctx,
+        MirCondBranchOp::get_concrete_op_info(),
+        vec![],
+        vec![condition, value],
+        vec![true_block, false_block],
+        0,
+    ));
+
+    assert!(branch.verify(&ctx).is_err(), "Missing segment attribute");
+    assert!(branch.verify_interfaces(&ctx).is_err());
+    branch.get_operation().deref_mut(&ctx).attributes.set(
+        ATTR_KEY_OPERAND_SEGMENT_SIZES.clone(),
+        StringAttr::new("wrong attribute type".to_owned()),
+    );
+    assert!(branch.verify(&ctx).is_err(), "Wrong segment attribute type");
+    assert!(branch.verify_interfaces(&ctx).is_err());
+
+    for sizes in [
+        vec![],
+        vec![2],
+        vec![1, 1],
+        vec![1, 1, 0, 0],
+        vec![1, 0, 0],
+        vec![0, 2, 0],
+        vec![2, 0, 0],
+        vec![1, 0, 1],
+    ] {
+        branch.set_operand_segment_sizes(&ctx, OperandSegmentSizesAttr(sizes.clone()));
+        assert!(branch.verify(&ctx).is_err(), "Accepted malformed {sizes:?}");
+        assert!(
+            branch.verify_interfaces(&ctx).is_err(),
+            "Interfaces accepted {sizes:?}"
+        );
+    }
+
+    branch.set_operand_segment_sizes(&ctx, OperandSegmentSizesAttr(vec![1, 1, 0]));
+    assert!(branch.verify(&ctx).is_ok());
+    assert!(branch.verify_interfaces(&ctx).is_ok());
+}
+
+/// Segment totals must not wrap to the operand count or panic during verification.
+#[test]
+fn test_mir_cond_branch_rejects_overflowing_segment_totals() {
+    let mut ctx = Context::new();
+    dialect_mir::register(&mut ctx);
+    let i1_ty = IntegerType::get(&ctx, 1, Signedness::Signless);
+    let i32_ty = IntegerType::get(&ctx, 32, Signedness::Signed);
+    let source = BasicBlock::new(&mut ctx, None, vec![i1_ty.into(), i32_ty.into()]);
+    let condition = source.deref(&ctx).get_argument(0);
+    let value = source.deref(&ctx).get_argument(1);
+    let true_block = BasicBlock::new(&mut ctx, None, vec![i32_ty.into()]);
+    let false_block = BasicBlock::new(&mut ctx, None, vec![]);
+    let branch = MirCondBranchOp::new(Operation::new(
+        &mut ctx,
+        MirCondBranchOp::get_concrete_op_info(),
+        vec![],
+        vec![condition, value],
+        vec![true_block, false_block],
+        0,
+    ));
+
+    // Both totals equal two modulo 2^32, matching the actual operand count.
+    for sizes in [vec![1, u32::MAX, 2], vec![u32::MAX, 1, 2]] {
+        branch.set_operand_segment_sizes(&ctx, OperandSegmentSizesAttr(sizes));
+        assert!(branch.verify(&ctx).is_err());
+        assert!(branch.verify_successor_operand_layout(&ctx).is_err());
+        assert!(<MirCondBranchOp as OperandSegmentInterface>::verify(&branch, &ctx).is_err());
+        assert!(branch.verify_interfaces(&ctx).is_err());
+    }
+}
+
+/// Invalid successor counts must be rejected without asking for an invalid range.
+#[test]
+fn test_mir_branches_reject_wrong_successor_counts() {
+    let mut ctx = Context::new();
+    dialect_mir::register(&mut ctx);
+    let i1_ty = IntegerType::get(&ctx, 1, Signedness::Signless);
+    let source = BasicBlock::new(&mut ctx, None, vec![i1_ty.into()]);
+    let condition = source.deref(&ctx).get_argument(0);
+    let target = BasicBlock::new(&mut ctx, None, vec![]);
+
+    for count in [0, 2] {
+        let branch = MirGotoOp::new(Operation::new(
+            &mut ctx,
+            MirGotoOp::get_concrete_op_info(),
+            vec![],
+            vec![],
+            vec![target; count],
+            0,
+        ));
+        assert!(branch.verify(&ctx).is_err());
+        assert!(branch.verify_interfaces(&ctx).is_err());
+    }
+    for count in [0, 1, 3] {
+        let branch = MirCondBranchOp::new(Operation::new(
+            &mut ctx,
+            MirCondBranchOp::get_concrete_op_info(),
+            vec![],
+            vec![condition],
+            vec![target; count],
+            0,
+        ));
+        branch.set_operand_segment_sizes(&ctx, OperandSegmentSizesAttr(vec![1, 0, 0]));
+        assert!(branch.verify(&ctx).is_err());
+        assert!(branch.verify_interfaces(&ctx).is_err());
+    }
+}
+
+/// Range-based mutation must preserve the condition and the other successor's operands.
+#[test]
+fn test_mir_cond_branch_successor_operand_mutation() {
+    let mut ctx = Context::new();
+    dialect_mir::register(&mut ctx);
+    let i1_ty = IntegerType::get(&ctx, 1, Signedness::Signless);
+    let i32_ty = IntegerType::get(&ctx, 32, Signedness::Signed);
+    let f32_ty = FP32Type::get(&ctx);
+    let source = BasicBlock::new(
+        &mut ctx,
+        None,
+        vec![i1_ty.into(), i32_ty.into(), i32_ty.into(), f32_ty.into()],
+    );
+    let condition = source.deref(&ctx).get_argument(0);
+    let first = source.deref(&ctx).get_argument(1);
+    let replacement = source.deref(&ctx).get_argument(2);
+    let second = source.deref(&ctx).get_argument(3);
+    let true_block = BasicBlock::new(&mut ctx, None, vec![]);
+    let false_block = BasicBlock::new(&mut ctx, None, vec![]);
+    let branch = MirCondBranchOp::new(Operation::new(
+        &mut ctx,
+        MirCondBranchOp::get_concrete_op_info(),
+        vec![],
+        vec![condition],
+        vec![true_block, false_block],
+        0,
+    ));
+    branch.set_operand_segment_sizes(&ctx, OperandSegmentSizesAttr(vec![1, 0, 0]));
+    assert!(branch.verify(&ctx).is_ok());
+    assert!(branch.verify_interfaces(&ctx).is_ok());
+    assert_eq!(branch.successor_operand_range(&ctx, 0), 1..1);
+    assert_eq!(branch.successor_operand_range(&ctx, 1), 1..1);
+
+    // Add false first: inserting true later must move, rather than overwrite, false.
+    assert_eq!(branch.add_successor_operand(&mut ctx, 1, second), 0);
+    BasicBlock::push_argument(false_block, &ctx, f32_ty.into());
+    assert_eq!(branch.add_successor_operand(&mut ctx, 0, first), 0);
+    BasicBlock::push_argument(true_block, &ctx, i32_ty.into());
+    assert_eq!(branch.successor_operand_range(&ctx, 0), 1..2);
+    assert_eq!(branch.successor_operand_range(&ctx, 1), 2..3);
+    assert_eq!(branch.successor_operands(&ctx, 0), vec![first]);
+    assert_eq!(branch.successor_operands(&ctx, 1), vec![second]);
+    assert!(branch.verify(&ctx).is_ok());
+    assert!(branch.verify_interfaces(&ctx).is_ok());
+
+    branch.set_successor_operand(&ctx, 0, 0, second);
+    assert!(branch.verify(&ctx).is_err(), "Wrong true argument type");
+    assert!(branch.verify_interfaces(&ctx).is_err());
+    branch.set_successor_operand(&ctx, 0, 0, replacement);
+    branch.set_successor_operand(&ctx, 1, 0, first);
+    assert!(branch.verify(&ctx).is_err(), "Wrong false argument type");
+    assert!(branch.verify_interfaces(&ctx).is_err());
+    branch.set_successor_operand(&ctx, 1, 0, second);
+    assert_eq!(branch.successor_operands(&ctx, 0), vec![replacement]);
+    assert_eq!(branch.successor_operands(&ctx, 1), vec![second]);
+    assert_eq!(branch.get_operation().deref(&ctx).get_operand(0), condition);
+
+    assert_eq!(branch.remove_successor_operand(&mut ctx, 0, 0), replacement);
+    BasicBlock::pop_argument(true_block, &ctx);
+    assert_eq!(branch.successor_operand_range(&ctx, 1), 1..2);
+    assert_eq!(branch.successor_operands(&ctx, 1), vec![second]);
+    assert!(branch.verify(&ctx).is_ok());
+    assert!(branch.verify_interfaces(&ctx).is_ok());
+    assert_eq!(branch.remove_successor_operand(&mut ctx, 1, 0), second);
+    BasicBlock::pop_argument(false_block, &ctx);
+    assert_eq!(
+        branch
+            .get_operation()
+            .deref(&ctx)
+            .operands()
+            .collect::<Vec<_>>(),
+        vec![condition]
+    );
+    assert!(branch.verify(&ctx).is_ok());
+    assert!(branch.verify_interfaces(&ctx).is_ok());
+}
+
+/// Goto ranges must support empty and nonempty successors and type-checked mutation.
+#[test]
+fn test_mir_goto_successor_operand_mutation() {
+    let mut ctx = Context::new();
+    dialect_mir::register(&mut ctx);
+    let i32_ty = IntegerType::get(&ctx, 32, Signedness::Signed);
+    let f32_ty = FP32Type::get(&ctx);
+    let source = BasicBlock::new(
+        &mut ctx,
+        None,
+        vec![i32_ty.into(), i32_ty.into(), f32_ty.into()],
+    );
+    let first = source.deref(&ctx).get_argument(0);
+    let replacement = source.deref(&ctx).get_argument(1);
+    let wrong_type = source.deref(&ctx).get_argument(2);
+    let target = BasicBlock::new(&mut ctx, None, vec![]);
+    let branch = MirGotoOp::new(Operation::new(
+        &mut ctx,
+        MirGotoOp::get_concrete_op_info(),
+        vec![],
+        vec![],
+        vec![target],
+        0,
+    ));
+    assert_eq!(branch.successor_operand_range(&ctx, 0), 0..0);
+    assert!(branch.verify(&ctx).is_ok());
+    assert!(branch.verify_interfaces(&ctx).is_ok());
+    assert_eq!(branch.add_successor_operand(&mut ctx, 0, first), 0);
+    assert!(
+        branch.verify(&ctx).is_err(),
+        "Successor argument is missing"
+    );
+    BasicBlock::push_argument(target, &ctx, i32_ty.into());
+    assert_eq!(branch.successor_operand_range(&ctx, 0), 0..1);
+    branch.set_successor_operand(&ctx, 0, 0, wrong_type);
+    assert!(branch.verify(&ctx).is_err());
+    assert!(branch.verify_interfaces(&ctx).is_err());
+    branch.set_successor_operand(&ctx, 0, 0, replacement);
+    assert_eq!(branch.successor_operands(&ctx, 0), vec![replacement]);
+    assert!(branch.verify(&ctx).is_ok());
+    assert!(branch.verify_interfaces(&ctx).is_ok());
+    assert_eq!(branch.remove_successor_operand(&mut ctx, 0, 0), replacement);
+    BasicBlock::pop_argument(target, &ctx);
+    assert!(branch.verify(&ctx).is_ok());
+    assert!(branch.verify_interfaces(&ctx).is_ok());
 }

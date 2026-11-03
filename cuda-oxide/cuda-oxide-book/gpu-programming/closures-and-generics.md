@@ -63,7 +63,7 @@ forces the concrete instantiation and lets the loader look up the matching PTX
 entry point:
 
 ```rust
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 
 // SAFETY: config is 1D and both buffers cover every launched index.
 unsafe {
@@ -342,8 +342,9 @@ pub fn apply_transform(input: &[f32], mut out: DisjointSlice<f32>) {
         clamped * clamped
     };
 
+    let i = idx.get();
     if let Some(out_elem) = out.get_mut(idx) {
-        *out_elem = transform(input[idx.get()]);
+        *out_elem = transform(input[i]);
     }
 }
 ```

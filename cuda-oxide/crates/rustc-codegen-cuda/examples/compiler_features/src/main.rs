@@ -21,7 +21,7 @@
 //!
 //! Run: cargo oxide run compiler_features
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::shared::cvta_generic_to_shared_offset;
 use cuda_device::{DisjointSlice, SharedArray, kernel, thread};

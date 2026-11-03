@@ -12,7 +12,7 @@ license = "Apache-2.0"
 [dependencies]
 cuda-device = { path = "../../../cuda-device" }
 cuda-host = { path = "../../../cuda-host" }
-cuda-core = { path = "../../../../../cuda-core", version = "0.4.0" }
+cuda-core = { path = "../../../../../cuda-core" }
 
 # `x.atan()` and every other float method is a one-line `#[inline]` wrapper in
 # `std`. At default release settings rustc's MIR inliner folds that wrapper

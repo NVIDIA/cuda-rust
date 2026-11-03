@@ -14,6 +14,9 @@
 //! - Tcgen05SmemDescriptor / Tcgen05InstructionDescriptor builders
 //! - tcgen05_mma_ws_f16()
 //! - tcgen05_cp_smem_to_tmem() / tcgen05_ld_16x256b_pure()
+//! - TmemGuard::alloc() / dealloc() and alloc_by(3) / dealloc_by(3) in a
+//!   (32, 4, 1) block, one TMEM allocation per kernel, selecting the warp by
+//!   block-linear thread id
 //!
 //! **cta_group::2 (CTA pairs):**
 //! - tcgen05_alloc_cg2() / tcgen05_dealloc_cg2()
@@ -29,16 +32,17 @@
 //! Build and run with:
 //!   cargo oxide run tcgen05
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer, sys};
 use cuda_device::barrier::Barrier;
 use cuda_device::shared::{SharedArray, cvta_generic_to_shared_offset};
 use cuda_device::tcgen05::{
     self, Tcgen05AccumulatorType, Tcgen05ElementType, Tcgen05InstructionDescriptor,
-    Tcgen05MmaShape, Tcgen05SmemDescriptor, Tcgen05SwizzleMode, tcgen05_alloc, tcgen05_alloc_cg2,
-    tcgen05_commit, tcgen05_commit_multicast_cg2, tcgen05_cp_smem_to_tmem, tcgen05_dealloc,
-    tcgen05_dealloc_cg2, tcgen05_fence_after_thread_sync, tcgen05_fence_before_thread_sync,
-    tcgen05_ld_16x256b_pure, tcgen05_load_wait, tcgen05_mma_f16_cg2, tcgen05_mma_ws_f16,
+    Tcgen05MmaShape, Tcgen05SmemDescriptor, Tcgen05SwizzleMode, TmemGuard, TmemUninit,
+    tcgen05_alloc, tcgen05_alloc_cg2, tcgen05_commit, tcgen05_commit_multicast_cg2,
+    tcgen05_cp_smem_to_tmem, tcgen05_dealloc, tcgen05_dealloc_cg2, tcgen05_fence_after_thread_sync,
+    tcgen05_fence_before_thread_sync, tcgen05_ld_16x256b_pure, tcgen05_load_wait,
+    tcgen05_mma_f16_cg2, tcgen05_mma_ws_f16,
 };
 use cuda_device::{CuSimd, DisjointSlice, cluster, cluster_launch, kernel, thread, warp};
 use cuda_host::cuda_module;
@@ -116,6 +120,67 @@ mod kernels {
             if warp_id == 0 && tmem_addr != 0xDEADBEEF {
                 tcgen05_dealloc(tmem_addr, 32);
             }
+        }
+    }
+
+    /// `TmemGuard::alloc()` and `dealloc()` in a (32, 4, 1) block.
+    ///
+    /// Every thread calls both. The guard selects the allocating warp by
+    /// block-linear thread id, so only warp 0, the y == 0 row, runs
+    /// `tcgen05.alloc` and `tcgen05.dealloc`; under a `threadIdx.x / 32`
+    /// selection all four rows would allocate. Thread (0, 0, 0) stores the
+    /// TMEM address to `output[0]`.
+    ///
+    /// The kernel allocates once. The CUTLASS TMEM allocator requires
+    /// repeated allocations in one CTA to come from the same warp, so the
+    /// warp 3 case lives in its own kernel, `tmem_guard_2d_warp3_test`.
+    #[kernel]
+    pub unsafe fn tmem_guard_2d_test(mut output: DisjointSlice<u32>) {
+        static mut TMEM_SLOT: SharedArray<u32, 1, 4> = SharedArray::UNINIT;
+
+        unsafe {
+            let first = thread::threadIdx_x() == 0 && thread::threadIdx_y() == 0;
+            let slot = &raw mut TMEM_SLOT as *mut u32;
+
+            if first {
+                *slot = 0xDEADBEEF;
+            }
+            thread::sync_threads();
+
+            // Block-linear warp 0 allocates and frees.
+            let tmem = TmemGuard::<TmemUninit, 32>::from_static(slot).alloc();
+            if first {
+                *output.get_unchecked_mut(0) = tmem.raw_address();
+            }
+            let _done = tmem.dealloc();
+        }
+    }
+
+    /// `TmemGuard::alloc_by(3)` and `dealloc_by(3)` in a (32, 4, 1) block.
+    ///
+    /// The same block as `tmem_guard_2d_test`, with the job handed to
+    /// block-linear warp 3, the y == 3 row. Thread (0, 0, 0) stores the TMEM
+    /// address to `output[1]`, next to the warp 0 result. One allocation per
+    /// kernel, for the reason given on `tmem_guard_2d_test`.
+    #[kernel]
+    pub unsafe fn tmem_guard_2d_warp3_test(mut output: DisjointSlice<u32>) {
+        static mut TMEM_SLOT: SharedArray<u32, 1, 4> = SharedArray::UNINIT;
+
+        unsafe {
+            let first = thread::threadIdx_x() == 0 && thread::threadIdx_y() == 0;
+            let slot = &raw mut TMEM_SLOT as *mut u32;
+
+            if first {
+                *slot = 0xDEADBEEF;
+            }
+            thread::sync_threads();
+
+            // Block-linear warp 3 allocates and frees.
+            let tmem = TmemGuard::<TmemUninit, 32>::from_static(slot).alloc_by(3);
+            if first {
+                *output.get_unchecked_mut(1) = tmem.raw_address();
+            }
+            let _done = tmem.dealloc_by(3);
         }
     }
 
@@ -838,6 +903,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return verify_ptx_only();
     }
 
+    // The module's own `.target` decides too. Its compile-only coverage kernels
+    // include `tcgen05.mma ... kind::i8`, which sm_103a does not provide, so on a
+    // cc 10.3 GPU the backend falls back to an sm_100a module. An arch-specific
+    // target runs only on that exact compute capability.
+    let target = ptx_target()?;
+    if !module_target_runs_on(&target, major, minor) {
+        println!(
+            "\n⚠️  WARNING: tcgen05 module targets {target}, which sm_{major}{minor} cannot load."
+        );
+        println!("   PTX was generated successfully; run on {target} to execute kernels.");
+        return verify_ptx_only();
+    }
+
     let module = match kernels::load(&ctx) {
         Ok(m) => m,
         Err(e) => {
@@ -867,6 +945,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     run_tcgen05_alloc_test(&stream, &module)?;
     run_tcgen05_commit_test(&stream, &module)?;
     run_tcgen05_mma_minimal_test(&stream, &module)?;
+    run_tmem_guard_2d_test(&stream, &module)?;
 
     println!("\n--- CTA Pair (cta_group::2) Tests ---\n");
     run_tcgen05_alloc_cg2_test(&stream, &module)?;
@@ -882,6 +961,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 // module-load failure into an execution pass.
 fn can_execute_tcgen05_ptx(major: i32, minor: i32) -> bool {
     matches!((major, minor), (10, 0) | (10, 1) | (10, 3) | (11, 0))
+}
+
+/// The `.target` of the generated PTX (e.g. `sm_100a`).
+fn ptx_target() -> Result<String, Box<dyn std::error::Error>> {
+    let ptx_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tcgen05.ptx");
+    let ptx = std::fs::read_to_string(&ptx_path)?;
+    ptx.lines()
+        .find_map(|line| line.strip_prefix(".target "))
+        .map(|rest| rest.split([',', ' ']).next().unwrap_or(rest).to_string())
+        .ok_or_else(|| format!("no .target line in {}", ptx_path.display()).into())
+}
+
+/// Whether a GPU of compute capability `major.minor` can load a module built
+/// for `target`: an `a` target needs that exact capability, an `f` target the
+/// same major and at least its minor, a plain target at least its capability.
+fn module_target_runs_on(target: &str, major: i32, minor: i32) -> bool {
+    let Some(digits) = target.strip_prefix("sm_") else {
+        return false;
+    };
+    let (number, suffix) = match digits.chars().last() {
+        Some(c @ ('a' | 'f')) => (&digits[..digits.len() - 1], Some(c)),
+        _ => (digits, None),
+    };
+    let Ok(capability) = number.parse::<i32>() else {
+        return false;
+    };
+    let (t_major, t_minor) = (capability / 10, capability % 10);
+    match suffix {
+        Some('a') => (major, minor) == (t_major, t_minor),
+        Some(_) => major == t_major && minor >= t_minor,
+        None => (major, minor) >= (t_major, t_minor),
+    }
 }
 
 fn verify_ptx_only() -> Result<(), Box<dyn std::error::Error>> {
@@ -995,6 +1106,43 @@ fn run_tcgen05_alloc_test(
             host_output[0]
         );
     }
+
+    Ok(())
+}
+
+fn run_tmem_guard_2d_test(
+    stream: &Arc<CudaStream>,
+    module: &kernels::LoadedModule,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!("--- Test: TmemGuard in a (32, 4, 1) block ---\n");
+
+    let mut output = DeviceBuffer::<u32>::zeroed(stream, 2)?;
+    let cfg = LaunchConfig {
+        block_dim: (32, 4, 1),
+        grid_dim: (1, 1, 1),
+        shared_mem_bytes: 0,
+    };
+
+    // One TMEM allocation per kernel: warp 0 in the first launch, warp 3 in
+    // the second. Both kernels write into `output`, at index 0 and index 1.
+    println!("Launching tmem_guard_2d_test kernel...");
+    unsafe { module.tmem_guard_2d_test((stream).as_ref(), cfg, &mut output) }?;
+    println!("Launching tmem_guard_2d_warp3_test kernel...");
+    unsafe { module.tmem_guard_2d_warp3_test((stream).as_ref(), cfg, &mut output) }?;
+
+    stream.synchronize()?;
+
+    let host_output = output.to_host_vec(stream)?;
+    println!("TMEM address (warp 0): 0x{:08x}", host_output[0]);
+    println!("TMEM address (warp 3): 0x{:08x}", host_output[1]);
+
+    // A slot that still holds the sentinel means the selected warp never ran
+    // tcgen05.alloc. This is the 2D block the guard's warp selection exists for,
+    // so it is a failure, not a note.
+    if host_output.contains(&0xDEADBEEF) {
+        return Err("TmemGuard left a TMEM slot holding the sentinel in a (32, 4, 1) block".into());
+    }
+    println!("✓ TmemGuard allocated and freed from block-linear warps 0 and 3, one kernel each\n");
 
     Ok(())
 }

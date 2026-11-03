@@ -817,13 +817,16 @@ fn extended_mbarrier_rendering_preserves_all_manual_contracts() {
     let catalog = crate::resolve::resolve(&repo_root).unwrap();
     validate_renderable(&catalog).unwrap();
     let records = mbarrier_extended(&catalog).collect::<Vec<_>>();
-    assert_eq!(records.len(), 11);
+    assert_eq!(records.len(), 14);
 
     let compatibility = render_compat_mbarrier_extended(&catalog, "test-hash");
     for signature in [
         "pub unsafe fn mbarrier_arrive_expect_tx(bar: *const Barrier, _tx_count: u32, bytes: u32) -> u64",
         "pub unsafe fn mbarrier_arrive_expect_tx_cluster(bar: *const Barrier, _tx_count: u32, bytes: u32) -> u64",
         "pub unsafe fn mbarrier_arrive_cluster(remote_bar_addr: u64)",
+        "pub unsafe fn mbarrier_arrive_cluster_relaxed(remote_bar_addr: u64)",
+        "pub unsafe fn mbarrier_try_wait_parity_cluster_relaxed(bar: *const Barrier, parity: u32) -> bool",
+        "pub unsafe fn fence_acquire_shared_cluster_cluster()",
         "pub unsafe fn mbarrier_try_wait(bar: *const Barrier, token: u64) -> bool",
         "pub unsafe fn mbarrier_try_wait_parity(bar: *const Barrier, parity: u32) -> bool",
         "pub unsafe fn mbarrier_try_wait_parity_cluster(bar: *const Barrier, parity: u32) -> bool",
@@ -886,6 +889,7 @@ fn extended_mbarrier_rendering_preserves_all_manual_contracts() {
     assert!(importer.contains("MbarrierTryWaitSharedOp::build(ctx, barrier, token)"));
     assert!(importer.contains("MbarrierTryWaitParitySharedOp::build(ctx, barrier, parity)"));
     assert!(importer.contains("MbarrierTryWaitParityClusterOp::build(ctx, barrier, parity)"));
+    assert!(importer.contains("FenceAcquireSharedClusterClusterOp::build(ctx)"));
     assert!(importer.contains("FenceProxyAsyncSharedCtaOp::build(ctx)"));
     assert!(importer.contains("FenceMbarrierInitReleaseClusterOp::build(ctx)"));
     assert!(importer.contains("NanosleepOp::build(ctx, ns)"));

@@ -40,12 +40,12 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 rust-version = "1.89"
 license = "Apache-2.0"
 authors = ["Melih Elibol"]
-repository = "https://github.com/nvlabs/cutile-rs"
+repository = "https://github.com/NVIDIA/cuda-rust"
 
 [workspace.dependencies]
 # ── Third-party ──────────────────────────────────────────────────────────────
@@ -78,19 +78,19 @@ sha2 = "0.10"
 once_cell = "1.19"
 
 # ── Intra-workspace ──────────────────────────────────────────────────────────
-cuda-bindings = { path = "../cuda-bindings", version = "=0.4.0" }
-cuda-core = { path = "../cuda-core", version = "=0.4.0" }
-cuda-async = { path = "../cuda-async", version = "=0.4.0" }
+cuda-bindings = { path = "../cuda-bindings", version = "=0.5.0" }
+cuda-core = { path = "../cuda-core", version = "=0.5.0" }
+cuda-async = { path = "../cuda-async", version = "=0.5.0" }
 # Lockstep crates: the macro's generated code targets exact runtime items
 # (and the compiler's registry/ast contract), so a floating requirement lets
 # cargo pair an old runtime with a new macro and break the OLD published
 # crate for downstreams (candle CI, 2026-09-04: cutile 0.3.0 resolved
 # cutile-macro 0.3.1 and failed on 0.3.1-only symbols). Exact-pin, like
 # serde pins serde_derive.
-cutile-compiler = { path = "cutile-compiler", version = "=0.4.0" }
-cutile-macro = { path = "cutile-macro", version = "=0.4.0" }
-cutile = { path = "cutile", version = "=0.4.0" }
-cutile-ir = { path = "cutile-ir", version = "=0.4.0" }
+cutile-compiler = { path = "cutile-compiler", version = "=0.5.0" }
+cutile-macro = { path = "cutile-macro", version = "=0.5.0" }
+cutile = { path = "cutile", version = "=0.5.0" }
+cutile-ir = { path = "cutile-ir", version = "=0.5.0" }
 
 # Lint policy shared by every workspace crate (`[lints] workspace = true`).
 [workspace.lints.rust]

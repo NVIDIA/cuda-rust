@@ -1,0 +1,45 @@
+<!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<svg class="cute-rs-preview" xmlns="http://www.w3.org/2000/svg" width="1040" height="440" viewBox="0 0 1040 440" role="img" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif">
+<title>Three kernel authoring tiers in cuda-oxide: cute-rs, ctm-rs, and cuda-device</title>
+<style>.cute-rs-preview text { dominant-baseline:central; text-anchor:middle } .cute-rs-preview .l { text-anchor:start } .cute-rs-preview .bg { fill:#faf9f5 } .cute-rs-preview .title { font-size:17px; font-weight:700; fill:#1e1e1e } .cute-rs-preview .sec { font-size:11px; font-weight:700; letter-spacing:0.05em; fill:#5c5c5c } .cute-rs-preview .th { font-size:14px; font-weight:600; fill:#1e1e1e } .cute-rs-preview .ts { font-size:12.5px; fill:#5c5c5c } .cute-rs-preview .tm { font-family:'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size:12px; font-weight:500 } .cute-rs-preview .k-box { fill:#f1efe9; stroke:#c8c5be } .cute-rs-preview .tx-box { fill:#1e1e1e } .cute-rs-preview .k-purple { fill:#ebe9fb; stroke:#7f77dd } .cute-rs-preview .tx-purple { fill:#3a3490 } .cute-rs-preview .k-teal { fill:#dff3ec; stroke:#3aa47f } .cute-rs-preview .tx-teal { fill:#1f5c47 } .cute-rs-preview .k-amber { fill:#fdeed3; stroke:#ef9f27 } .cute-rs-preview .tx-amber { fill:#6b4100 } .cute-rs-preview .hair { stroke:#d4d1c9 } @media (prefers-color-scheme: dark) { .cute-rs-preview .bg { fill:#1b1d23 } .cute-rs-preview .title, .cute-rs-preview .th { fill:#f5f6f8 } .cute-rs-preview .sec { fill:#b8beca } .cute-rs-preview .ts { fill:#cfd4de } .cute-rs-preview .k-box { fill:#2e323c; stroke:#5c6375 } .cute-rs-preview .tx-box { fill:#f5f6f8 } .cute-rs-preview .hair { stroke:#5c6375 } .cute-rs-preview .k-purple { fill:#524e7d; stroke:#bab5f4 } .cute-rs-preview .tx-purple { fill:#f6f5ff } .cute-rs-preview .k-teal { fill:#346357; stroke:#7ed8bb } .cute-rs-preview .tx-teal { fill:#f0fdf8 } .cute-rs-preview .k-amber { fill:#735a3c; stroke:#f4c474 } .cute-rs-preview .tx-amber { fill:#fff8eb } }</style>
+<rect class="bg" width="1040" height="440" rx="10"/>
+<text class="title l" x="36" y="34">Choosing the right layer in cuda-oxide</text>
+<text class="ts l" x="36" y="56">Use cute-rs for tensor layouts, copies, and MMA; drop down to ctm-rs or cuda-device only when you need explicit hardware control.</text>
+<rect class="k-teal" x="36" y="84" width="308" height="328" rx="9" stroke-width="0.9"/>
+<text class="sec l" x="56" y="108">PRIMARY TENSOR LAYER</text>
+<text class="th tx-teal l" x="56" y="130">cute-rs + cute-layout</text>
+<line class="hair" x1="56" y1="148" x2="324" y2="148" stroke-width="0.8"/>
+<rect class="k-box" x="56" y="162" width="268" height="30" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="190" y="177">Tensor / TensorMut / slice</text>
+<rect class="k-box" x="56" y="200" width="268" height="30" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="190" y="215">ComposedLayout&lt;Swizzle, RowMajor&gt;</text>
+<rect class="k-box" x="56" y="238" width="268" height="30" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="190" y="253">TensorMap / PipelineTmaAsync</text>
+<rect class="k-box" x="56" y="276" width="268" height="30" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="190" y="291">Mxf4TiledMma / Sm100TiledMma</text>
+<text class="th tx-teal l" x="56" y="330">Lowers to: dialect-cute</text>
+<text class="ts tx-teal l" x="56" y="352">Best for: GEMM, GEMV, FlashAttention,</text>
+<text class="ts tx-teal l" x="56" y="370">MLA, RMSNorm, SwiGLU, full models</text>
+<text class="ts tx-teal l" x="56" y="392">Examples: *_cute, qwen_decoder_cute</text>
+<rect class="k-purple" x="366" y="84" width="308" height="328" rx="9" stroke-width="0.9"/>
+<text class="sec l" x="386" y="108">INSTRUCTION PRIMITIVES</text>
+<text class="th tx-purple l" x="386" y="130">ctm-rs</text>
+<line class="hair" x1="386" y1="148" x2="654" y2="148" stroke-width="0.8"/>
+<rect class="k-box" x="386" y="162" width="268" height="30" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="520" y="177">#[kernel] &amp; launch contracts</text>
+<rect class="k-box" x="386" y="200" width="268" height="30" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="520" y="215">thread / warp / cluster coords</text>
+<rect class="k-box" x="386" y="238" width="268" height="30" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="520" y="253">mbarrier &amp; async proxy fences</text>
+<rect class="k-box" x="386" y="276" width="268" height="30" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="520" y="291">tcgen05::tmem::TmemGuard</text>
+<text class="th tx-purple l" x="386" y="330">Lowers to: dialect-nvvm</text>
+<text class="ts tx-purple l" x="386" y="352">Best for: warp-specialized barriers,</text>
+<text class="ts tx-purple l" x="386" y="370">TMEM lifecycle, or CTM-only kernels</text>
+<text class="ts tx-purple l" x="386" y="392">Examples: *_ctm + inside SM100 *_cute</text>
+<rect class="k-amber" x="696" y="84" width="308" height="328" rx="9" stroke-width="0.9"/>
+<text class="sec l" x="716" y="108">FOUNDATIONAL SIMT LAYER</text>
+<text class="th tx-amber l" x="716" y="130">cuda-device</text>
+<line class="hair" x1="716" y1="148" x2="984" y2="148" stroke-width="0.8"/>
+<rect class="k-box" x="716" y="162" width="268" height="30" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="850" y="177">DisjointSlice / SharedArray</text>
+<rect class="k-box" x="716" y="200" width="268" height="30" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="850" y="215">Scalar &amp; warp shuffle ops</text>
+<rect class="k-box" x="716" y="238" width="268" height="30" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="850" y="253">Atomics &amp; raw PTX intrinsics</text>
+<rect class="k-box" x="716" y="276" width="268" height="30" rx="5" stroke-width="0.7"/><text class="tm tx-box" x="850" y="291">Arbitrary Rust control flow</text>
+<text class="th tx-amber l" x="716" y="330">Lowers to: dialect-mir + nvvm</text>
+<text class="ts tx-amber l" x="716" y="352">Best for: sparse/irregular SIMT,</text>
+<text class="ts tx-amber l" x="716" y="370">pointer chasing, custom graph ops</text>
+<text class="ts tx-amber l" x="716" y="392">Examples: vecadd, async_mlp, etc.</text>
+</svg>

@@ -86,7 +86,7 @@ fn convert_dbg_value_lowers_to_llvm_dbg_value() {
         .expect("expected lowered llvm.dbg_value marker");
     assert_eq!(
         dbg_value.get_operation().deref(&ctx).loc(),
-        dbg_loc,
+        &dbg_loc,
         "dbg.value lowering should keep the current-value source location"
     );
     let info = llvm::debug_local_variable(&ctx, dbg_value.get_operation())
@@ -285,7 +285,7 @@ fn mem2reg_salvages_tagged_alloca_into_mir_dbg_value() {
     );
     assert_eq!(
         dbg_values[0].get_operation().deref(&ctx).loc(),
-        decl_loc,
+        &decl_loc,
         "debug records for source-less promoted ops should fall back to the local declaration"
     );
 }

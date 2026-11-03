@@ -15,7 +15,7 @@
 //!
 //! Run: cargo oxide run cvt_f16x2
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::convert::cvt_f16x2_f32;
 use cuda_device::{DisjointSlice, kernel, thread};

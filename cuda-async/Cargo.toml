@@ -1,19 +1,19 @@
 [package]
 name = "cuda-async"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 rust-version = "1.89"
 license = "Apache-2.0"
 authors = ["Melih Elibol"]
-repository = "https://github.com/nvlabs/cutile-rs"
+repository = "https://github.com/NVIDIA/cuda-rust"
 readme = "README.md"
 description = "Safe Async CUDA support via Async Rust."
 
 [dependencies]
 # Sibling paths, not the root workspace entries; see cuda-core/Cargo.toml.
-cuda-core = { version = "=0.4.0", path = "../cuda-core" }
+cuda-core = { version = "=0.5.0", path = "../cuda-core" }
 rustc-hash = "2.0"
-cuda-bindings = { version = "=0.4.0", path = "../cuda-bindings" }
+cuda-bindings = { version = "=0.5.0", path = "../cuda-bindings" }
 half = { version = "2" }
 futures = "0.3"
 anyhow = "1"

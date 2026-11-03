@@ -67,9 +67,12 @@
 //!   taking `&[f32]`, and take the view **inside the kernel** with
 //!   [`as_vectors`] / [`as_vectors_mut`]. This needs no host-side type at all.
 //! - Or reinterpret the flat buffer once at the boundary with `cuda-core`'s
-//!   `DeviceBuffer::cast_chunks`, using a host-defined `#[repr(C, align(16))]`
-//!   element that implements `DeviceCopy`, and launch a kernel that takes that
-//!   element type directly.
+//!   `DeviceBuffer::cast_chunks`, which requires `bytemuck::AnyBitPattern` of
+//!   its target. These types implement `bytemuck::Pod`, so
+//!   `floats.cast_chunks::<F32x4>()` works, and so does a host-defined
+//!   `#[repr(C, align(16))]` element with its own `Pod` impl. Launch a kernel
+//!   that takes the vector type directly, and cast back to the scalar type
+//!   before reading the result on the host.
 //!
 //! # Related "N x scalar" types
 //!
@@ -124,6 +127,14 @@ macro_rules! define_vector {
             const LANES: usize = $lanes;
         }
 
+        // SAFETY: a public array of plain integers or floats whose size equals
+        // the alignment (checked below), so there is no padding and every bit
+        // pattern is a valid value. `Pod` is what lets cuda-core's
+        // `DeviceBuffer::cast_chunks` regroup a flat scalar buffer into this
+        // type.
+        unsafe impl bytemuck::Zeroable for $name {}
+        unsafe impl bytemuck::Pod for $name {}
+
         impl $name {
             /// Build a vector from its lanes.
             #[must_use]
@@ -165,31 +176,52 @@ macro_rules! define_vector {
 
 define_vector!(
     /// Two `f32` in one 64-bit transaction.
-    F32x2, f32, 2, 8
+    F32x2,
+    f32,
+    2,
+    8
 );
 define_vector!(
     /// Four `f32` in one 128-bit transaction. The `float4` equivalent.
-    F32x4, f32, 4, 16
+    F32x4,
+    f32,
+    4,
+    16
 );
 define_vector!(
     /// Two `f64` in one 128-bit transaction.
-    F64x2, f64, 2, 16
+    F64x2,
+    f64,
+    2,
+    16
 );
 define_vector!(
     /// Two `u32` in one 64-bit transaction.
-    U32x2, u32, 2, 8
+    U32x2,
+    u32,
+    2,
+    8
 );
 define_vector!(
     /// Four `u32` in one 128-bit transaction.
-    U32x4, u32, 4, 16
+    U32x4,
+    u32,
+    4,
+    16
 );
 define_vector!(
     /// Four `u16` in one 64-bit transaction.
-    U16x4, u16, 4, 8
+    U16x4,
+    u16,
+    4,
+    8
 );
 define_vector!(
     /// Eight `u16` in one 128-bit transaction. The width packed f16 pairs use.
-    U16x8, u16, 8, 16
+    U16x8,
+    u16,
+    8,
+    16
 );
 
 /// View a flat slice as over-aligned vectors, or `None` if it does not divide.

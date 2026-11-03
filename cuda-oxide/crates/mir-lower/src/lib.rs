@@ -126,6 +126,7 @@
 pub mod context;
 pub mod conversion_interface;
 pub mod convert;
+pub mod entry_allocas;
 pub mod helpers;
 pub mod lowering;
 mod packed_shared_local_storage;
@@ -143,7 +144,6 @@ use pliron::{
         DialectConversion, DialectConversionRewriter, OperandsInfo, apply_dialect_conversion,
     },
     irbuild::{listener::Recorder, rewriter::IRRewriter},
-    location::Located,
     op::{Op, op_cast},
     operation::Operation,
     opts::simplify_cfg::remove_blocks_inside_op,
@@ -304,7 +304,7 @@ impl DialectConversion for MirToLlvmConversionDriver {
         operands_info: &OperandsInfo,
     ) -> Result<()> {
         let opid = Operation::get_opid(op, ctx);
-        let loc = op.deref(ctx).loc();
+        let loc = op.deref(ctx).loc().clone();
 
         // Special-case ops that need CUDA pass-level state.
         if opid == dialect_mir::ops::MirFuncOp::get_opid_static() {
@@ -374,8 +374,12 @@ impl DialectConversion for MirToLlvmConversionDriver {
 ///
 /// # Returns
 ///
-/// `Ok(())` if all operations were successfully converted.
-pub fn lower_mir_to_llvm(ctx: &mut Context, module_op: Ptr<Operation>) -> Result<()> {
+/// The `#[nounroll]` annotations that could not be applied, once every
+/// operation is converted.
+pub fn lower_mir_to_llvm(
+    ctx: &mut Context,
+    module_op: Ptr<Operation>,
+) -> Result<Vec<mir_transforms::unroll::HintWarning>> {
     lower_mir_to_llvm_with_options(ctx, module_op, LoweringOptions::default())
 }
 
@@ -387,7 +391,7 @@ pub fn lower_mir_to_llvm_with_options(
     ctx: &mut Context,
     module_op: Ptr<Operation>,
     options: LoweringOptions,
-) -> Result<()> {
+) -> Result<Vec<mir_transforms::unroll::HintWarning>> {
     // Standalone users can enter here without cuda-oxide-codegen's preparation
     // pipeline. Verify the complete typed MIR tree before any transform reads
     // pointer-kind claims.
@@ -401,7 +405,16 @@ pub fn lower_mir_to_llvm_with_options(
     // unsupported pointer shapes retain the deferred pointer-group fallback.
     // Run this while MIR control flow and unsigned constants are still intact.
     wgmma_deferred_accumulator::fuse_deferred_accumulators(ctx, module_op)?;
-    // WGMMA fusion is the final MIR-producing transform in this entry point.
+    // `#[nounroll]` loops: give each marked loop one latch and mark its branch
+    // for `llvm.loop.unroll.disable`. This runs after every transform that can
+    // clone or reshape loops, including the WGMMA K-loop fusion above, and in
+    // full-debug builds too, which skip MIR preparation.
+    let nounroll = mir_transforms::nounroll::resolve_nounroll_hints(module_op, ctx)?;
+    for &latch in &nounroll.latches {
+        llvm_export::ops::set_loop_unroll_disable(ctx, latch);
+    }
+    // WGMMA fusion and nounroll latch placement are the final MIR-producing
+    // transforms in this entry point.
     // Reverify immediately before dialect conversion erases pointer kinds so a
     // future transform cannot bypass the provenance invariant.
     dialect_mir::verification::verify_pointer_kind_producers(ctx, module_op)?;
@@ -440,7 +453,12 @@ pub fn lower_mir_to_llvm_with_options(
     // an extra branch per iteration. Split such arguments into scalar leaves
     // so the exported IR carries scalar PHIs, as SROA would produce.
     scalarize_block_args::scalarize_aggregate_block_args(ctx, module_op)?;
-    Ok(())
+    // Move eligible fixed-size scratch allocas (both from the MIR entry block
+    // shifted to `bb0` by `convert_func`'s aggregate prologue and from
+    // use-site converters) into each function's true `entry` block so both
+    // `opt -O2`/`llc` and `libNVVM` see static stack slots.
+    entry_allocas::hoist_fixed_allocas(ctx, module_op);
+    Ok(nounroll.warnings)
 }
 
 /// Register the `dialect-mir` → LLVM dialect lowering pass with a pliron context.

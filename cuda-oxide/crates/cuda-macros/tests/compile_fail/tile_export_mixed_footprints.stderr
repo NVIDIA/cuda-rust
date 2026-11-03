@@ -1,0 +1,5 @@
+error: #[tile_export]: parameters `acc` (footprint 4) and `bias` (footprint 1) differ; every parameter of one export shares the invocation count, so all footprints must be equal
+ --> tests/compile_fail/tile_export_mixed_footprints.rs:7:41
+  |
+7 | pub fn window(acc: &mut [i32; 4], bias: &i32) {
+  |                                         ^^^^

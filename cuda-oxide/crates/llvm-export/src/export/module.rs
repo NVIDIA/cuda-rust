@@ -16,7 +16,6 @@ use pliron::{
     },
     context::Context,
     linked_list::ContainsLinkedList,
-    location::Located,
     op::Op,
     operation::Operation,
     r#type::{TypeHandle, Typed},
@@ -32,7 +31,9 @@ use super::{
     ExportedModule,
     config::{DebugKind, ExportBackendConfig, NvvmIrDialect},
     externs::{DeviceExternDecl, DeviceExternType},
-    metadata::{emit_nvvm_annotations, emit_nvvmir_version, needs_nvvm_annotations},
+    metadata::{
+        emit_loop_metadata, emit_nvvm_annotations, emit_nvvmir_version, needs_nvvm_annotations,
+    },
     state::{DebugSharedFunctionScope, GlobalSourceInfo, GlobalSymbolInfo, ModuleExportState},
 };
 
@@ -208,7 +209,7 @@ fn prepare_debug_shared_function_scopes(
         let raw_name = function.get_symbol_name(state.ctx);
         let owner = super::function::exported_function_name(raw_name.as_ref());
         if state.debug_shared_function_scopes.contains_key(&owner) {
-            let loc = function.get_operation().deref(state.ctx).loc();
+            let loc = function.get_operation().deref(state.ctx).loc().clone();
             let debug_name = ops::debug_function_name(state.ctx, function.get_operation())
                 .unwrap_or_else(|| owner.clone());
             state.debug_subprogram_for_function(&debug_name, &owner, &loc);
@@ -730,7 +731,13 @@ pub(super) fn export_module_with_externs_impl(
         emit_nvvmir_version(&mut output, &mut state, config.nvvmir_version());
     }
 
-    // 9. DWARF metadata (if requested and source locations exist)
+    // 9. Loop metadata for loops that must stay rolled (`#[nounroll]`)
+    if !state.unroll_disabled_loops.is_empty() {
+        writeln!(&mut output).unwrap();
+        emit_loop_metadata(&mut output, &state);
+    }
+
+    // 10. DWARF metadata (if requested and source locations exist)
     if state.has_debug_metadata() {
         writeln!(&mut output).unwrap();
         state.emit_debug_metadata(&mut output);
@@ -875,6 +882,12 @@ pub(super) fn export_module_to_string_with_config(
     if config.emit_nvvmir_version() {
         writeln!(&mut output).unwrap();
         emit_nvvmir_version(&mut output, &mut state, config.nvvmir_version());
+    }
+
+    // Emit loop metadata for loops that must stay rolled (`#[nounroll]`)
+    if !state.unroll_disabled_loops.is_empty() {
+        writeln!(&mut output).unwrap();
+        emit_loop_metadata(&mut output, &state);
     }
 
     // Emit DWARF line-table metadata if debug export requested it and at least

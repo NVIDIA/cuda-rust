@@ -752,7 +752,7 @@ pub fn l2_key(
     put_field(&mut h, gpu_name.as_bytes());
     // The stage-2 flags are key material: a debug or sanitizer cubin must
     // never be served for a release request (or vice versa).
-    put_field(&mut h, &[opts.opt_level, opts.flags_byte()]);
+    put_field(&mut h, &[opts.codegen.opt_level(), opts.flags_byte()]);
     put_field(&mut h, tileiras_fp.as_bytes());
     hex(&h.finalize())
 }
@@ -889,6 +889,7 @@ pub fn decode_entry(bytes: &[u8], params: &EntryParams<'_>) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hints::CodegenMode;
     use cutile_ir::bytecode::BytecodeVersion;
 
     #[cfg(unix)]
@@ -1016,7 +1017,10 @@ mod tests {
 
     fn opts(opt_level: u8) -> crate::cuda_tile_runtime_utils::TileirasOptions {
         crate::cuda_tile_runtime_utils::TileirasOptions {
-            opt_level,
+            codegen: CodegenMode::Optimized {
+                level: opt_level,
+                lineinfo: false,
+            },
             ..Default::default()
         }
     }
@@ -1042,10 +1046,13 @@ mod tests {
         // Every stage-2 flag is key material: a debug, lineinfo, or
         // sanitizer cubin must never share a slot with a release one.
         let mut flagged = opts(3);
-        flagged.device_debug = true;
+        flagged.codegen = CodegenMode::Debug;
         assert_ne!(base, l2_key(b"bc", V, "sm_90", &flagged, "fp"));
         let mut flagged = opts(3);
-        flagged.lineinfo = true;
+        flagged.codegen = CodegenMode::Optimized {
+            level: 3,
+            lineinfo: true,
+        };
         assert_ne!(base, l2_key(b"bc", V, "sm_90", &flagged, "fp"));
         let mut flagged = opts(3);
         flagged.sanitize_memcheck = true;

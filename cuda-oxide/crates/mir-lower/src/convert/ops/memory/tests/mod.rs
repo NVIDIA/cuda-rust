@@ -43,7 +43,7 @@ use pliron::builtin::types::{IntegerType, Signedness};
 use pliron::context::{Context, Ptr};
 use pliron::identifier::Identifier;
 use pliron::linked_list::ContainsLinkedList;
-use pliron::location::{Located, Location, Source};
+use pliron::location::{Location, Source};
 use pliron::op::Op;
 use pliron::operation::Operation;
 use pliron::r#type::{TypeHandle, Typed};

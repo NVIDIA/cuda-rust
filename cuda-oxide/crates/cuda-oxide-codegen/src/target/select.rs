@@ -11,7 +11,7 @@ use super::generated_requirements::{
 };
 use crate::error::PipelineError;
 use crate::generated::GeneratedModuleRequirements;
-use cuda_target_spec::{CudaArch, RECORDED_PTX_FLOORS, recorded_ptx_floor};
+use cuda_target_spec::{CudaArch, RECORDED_PTX_FLOORS, recorded_ptx_floor, resolve_sm_floor};
 
 /// Select a concrete architecture that satisfies every detected feature.
 ///
@@ -167,6 +167,33 @@ pub fn resolve_ptx_target(
     )
 }
 
+/// Raise an automatically selected target to the device cfg floor.
+/// Reject the combination if that floor cannot run the module's features.
+pub(crate) fn honour_sm_floor(
+    selected: CudaArch,
+    floor: u32,
+    features: DetectedFeatures,
+    generated: &GeneratedModuleRequirements,
+) -> Result<CudaArch, String> {
+    if selected.capability() >= floor {
+        return Ok(selected);
+    }
+
+    let at_floor = CudaArch::new(floor, None).map_err(|error| {
+        format!("compute capability {floor} is not a CUDA target this compiler knows: {error}")
+    })?;
+    if arch_satisfies(&at_floor, features) && generated_target_satisfied(&at_floor, generated) {
+        return Ok(at_floor);
+    }
+
+    Err(format!(
+        "device code is compiled against compute capability {floor} or newer, but this module's \
+         features run only on {}, which that floor cannot host. Pin the architecture you mean to \
+         build for with `--arch` (or CUDA_OXIDE_TARGET), so device code and the emitted PTX agree.",
+        selected.sm()
+    ))
+}
+
 pub(crate) fn resolve_ptx_target_with_generated(
     explicit_override: Option<&str>,
     explicit_override_source: &'static str,
@@ -201,13 +228,28 @@ pub(crate) fn resolve_ptx_target_with_generated(
     }
 
     if let Some(device) = device_hint.filter(|target| {
-        arch_satisfies(target, detected) && generated_target_satisfied(target, generated)
+        recorded_ptx_floor(target).is_ok()
+            && arch_satisfies(target, detected)
+            && generated_target_satisfied(target, generated)
     }) {
         return Ok((device.clone(), "detected GPU"));
     }
 
+    // Reached only with no explicit target, so only the detected-device hint
+    // can move the floor -- downwards. Resolved through the same function the
+    // build script uses rather than restated here.
+    let floor = resolve_sm_floor(explicit_override, device_hint).map_err(|error| {
+        PipelineError::TargetSelection {
+            target: String::new(),
+            reason: format!(
+                "cannot resolve the compute-capability floor device code is compiled against: {error}"
+            ),
+        }
+    })?;
     let target =
         select_target_with_generated(detected, generated).map_err(PipelineError::PtxGeneration)?;
+    let target = honour_sm_floor(target, floor, detected, generated)
+        .map_err(PipelineError::PtxGeneration)?;
     Ok((target, "feature requirement"))
 }
 
@@ -252,18 +294,32 @@ pub fn validate_target_for_llvm_major(
     Ok(())
 }
 
+/// Refuses a PTX ISA requirement that the LLVM backend cannot honor.
+///
+/// Each PTX feature the compiler can request has an LLVM floor: `+ptx90` needs
+/// LLVM 22 and `+ptx91` needs LLVM 23. An older llc does not fail on a feature
+/// it lacks; LLVM 22 ignores `+ptx91` with a warning and emits PTX 8.8, so the
+/// build would pass and the module would fail to load. The gate refuses such a
+/// backend at compile time instead. An unknown backend version cannot prove
+/// support and is refused whenever a floor applies.
 pub(crate) fn validate_ptx_isa_for_llvm_major(
     requirement: PtxIsaRequirement,
     llc_major: Option<u32>,
 ) -> Result<(), String> {
-    if requirement >= PtxIsaRequirement::new(90) && llc_major.is_none_or(|major| major < 22) {
-        let backend = llc_major.map_or_else(
-            || "an LLVM backend with an unknown version".to_string(),
-            |major| format!("LLVM {major}"),
-        );
-        return Err(format!(
-            "PTX 9.0 or newer requires LLVM 22 or newer; {backend} does not support the required PTX feature"
-        ));
+    // Newest floor first, so the message names the rule that applies.
+    const LLVM_FLOORS: [(u16, u32, &str); 2] = [(91, 23, "9.1"), (90, 22, "9.0")];
+    for (spelling, llvm_major, label) in LLVM_FLOORS {
+        if requirement >= PtxIsaRequirement::new(spelling)
+            && llc_major.is_none_or(|major| major < llvm_major)
+        {
+            let backend = llc_major.map_or_else(
+                || "an LLVM backend with an unknown version".to_string(),
+                |major| format!("LLVM {major}"),
+            );
+            return Err(format!(
+                "PTX {label} or newer requires LLVM {llvm_major} or newer; {backend} does not support the required PTX feature"
+            ));
+        }
     }
     Ok(())
 }

@@ -81,8 +81,8 @@ on multiple slices:
 #[kernel]
 pub fn vecadd(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>) {
     let idx = thread::index_1d();
+    let i = idx.get();
     if let Some(c_elem) = c.get_mut(idx) {
-        let i = idx.get();
         *c_elem = a[i] + b[i];
     }
 }
@@ -198,7 +198,7 @@ in elements and must match the buffer's layout. The buffer length does not
 have to be a multiple of the row width; only complete tiles are returned.
 
 See the runnable
-[`proof_carrying_views`](https://github.com/NVlabs/cuda-oxide/tree/main/cuda-oxide/crates/rustc-codegen-cuda/examples/proof_carrying_views)
+[`proof_carrying_views`](https://github.com/NVIDIA/cuda-rust/tree/main/cuda-oxide/crates/rustc-codegen-cuda/examples/proof_carrying_views)
 example for 1-D and 2-D versions.
 
 ### How `index_2d` is type-safe

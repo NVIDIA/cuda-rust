@@ -12,6 +12,7 @@
 //! |--------------|------------------------------------------------------------------------------|
 //! | `generated`  | Every catalog intrinsic, dispatched by canonical and compatibility path      |
 //! | `indexing`   | `threadIdx_*`, `blockIdx_*`, `index_1d`, `index_2d::<S>`, `index_2d_runtime` |
+//! | `integer_minmax` | Rust compiler integer minimum and maximum intrinsics                    |
 //! | `memory`     | `SharedArray`, `stmatrix_*`, type conversions                                |
 //! | `atomic`     | Atomic read-modify-write and compare-exchange                                |
 //! | `wgmma`      | Hopper WGMMA matrix operations                                               |
@@ -24,6 +25,7 @@
 //! | `bitops`     | Rust compiler bit-manipulation intrinsics                                    |
 //! | `exact_div`  | Rust compiler `exact_div`                                                    |
 //! | `float_math` | Rust compiler floating-point math intrinsics                                 |
+//! | `float_to_int` | Rust compiler `float_to_int_unchecked`                                     |
 //! | `saturating` | Rust compiler saturating integer intrinsics                                  |
 //!
 //! # Architecture
@@ -48,9 +50,11 @@ pub mod bitops;
 pub mod debug;
 pub mod exact_div;
 pub mod float_math;
+pub mod float_to_int;
 pub mod generated;
 pub mod iket;
 pub mod indexing;
+pub mod integer_minmax;
 pub mod layout;
 pub mod memory;
 pub mod saturating;

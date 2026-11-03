@@ -28,6 +28,7 @@ RUN apt-get update \
         pkg-config \
         python3 \
         python3-pip \
+        python3-venv \
         xz-utils \
     && curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
         | gpg --dearmor -o /usr/share/keyrings/apt.llvm.org.gpg \

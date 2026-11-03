@@ -3021,7 +3021,8 @@ fn try_dispatch_intrinsic(
         // integer `checked_pow`/`overflowing_pow` and `checked_ilog`, so
         // rejecting it also rejects integer `pow` and `ilog`, which call them.
         "core::intrinsics::is_val_statically_known"
-        | "std::intrinsics::is_val_statically_known" => {
+        | "std::intrinsics::is_val_statically_known"
+        | "cuda_device::warp::__target_has_integer_redux_sync" => {
             Ok(Some(helpers::emit_bool_constant_intrinsic(
                 ctx,
                 body,

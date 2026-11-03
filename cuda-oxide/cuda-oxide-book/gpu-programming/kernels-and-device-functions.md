@@ -264,7 +264,8 @@ target-derived `cfg`, so a kernel has no way to ask which architecture it is
 being compiled for. Arch requirements live in doc comments and are enforced by
 the caller, which is why an example that needs `redux.sync` checks
 `ctx.compute_capability()` on the host and skips rather than specializing the
-kernel.
+kernel (`cuda-device`'s own `warp_reduce` selects `redux.sync` vs shuffles
+through an internal compiler-resolved target floor predicate).
 
 `--device-cfg NAME` is how you supply one yourself. It is repeatable, and each
 occurrence becomes a `--cfg NAME` in the build's rustflags:

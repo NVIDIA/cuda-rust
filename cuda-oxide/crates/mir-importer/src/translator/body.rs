@@ -604,6 +604,81 @@ fn validate_monomorphized_successors(
     Ok(())
 }
 
+/// Narrow `SwitchInt` terminators controlled by `__target_has_integer_redux_sync`
+/// to the single arm selected by the resolved target floor (`sm_80+` vs below).
+pub fn narrow_target_predicate_switches(
+    body: &mir::Body,
+    mono_successors: &[Vec<usize>],
+    has_integer_redux_sync: bool,
+) -> Vec<Vec<usize>> {
+    use rustc_public::mir::{Operand, StatementKind, TerminatorKind};
+    use rustc_public::ty::{RigidTy, TyKind};
+
+    let mut narrowed = mono_successors.to_vec();
+    for block in &body.blocks {
+        let TerminatorKind::Call {
+            func,
+            destination,
+            target: Some(next_bb),
+            ..
+        } = &block.terminator.kind
+        else {
+            continue;
+        };
+        if !destination.projection.is_empty() || *next_bb >= body.blocks.len() {
+            continue;
+        }
+        let is_redux_predicate = func.ty(body.locals()).ok().is_some_and(|ty| {
+            matches!(
+                ty.kind(),
+                TyKind::RigidTy(RigidTy::FnDef(def, _))
+                    if def.name() == "cuda_device::warp::__target_has_integer_redux_sync"
+                        || def.name().ends_with("::__target_has_integer_redux_sync")
+            )
+        });
+        if !is_redux_predicate {
+            continue;
+        }
+        let next_block = &body.blocks[*next_bb];
+        let overwritten = next_block.statements.iter().any(|stmt| {
+            matches!(
+                &stmt.kind,
+                StatementKind::Assign(place, _) if place.local == destination.local
+            )
+        });
+        if overwritten {
+            continue;
+        }
+        let TerminatorKind::SwitchInt {
+            discr: Operand::Move(place) | Operand::Copy(place),
+            targets,
+        } = &next_block.terminator.kind
+        else {
+            continue;
+        };
+        if !place.projection.is_empty() || place.local != destination.local {
+            continue;
+        }
+        let chosen = if has_integer_redux_sync {
+            targets
+                .branches()
+                .find(|(val, _)| *val == 1)
+                .map_or_else(|| targets.otherwise(), |(_, target)| target)
+        } else {
+            targets
+                .branches()
+                .find(|(val, _)| *val == 0)
+                .map_or_else(|| targets.otherwise(), |(_, target)| target)
+        };
+        if let Some(edges) = narrowed.get_mut(*next_bb)
+            && edges.contains(&chosen)
+        {
+            *edges = vec![chosen];
+        }
+    }
+    narrowed
+}
+
 /// BFS from the entry block following rustc's exact per-block monomorphized
 /// successors, intersected with the importer's existing non-unwind policy.
 ///

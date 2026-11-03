@@ -50,7 +50,7 @@ configurations.
 
 - [Attention types and layout constraints](../../../cute-rs/src/attention/sm100/mod.rs),
   [host TMA descriptors](../../../cute-rs/src/attention/sm100/host.rs), and
-  [CuTe operation contracts](../../../dialect-cute/src/ops/sm100_attention.rs)
+  [CuTe operation contracts](../../../dialect-cute/src/ops/sm100/attention.rs)
   currently specialize the attention path to FP16.
 - [CuTe importing](../../../../crates/mir-importer/src/translator/cute/sm100_attention.rs)
   and [attention export](../../../../crates/cuda-oxide-mlir-export/src/cute/independent_sm100.rs)

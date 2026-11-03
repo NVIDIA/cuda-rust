@@ -201,7 +201,9 @@ pub(crate) fn resolve_ptx_target_with_generated(
     }
 
     if let Some(device) = device_hint.filter(|target| {
-        arch_satisfies(target, detected) && generated_target_satisfied(target, generated)
+        recorded_ptx_floor(target).is_ok()
+            && arch_satisfies(target, detected)
+            && generated_target_satisfied(target, generated)
     }) {
         return Ok((device.clone(), "detected GPU"));
     }

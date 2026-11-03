@@ -8,6 +8,7 @@
 #![allow(deprecated)]
 
 use cutile_compiler::compiler::utils::CompileOptions;
+use cutile_compiler::hints::DebugInfoLevel;
 
 mod common;
 
@@ -1420,7 +1421,7 @@ fn kv_loop_bounds_checks_hoist_to_the_preheader() {
             &[],
             &[],
             Some((4, 1, 1)),
-            &CompileOptions::default().device_debug(false),
+            &CompileOptions::default().debug_info(DebugInfoLevel::None),
         )
         .map_err(|err| err.to_string())
         .expect("Failed to compile hoisted-checks kernel");
@@ -1474,7 +1475,7 @@ fn compile_hoist_kernel(function_name: &str, generics: &[&str]) -> String {
         &[],
         &[],
         None,
-        &CompileOptions::default().device_debug(false),
+        &CompileOptions::default().debug_info(DebugInfoLevel::None),
     )
     .map_err(|err| err.to_string())
     .expect("Failed to compile hoist kernel")

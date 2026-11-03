@@ -42,7 +42,7 @@
 //!
 //! Run: `cargo oxide run constant_memory_table`
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer};
 use cuda_device::cuda_module;
 

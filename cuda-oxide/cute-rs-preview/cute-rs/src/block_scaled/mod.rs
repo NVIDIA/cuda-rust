@@ -42,19 +42,12 @@ pub struct Mkl;
 pub struct Nkl;
 
 // Map one logical scale coordinate into Blackwell's 512-byte block order.
-/// Map batch, row and K-group coordinates into the canonical 512-byte scale-block order.
+/// Map batch, row and K-group coordinates into the canonical 512-byte scale-block order
+/// via [`cute_layout::sm1xx_block_scale_crd2idx`].
 macro_rules! sm1xx_scale_offset {
     ($layout:expr, $batch:expr, $row:expr, $group:expr) => {{
         let layout = $layout;
-        let batch = $batch;
-        let row = $row;
-        let group = $group;
-        batch * layout.rest_m * layout.rest_k * CANONICAL_SCALE_ATOM_BYTES
-            + (row >> 7) * layout.rest_k * CANONICAL_SCALE_ATOM_BYTES
-            + (group >> 2) * CANONICAL_SCALE_ATOM_BYTES
-            + ((row & 31) << 4)
-            + (((row >> 5) & 3) << 2)
-            + (group & 3)
+        cute_layout::sm1xx_block_scale_crd2idx($batch, $row, $group, layout.rest_m, layout.rest_k)
     }};
 }
 
@@ -71,7 +64,7 @@ pub use gemv::{
 };
 pub use layouts::{
     CANONICAL_SCALE_ATOM_BYTES, CANONICAL_SCALE_K_GROUPS, CANONICAL_SCALE_M, DenseBlockScaleKMajor,
-    KMajor, SharedScaleAtom, Sm1xxBlockScaleKMajor, Sm120ScaleAtom,
+    KMajor, SharedNvfp4ScaleAtom, SharedScaleAtom, Sm1xxBlockScaleKMajor, Sm120ScaleAtom,
 };
 pub use scales::{MmaScalePair, MmaScaleQuad, ScalePack4};
 pub use tensor::{BlockScaledTensor, Mxf4BlockScaledTensor, Nvfp4BlockScaledTensor};

@@ -204,8 +204,13 @@ fn load_half(path: &std::path::Path, count: usize) -> Result<Vec<u16>> {
 }
 
 /// Pack one 128-byte TMA descriptor per batch/head for a BSHD allocation with D=128.
-fn descriptors<L: SmemLayout>(base: u64, batch: u32, sequence: u32, heads: u32) -> Result<Vec<u8>> {
-    let mut result = Vec::with_capacity(batch as usize * heads as usize * 128);
+fn descriptors<L: SmemLayout>(
+    base: u64,
+    batch: u32,
+    sequence: u32,
+    heads: u32,
+) -> Result<Vec<cute_rs::TensorMap<f16, L>>> {
+    let mut result = Vec::with_capacity(batch as usize * heads as usize);
     for b in 0..batch {
         for h in 0..heads {
             let offset =
@@ -216,7 +221,7 @@ fn descriptors<L: SmemLayout>(base: u64, batch: u32, sequence: u32, heads: u32) 
                 128,
                 u64::from(heads) * 128,
             )?;
-            result.extend_from_slice(&desc.bytes);
+            result.push(desc);
         }
     }
     Ok(result)
@@ -281,8 +286,9 @@ fn main() -> Result<()> {
         .map(|x| f32::from_le_bytes(*x))
         .collect();
     let ctx = CudaContext::new(0)?;
-    if ctx.compute_capability()? != (10, 0) {
-        return Err("this matched FP16 example requires SM100".into());
+    let capability = ctx.compute_capability()?;
+    if !matches!(capability, (10, 0) | (10, 3)) {
+        return Err("this matched FP16 example requires SM100 or SM103".into());
     }
     let stream = ctx.new_stream()?;
     let qdev = DeviceBuffer::from_host(&stream, &qhost)?;
@@ -322,10 +328,10 @@ fn main() -> Result<()> {
             module.sm100_fmha_prefill_cute_rs(
                 &stream,
                 &prepared,
-                qmaps.cu_deviceptr() as *const _,
-                kmaps.cu_deviceptr() as *const _,
-                vmaps.cu_deviceptr() as *const _,
-                omaps.cu_deviceptr() as *const _,
+                &qmaps,
+                &kmaps,
+                &vmaps,
+                &omaps,
                 u64::from(b),
                 u64::from(q),
                 u64::from(k),
@@ -346,8 +352,8 @@ fn main() -> Result<()> {
                 run()?;
             }
             stream.synchronize()?;
-            let start = ctx.new_event(Some(sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
-            let end = ctx.new_event(Some(sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+            let start = ctx.new_event_with_flags(Some(sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+            let end = ctx.new_event_with_flags(Some(sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
             start.record(&stream)?;
             for _ in 0..args.iters {
                 run()?;
@@ -382,7 +388,7 @@ fn main() -> Result<()> {
         "shared_memory_bytes":kernel::DYNAMIC_SMEM_BYTES,"registers_per_thread":registers,
         "compiler_optimization_level":option_env!("CUDA_OXIDE_CUTLASS_OPT_LEVEL")
             .and_then(|value| value.parse::<u32>().ok()).unwrap_or(3),
-        "compiler":"CUTLASS 4.7.0", "target":"sm_100a",
+        "compiler":"CUTLASS 4.7.0", "target":format!("sm_{}{}a", capability.0, capability.1),
         "source_commit":"dcf215af68a2d08d305076c152a06f201728cd53"});
     let rendered = serde_json::to_string_pretty(&report)?;
     if let Some(path) = args.json {

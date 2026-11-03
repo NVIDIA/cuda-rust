@@ -169,20 +169,28 @@
 //! available at the crate root through reexports of the same definitions.
 
 #![no_std]
+#![deny(missing_docs, clippy::missing_docs_in_private_items)]
 
 extern crate alloc;
 
 pub mod algebra;
 pub mod composed;
 pub mod layout;
+pub mod markers;
 pub mod parse;
 pub mod predication;
+pub mod static_layout;
 pub mod swizzle;
 pub mod tuple;
 pub mod validation;
 
 pub use composed::{ComposedLayout, ComposedLayoutError, OffsetUnit};
-pub use layout::{Layout, crd2idx};
+pub use layout::{
+    Layout, SharedLayout, SmemLayout, crd2idx, crd2idx_col_major_2d, crd2idx_col_major_3d,
+    crd2idx_row_major_2d, crd2idx_row_major_3d, idx2crd, idx2crd_col_major_2d, idx2crd_grouped_2d,
+    idx2crd_row_major_2d, sm1xx_block_scale_crd2idx, sm1xx_scale_atom_word_offset,
+    sm100_smem_crd2idx, sm100_smem_crd2idx_with_extents,
+};
 pub use parse::ParseLayoutError;
 pub use predication::{
     AtomCoord, GmemMatrixBounds, PredicatedSource, PredicationError, PredicationResult,

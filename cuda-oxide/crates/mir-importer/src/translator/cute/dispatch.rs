@@ -520,6 +520,10 @@ pub(crate) fn try_translate_cute_call(
             ctx, body, args, destination, target, block_ptr, prev_op, value_map, block_map,
             loc.clone(),
         ),
+        CuteFn::Nvfp4MmaAtom => smem_mma::emit::emit_nvfp4_mma_atom(
+            ctx, body, args, destination, target, block_ptr, prev_op, value_map, block_map,
+            loc.clone(),
+        ),
         CuteFn::EpilogueOverlay => epilogue::emit::emit_overlay(
             ctx,
             body,

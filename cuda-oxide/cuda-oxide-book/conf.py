@@ -8,7 +8,7 @@
 project = 'cuda-oxide'
 copyright = '2025-2026, NVIDIA Corporation'
 author = 'Nihal Pasham, NVIDIA Corporation'
-release = '0.1.0'
+release = '0.3.0'
 
 # -- General configuration ---------------------------------------------------
 extensions = [

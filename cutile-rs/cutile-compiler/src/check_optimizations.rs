@@ -103,41 +103,43 @@ impl CheckOptimizations {
 mod tests {
     use super::*;
     use crate::cuda_tile_runtime_utils::{TileirasOptions, DEFAULT_OPT_LEVEL};
-    use crate::hints::CompileOptions;
+    use crate::hints::{CodegenMode, CompileOptions, DebugInfoLevel};
 
     #[test]
-    fn device_debug_implies_opt_zero_unless_explicit() {
-        let debug =
-            TileirasOptions::from_compile_options(&CompileOptions::new().device_debug(true));
-        assert_eq!(debug.opt_level, 0);
-        assert!(debug.device_debug);
-
-        let explicit = TileirasOptions::from_compile_options(
-            &CompileOptions::new().device_debug(true).opt_level(2),
+    fn full_debug_compiles_at_level_zero() {
+        let debug = TileirasOptions::from_compile_options(
+            &CompileOptions::new().debug_info(DebugInfoLevel::Full),
         );
-        assert_eq!(explicit.opt_level, 2, "an explicit level wins");
+        assert_eq!(debug.codegen, CodegenMode::Debug);
+        assert_eq!(debug.codegen.opt_level(), 0);
 
         let release = TileirasOptions::from_compile_options(
-            &CompileOptions::new().debug_info(crate::hints::DebugInfoLevel::None),
+            &CompileOptions::new().debug_info(DebugInfoLevel::None),
         );
-        assert_eq!(release.opt_level, DEFAULT_OPT_LEVEL);
+        assert_eq!(release.codegen.opt_level(), DEFAULT_OPT_LEVEL);
         assert_eq!(release, TileirasOptions::default());
     }
 
     #[test]
     fn flags_byte_is_injective_over_the_flag_combinations() {
         let mut seen = std::collections::BTreeSet::new();
-        for dd in [false, true] {
-            for li in [false, true] {
-                for sm in [false, true] {
-                    let o = TileirasOptions {
-                        opt_level: 3,
-                        device_debug: dd,
-                        lineinfo: li,
-                        sanitize_memcheck: sm,
-                    };
-                    assert!(seen.insert(o.flags_byte()), "flags_byte collision");
-                }
+        for codegen in [
+            CodegenMode::Debug,
+            CodegenMode::Optimized {
+                level: 3,
+                lineinfo: false,
+            },
+            CodegenMode::Optimized {
+                level: 3,
+                lineinfo: true,
+            },
+        ] {
+            for sanitize_memcheck in [false, true] {
+                let o = TileirasOptions {
+                    codegen,
+                    sanitize_memcheck,
+                };
+                assert!(seen.insert(o.flags_byte()), "flags_byte collision");
             }
         }
         assert_eq!(

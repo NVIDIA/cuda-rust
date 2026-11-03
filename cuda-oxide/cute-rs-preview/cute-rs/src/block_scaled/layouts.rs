@@ -6,7 +6,7 @@
 //! Value and scale coordinate layouts for block-scaled tensors.
 
 use crate::copy::tiled::SharedTensor;
-use crate::numeric::UE8M0x4;
+use crate::numeric::{E4M3x4, UE8M0x4};
 use core::marker::PhantomData;
 
 /// Rows whose K values are adjacent in memory.
@@ -93,11 +93,11 @@ impl<Mode, const SF_VEC: usize> DenseBlockScaleKMajor<Mode, SF_VEC> {
     }
 
     /// Map the coordinate `(row, K group)` to its byte index (CuTeDSL
-    /// `cute.crd2idx` on this layout).
+    /// `cute.crd2idx` on this layout) via [`cute_layout::crd2idx_row_major_2d`].
     #[must_use]
     #[inline(always)]
     pub const fn crd2idx(&self, row: usize, group: usize) -> usize {
-        row * self.groups + group
+        cute_layout::crd2idx_row_major_2d(row, group, self.groups)
     }
 
     /// Return the number of scale groups in each row.
@@ -148,14 +148,15 @@ impl Sm120ScaleAtom {
     /// Number of bytes copied by TMA.
     pub const BYTES: usize = CANONICAL_SCALE_ATOM_BYTES;
 
-    /// Return the `u32` word holding one logical row's scales.
+    /// Return the `u32` word holding one logical row's scales via
+    /// [`cute_layout::sm1xx_scale_atom_word_offset`].
     ///
     /// The layout repeats every 128 rows, so only the lowest seven row bits are
     /// used.
     #[must_use]
     #[inline(always)]
     pub const fn word_offset(row: usize) -> usize {
-        (row & 31) * 4 + ((row >> 5) & 3)
+        cute_layout::sm1xx_scale_atom_word_offset(row)
     }
 }
 
@@ -166,6 +167,13 @@ impl Sm120ScaleAtom {
 /// TMA wrote the same bytes using `u16` storage boxes. `Role` keeps A and B
 /// scale blocks distinct.
 pub type SharedScaleAtom<Role> = SharedTensor<UE8M0x4, u32, Sm120ScaleAtom, Role>;
+
+/// A typed view of one Blackwell `Float8E4M3FN` (`SF_VEC = 16`) scale block in shared memory.
+///
+/// Each 512-byte atom holds 128 rows of four E4M3 scale bytes (`u32` per row),
+/// covering `K = 64` at `SF_VEC = 16`. `Role` keeps A (`Mkl`) and B (`Nkl`)
+/// scale blocks distinct.
+pub type SharedNvfp4ScaleAtom<Role> = SharedTensor<E4M3x4, u32, Sm120ScaleAtom, Role>;
 
 /// Blackwell's required memory layout for block scales.
 ///

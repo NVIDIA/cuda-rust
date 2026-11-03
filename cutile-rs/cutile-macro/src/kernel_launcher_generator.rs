@@ -133,6 +133,7 @@ pub(crate) struct RequiredGenerics {
     /// Names of compile-time generic type parameters required by launcher functions.
     /// This lets generated launcher functions support type param inference via impls of the DType trait.
     launcher_type_params: Vec<String>,
+    scalar_type_params: Vec<String>,
     /// Type annotations for const generic parameters (None for type params)
     types: Vec<Option<Type>>,
     /// Inferred expressions for each generic parameter
@@ -150,6 +151,7 @@ impl RequiredGenerics {
         Self {
             names,
             launcher_type_params: vec![],
+            scalar_type_params: vec![],
             types,
             expressions,
         }
@@ -192,7 +194,12 @@ impl RequiredGenerics {
         for name in &self.names {
             let is_launcher_type_param = self.launcher_type_params.contains(name);
             if is_launcher_type_param && self.get_ty(name) == SupportedGenericType::TypeParam {
-                type_params.push(format!("{}: Send + DType", name.clone()));
+                let copy_bound = if self.scalar_type_params.contains(name) {
+                    " + DeviceCopy"
+                } else {
+                    ""
+                };
+                type_params.push(format!("{name}: Send + DType{copy_bound}"));
             }
         }
         syn::parse2::<Generics>(format!("<{}>", type_params.join(", ")).parse().unwrap()).unwrap()
@@ -578,6 +585,9 @@ pub fn generate_kernel_launcher(
                     launch_grid_expr_strs.extend(res.launch_grid_expr_strs);
                     validator_statements.extend(res.validator_statements.block.stmts);
                     continue;
+                }
+                if required_generics.get_ty(&type_name) == SupportedGenericType::TypeParam {
+                    required_generics.scalar_type_params.push(type_name.clone());
                 }
                 arg_types.push(syn::parse2::<Type>(type_name.parse().unwrap()).unwrap());
                 if required_generics.is_required(&type_name) {
@@ -1053,7 +1063,7 @@ pub fn generate_kernel_launcher(
     ));
 
     let mut launch_only_stmts: Vec<Stmt> = vec![parse_stmt(
-        "let mut kernel_launch = AsyncKernelLaunch::new(function.clone());".to_string(),
+        "let mut kernel_launch = AsyncKernelLaunchBuilder::new(function.clone());".to_string(),
     )];
     launch_only_stmts.extend(builder_statements);
     launch_only_stmts.extend(

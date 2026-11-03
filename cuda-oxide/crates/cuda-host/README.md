@@ -8,7 +8,7 @@ keep `#[kernel]` on the actual GPU entry points, then load the embedded device
 artifact as a typed Rust value.
 
 ```rust
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, kernel, thread};
 use cuda_host::cuda_module;
@@ -20,8 +20,9 @@ mod kernels {
     #[kernel]
     pub fn vecadd(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>) {
         let idx = thread::index_1d();
+        let i = idx.get();
         if let Some(c_elem) = c.get_mut(idx) {
-            *c_elem = a[idx.get()] + b[idx.get()];
+            *c_elem = a[i] + b[i];
         }
     }
 }
@@ -206,7 +207,7 @@ Enable the `async` feature to generate async launch methods. They use the same
 scalar mapping, but take no stream argument:
 
 ```rust
-use cuda_async::simt::device_operation::DeviceOperation;
+use cuda_async::device_operation::DeviceOperation;
 
 let module = kernels::load_async(0)?;
 let launch = unsafe {
@@ -222,7 +223,7 @@ launch.sync()?;
 ```
 
 For async launches, device-slice parameters accept either `DeviceBuffer<T>` or
-`cuda_async::simt::device_box::DeviceBox<[T]>`. The mutable
+`cuda_async::device_box::DeviceBox<[T]>`. The mutable
 `AsyncKernelLaunchBuilder` collects arguments and options. Finalizing it with a
 raw configuration is unsafe and produces an immutable `AsyncKernelLaunch<'_>`;
 geometry cannot be changed after that point. Rust keeps referenced buffers and
@@ -279,7 +280,7 @@ back to the selector and are repaired. The core API does not query CUDA, time
 kernels, start threads, or touch the filesystem; callers put the relevant facts
 in their problem type.
 
-The [gemm_sol_final example](../rustc-codegen-cuda/examples/gemm_sol_final/)
+The [gemm_sol_final example](../../examples/gemm_sol_final/)
 uses a two-entry family for its M256xN256 and M512xN256 output tiles. Its
 automatic policy preserves the measured 4K/8K/16K choices, while
 `GEMM_SOL_VARIANT` exposes either resource envelope as a checked override.
@@ -361,5 +362,5 @@ specific 8x8 tile arrangements:
 
 - [cuda-device](../cuda-device/) -- device-side intrinsics
 - [cuda-macros](../cuda-macros/) -- proc-macro implementations
-- [cuda-core](https://github.com/NVIDIA/cuda-rust/tree/main/cuda-core) -- shared CUDA driver API crate; `DeviceBuffer`, `simt::LaunchConfig`
-- [cuda-async](https://github.com/NVIDIA/cuda-rust/tree/main/cuda-async) -- shared async crate; the SIMT model lives under `cuda_async::simt`
+- [cuda-core](https://github.com/NVIDIA/cuda-rust/tree/main/cuda-core) -- shared CUDA driver API crate; `DeviceBuffer`, `LaunchConfig`
+- [cuda-async](https://github.com/NVIDIA/cuda-rust/tree/main/cuda-async) -- shared async crate; one runtime for Tile and SIMT

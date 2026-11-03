@@ -40,6 +40,22 @@ pub unsafe fn make_warp_uniform(value: u32) -> u32 {
     unsafe { ctm_rs::warp::shuffle_sync(u32::MAX, value, 0) }
 }
 
+/// First two butterfly steps (XOR offsets 16 and 8) of a full-warp FP32 sum.
+#[inline(always)]
+fn warp_upper_sum_f32(mut value: f32) -> f32 {
+    value += ctm_rs::warp::shuffle_xor_f32(value, 16);
+    value + ctm_rs::warp::shuffle_xor_f32(value, 8)
+}
+
+/// First two butterfly steps (XOR offsets 16 and 8) of a full-warp FP32 maximum.
+#[inline(always)]
+fn warp_upper_max_f32(mut value: f32) -> f32 {
+    let other16 = ctm_rs::warp::shuffle_xor_f32(value, 16);
+    value = if value > other16 { value } else { other16 };
+    let other8 = ctm_rs::warp::shuffle_xor_f32(value, 8);
+    if value > other8 { value } else { other8 }
+}
+
 /// Sum one FP32 contribution from each of the 32 lanes of a warp.
 ///
 /// This is CuTeDSL's `cute.arch.warp_reduction_sum` for FP32. Every lane
@@ -56,14 +72,45 @@ pub unsafe fn make_warp_uniform(value: u32) -> u32 {
 #[must_use]
 #[inline(always)]
 pub unsafe fn warp_reduction_sum_f32(value: f32) -> f32 {
-    // SAFETY: every lane participates under this function's caller contract.
-    unsafe { ctm_rs::warp::reduce_sum_f32(value) }
+    let mut value = warp_upper_sum_f32(value);
+    value += ctm_rs::warp::shuffle_xor_f32(value, 4);
+    value += ctm_rs::warp::shuffle_xor_f32(value, 2);
+    value + ctm_rs::warp::shuffle_xor_f32(value, 1)
 }
 
 /// Approximate base-two exponential, preserving the device instruction semantics.
 #[inline(always)]
 pub fn exp2_f32(value: f32) -> f32 {
     ctm_rs::float::ex2_approx_f32(value)
+}
+
+/// Approximate base-two exponential with subnormal flushing (`ex2.approx.ftz.f32`).
+///
+/// This is CuTeDSL's `cute.math.exp2(x, fastmath=True)` used in SM100 and SM120
+/// online softmax and output-correction loops.
+#[must_use]
+#[inline(always)]
+pub fn exp2_ftz_f32(value: f32) -> f32 {
+    ctm_rs::float::ex2_approx_ftz_f32(value)
+}
+
+/// Approximate base-two logarithm (`lg2.approx.f32`).
+///
+/// This is CuTeDSL's `cute.math.log2(x, fastmath=True)` used to compute
+/// base-two log-sum-exp statistics in SM100 attention.
+#[must_use]
+#[inline(always)]
+pub fn log2_f32(value: f32) -> f32 {
+    ctm_rs::float::lg2_approx_f32(value)
+}
+
+/// Select the larger of two FP32 values using the hardware `fmax` instruction.
+///
+/// This is `cute.arch.fmax(a, b)`. When one operand is NaN, returns the other.
+#[must_use]
+#[inline(always)]
+pub fn fmax_f32(a: f32, b: f32) -> f32 {
+    a.max(b)
 }
 
 /// Approximate reciprocal with the device instruction's flush-to-zero behavior.
@@ -94,14 +141,14 @@ pub fn sin_f32(value: f32) -> f32 {
 /// # Safety
 /// All 32 lanes must execute this operation convergently.
 #[inline(always)]
-pub unsafe fn warp_reduction_max_f32(mut value: f32) -> f32 {
-    let mut offset = 16;
-    while offset != 0 {
-        let other = ctm_rs::warp::shuffle_xor_f32(value, offset);
-        value = if value > other { value } else { other };
-        offset /= 2;
-    }
-    value
+pub unsafe fn warp_reduction_max_f32(value: f32) -> f32 {
+    let mut value = warp_upper_max_f32(value);
+    let other4 = ctm_rs::warp::shuffle_xor_f32(value, 4);
+    value = if value > other4 { value } else { other4 };
+    let other2 = ctm_rs::warp::shuffle_xor_f32(value, 2);
+    value = if value > other2 { value } else { other2 };
+    let other1 = ctm_rs::warp::shuffle_xor_f32(value, 1);
+    if value > other1 { value } else { other1 }
 }
 
 /// Sum independent groups of four neighboring lanes, with XOR offsets 1 then 2.
@@ -115,6 +162,64 @@ pub unsafe fn quad_sum_f32(mut value: f32) -> f32 {
     value += ctm_rs::warp::shuffle_xor_f32(value, 1);
     value += ctm_rs::warp::shuffle_xor_f32(value, 2);
     value
+}
+
+/// Reduce a maximum across each 4-lane thread quad using XOR offsets 2 then 1.
+///
+/// This is CuTeDSL's `_threadquad_reduce_max` used for `m16n8k16` accumulator
+/// rows where four adjacent lanes own one matrix row.
+///
+/// # Safety
+/// All 32 lanes must execute this operation convergently.
+#[must_use]
+#[inline(always)]
+pub unsafe fn threadquad_reduce_max_f32(mut value: f32) -> f32 {
+    value = fmax_f32(value, ctm_rs::warp::shuffle_xor_f32(value, 2));
+    value = fmax_f32(value, ctm_rs::warp::shuffle_xor_f32(value, 1));
+    value
+}
+
+/// Sum values across each 4-lane thread quad using XOR offsets 2 then 1.
+///
+/// This is CuTeDSL's `_threadquad_reduce_sum` used for `m16n8k16` accumulator
+/// rows where four adjacent lanes own one matrix row.
+///
+/// # Safety
+/// All 32 lanes must execute this operation convergently.
+#[must_use]
+#[inline(always)]
+pub unsafe fn threadquad_reduce_sum_f32(mut value: f32) -> f32 {
+    value += ctm_rs::warp::shuffle_xor_f32(value, 2);
+    value += ctm_rs::warp::shuffle_xor_f32(value, 1);
+    value
+}
+
+/// Commit this thread's pending `cp.async` copies as one group without waiting.
+///
+/// This is `cute.arch.cp_async_commit_group()` over
+/// [`ctm_rs::async_copy::cp_async_commit_group`].
+///
+/// # Safety
+/// Copies must satisfy their source/destination lifetime and alignment
+/// contracts. Commit does not wait for completion or synchronize threads.
+#[inline(always)]
+pub unsafe fn cp_async_commit_group() {
+    unsafe { ctm_rs::async_copy::cp_async_commit_group() }
+}
+
+/// Wait until at most `N` committed `cp.async` groups remain pending for this thread.
+///
+/// This is `cute.arch.cp_async_wait_group(N)` over
+/// [`ctm_rs::async_copy::cp_async_wait_group`]. Follow with a CTA barrier before
+/// reading shared data written by other threads.
+///
+/// # Safety
+/// Access only destinations whose copy groups this wait completes. Synchronize
+/// threads before another thread accesses a completed destination. All copy
+/// source and destination allocations must remain live until completion.
+#[inline(always)]
+pub unsafe fn cp_async_wait_group<const N: u32>() {
+    unsafe { ctm_rs::async_copy::cp_async_wait_group::<N>() }
 }
 
 /// A named CTA barrier with a statically fixed participant count.
@@ -784,4 +889,94 @@ pub unsafe fn shuffle_sync_down(value: u32, offset: u32, mask: u32) -> u32 {
 pub unsafe fn shuffle_sync_down_f32(value: f32, offset: u32, mask: u32) -> f32 {
     // SAFETY: forwarded under the caller contract above.
     unsafe { ctm_rs::warp::shfl_sync_down_f32(mask, value, offset) }
+}
+
+// Proxy fences and packed FP32x2 / FP16x2 arithmetic.
+
+/// Publish preceding generic-proxy shared-memory writes to the CTA async proxy.
+///
+/// This is CuTeDSL's `cute.arch.fence_view_async_shared()` over
+/// [`ctm_rs::fence::fence_proxy_async_shared_cta`] (`fence.proxy.async.shared::cta`).
+///
+/// # Safety
+/// Call before signaling or issuing an asynchronous TMA or UMMA operation that
+/// reads ordinary shared-memory stores written by this thread.
+#[inline(always)]
+pub unsafe fn fence_view_async_shared() {
+    // SAFETY: forwarded under the caller contract above.
+    unsafe { ctm_rs::fence::fence_proxy_async_shared_cta() }
+}
+
+/// Two packed `f32` values carried in a 64-bit register pair for `f32x2` instructions.
+///
+/// Mirrors the tuple register pairs passed to `cute.arch.add_packed_f32x2`,
+/// `cute.arch.mul_packed_f32x2` and `cute.arch.fma_packed_f32x2` in CuTeDSL.
+pub use ctm_rs::f32x2::PackedF32x2;
+
+/// Pack two `f32` scalars (`lo`, `hi`) into one [`PackedF32x2`] register pair.
+///
+/// Preserves the exact bit pattern of both lanes without arithmetic conversion.
+#[must_use]
+#[inline(always)]
+pub fn pack_f32x2(lo: f32, hi: f32) -> PackedF32x2 {
+    ctm_rs::f32x2::pack_f32x2(lo, hi)
+}
+
+/// Extract the low `f32` lane of a [`PackedF32x2`] register pair.
+///
+/// Preserves the exact bit pattern of the low 32 bits.
+#[must_use]
+#[inline(always)]
+pub fn unpack_f32x2_lo(pair: PackedF32x2) -> f32 {
+    ctm_rs::f32x2::unpack_f32x2_lo(pair)
+}
+
+/// Extract the high `f32` lane of a [`PackedF32x2`] register pair.
+///
+/// Preserves the exact bit pattern of the high 32 bits.
+#[must_use]
+#[inline(always)]
+pub fn unpack_f32x2_hi(pair: PackedF32x2) -> f32 {
+    ctm_rs::f32x2::unpack_f32x2_hi(pair)
+}
+
+/// Add two [`PackedF32x2`] register pairs lane-by-lane (`add.rn.f32x2`).
+///
+/// This is CuTeDSL's `cute.arch.add_packed_f32x2(a, b)` over
+/// [`ctm_rs::f32x2::add_f32x2`].
+#[must_use]
+#[inline(always)]
+pub fn add_packed_f32x2(a: PackedF32x2, b: PackedF32x2) -> PackedF32x2 {
+    ctm_rs::f32x2::add_f32x2(a, b)
+}
+
+/// Multiply two [`PackedF32x2`] register pairs lane-by-lane (`mul.rn.f32x2`).
+///
+/// This is CuTeDSL's `cute.arch.mul_packed_f32x2(a, b)` over
+/// [`ctm_rs::f32x2::mul_f32x2`].
+#[must_use]
+#[inline(always)]
+pub fn mul_packed_f32x2(a: PackedF32x2, b: PackedF32x2) -> PackedF32x2 {
+    ctm_rs::f32x2::mul_f32x2(a, b)
+}
+
+/// Fused multiply-add `a * b + c` on [`PackedF32x2`] register pairs (`fma.rn.f32x2`).
+///
+/// This is CuTeDSL's `cute.arch.fma_packed_f32x2(a, b, c)` over
+/// [`ctm_rs::f32x2::fma_f32x2`].
+#[must_use]
+#[inline(always)]
+pub fn fma_packed_f32x2(a: PackedF32x2, b: PackedF32x2, c: PackedF32x2) -> PackedF32x2 {
+    ctm_rs::f32x2::fma_f32x2(a, b, c)
+}
+
+/// Convert two `f32` values to packed round-to-nearest-even `f16x2` bits (`cvt.rn.f16x2.f32`).
+///
+/// `lo` occupies the low 16 bits and `hi` occupies the high 16 bits of the
+/// returned `u32`, matching the packed `f16x2` storage expected by SM100 TMEM
+/// and shared-memory probability tiles.
+#[must_use]
+#[inline(always)]
+pub fn cvt_f16x2_f32(lo: f32, hi: f32) -> u32 {
+    ctm_rs::convert::cvt_f16x2_f32(lo, hi)
 }

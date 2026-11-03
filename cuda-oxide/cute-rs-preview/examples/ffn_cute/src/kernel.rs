@@ -33,7 +33,10 @@ pub mod kernels {
         stride: usize,
     ) -> BFloat16 {
         if row < rows && col < cols {
-            data[row * stride + col]
+            unsafe {
+                cute_rs::tensor::partition::StridedTensor::from_slice(data)
+                    .get_unchecked(cute_rs::crd2idx_row_major_2d(row, col, stride))
+            }
         } else {
             BFloat16::from_bits(0)
         }
@@ -96,17 +99,21 @@ pub mod kernels {
             }
         }
         let mut output = cute_rs::tensor::partition::StridedTensorMut::from_disjoint_slice(output);
+        let bias_tensor = cute_rs::tensor::partition::StridedTensor::from_slice(bias);
         mma.partition_c()
             .store_decode_with(accumulator, source, |row, col, value| {
                 let value = if HAS_BIAS {
-                    value + bias[n + col].to_f32()
+                    value + unsafe { bias_tensor.get_unchecked(n + col) }.to_f32()
                 } else {
                     value
                 };
                 // SAFETY: C's bijective layout and the checked grid give each lane
                 // disjoint initialized output coordinates, with one BF16 rounding.
                 unsafe {
-                    output.store_at(row * outputs + n + col, BFloat16::from_f32(value));
+                    output.store_at(
+                        cute_rs::crd2idx_row_major_2d(row, n + col, outputs),
+                        BFloat16::from_f32(value),
+                    );
                 }
             });
     }
@@ -139,13 +146,19 @@ pub mod kernels {
         input_stride: usize,
         weight_stride: usize,
     ) {
-        let tid = thread::threadIdx_x() as usize;
-        let lane = tid % 32;
-        let tile = thread::blockIdx_x() as usize * WARPS_PER_BLOCK + tid / 32;
+        let tid = thread::threadIdx_x();
+        let (lane, warp_id) = cute_rs::idx2crd_col_major_2d(tid, 32);
+        let lane = lane as usize;
+        let tile = cute_rs::crd2idx_row_major_2d(
+            thread::blockIdx_x() as usize,
+            warp_id as usize,
+            WARPS_PER_BLOCK,
+        );
         let columns = outputs.div_ceil(8);
         if tile < rows.div_ceil(16) * columns {
-            let m = tile / columns * 16;
-            let n = tile % columns * 8;
+            let (m_tile, n_tile) = cute_rs::idx2crd_row_major_2d(tile as u32, columns as u32);
+            let m = (m_tile as usize) * 16;
+            let n = (n_tile as usize) * 8;
             let mma = Bf16Mma16x8x16::get_slice(lane);
             let load_a = |k| {
                 mma.partition_a()
@@ -156,47 +169,79 @@ pub mod kernels {
                     .load_with(|r, c| element(weight, n + r, k + c, outputs, width, weight_stride))
             };
             let mut accumulator = FragmentC::ZERO;
-            let mut k = 0;
-            while k < width {
-                if PREFETCH && width - k >= 64 {
-                    let a0 = load_a(k);
-                    let b0 = load_b(k);
-                    let a1 = load_a(k + 16);
-                    let b1 = load_b(k + 16);
-                    let a2 = load_a(k + 32);
-                    let b2 = load_b(k + 32);
-                    let a3 = load_a(k + 48);
-                    let b3 = load_b(k + 48);
-                    // SAFETY: the full warp uses the atom's typed fragments;
-                    // arithmetic consumes K tiles in unchanged increasing order.
-                    unsafe {
-                        accumulator = mma.mma_atom_call(accumulator, a0, b0);
-                        accumulator = mma.mma_atom_call(accumulator, a1, b1);
-                        accumulator = mma.mma_atom_call(accumulator, a2, b2);
-                        accumulator = mma.mma_atom_call(accumulator, a3, b3);
-                    }
-                    k += 64;
-                    continue;
+            let can_pack_tiles = rows > 0
+                && width > 0
+                && width.is_multiple_of(16)
+                && n + 8 <= outputs
+                && input_stride >= width
+                && input_stride.is_multiple_of(2)
+                && weight_stride >= width
+                && weight_stride.is_multiple_of(2)
+                && (input.as_ptr() as usize).is_multiple_of(4)
+                && (weight.as_ptr() as usize).is_multiple_of(4)
+                && input.len() >= rows.saturating_sub(1) * input_stride + width
+                && weight.len() >= (n + 7) * weight_stride + width;
+            if can_pack_tiles {
+                let mut k = 0;
+                while k < width {
+                    let a = unsafe {
+                        mma.partition_a()
+                            .load_tiled_packed(input, m, k, rows, input_stride)
+                    };
+                    let b = unsafe {
+                        mma.partition_b()
+                            .load_tiled_packed(weight, n, k, weight_stride)
+                    };
+                    accumulator = unsafe { mma.mma_atom_call(accumulator, a, b) };
+                    k += 16;
                 }
-                let a = load_a(k);
-                let b = load_b(k);
-                // SAFETY: no lane skips the collective; tails are zero-padded.
-                accumulator = unsafe { mma.mma_atom_call(accumulator, a, b) };
-                k += 16;
+            } else {
+                let mut k = 0;
+                while k < width {
+                    if PREFETCH && width - k >= 64 {
+                        let a0 = load_a(k);
+                        let b0 = load_b(k);
+                        let a1 = load_a(k + 16);
+                        let b1 = load_b(k + 16);
+                        let a2 = load_a(k + 32);
+                        let b2 = load_b(k + 32);
+                        let a3 = load_a(k + 48);
+                        let b3 = load_b(k + 48);
+                        // SAFETY: the full warp uses the atom's typed fragments;
+                        // arithmetic consumes K tiles in unchanged increasing order.
+                        unsafe {
+                            accumulator = mma.mma_atom_call(accumulator, a0, b0);
+                            accumulator = mma.mma_atom_call(accumulator, a1, b1);
+                            accumulator = mma.mma_atom_call(accumulator, a2, b2);
+                            accumulator = mma.mma_atom_call(accumulator, a3, b3);
+                        }
+                        k += 64;
+                        continue;
+                    }
+                    let a = load_a(k);
+                    let b = load_b(k);
+                    // SAFETY: no lane skips the collective; tails are zero-padded.
+                    accumulator = unsafe { mma.mma_atom_call(accumulator, a, b) };
+                    k += 16;
+                }
             }
             let mut output =
                 cute_rs::tensor::partition::StridedTensorMut::from_disjoint_slice(&mut output);
+            let bias_tensor = cute_rs::tensor::partition::StridedTensor::from_slice(bias);
             mma.partition_c().store_with(accumulator, |r, c, value| {
                 if m + r < rows && n + c < outputs {
                     let value = if HAS_BIAS {
-                        value + bias[n + c].to_f32()
+                        value + unsafe { bias_tensor.get_unchecked(n + c) }.to_f32()
                     } else {
                         value
                     };
                     // SAFETY: C's bijective layout and the host-checked tile grid
                     // give disjoint output writes within the validated extent.
                     unsafe {
-                        output.store_at((m + r) * outputs + n + c, BFloat16::from_f32(value));
+                        output.store_at(
+                            cute_rs::crd2idx_row_major_2d(m + r, n + c, outputs),
+                            BFloat16::from_f32(value),
+                        );
                     }
                 }
             });

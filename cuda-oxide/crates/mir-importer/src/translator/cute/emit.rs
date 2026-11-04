@@ -279,7 +279,7 @@ fn emit_tma_copy_2d_views(
     copy_op
 }
 
-/// `cute_rs::copy::cooperative::copy_g2s::<Atom, ThrL, ValL, TileL, SmemL, T>`
+/// `cute_rs::atom::cooperative::copy_g2s::<Atom, ThrL, ValL, TileL, SmemL, T>`
 ///
 /// The importer's whole job is flattening: read the validated static
 /// configuration from the substs, read the runtime facts out of the carrier
@@ -426,7 +426,7 @@ pub(crate) fn emit_copy_g2s(
     Ok(emit_goto(ctx, *target_idx, copy_op, block_map, loc))
 }
 
-/// `cute_rs::mma::load_matrix_{a,b}::<SmemL>(src, warp_tile, lane) -> Frag`
+/// `cute_rs::nvgpu::warp::load_matrix_{a,b}::<SmemL>(src, warp_tile, lane) -> Frag`
 ///
 /// Flattening only, like `copy_g2s`: the shared base comes out of the
 /// carrier, the tuple splits into two coordinates, and the destination
@@ -898,7 +898,7 @@ fn finish_with_copy(
     Ok(emit_goto(ctx, *target_idx, copy_op, block_map, loc))
 }
 
-/// `cute_rs::copy::vector::load_tile::<T, N>(src: &[T], idx: usize) -> [T; N]`
+/// `cute_rs::atom::vector::load_tile::<T, N>(src: &[T], idx: usize) -> [T; N]`
 ///
 /// The returned tile is written directly into the destination local's slot
 /// (memory-to-memory `cute.copy`), so there is no SSA result to record.
@@ -982,7 +982,7 @@ pub(crate) fn emit_load_tile(
     )
 }
 
-/// `cute_rs::copy::vector::assume::<D>(x: usize) -> usize`
+/// `cute_rs::atom::vector::assume::<D>(x: usize) -> usize`
 ///
 /// The result equals the input at runtime, but the SSA edge carries `D`:
 ///
@@ -1876,7 +1876,7 @@ pub(crate) fn emit_register_tile_vector_op(
     Ok(emit_goto(ctx, *target_idx, goto_prev, block_map, loc))
 }
 
-/// `cute_rs::copy::vector::store_tile::<T, N>(dst: *mut T, idx: usize, vals: &[T; N])`
+/// `cute_rs::atom::vector::store_tile::<T, N>(dst: *mut T, idx: usize, vals: &[T; N])`
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_store_tile(
     ctx: &mut Context,
@@ -1933,7 +1933,7 @@ pub(crate) fn emit_store_tile(
     )
 }
 
-/// `cute_rs::copy::tma::copy_tma_2d::<T, SmemL>(desc, (r, c), &mut SmemTile, bar)`
+/// `cute_rs::nvgpu::cpasync::copy_tma_2d::<T, SmemL>(desc, (r, c), &mut SmemTile, bar)`
 ///
 /// The descriptor becomes a global transport view; the selected shared base
 /// and exact remaining capacity become a shared transport view. One
@@ -2065,7 +2065,7 @@ pub(crate) fn emit_copy_tma(
     Ok(emit_goto(ctx, *target_idx, copy_op, block_map, loc))
 }
 
-/// `cute_rs::copy::tma::copy_tma_s2g_2d::<T, SmemL>(desc, (r, c), SmemTile)`
+/// `cute_rs::nvgpu::cpasync::copy_tma_s2g_2d::<T, SmemL>(desc, (r, c), SmemTile)`
 ///
 /// The recognized boundary recovers the CTA-shared source proof from the
 /// carrier, splits the tile coordinate, and creates two short-lived TMA views

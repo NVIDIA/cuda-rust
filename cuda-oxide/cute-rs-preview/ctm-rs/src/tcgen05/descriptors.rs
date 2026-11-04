@@ -27,20 +27,20 @@ mod sealed {
 /// The shared operand's K coordinate is contiguous before swizzling.
 ///
 /// This descriptor marker is distinct from cute-rs's `KMajor<Mode>`
-/// (`cute_rs::block_scaled::KMajor`), a block-scaled operand layout that also
+/// (`cute_rs::utils::blockscaled::KMajor`), a block-scaled operand layout that also
 /// carries row and K extents.
 pub enum KMajor {}
 /// Left matrix input; cannot be substituted for [`OperandB`].
 ///
-/// cute-rs reexports this marker as `cute_rs::sm100::OperandA` (also at its
-/// crate root), so shared tiles there and instruction operands here share one
-/// role vocabulary.
+/// cute-rs defines the corresponding marker as `cute_rs::nvgpu::common::OperandA`
+/// (re-exported at its crate root), so shared tiles there and instruction
+/// operands here share one role vocabulary.
 pub enum OperandA {}
 /// Right matrix input; cannot be substituted for [`OperandA`].
 ///
-/// cute-rs reexports this marker as `cute_rs::sm100::OperandB` (also at its
-/// crate root), so shared tiles there and instruction operands here share one
-/// role vocabulary.
+/// cute-rs defines the corresponding marker as `cute_rs::nvgpu::common::OperandB`
+/// (re-exported at its crate root), so shared tiles there and instruction
+/// operands here share one role vocabulary.
 pub enum OperandB {}
 impl sealed::Role for OperandA {}
 impl sealed::Role for OperandB {}

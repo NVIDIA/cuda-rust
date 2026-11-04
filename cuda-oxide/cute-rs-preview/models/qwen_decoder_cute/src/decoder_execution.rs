@@ -9,15 +9,15 @@ use crate::operator::{GUARD_LEN, Result};
 use crate::reference_linear::{ReductionPlan, reference_plan};
 use crate::reference_linear_kernel::kernels as reference;
 use crate::{
-    attention_kernel, element_kernel, ffn_kernel, kernel, norm_kernel, predictor_graph_kernel,
+    attention_kernel,
+    decoder::{BiasWeights, DecoderWeights},
+    element_kernel,
+    ffn::{ProjectionRole, ProjectionWeights},
+    ffn_kernel, kernel, norm_kernel, predictor_graph_kernel,
 };
 use cuda_core::LaunchConfig;
 use cuda_core::{CudaStream, DeviceBuffer, LaunchConfig1D, PreparedLaunch};
-use cute_rs::{
-    BFloat16,
-    decoder::{BiasWeights, DecoderWeights},
-    ffn::{ProjectionRole, ProjectionWeights},
-};
+use cute_rs::BFloat16;
 use std::sync::Arc;
 
 /// Keep device guard offsets consistent with the shared attention state layout.

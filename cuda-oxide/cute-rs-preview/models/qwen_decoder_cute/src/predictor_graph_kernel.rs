@@ -70,7 +70,7 @@ pub mod kernels {
             .subview(0, 2048)
             .local_partition::<32>(lane as usize);
         let mut idx = lane;
-        let (mut best_val, mut best_idx, mut valid) = values.fold(
+        let (mut best_val, mut best_idx, valid) = values.fold(
             (f32::NEG_INFINITY, u32::MAX, true),
             |(bv, bi, ok), value| {
                 let v = value.to_f32();

@@ -98,7 +98,7 @@ pub struct OwnedBf16Layer {
 }
 
 impl OwnedBf16Layer {
-    /// Borrow this layer's buffers as a role-checked `cute_rs::decoder::DecoderWeights` view.
+    /// Borrow this layer's buffers as a role-checked [`DecoderWeights`] view.
     pub fn view(
         &self,
     ) -> Result<DecoderWeights<'_, HIDDEN, INTERMEDIATE, Q_WIDTH, KV_WIDTH, HEAD_DIM>> {

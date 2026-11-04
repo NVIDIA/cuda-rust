@@ -2519,6 +2519,16 @@ fn validate_192e(
     bufs.w_down_global
         .copy_from_host(stream, &w_down_global_host)?;
 
+    const E2M1_POS: [f32; 8] = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0];
+    let decode_e4m3 = |code: u8| -> f32 {
+        let exp = (code >> 3) & 0x0f;
+        let mant = code & 0x07;
+        if exp == 0 {
+            (mant as f32) * (1.0 / 512.0)
+        } else {
+            (1.0 + (mant as f32) * 0.125) * 2.0f32.powi((exp as i32) - 7)
+        }
+    };
     let host_quant_nvfp4 = |v: f32| -> f32 {
         let a = v.abs().min(2688.0);
         if a == 0.0 {
@@ -2528,7 +2538,7 @@ fn validate_192e(
         let mut best_s = 0.0f32;
         let mut best_err = f32::INFINITY;
         for code in 0u8..=0x7E {
-            let cand = E4M3x2::from_bytes(code, 0).to_f32x2().0;
+            let cand = decode_e4m3(code);
             let err = (target_s - cand).abs();
             if err < best_err || (err == best_err && (code & 1) == 0) {
                 best_err = err;
@@ -2541,8 +2551,7 @@ fn validate_192e(
         let scaled = a / best_s;
         let mut best_m = 0.0f32;
         let mut best_m_err = f32::INFINITY;
-        for nib in 0u8..8 {
-            let cand = Float4E2M1FNx2::from_bits(nib).to_f32x2().0;
+        for (nib, &cand) in E2M1_POS.iter().enumerate() {
             let err = (scaled - cand).abs();
             if err < best_m_err || (err == best_m_err && (nib & 1) == 0) {
                 best_m_err = err;
@@ -2569,12 +2578,8 @@ fn validate_192e(
                 for mt in 0..(INTERMEDIATE_192E / 128) {
                     let mut acc = 0.0f32;
                     for kc in 0..(HIDDEN_192E / 64) {
-                        let w_val = Float4E2M1FNx2::from_bits(NIB_PAIR[(e + mt + kc) & 3])
-                            .to_f32x2()
-                            .0;
-                        let w_sc = E4M3x2::from_bytes(SCALE_CODES[(e + mt + kc) % 3], 0)
-                            .to_f32x2()
-                            .0;
+                        let w_val = E2M1_POS[(NIB_PAIR[(e + mt + kc) & 3] & 7) as usize];
+                        let w_sc = decode_e4m3(SCALE_CODES[(e + mt + kc) % 3]);
                         acc += 64.0 * q_in[kc] * w_val * w_sc;
                     }
                     let u = (acc * up_g).max(0.0);
@@ -2583,12 +2588,8 @@ fn validate_192e(
                 for mt in 0..(HIDDEN_192E / 128) {
                     let mut acc = 0.0f32;
                     for kc in 0..(INTERMEDIATE_192E / 64) {
-                        let w_val = Float4E2M1FNx2::from_bits(NIB_PAIR[(e + mt * 3 + kc) & 3])
-                            .to_f32x2()
-                            .0;
-                        let w_sc = E4M3x2::from_bytes(SCALE_CODES[(e + mt + kc * 2) % 3], 0)
-                            .to_f32x2()
-                            .0;
+                        let w_val = E2M1_POS[(NIB_PAIR[(e + mt * 3 + kc) & 3] & 7) as usize];
+                        let w_sc = decode_e4m3(SCALE_CODES[(e + mt + kc * 2) % 3]);
                         acc += 64.0 * q_inter[kc >> 1] * w_val * w_sc;
                     }
                     let fc2_bf16 = BFloat16::from_f32(acc * down_g).to_f32();

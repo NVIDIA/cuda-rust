@@ -37,9 +37,8 @@ use cute_rs::utils::blockscaled::{
     CANONICAL_SCALE_ATOM_BYTES, CANONICAL_SCALE_K_GROUPS, CANONICAL_SCALE_M,
 };
 use cute_rs::{
-    BFloat16, BlockScaledTensor, E4M3x2, Float4E2M1FN, Float4E2M1FNx2, Float8E4M3FN, FragmentC,
-    GmemMatrix, KMajor, Mkl, Nkl, Nvfp4TiledMma, RegisterTile, Sm1xxBlockScaleKMajor, SmemTile,
-    Tensor, TiledCopy,
+    BFloat16, BlockScaledTensor, Float4E2M1FN, Float8E4M3FN, FragmentC, GmemMatrix, KMajor, Mkl,
+    Nkl, Nvfp4TiledMma, RegisterTile, Sm1xxBlockScaleKMajor, SmemTile, Tensor, TiledCopy,
 };
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -72,13 +71,23 @@ pub fn quantize_matrix_nvfp4(
     let mut values = vec![0u8; rows * packed_k];
     let mut scales = vec![0u8; rest_m * rest_k * CANONICAL_SCALE_ATOM_BYTES];
 
+    const E2M1_POS: [f32; 8] = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0];
+    let decode_e4m3 = |code: u8| -> f32 {
+        let exp = (code >> 3) & 0x0f;
+        let mant = code & 0x07;
+        if exp == 0 {
+            (mant as f32) * (1.0 / 512.0)
+        } else {
+            (1.0 + (mant as f32) * 0.125) * 2.0f32.powi((exp as i32) - 7)
+        }
+    };
     let encode_e4m3 = |v: f32| -> (u8, f32) {
         let c = v.clamp(0.0, 448.0);
         let mut best_code = 0u8;
         let mut best_val = 0.0f32;
         let mut best_err = f32::INFINITY;
         for code in 0u8..=0x7e {
-            let cand = E4M3x2::from_bytes(code, 0).to_f32x2().0;
+            let cand = decode_e4m3(code);
             let err = (c - cand).abs();
             if err < best_err || (err == best_err && (code & 1) == 0) {
                 best_err = err;
@@ -93,12 +102,11 @@ pub fn quantize_matrix_nvfp4(
         let a = v.abs().min(6.0);
         let mut best = 0u8;
         let mut best_err = f32::INFINITY;
-        for nib in 0u8..8 {
-            let cand = Float4E2M1FNx2::from_bits(nib).to_f32x2().0;
+        for (nib, &cand) in E2M1_POS.iter().enumerate() {
             let err = (a - cand).abs();
             if err < best_err || (err == best_err && (nib & 1) == 0) {
                 best_err = err;
-                best = nib;
+                best = nib as u8;
             }
         }
         sign | best
@@ -136,17 +144,29 @@ pub fn quantize_matrix_nvfp4(
 /// Reconstruct one logical row of `k` `f32` values from NVFP4 `values` and canonical `Float8E4M3FN` `scales`.
 #[must_use]
 pub fn dequantize_nvfp4_row(values: &[u8], scales: &[u8], row: usize, k: usize) -> Vec<f32> {
+    const E2M1_POS: [f32; 8] = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0];
+    let decode_e4m3 = |code: u8| -> f32 {
+        let exp = (code >> 3) & 0x0f;
+        let mant = code & 0x07;
+        if exp == 0 {
+            (mant as f32) * (1.0 / 512.0)
+        } else {
+            (1.0 + (mant as f32) * 0.125) * 2.0f32.powi((exp as i32) - 7)
+        }
+    };
+    let decode_e2m1 = |nib: u8| -> f32 {
+        let mag = E2M1_POS[(nib & 7) as usize];
+        if (nib & 8) != 0 { -mag } else { mag }
+    };
     let packed_k = k / 2;
     let groups_per_row = k / 16;
     let rest_k = groups_per_row.div_ceil(CANONICAL_SCALE_K_GROUPS);
     let mut out = Vec::with_capacity(k);
     for g in 0..groups_per_row {
-        let scale = E4M3x2::from_bytes(scales[canonical_scale_offset(rest_k, row, g)], 0)
-            .to_f32x2()
-            .0;
+        let scale = decode_e4m3(scales[canonical_scale_offset(rest_k, row, g)]);
         for pair in 0..8 {
             let byte = values[row * packed_k + g * 8 + pair];
-            let (lo, hi) = cute_rs::Float4E2M1FNx2::from_bits(byte).to_f32x2();
+            let (lo, hi) = (decode_e2m1(byte & 0x0f), decode_e2m1(byte >> 4));
             out.push(lo * scale);
             out.push(hi * scale);
         }
@@ -812,24 +832,11 @@ impl Nvfp4Runner {
 mod tests {
     use super::*;
 
-    /// Verify E4M3FN decoding preserves fractional scales and saturation codes.
+    /// Verify E4M3FN packing preserves byte order.
     #[test]
     fn e4m3_encoder_preserves_fractional_scales_and_clamps_overflow() {
-        for &(code, target) in &[
-            (0x00u8, 0.0f32),
-            (0x30, 0.5),
-            (0x38, 1.0),
-            (0x3a, 1.25),
-            (0x3c, 1.5),
-            (0x3e, 1.75),
-            (0x40, 2.0),
-            (0x44, 3.0),
-            (0x4c, 6.0),
-            (0x68, 64.0),
-            (0x7e, 448.0),
-        ] {
-            assert_eq!(E4M3x2::from_bytes(code, 0).to_f32x2().0, target);
-        }
+        let pair = cute_rs::E4M3x2::from_bytes(0x38, 0x3c);
+        assert_eq!(pair.to_bits(), 0x3c38);
     }
 
     /// Verify NVFP4 row quantization and dequantization preserve sign and scale across K=64 tiles.

@@ -104,6 +104,7 @@ pub fn idx2crd(idx: i64, shape: &IntTuple) -> IntTuple {
 ///
 /// Unpacks a flat coordinate `idx` into `(row, col) = (idx % rows, idx / rows)`
 /// with the row mode (`0..rows`) changing fastest (CuTeDSL `cute.idx2crd`).
+#[allow(clippy::manual_checked_ops)]
 #[must_use]
 #[inline(always)]
 pub const fn idx2crd_col_major_2d(idx: u32, rows: u32) -> (u32, u32) {
@@ -118,6 +119,7 @@ pub const fn idx2crd_col_major_2d(idx: u32, rows: u32) -> (u32, u32) {
 ///
 /// Unpacks a flat coordinate `idx` into `(row, col) = (idx / cols, idx % cols)`
 /// with the column mode (`0..cols`) changing fastest (CuTeDSL `cute.idx2crd`).
+#[allow(clippy::manual_checked_ops)]
 #[must_use]
 #[inline(always)]
 pub const fn idx2crd_row_major_2d(idx: u32, cols: u32) -> (u32, u32) {

@@ -226,8 +226,8 @@ for path in sorted(glob.glob("cuda-oxide/cute-rs-preview/cute-rs/src/**/*.rs", r
         for lineno, line in enumerate(f, 1):
             if "ctm_rs" in line or "ctm-rs" in line:
                 errors.append(f"{path}:{lineno}: `ctm_rs` is banned inside `cute-rs`: {line.strip()}")
-            if "fn f32_to_e4m3" in line or "fn f32_to_e2m1" in line:
-                errors.append(f"{path}:{lineno}: software `f32_to_e4m3` / `f32_to_e2m1` is banned in `cute-rs` (lower through `__compiler` -> `dialect-cute`): {line.strip()}")
+            if "fn f32_to_e4m3" in line or "fn f32_to_e2m1" in line or "fn e4m3_to_f32" in line or "fn e2m1_to_f32" in line or "fn ue8m0_to_f32" in line:
+                errors.append(f"{path}:{lineno}: software FP4/FP8 conversion helper is banned in `cute-rs` (lower through `__compiler` -> `dialect-cute`): {line.strip()}")
             if "/nvgpu/" in path and ("cuda_device" in line or "encode_no_swizzle_smem_desc" in line or "0x0000_0480" in line):
                 errors.append(f"{path}:{lineno}: raw `cuda_device` or manual descriptor bit-packing is banned in `cute-rs/src/nvgpu/` (lower through `__compiler` -> `dialect-cute`): {line.strip()}")
 

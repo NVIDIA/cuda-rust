@@ -275,7 +275,18 @@ fn verify_outputs(
                         let slot = slots[row] as usize;
                         k_cache[(slot * num_kv_heads + kv_head) * HEAD_DIM + d]
                     };
-                    let got_f32 = cute_rs::E4M3x2::from_bytes(got_byte, 0).to_f32x2().0;
+                    let sign = if (got_byte & 0x80) != 0 {
+                        -1.0f32
+                    } else {
+                        1.0f32
+                    };
+                    let exp = (got_byte >> 3) & 0x0f;
+                    let mant = got_byte & 0x07;
+                    let got_f32 = if exp == 0 {
+                        sign * (mant as f32) * (1.0 / 512.0)
+                    } else {
+                        sign * (1.0 + (mant as f32) * 0.125) * 2.0f32.powi((exp as i32) - 7)
+                    };
                     let err = (got_f32 - expected_f32).abs();
                     if err > max_err {
                         max_err = err;
@@ -293,7 +304,18 @@ fn verify_outputs(
                 for (d, &acc_d) in acc.iter().enumerate() {
                     let expected_f32 = (acc_d * inv_scale).clamp(-448.0, 448.0);
                     let got_byte = v_cache[(slot * num_kv_heads + kv_head) * HEAD_DIM + d];
-                    let got_f32 = cute_rs::E4M3x2::from_bytes(got_byte, 0).to_f32x2().0;
+                    let sign = if (got_byte & 0x80) != 0 {
+                        -1.0f32
+                    } else {
+                        1.0f32
+                    };
+                    let exp = (got_byte >> 3) & 0x0f;
+                    let mant = got_byte & 0x07;
+                    let got_f32 = if exp == 0 {
+                        sign * (mant as f32) * (1.0 / 512.0)
+                    } else {
+                        sign * (1.0 + (mant as f32) * 0.125) * 2.0f32.powi((exp as i32) - 7)
+                    };
                     let err = (got_f32 - expected_f32).abs();
                     if err > max_err {
                         max_err = err;

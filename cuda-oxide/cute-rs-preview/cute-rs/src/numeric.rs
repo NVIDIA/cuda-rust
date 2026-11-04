@@ -243,7 +243,7 @@ impl Float4E2M1FNx2 {
     #[must_use]
     #[inline(always)]
     pub fn to_f32x2(self) -> (f32, f32) {
-        (e2m1_to_f32(self.0 & 0x0f), e2m1_to_f32(self.0 >> 4))
+        __compiler::cvt_e2m1x2_to_f32x2(self.0)
     }
 }
 
@@ -291,10 +291,7 @@ impl UE8M0x2 {
     #[must_use]
     #[inline(always)]
     pub fn to_f32x2(self) -> (f32, f32) {
-        (
-            ue8m0_to_f32(self.0 as u8),
-            ue8m0_to_f32((self.0 >> 8) as u8),
-        )
+        __compiler::cvt_ue8m0x2_to_f32x2(self.0)
     }
 }
 
@@ -341,61 +338,10 @@ impl E4M3x2 {
     #[must_use]
     #[inline(always)]
     pub fn to_f32x2(self) -> (f32, f32) {
-        (e4m3_to_f32(self.0 as u8), e4m3_to_f32((self.0 >> 8) as u8))
-    }
-}
-
-#[inline(always)]
-/// Decode one `Float8E4M3FN` byte to `f32`; `0x7f` and `0xff` become quiet NaN.
-const fn e4m3_to_f32(byte: u8) -> f32 {
-    let sign = (byte >> 7) as u32;
-    let exp = ((byte >> 3) & 0x0f) as u32;
-    let mantissa = (byte & 0x07) as u32;
-    if exp == 0x0f && mantissa == 0x07 {
-        f32::from_bits(0x7fff_ffff)
-    } else if exp == 0 {
-        if mantissa == 0 {
-            f32::from_bits(sign << 31)
-        } else {
-            let mag = (mantissa as f32) * (1.0 / 512.0);
-            if sign == 0 { mag } else { -mag }
-        }
-    } else {
-        f32::from_bits((sign << 31) | ((exp + 120) << 23) | (mantissa << 20))
-    }
-}
-
-#[inline(always)]
-/// Decode the low FP4 E2M1 nibble, including its sign bit, to f32.
-fn e2m1_to_f32(nibble: u8) -> f32 {
-    let magnitude = match nibble & 0x07 {
-        0 => 0.0,
-        1 => 0.5,
-        2 => 1.0,
-        3 => 1.5,
-        4 => 2.0,
-        5 => 3.0,
-        6 => 4.0,
-        _ => 6.0,
-    };
-    if nibble & 0x08 == 0 {
-        magnitude
-    } else {
-        -magnitude
-    }
-}
-
-#[inline(always)]
-/// Decode one unsigned exponent-only scale; 0xff becomes NaN.
-fn ue8m0_to_f32(byte: u8) -> f32 {
-    match byte {
-        // UE8M0 code zero denotes 2^-127, exactly halfway through the first
-        // f32 subnormal exponent bin.
-        0 => f32::from_bits(0x0040_0000),
-        // The all-ones code is NaN. Keep a stable quiet payload without
-        // requiring a backend conversion intrinsic.
-        0xff => f32::from_bits(0x7fff_ffff),
-        exponent => f32::from_bits((exponent as u32) << 23),
+        (
+            Float8E4M3FN::from_bits(self.0 as u8).to_f32(),
+            Float8E4M3FN::from_bits((self.0 >> 8) as u8).to_f32(),
+        )
     }
 }
 
@@ -414,6 +360,22 @@ pub mod __compiler {
     #[must_use]
     #[inline(never)]
     pub fn cvt_e4m3_to_f32(bits: u8) -> f32 {
+        let _ = bits;
+        unreachable!("CuTe numeric conversion marker requires device compilation")
+    }
+
+    /// Widen one packed `Float4E2M1FNx2` byte into `(f32, f32)`.
+    #[must_use]
+    #[inline(never)]
+    pub fn cvt_e2m1x2_to_f32x2(bits: u8) -> (f32, f32) {
+        let _ = bits;
+        unreachable!("CuTe numeric conversion marker requires device compilation")
+    }
+
+    /// Widen one packed `UE8M0x2` `u16` pair into `(f32, f32)`.
+    #[must_use]
+    #[inline(never)]
+    pub fn cvt_ue8m0x2_to_f32x2(bits: u16) -> (f32, f32) {
         let _ = bits;
         unreachable!("CuTe numeric conversion marker requires device compilation")
     }
@@ -450,55 +412,14 @@ mod tests {
         }
     }
 
-    /// The low UE8M0 byte must decode as the first scale and the high byte as the second.
+    /// The low UE8M0 byte must store in the low half and the high byte in the high half.
     #[test]
     fn scale_pair_uses_low_byte_first() {
         let pair = UE8M0x2::from_bytes(0x7f, 0x80);
         assert_eq!(pair.to_bits(), 0x807f);
         assert_eq!(UE8M0x2::from_bits(0x807f), pair);
-    }
-
-    /// Every signed FP4 code must decode to the exact expected f32 bit pattern.
-    #[test]
-    fn e2m1_conversion_covers_every_code_bit_exactly() {
-        /// Independent positive FP4 reference values for all three-bit magnitude codes.
-        const MAGNITUDES: [f32; 8] = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0];
-        for (code, expected) in MAGNITUDES.into_iter().enumerate() {
-            assert_eq!(e2m1_to_f32(code as u8).to_bits(), expected.to_bits());
-            assert_eq!(
-                e2m1_to_f32(code as u8 | 0x08).to_bits(),
-                (-expected).to_bits()
-            );
-        }
-    }
-
-    /// Exponent-only decoding must handle the lowest exponent, normal codes and the NaN sentinel.
-    #[test]
-    fn ue8m0_conversion_handles_floor_normal_and_nan_codes() {
-        assert_eq!(ue8m0_to_f32(0).to_bits(), 0x0040_0000);
-        assert_eq!(ue8m0_to_f32(1).to_bits(), 0x0080_0000);
-        assert_eq!(ue8m0_to_f32(126), 0.5);
-        assert_eq!(ue8m0_to_f32(127), 1.0);
-        assert_eq!(ue8m0_to_f32(128), 2.0);
-        assert_eq!(ue8m0_to_f32(254).to_bits(), 0x7f00_0000);
-        assert!(ue8m0_to_f32(255).is_nan());
-    }
-
-    /// E4M3FN decoding must handle signed zero, subnormals, fractional normals, max 448.0, and NaN.
-    #[test]
-    fn e4m3_conversion_handles_zero_subnormal_fractional_max_and_nan() {
-        assert_eq!(e4m3_to_f32(0x00).to_bits(), 0x0000_0000);
-        assert_eq!(e4m3_to_f32(0x80).to_bits(), 0x8000_0000);
-        assert_eq!(e4m3_to_f32(0x01), 1.0 / 512.0);
-        assert_eq!(e4m3_to_f32(0x81), -1.0 / 512.0);
-        assert_eq!(e4m3_to_f32(0x38), 1.0);
-        assert_eq!(e4m3_to_f32(0x3c), 1.5);
-        assert_eq!(e4m3_to_f32(0xbc), -1.5);
-        assert_eq!(e4m3_to_f32(0x7e), 448.0);
-        assert_eq!(e4m3_to_f32(0xfe), -448.0);
-        assert!(e4m3_to_f32(0x7f).is_nan());
-        assert!(e4m3_to_f32(0xff).is_nan());
-        let pair = E4M3x2::from_bytes(0x38, 0x3c);
-        assert_eq!(pair.to_f32x2(), (1.0, 1.5));
+        let e4m3 = E4M3x2::from_bytes(0x38, 0x3c);
+        assert_eq!(e4m3.to_bits(), 0x3c38);
+        assert_eq!(E4M3x2::from_bits(0x3c38), e4m3);
     }
 }

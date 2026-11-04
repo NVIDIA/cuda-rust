@@ -268,24 +268,28 @@ fn make_scales(m: usize, k: usize, l: usize) -> (Vec<u8>, Vec<u8>) {
 
 /// Compute every GEMV result in FP32 and round once to FP16.
 fn reference(m: usize, k: usize, l: usize) -> Vec<f16> {
+    const E2M1_LUT: [f32; 8] = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0];
+    let decode_e2m1 = |nib: u8| -> f32 {
+        let mag = E2M1_LUT[(nib & 7) as usize];
+        if (nib & 8) != 0 { -mag } else { mag }
+    };
+    let decode_ue8m0 = |byte: u8| -> f32 {
+        match byte {
+            0 => f32::from_bits(0x0040_0000),
+            0xff => f32::from_bits(0x7fff_ffff),
+            exp => f32::from_bits((exp as u32) << 23),
+        }
+    };
     let mut expected = vec![0.0f16; checked_product("C", &[l, m])];
     for batch in 0..l {
         for row in 0..m {
             let mut acc = 0.0f32;
             for kk in 0..k {
                 let k_group = kk / SF_VEC;
-                let a_val = cute_rs::Float4E2M1FNx2::from_bits(a_nibble(batch, row, kk))
-                    .to_f32x2()
-                    .0;
-                let b_val = cute_rs::Float4E2M1FNx2::from_bits(b_nibble(batch, kk))
-                    .to_f32x2()
-                    .0;
-                let sfa_val = cute_rs::UE8M0x2::from_bytes(sfa_byte(batch, row, k_group), 0)
-                    .to_f32x2()
-                    .0;
-                let sfb_val = cute_rs::UE8M0x2::from_bytes(sfb_byte(batch, k_group), 0)
-                    .to_f32x2()
-                    .0;
+                let a_val = decode_e2m1(a_nibble(batch, row, kk));
+                let b_val = decode_e2m1(b_nibble(batch, kk));
+                let sfa_val = decode_ue8m0(sfa_byte(batch, row, k_group));
+                let sfb_val = decode_ue8m0(sfb_byte(batch, k_group));
                 acc += ((a_val * sfa_val) * b_val) * sfb_val;
             }
             expected[batch * m + row] = acc as f16;
@@ -393,53 +397,13 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
-    /// Check all signed E2M1 values, including positive and negative zero.
+    /// Check that the packed E2M1 and UE8M0 types preserve their exact bit representations.
     #[test]
-    fn e2m1_decode_covers_all_nibbles() {
-        let positives = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0];
-        for (nibble, expected) in positives.into_iter().enumerate() {
-            assert_eq!(
-                cute_rs::Float4E2M1FNx2::from_bits(nibble as u8)
-                    .to_f32x2()
-                    .0,
-                expected
-            );
-            assert_eq!(
-                cute_rs::Float4E2M1FNx2::from_bits(nibble as u8 | 8)
-                    .to_f32x2()
-                    .0,
-                -expected
-            );
+    fn packed_pairs_preserve_bits() {
+        for bits in 0u8..=u8::MAX {
+            assert_eq!(cute_rs::Float4E2M1FNx2::from_bits(bits).to_bits(), bits);
         }
-        assert_eq!(
-            cute_rs::Float4E2M1FNx2::from_bits(0).to_f32x2().0.to_bits(),
-            0x0000_0000
-        );
-        assert_eq!(
-            cute_rs::Float4E2M1FNx2::from_bits(8).to_f32x2().0.to_bits(),
-            0x8000_0000
-        );
-    }
-
-    /// Check scale-byte boundary values and the reserved NaN encoding.
-    #[test]
-    fn ue8m0_decode_covers_boundaries_and_nan() {
-        assert_eq!(
-            cute_rs::UE8M0x2::from_bytes(0, 0).to_f32x2().0.to_bits(),
-            0x0040_0000
-        );
-        assert_eq!(
-            cute_rs::UE8M0x2::from_bytes(1, 0).to_f32x2().0.to_bits(),
-            0x0080_0000
-        );
-        assert_eq!(cute_rs::UE8M0x2::from_bytes(126, 0).to_f32x2().0, 0.5);
-        assert_eq!(cute_rs::UE8M0x2::from_bytes(127, 0).to_f32x2().0, 1.0);
-        assert_eq!(cute_rs::UE8M0x2::from_bytes(128, 0).to_f32x2().0, 2.0);
-        assert_eq!(
-            cute_rs::UE8M0x2::from_bytes(254, 0).to_f32x2().0.to_bits(),
-            0x7f00_0000
-        );
-        assert!(cute_rs::UE8M0x2::from_bytes(255, 0).to_f32x2().0.is_nan());
+        assert_eq!(cute_rs::UE8M0x2::from_bytes(0x7f, 0x80).to_bits(), 0x807f);
     }
 
     /// Check that logical scale coordinates map to distinct, allocated bytes.

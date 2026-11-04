@@ -27,8 +27,8 @@ use cute_rs::pipeline::sm100::SingleCtaRing;
 use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
 use cute_rs::utils::tmem_allocator::TmemAllocator;
 use cute_rs::{
-    BFloat16, Consumer, Float4E2M1FN, Float8E4M3FN, Mkl, Nkl, OperandA, OperandB, PipelineState,
-    PipelineTmaAsync, Producer, RowMajor, Sm100BlockScaledTiledMma, Sm100ScaleTile,
+    BFloat16, Consumer, Float4E2M1FN, Float4E2M1FNx2, Float8E4M3FN, Mkl, Nkl, OperandA, OperandB,
+    PipelineState, PipelineTmaAsync, Producer, RowMajor, Sm100BlockScaledTiledMma, Sm100ScaleTile,
     Sm100SharedTile, SmemTile, Tensor, TensorMap, TensorMut, copy_tma_2d, crd2idx_2d,
     crd2idx_row_major_2d, idx2crd_2d, idx2crd_col_major_2d, idx2crd_row_major_2d, size_in_bytes,
     sm1xx_block_scale_crd2idx, sm100_noswizzle_burst_u64_crd2idx,
@@ -2431,70 +2431,14 @@ fn check_output_192e(
     Ok(norm_err)
 }
 
-/// Host reference helper: decode one `Float8E4M3FN` byte to `f32`.
-fn host_e4m3_to_f32(code: u8) -> f32 {
-    if code == 0 || code == 0x80 {
-        return 0.0;
-    }
-    let sign = if (code & 0x80) != 0 { -1.0f32 } else { 1.0f32 };
-    let exp = ((code >> 3) & 0x0F) as i32;
-    let mant = (code & 0x07) as f32;
-    if exp == 0 {
-        sign * (mant / 8.0) * 2.0f32.powi(-6)
-    } else {
-        sign * (1.0 + mant / 8.0) * 2.0f32.powi(exp - 7)
-    }
-}
-
-/// Host reference helper: encode one non-negative `f32` to `Float8E4M3FN` (round-to-nearest-even).
-fn host_f32_to_e4m3(v: f32) -> u8 {
-    let c = v.clamp(0.0, 448.0);
-    let mut best = 0u8;
-    let mut best_err = f32::INFINITY;
-    for code in 0u8..=0x7E {
-        let cand = host_e4m3_to_f32(code);
-        let err = (c - cand).abs();
-        if err < best_err || (err == best_err && (code & 1) == 0) {
-            best_err = err;
-            best = code;
-        }
-    }
-    best
-}
-
-/// Host reference helper: decode one 4-bit `Float4E2M1FN` nibble (`0..15`) to `f32`.
-fn host_e2m1_to_f32(nib: u8) -> f32 {
-    const LUT: [f32; 8] = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0];
-    let mag = LUT[(nib & 7) as usize];
-    if (nib & 8) != 0 { -mag } else { mag }
-}
-
-/// Host reference helper: encode one `f32` to 4-bit `Float4E2M1FN` (round-to-nearest-even).
-fn host_f32_to_e2m1(v: f32) -> u8 {
-    const LUT: [f32; 8] = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0];
-    let sign = if v < 0.0 { 8u8 } else { 0u8 };
-    let a = v.abs().min(6.0);
-    let mut best = 0u8;
-    let mut best_err = f32::INFINITY;
-    for (idx, &cand) in LUT.iter().enumerate() {
-        let err = (a - cand).abs();
-        if err < best_err || (err == best_err && (idx & 1) == 0) {
-            best_err = err;
-            best = idx as u8;
-        }
-    }
-    sign | best
-}
-
 /// Exact CPU reference for the uniform 192-expert fixture at token `t`.
 fn uniform_expected_row_192e(t: usize) -> f32 {
     let x = (crate::hidden_value(t) as f16) as f32;
-    let sc = host_f32_to_e4m3(x.abs() / 6.0);
-    let s = host_e4m3_to_f32(sc);
+    let s = Float8E4M3FN::from_f32(x.abs() / 6.0).to_f32();
     let q = if s == 0.0 {
         0.0
     } else {
-        host_e2m1_to_f32(host_f32_to_e2m1(x / s)) * s
+        Float4E2M1FNx2::from_f32x2(x / s, 0.0).to_f32x2().0 * s
     };
 
     let mut total = 0.0f32;
@@ -2504,12 +2448,11 @@ fn uniform_expected_row_192e(t: usize) -> f32 {
         let fc1 = q * UP_FACTORS_192E[expert];
         let u = fc1.max(0.0);
         let relu2 = u * u;
-        let isc = host_f32_to_e4m3(relu2 / 6.0);
-        let is = host_e4m3_to_f32(isc);
+        let is = Float8E4M3FN::from_f32(relu2 / 6.0).to_f32();
         let iq = if is == 0.0 {
             0.0
         } else {
-            host_e2m1_to_f32(host_f32_to_e2m1(relu2 / is)) * is
+            Float4E2M1FNx2::from_f32x2(relu2 / is, 0.0).to_f32x2().0 * is
         };
         let fc2 = BFloat16::from_f32(iq * DOWN_FACTORS_192E[expert]).to_f32();
         total += rw * fc2;
@@ -2595,12 +2538,11 @@ fn validate_192e(
             let mut q_in = [0.0f32; HIDDEN_192E / 64];
             for kc in 0..(HIDDEN_192E / 64) {
                 let x = hidden_h[t * HIDDEN_192E + kc * 64] as f32;
-                let sc = host_f32_to_e4m3(x.abs() / 6.0);
-                let s = host_e4m3_to_f32(sc);
+                let s = Float8E4M3FN::from_f32(x.abs() / 6.0).to_f32();
                 q_in[kc] = if s == 0.0 {
                     0.0
                 } else {
-                    host_e2m1_to_f32(host_f32_to_e2m1(x / s)) * s
+                    Float4E2M1FNx2::from_f32x2(x / s, 0.0).to_f32x2().0 * s
                 };
             }
             for slot in 0..TOP_K_192E {
@@ -2612,25 +2554,29 @@ fn validate_192e(
                 for mt in 0..(INTERMEDIATE_192E / 128) {
                     let mut acc = 0.0f32;
                     for kc in 0..(HIDDEN_192E / 64) {
-                        let w_val = host_e2m1_to_f32(NIB_PAIR[(e + mt + kc) & 3] & 0x0F);
-                        let w_sc = host_e4m3_to_f32(SCALE_CODES[(e + mt + kc) % 3]);
+                        let w_val = Float4E2M1FNx2::from_bits(NIB_PAIR[(e + mt + kc) & 3])
+                            .to_f32x2()
+                            .0;
+                        let w_sc = Float8E4M3FN::from_bits(SCALE_CODES[(e + mt + kc) % 3]).to_f32();
                         acc += 64.0 * q_in[kc] * w_val * w_sc;
                     }
                     let u = (acc * up_g).max(0.0);
                     let relu2 = u * u;
-                    let isc = host_f32_to_e4m3(relu2 / 6.0);
-                    let is = host_e4m3_to_f32(isc);
+                    let is = Float8E4M3FN::from_f32(relu2 / 6.0).to_f32();
                     q_inter[mt] = if is == 0.0 {
                         0.0
                     } else {
-                        host_e2m1_to_f32(host_f32_to_e2m1(relu2 / is)) * is
+                        Float4E2M1FNx2::from_f32x2(relu2 / is, 0.0).to_f32x2().0 * is
                     };
                 }
                 for mt in 0..(HIDDEN_192E / 128) {
                     let mut acc = 0.0f32;
                     for kc in 0..(INTERMEDIATE_192E / 64) {
-                        let w_val = host_e2m1_to_f32(NIB_PAIR[(e + mt * 3 + kc) & 3] & 0x0F);
-                        let w_sc = host_e4m3_to_f32(SCALE_CODES[(e + mt + kc * 2) % 3]);
+                        let w_val = Float4E2M1FNx2::from_bits(NIB_PAIR[(e + mt * 3 + kc) & 3])
+                            .to_f32x2()
+                            .0;
+                        let w_sc =
+                            Float8E4M3FN::from_bits(SCALE_CODES[(e + mt + kc * 2) % 3]).to_f32();
                         acc += 64.0 * q_inter[kc >> 1] * w_val * w_sc;
                     }
                     let fc2_bf16 = BFloat16::from_f32(acc * down_g).to_f32();

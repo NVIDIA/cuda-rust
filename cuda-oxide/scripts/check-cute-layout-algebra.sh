@@ -269,7 +269,7 @@ if os.path.isfile(moe_cute_path):
 
 main_cute_path = "cuda-oxide/cute-rs-preview/models/nemotron3_moe_cute/src/main.rs"
 if os.path.isfile(main_cute_path):
-    forbidden_main_re = re.compile(r"\b(dev_e4m3_to_f32|dev_f32_to_e4m3|dev_e4m3_inv_e2m1|fast_pos_e2m1)\b")
+    forbidden_main_re = re.compile(r"\b(dev_e4m3_to_f32|dev_f32_to_e4m3|dev_e4m3_inv_e2m1|fast_pos_e2m1|fn\s+f32_to_e2m1)\b")
     with open(main_cute_path, encoding="utf-8") as f:
         for lineno, line in enumerate(f, 1):
             if forbidden_main_re.search(line.split("//")[0]):

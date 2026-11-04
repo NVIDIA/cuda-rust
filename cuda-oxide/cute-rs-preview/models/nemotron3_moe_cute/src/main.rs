@@ -297,24 +297,6 @@ const _: () = {
     assert!(PIPELINE_OFFSET == 221_184);
 };
 
-/// Encode one signed `f32` value into its nearest 4-bit `Float4E2M1FN` nibble (`bits 3..0`).
-/// Maps magnitude thresholds `{0.25, 0.75, 1.25, 1.75, 2.5, 3.5, 5.0}` to `{0, 0.5, 1, 1.5, 2, 3, 4, 6}`
-/// and sets bit `3` (`0x08`) for negative values.
-#[must_use]
-#[inline(always)]
-pub fn f32_to_e2m1(value: f32) -> u8 {
-    let sign = if value < 0.0 { 0x08u8 } else { 0x00u8 };
-    let abs = if value < 0.0 { -value } else { value };
-    let mag = (abs >= 0.25) as u8
-        + (abs >= 0.75) as u8
-        + (abs >= 1.25) as u8
-        + (abs >= 1.75) as u8
-        + (abs >= 2.50) as u8
-        + (abs >= 3.50) as u8
-        + (abs >= 5.00) as u8;
-    sign | mag
-}
-
 /// Device kernels for the `cute-rs` Nemotron-3 NVFP4 `ReLU²` MoE pipeline (`K1`..`K4`).
 /// Compiled through `dialect-cute` and `cutlass-mlir` into a Blackwell (`sm_100a`) cubin.
 #[allow(clippy::too_many_arguments)]
@@ -1985,8 +1967,8 @@ mod kernels {
     }
 
     /// Weighted top-4 expert combination (`K5` finalize step for `B >= 2048`) using
-    /// `1` warp (`32` threads, `4 × u128` = `32` `BFloat16`s per thread) per token over
-    /// `StridedTensor<u128>` and `StridedTensorMut<u128>`.
+    /// `1` warp (`32` threads, `4 × RegisterTile<BFloat16, 8>` = `32` `BFloat16`s per thread) per token
+    /// over `Tensor::local_tile::<8>` and `TensorMut::local_tile::<8>`.
     #[kernel]
     pub fn moe_finalize_cute(
         grouped_out: &[BFloat16],
@@ -1998,62 +1980,45 @@ mod kernels {
     ) {
         let tid_global = (thread::blockIdx_x() as usize) * (thread::blockDim_x() as usize)
             + (thread::threadIdx_x() as usize);
-        let token = tid_global >> 5;
-        let lane = tid_global & 31;
+        let (lane_u32, token_u32) = idx2crd_col_major_2d(tid_global as u32, 32);
+        let (token, lane) = (token_u32 as usize, lane_u32 as usize);
         if token >= num_tokens {
             return;
         }
-        let h_u128 = hidden_size >> 3;
-        let grouped = unsafe { StridedTensor::<u128>::from_slice_as(grouped_out) };
-        let perm_u128 = unsafe { StridedTensor::<u128>::from_slice_as(tok_to_perm) };
-        let rw_u64 = unsafe { StridedTensor::<u64>::from_slice_as(routing_weights) };
-        let (gp128, w64) = unsafe { (perm_u128.get_unchecked(token), rw_u64.get_unchecked(token)) };
-        let r0 = ((gp128 & 0xFFFF_FFFF) as usize) * h_u128 + lane;
-        let r1 = (((gp128 >> 32) & 0xFFFF_FFFF) as usize) * h_u128 + lane;
-        let r2 = (((gp128 >> 64) & 0xFFFF_FFFF) as usize) * h_u128 + lane;
-        let r3 = ((gp128 >> 96) as usize) * h_u128 + lane;
-        let w0 = f32::from_bits(((w64 & 0xFFFF) as u32) << 16);
-        let w1 = f32::from_bits((((w64 >> 16) & 0xFFFF) as u32) << 16);
-        let w2 = f32::from_bits((((w64 >> 32) & 0xFFFF) as u32) << 16);
-        let w3 = f32::from_bits((((w64 >> 48) & 0xFFFF) as u32) << 16);
-        let mut out_u128 = unsafe { StridedTensorMut::<u128>::from_disjoint_slice_as(&mut output) };
-        let out_base = token * h_u128 + lane;
+        let h_tiles = hidden_size / 8; // 128
+        let perms = unsafe {
+            cute_rs::Tensor::from_slice(tok_to_perm)
+                .local_tile::<4>(token)
+                .load()
+                .into_array()
+        };
+        let rws = unsafe {
+            cute_rs::Tensor::from_slice(routing_weights)
+                .local_tile::<4>(token)
+                .load()
+                .to::<f32>()
+                .into_array()
+        };
+        let r0 = (perms[0] as usize) * h_tiles + lane;
+        let r1 = (perms[1] as usize) * h_tiles + lane;
+        let r2 = (perms[2] as usize) * h_tiles + lane;
+        let r3 = (perms[3] as usize) * h_tiles + lane;
+        let (w0, w1, w2, w3) = (rws[0], rws[1], rws[2], rws[3]);
+        let grouped_t = cute_rs::Tensor::from_slice(grouped_out);
+        let out_base = token * h_tiles + lane;
 
-        /// Combine one `u32` (`bf16x2`) pair across the 4 routed experts at bit shift `$sh`.
-        macro_rules! combine_pair {
-            ($q0:ident, $q1:ident, $q2:ident, $q3:ident, $sh:expr) => {{
-                let p0 = (($q0 >> $sh) & 0xFFFF_FFFF) as u32;
-                let p1 = (($q1 >> $sh) & 0xFFFF_FFFF) as u32;
-                let p2 = (($q2 >> $sh) & 0xFFFF_FFFF) as u32;
-                let p3 = (($q3 >> $sh) & 0xFFFF_FFFF) as u32;
-                let acc_lo = w0 * f32::from_bits(p0 << 16)
-                    + w1 * f32::from_bits(p1 << 16)
-                    + w2 * f32::from_bits(p2 << 16)
-                    + w3 * f32::from_bits(p3 << 16);
-                let acc_hi = w0 * f32::from_bits(p0 & 0xFFFF_0000)
-                    + w1 * f32::from_bits(p1 & 0xFFFF_0000)
-                    + w2 * f32::from_bits(p2 & 0xFFFF_0000)
-                    + w3 * f32::from_bits(p3 & 0xFFFF_0000);
-                let b_lo = BFloat16::from_f32(acc_lo).to_bits() as u32;
-                let b_hi = BFloat16::from_f32(acc_hi).to_bits() as u32;
-                ((b_lo | (b_hi << 16)) as u128) << $sh
-            }};
-        }
-        /// Coalesced 32-lane warp load/combine/store at column offset `$off`.
+        /// Coalesced 32-lane warp load/combine/store of 8 `BFloat16` elements at tile offset `$off`.
         macro_rules! combine_step {
             ($off:expr) => {
                 unsafe {
-                    let q0 = grouped.get_unchecked(r0 + $off);
-                    let q1 = grouped.get_unchecked(r1 + $off);
-                    let q2 = grouped.get_unchecked(r2 + $off);
-                    let q3 = grouped.get_unchecked(r3 + $off);
-                    out_u128.store_at(
-                        out_base + $off,
-                        combine_pair!(q0, q1, q2, q3, 0)
-                            | combine_pair!(q0, q1, q2, q3, 32)
-                            | combine_pair!(q0, q1, q2, q3, 64)
-                            | combine_pair!(q0, q1, q2, q3, 96),
-                    );
+                    let g0 = grouped_t.local_tile::<8>(r0 + $off).load().to::<f32>();
+                    let g1 = grouped_t.local_tile::<8>(r1 + $off).load().to::<f32>();
+                    let g2 = grouped_t.local_tile::<8>(r2 + $off).load().to::<f32>();
+                    let g3 = grouped_t.local_tile::<8>(r3 + $off).load().to::<f32>();
+                    let combined = (g0 * w0 + g1 * w1 + g2 * w2 + g3 * w3).to::<BFloat16>();
+                    cute_rs::TensorMut::from_disjoint_slice(&mut output)
+                        .local_tile::<8>(out_base + $off)
+                        .store(combined);
                 }
             };
         }

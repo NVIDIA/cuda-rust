@@ -18,7 +18,7 @@
 //! [`CacheShape::append_range`] does not reserve or initialize any storage.
 //!
 //! ```
-//! use cute_rs::attention::{AttentionShape, CacheShape};
+//! use qwen3_8b_cute::attention_metadata::{AttentionShape, CacheShape};
 //! let attention = AttentionShape::<16, 8, 128>::new().unwrap();
 //! assert_eq!(attention.query_width(), 2048);
 //! assert_eq!(attention.kv_width(), 1024);
@@ -190,7 +190,7 @@ impl<const QH: usize, const KVH: usize, const D: usize> AttentionShape<QH, KVH, 
 /// allocation capacities as `key_tokens`.
 ///
 /// ```
-/// use cute_rs::attention::AttentionWindow;
+/// use qwen3_8b_cute::attention_metadata::AttentionWindow;
 /// let appended = AttentionWindow::causal(3, 19, 16).unwrap();
 /// assert_eq!(appended.visible_keys(0).unwrap(), 17);
 /// assert_eq!(appended.visible_keys(2).unwrap(), 19);
@@ -275,7 +275,7 @@ impl AttentionWindow {
 /// remain part of its Rust type so checked callers can require compatible caches:
 ///
 /// ```compile_fail,E0308
-/// use cute_rs::attention::CacheShape;
+/// use qwen3_8b_cute::attention_metadata::CacheShape;
 /// fn needs_128_wide_heads(_: CacheShape<8, 128>) {}
 /// let cache = CacheShape::<8, 64>::new(65).unwrap();
 /// needs_128_wide_heads(cache);

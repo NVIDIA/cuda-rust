@@ -248,7 +248,7 @@ impl NormRole for FinalNorm {}
 ///
 /// A query norm cannot be substituted for the equally sized key norm:
 /// ```compile_fail,E0308
-/// use cute_rs::decoder::{KeyNorm, NormWeights, QueryNorm};
+/// use qwen3_8b_cute::decoder::{KeyNorm, NormWeights, QueryNorm};
 /// fn wrong_role(query: NormWeights<'_, QueryNorm, 128>) {
 ///     let _: NormWeights<'_, KeyNorm, 128> = query;
 /// }
@@ -256,7 +256,8 @@ impl NormRole for FinalNorm {}
 /// The immutable borrow lasts through the checked view's final use:
 /// ```compile_fail,E0502
 /// use cuda_core::DeviceBuffer;
-/// use cute_rs::{BFloat16, decoder::{InputNorm, NormWeights}};
+/// use cute_rs::BFloat16;
+/// use qwen3_8b_cute::decoder::{InputNorm, NormWeights};
 /// fn mutate(_: &mut DeviceBuffer<BFloat16>) {}
 /// fn alias(buffer: &mut DeviceBuffer<BFloat16>) {
 ///     let weights = NormWeights::<InputNorm, 1024>::new(buffer).unwrap();
@@ -322,7 +323,7 @@ impl<'a, Role: ProjectionRole, const WIDTH: usize> BiasWeights<'a, Role, WIDTH> 
 /// Query and key weights remain distinct even for multi-head attention where
 /// their dimensions match:
 /// ```compile_fail,E0308
-/// use cute_rs::ffn::{Key, ProjectionWeights, Query};
+/// use qwen3_8b_cute::ffn::{Key, ProjectionWeights, Query};
 /// fn wrong_role(query: ProjectionWeights<'_, Query, 8, 16>) {
 ///     let _: ProjectionWeights<'_, Key, 8, 16> = query;
 /// }
@@ -401,7 +402,7 @@ impl<'a, const H: usize, const QWIDTH: usize, const KVWIDTH: usize, const D: usi
 ///
 /// Predictor hidden width 1024 cannot stand in for Talker hidden width 2048:
 /// ```compile_fail,E0308
-/// use cute_rs::decoder::{DecoderShape, DecoderWeights};
+/// use qwen3_8b_cute::decoder::{DecoderShape, DecoderWeights};
 /// fn wrong_hidden(weights: &DecoderWeights<'_, 1024, 3072, 2048, 1024, 128>) {
 ///     let talker = DecoderShape::<2048, 6144, 16, 8, 128>::new(1, 2048).unwrap();
 ///     talker.validate_weights(weights).unwrap();
@@ -527,7 +528,7 @@ impl<'a, const VOCAB: usize, const WIDTH: usize> EmbeddingWeights<'a, VOCAB, WID
 ///
 /// The host indices cannot change while the checked view is in use:
 /// ```compile_fail,E0506
-/// use cute_rs::decoder::TokenIds;
+/// use qwen3_8b_cute::decoder::TokenIds;
 /// let mut ids = [0, 1];
 /// let checked = TokenIds::<2>::new(&ids).unwrap();
 /// ids[0] = 99;

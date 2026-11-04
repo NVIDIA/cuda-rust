@@ -60,7 +60,7 @@ pub use layout::{
 };
 pub use numeric::{
     BFloat16, E4M3x2, E4M3x4, Float4E2M1FN, Float4E2M1FNx2, Float8E4M3FN, Float8E8M0FNU, Mxf4E2M1,
-    UE8M0x2, UE8M0x4, e4m3_to_f32, f32_to_e2m1, f32_to_e4m3,
+    UE8M0x2, UE8M0x4,
 };
 pub use nvgpu::common::{Mkl, Nkl, OperandA, OperandB};
 pub use nvgpu::cpasync::{

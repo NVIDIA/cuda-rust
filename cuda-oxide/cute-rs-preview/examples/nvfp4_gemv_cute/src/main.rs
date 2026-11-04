@@ -189,29 +189,6 @@ fn validate_problem_sizes(m: usize, k: usize, l: usize) {
     let _ = u32::try_from(l).expect("grid.z exceeds u32");
 }
 
-/// Decode an E2M1 nibble, including its sign bit.
-fn e2m1_to_f32(nibble: u8) -> f32 {
-    /// FP32 magnitudes for the eight unsigned E2M1 bit patterns.
-    const VALUES: [f32; 8] = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0];
-    let magnitude = VALUES[(nibble & 0x7) as usize];
-    if nibble & 0x8 != 0 {
-        -magnitude
-    } else {
-        magnitude
-    }
-}
-
-/// Decode a scale byte, including the smallest scale and the NaN encoding.
-fn ue8m0_to_f32(byte: u8) -> f32 {
-    if byte == 0 {
-        f32::from_bits(0x0040_0000)
-    } else if byte == 0xff {
-        f32::from_bits(0x7fff_ffff)
-    } else {
-        f32::from_bits((byte as u32) << 23)
-    }
-}
-
 /// Generate a deterministic matrix value from its batch, row, and K coordinate.
 fn a_nibble(batch: usize, row: usize, k: usize) -> u8 {
     (((batch % 16) * 5 + (row % 16) * 13 + (k % 16) * 7 + 3) % 16) as u8
@@ -297,10 +274,19 @@ fn reference(m: usize, k: usize, l: usize) -> Vec<f16> {
             let mut acc = 0.0f32;
             for kk in 0..k {
                 let k_group = kk / SF_VEC;
-                acc += ((e2m1_to_f32(a_nibble(batch, row, kk))
-                    * ue8m0_to_f32(sfa_byte(batch, row, k_group)))
-                    * e2m1_to_f32(b_nibble(batch, kk)))
-                    * ue8m0_to_f32(sfb_byte(batch, k_group));
+                let a_val = cute_rs::Float4E2M1FNx2::from_bits(a_nibble(batch, row, kk))
+                    .to_f32x2()
+                    .0;
+                let b_val = cute_rs::Float4E2M1FNx2::from_bits(b_nibble(batch, kk))
+                    .to_f32x2()
+                    .0;
+                let sfa_val = cute_rs::UE8M0x2::from_bytes(sfa_byte(batch, row, k_group), 0)
+                    .to_f32x2()
+                    .0;
+                let sfb_val = cute_rs::UE8M0x2::from_bytes(sfb_byte(batch, k_group), 0)
+                    .to_f32x2()
+                    .0;
+                acc += ((a_val * sfa_val) * b_val) * sfb_val;
             }
             expected[batch * m + row] = acc as f16;
         }
@@ -412,23 +398,48 @@ mod tests {
     fn e2m1_decode_covers_all_nibbles() {
         let positives = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0];
         for (nibble, expected) in positives.into_iter().enumerate() {
-            assert_eq!(e2m1_to_f32(nibble as u8), expected);
-            assert_eq!(e2m1_to_f32(nibble as u8 | 8), -expected);
+            assert_eq!(
+                cute_rs::Float4E2M1FNx2::from_bits(nibble as u8)
+                    .to_f32x2()
+                    .0,
+                expected
+            );
+            assert_eq!(
+                cute_rs::Float4E2M1FNx2::from_bits(nibble as u8 | 8)
+                    .to_f32x2()
+                    .0,
+                -expected
+            );
         }
-        assert_eq!(e2m1_to_f32(0).to_bits(), 0x0000_0000);
-        assert_eq!(e2m1_to_f32(8).to_bits(), 0x8000_0000);
+        assert_eq!(
+            cute_rs::Float4E2M1FNx2::from_bits(0).to_f32x2().0.to_bits(),
+            0x0000_0000
+        );
+        assert_eq!(
+            cute_rs::Float4E2M1FNx2::from_bits(8).to_f32x2().0.to_bits(),
+            0x8000_0000
+        );
     }
 
     /// Check scale-byte boundary values and the reserved NaN encoding.
     #[test]
     fn ue8m0_decode_covers_boundaries_and_nan() {
-        assert_eq!(ue8m0_to_f32(0).to_bits(), 0x0040_0000);
-        assert_eq!(ue8m0_to_f32(1).to_bits(), 0x0080_0000);
-        assert_eq!(ue8m0_to_f32(126), 0.5);
-        assert_eq!(ue8m0_to_f32(127), 1.0);
-        assert_eq!(ue8m0_to_f32(128), 2.0);
-        assert_eq!(ue8m0_to_f32(254).to_bits(), 0x7f00_0000);
-        assert!(ue8m0_to_f32(255).is_nan());
+        assert_eq!(
+            cute_rs::UE8M0x2::from_bytes(0, 0).to_f32x2().0.to_bits(),
+            0x0040_0000
+        );
+        assert_eq!(
+            cute_rs::UE8M0x2::from_bytes(1, 0).to_f32x2().0.to_bits(),
+            0x0080_0000
+        );
+        assert_eq!(cute_rs::UE8M0x2::from_bytes(126, 0).to_f32x2().0, 0.5);
+        assert_eq!(cute_rs::UE8M0x2::from_bytes(127, 0).to_f32x2().0, 1.0);
+        assert_eq!(cute_rs::UE8M0x2::from_bytes(128, 0).to_f32x2().0, 2.0);
+        assert_eq!(
+            cute_rs::UE8M0x2::from_bytes(254, 0).to_f32x2().0.to_bits(),
+            0x7f00_0000
+        );
+        assert!(cute_rs::UE8M0x2::from_bytes(255, 0).to_f32x2().0.is_nan());
     }
 
     /// Check that logical scale coordinates map to distinct, allocated bytes.

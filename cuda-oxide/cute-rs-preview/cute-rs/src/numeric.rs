@@ -354,7 +354,7 @@ impl E4M3x2 {
 
 #[inline(always)]
 /// Decode one `Float8E4M3FN` byte to `f32`; `0x7f` and `0xff` become quiet NaN.
-pub const fn e4m3_to_f32(byte: u8) -> f32 {
+const fn e4m3_to_f32(byte: u8) -> f32 {
     let sign = (byte >> 7) as u32;
     let exp = ((byte >> 3) & 0x0f) as u32;
     let mantissa = (byte & 0x07) as u32;
@@ -372,27 +372,34 @@ pub const fn e4m3_to_f32(byte: u8) -> f32 {
     }
 }
 
-/// Encode a non-negative `f32` scale into the nearest finite `Float8E4M3FN` byte (`[0.0, 448.0]`).
-///
-/// Negative or NaN inputs return `0`; values above `448.0` clamp to the maximum
-/// finite `Float8E4M3FN` code (`0x7e`).
+/// Encode an `f32` value into the nearest finite `Float8E4M3FN` byte (`[-448.0, 448.0]`),
+/// returning `0x7f` for `NaN`.
 #[must_use]
 #[inline(always)]
-pub fn f32_to_e4m3(value: f32) -> u8 {
-    if value.is_nan() || value <= 0.0 {
-        return 0;
+fn f32_to_e4m3(value: f32) -> u8 {
+    if value.is_nan() {
+        return 0x7f;
     }
-    let clamped = if value > 448.0 { 448.0 } else { value };
+    let sign = if value.is_sign_negative() {
+        0x80u8
+    } else {
+        0u8
+    };
+    let abs = value.abs();
+    if abs == 0.0 {
+        return sign;
+    }
+    let clamped = if abs > 448.0 { 448.0 } else { abs };
     if clamped < (1.0 / 64.0) {
         let mant = ((clamped * 512.0) + 0.5) as u32;
-        return mant.clamp(1, 7) as u8;
+        return sign | (if mant > 7 { 7 } else { mant } as u8);
     }
     let bits = clamped.to_bits();
     let f32_exp = ((bits >> 23) & 0xff) as i32;
     let e4m3_exp = f32_exp - 120;
     if e4m3_exp <= 0 {
         let mant = ((clamped * 512.0) + 0.5) as u32;
-        return (if mant > 7 { 7 } else { mant }) as u8;
+        return sign | (if mant > 7 { 7 } else { mant } as u8);
     }
     let rounded_mant = (((bits >> 19) & 0x0f) + 1) >> 1;
     let (mut exp, mut mant) = if rounded_mant >= 8 {
@@ -404,13 +411,13 @@ pub fn f32_to_e4m3(value: f32) -> u8 {
         exp = 15;
         mant = 6;
     }
-    (((exp as u8) & 0x0f) << 3) | ((mant as u8) & 0x07)
+    sign | (((exp as u8) & 0x0f) << 3) | ((mant as u8) & 0x07)
 }
 
 /// Encode one signed `f32` value into its nearest 4-bit `Float4E2M1FN` nibble (`bits 3..0`).
 #[must_use]
 #[inline(always)]
-pub fn f32_to_e2m1(value: f32) -> u8 {
+fn f32_to_e2m1(value: f32) -> u8 {
     let sign = if value < 0.0 { 0x08u8 } else { 0x00u8 };
     let abs = if value < 0.0 { -value } else { value };
     let mag = if abs < 0.25 {

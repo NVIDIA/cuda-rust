@@ -39,7 +39,7 @@ use cute_rs::utils::blockscaled::{
 use cute_rs::{
     BFloat16, BlockScaledTensor, Float4E2M1FN, Float4E2M1FNx2, Float8E4M3FN, FragmentC, GmemMatrix,
     KMajor, Mkl, Nkl, Nvfp4TiledMma, RegisterTile, Sm1xxBlockScaleKMajor, SmemTile, Tensor,
-    TensorMut, TiledCopy, e4m3_to_f32, f32_to_e2m1, f32_to_e4m3,
+    TiledCopy,
 };
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -84,18 +84,20 @@ pub fn quantize_matrix_nvfp4(
                     max_abs = a;
                 }
             }
-            let scale_code = f32_to_e4m3(max_abs / 6.0);
-            let scale_val = e4m3_to_f32(scale_code);
+            let scale = Float8E4M3FN::from_f32(max_abs / 6.0);
+            let scale_val = scale.to_f32();
             let inv_scale = if scale_val > 0.0 {
                 1.0 / scale_val
             } else {
                 0.0
             };
-            scales[canonical_scale_offset(rest_k, r, g)] = scale_code;
+            scales[canonical_scale_offset(rest_k, r, g)] = scale.to_bits();
             for pair in 0..8 {
-                let lo = f32_to_e2m1(block[pair * 2].to_f32() * inv_scale);
-                let hi = f32_to_e2m1(block[pair * 2 + 1].to_f32() * inv_scale);
-                out_row[g * 8 + pair] = lo | (hi << 4);
+                out_row[g * 8 + pair] = Float4E2M1FNx2::from_f32x2(
+                    block[pair * 2].to_f32() * inv_scale,
+                    block[pair * 2 + 1].to_f32() * inv_scale,
+                )
+                .to_bits();
             }
         }
     }
@@ -110,7 +112,8 @@ pub fn dequantize_nvfp4_row(values: &[u8], scales: &[u8], row: usize, k: usize) 
     let rest_k = groups_per_row.div_ceil(CANONICAL_SCALE_K_GROUPS);
     let mut out = Vec::with_capacity(k);
     for g in 0..groups_per_row {
-        let scale = e4m3_to_f32(scales[canonical_scale_offset(rest_k, row, g)]);
+        let scale =
+            Float8E4M3FN::from_bits(scales[canonical_scale_offset(rest_k, row, g)]).to_f32();
         for pair in 0..8 {
             let byte = values[row * packed_k + g * 8 + pair];
             let (lo, hi) = cute_rs::Float4E2M1FNx2::from_bits(byte).to_f32x2();
@@ -178,33 +181,21 @@ pub(crate) mod kernels {
                 let a = if v < 0.0 { -v } else { v };
                 if a > m { a } else { m }
             });
-            let scale_code = f32_to_e4m3(max_abs * (scale_boost / 6.0));
-            let scale_val = e4m3_to_f32(scale_code) * inv_scale_boost;
-            let inv_scale = if scale_val > 0.0 {
-                1.0 / scale_val
-            } else {
-                0.0
-            };
+            let scale = Float8E4M3FN::from_f32(max_abs * (scale_boost / 6.0));
+            let inv_scale =
+                cute_rs::arch::rcp_approx(scale.to_f32() * inv_scale_boost).min(f32::MAX);
             let scale_offset = scale_layout.crd2idx(0, row, group);
             unsafe {
-                scales_out.store_at(scale_offset, scale_code);
+                scales_out.store_at(scale_offset, scale.to_bits());
             }
-            let lo_arr = lo_half.into_array();
-            let hi_arr = hi_half.into_array();
-            let packed = RegisterTile::<u8, 8>::from_array([
-                Float4E2M1FNx2::from_f32x2(lo_arr[0] * inv_scale, lo_arr[1] * inv_scale).to_bits(),
-                Float4E2M1FNx2::from_f32x2(lo_arr[2] * inv_scale, lo_arr[3] * inv_scale).to_bits(),
-                Float4E2M1FNx2::from_f32x2(lo_arr[4] * inv_scale, lo_arr[5] * inv_scale).to_bits(),
-                Float4E2M1FNx2::from_f32x2(lo_arr[6] * inv_scale, lo_arr[7] * inv_scale).to_bits(),
-                Float4E2M1FNx2::from_f32x2(hi_arr[0] * inv_scale, hi_arr[1] * inv_scale).to_bits(),
-                Float4E2M1FNx2::from_f32x2(hi_arr[2] * inv_scale, hi_arr[3] * inv_scale).to_bits(),
-                Float4E2M1FNx2::from_f32x2(hi_arr[4] * inv_scale, hi_arr[5] * inv_scale).to_bits(),
-                Float4E2M1FNx2::from_f32x2(hi_arr[6] * inv_scale, hi_arr[7] * inv_scale).to_bits(),
-            ]);
+            let lo_u32 = (lo_half * inv_scale).to::<Float4E2M1FN>();
+            let hi_u32 = (hi_half * inv_scale).to::<Float4E2M1FN>();
+            let packed = RegisterTile::<u32, 2>::from_array([lo_u32, hi_u32]);
             unsafe {
-                TensorMut::from_disjoint_slice(&mut out_values)
-                    .local_tile::<8>(group_idx)
-                    .store(packed);
+                StridedTensorMut::<u64>::from_disjoint_slice_as(&mut out_values).store_at(
+                    group_idx,
+                    (packed.into_array()[0] as u64) | ((packed.into_array()[1] as u64) << 32),
+                );
             }
             g += 1;
         }
@@ -797,11 +788,11 @@ mod tests {
         for &target in &[
             0.0f32, 0.5, 1.0, 1.25, 1.5, 1.75, 2.0, 3.0, 6.0, 64.0, 448.0,
         ] {
-            let code = f32_to_e4m3(target);
-            assert_eq!(e4m3_to_f32(code), target);
+            let scale = Float8E4M3FN::from_f32(target);
+            assert_eq!(scale.to_f32(), target);
         }
-        assert_eq!(e4m3_to_f32(f32_to_e4m3(1000.0)), 448.0);
-        assert_eq!(f32_to_e4m3(-5.0), 0);
+        assert_eq!(Float8E4M3FN::from_f32(1000.0).to_f32(), 448.0);
+        assert_eq!(Float8E4M3FN::from_f32(-4.0).to_f32(), -4.0);
     }
 
     /// Verify NVFP4 row quantization and dequantization preserve sign and scale across K=64 tiles.

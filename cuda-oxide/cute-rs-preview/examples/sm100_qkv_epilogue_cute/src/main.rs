@@ -209,45 +209,6 @@ impl Drop for KernelGraph {
     }
 }
 
-/// Encode one `f32` value into `Float8E4M3FN` (`u8`) with round-to-nearest-even and finite saturation (`±448.0`).
-fn f32_to_e4m3fn(x: f32) -> u8 {
-    if x.is_nan() {
-        return 0x7f;
-    }
-    let sign = if x.is_sign_negative() { 0x80u8 } else { 0x00u8 };
-    let abs = x.abs().min(448.0);
-    if abs == 0.0 {
-        return sign;
-    }
-    let mut best_code = 0u8;
-    let mut best_diff = f32::INFINITY;
-    for code in 0u8..127u8 {
-        let val = e4m3fn_to_f32(code);
-        let diff = (abs - val).abs();
-        if diff < best_diff || (diff == best_diff && (code & 1) == 0) {
-            best_diff = diff;
-            best_code = code;
-        }
-    }
-    sign | best_code
-}
-
-/// Decode one `Float8E4M3FN` byte (`u8`) into its exact `f32` value.
-fn e4m3fn_to_f32(byte: u8) -> f32 {
-    let sign = if (byte & 0x80) != 0 { -1.0f32 } else { 1.0f32 };
-    let exp = (byte >> 3) & 0x0f;
-    let mant = byte & 0x07;
-    if exp == 15 && mant == 7 {
-        return f32::NAN;
-    }
-    let mag = if exp == 0 {
-        (mant as f32) * (2.0f32).powi(-9)
-    } else {
-        (1.0f32 + (mant as f32) * 0.125f32) * (2.0f32).powi((exp as i32) - 7)
-    };
-    sign * mag
-}
-
 /// Generate deterministic integer-valued FP16 bit patterns in `{-1.0, 0.0, 1.0}` for exact verification.
 /// Every row/head dot product is an exact integer in FP32 with zero accumulation rounding ambiguity.
 fn deterministic_f16(count: usize, mut seed: u32) -> Vec<u16> {
@@ -307,7 +268,8 @@ fn verify_outputs(
                 let gamma = if head < num_q_heads { gamma_q } else { gamma_k };
                 for (d, (&acc_d, &gamma_d)) in acc.iter().zip(gamma.iter()).enumerate() {
                     let expected_f32 =
-                        e4m3fn_to_f32(f32_to_e4m3fn(acc_d * inv_rms * gamma_d * inv_scale));
+                        cute_rs::Float8E4M3FN::from_f32(acc_d * inv_rms * gamma_d * inv_scale)
+                            .to_f32();
                     let got_byte = if head < num_q_heads {
                         q_out[(row * num_q_heads + head) * HEAD_DIM + d]
                     } else {
@@ -315,7 +277,7 @@ fn verify_outputs(
                         let slot = slots[row] as usize;
                         k_cache[(slot * num_kv_heads + kv_head) * HEAD_DIM + d]
                     };
-                    let got_f32 = e4m3fn_to_f32(got_byte);
+                    let got_f32 = cute_rs::Float8E4M3FN::from_bits(got_byte).to_f32();
                     let err = (got_f32 - expected_f32).abs();
                     if err > max_err {
                         max_err = err;
@@ -331,9 +293,9 @@ fn verify_outputs(
                 let kv_head = head - (num_q_heads + num_kv_heads);
                 let slot = slots[row] as usize;
                 for (d, &acc_d) in acc.iter().enumerate() {
-                    let expected_f32 = e4m3fn_to_f32(f32_to_e4m3fn(acc_d * inv_scale));
+                    let expected_f32 = cute_rs::Float8E4M3FN::from_f32(acc_d * inv_scale).to_f32();
                     let got_byte = v_cache[(slot * num_kv_heads + kv_head) * HEAD_DIM + d];
-                    let got_f32 = e4m3fn_to_f32(got_byte);
+                    let got_f32 = cute_rs::Float8E4M3FN::from_bits(got_byte).to_f32();
                     let err = (got_f32 - expected_f32).abs();
                     if err > max_err {
                         max_err = err;

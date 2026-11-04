@@ -19,7 +19,7 @@
 //! ```
 //! use cuda_core::DeviceBuffer;
 //! use cute_rs::BFloat16;
-//! use cute_rs::ffn::{Down, FfnError, FfnWeights, Gate, ProjectionWeights, Up};
+//! use qwen3_8b_cute::ffn::{Down, FfnError, FfnWeights, Gate, ProjectionWeights, Up};
 //!
 //! fn checked<'a>(
 //!     gate: &'a DeviceBuffer<BFloat16>,
@@ -210,7 +210,7 @@ pub struct InputProjection;
 /// The input and output adapters remain distinct even when widths happen to match:
 ///
 /// ```compile_fail,E0308
-/// use cute_rs::ffn::{InputProjection, OutputProjection, ProjectionWeights};
+/// use qwen3_8b_cute::ffn::{InputProjection, OutputProjection, ProjectionWeights};
 /// fn wrong_role(weight: ProjectionWeights<'_, InputProjection, 16, 16>) {
 ///     let _: ProjectionWeights<'_, OutputProjection, 16, 16> = weight;
 /// }
@@ -225,7 +225,7 @@ pub struct ChannelExpand;
 /// Weights contracting activated channels back to the residual width.
 ///
 /// ```compile_fail,E0308
-/// use cute_rs::ffn::{ChannelExpand, ChannelContract, ProjectionWeights};
+/// use qwen3_8b_cute::ffn::{ChannelExpand, ChannelContract, ProjectionWeights};
 /// fn wrong_role(weight: ProjectionWeights<'_, ChannelExpand, 16, 16>) {
 ///     let _: ProjectionWeights<'_, ChannelContract, 16, 16> = weight;
 /// }
@@ -284,7 +284,7 @@ impl ProjectionRole for Logits {}
 ///
 /// ```compile_fail,E0308
 /// use cuda_core::DeviceBuffer;
-/// use cute_rs::ffn::{Gate, ProjectionWeights};
+/// use qwen3_8b_cute::ffn::{Gate, ProjectionWeights};
 /// fn wrong_dtype(weights: &DeviceBuffer<f32>) {
 ///     let _ = ProjectionWeights::<Gate, 8, 16>::new(weights, 8);
 /// }
@@ -295,7 +295,7 @@ impl ProjectionRole for Logits {}
 /// ```compile_fail,E0502
 /// use cuda_core::DeviceBuffer;
 /// use cute_rs::BFloat16;
-/// use cute_rs::ffn::{Gate, ProjectionWeights};
+/// use qwen3_8b_cute::ffn::{Gate, ProjectionWeights};
 /// fn exclusive_use(_: &mut DeviceBuffer<BFloat16>) {}
 /// fn alias(weights: &mut DeviceBuffer<BFloat16>) {
 ///     let gate = ProjectionWeights::<Gate, 8, 16>::new(weights, 8).unwrap();
@@ -350,7 +350,7 @@ impl<'a, Role: ProjectionRole, const INPUT: usize, const OUTPUT: usize>
 /// Equal dimensions do not make gate and up weights interchangeable:
 ///
 /// ```compile_fail,E0308
-/// use cute_rs::ffn::{Down, FfnWeights, Gate, ProjectionWeights, Up};
+/// use qwen3_8b_cute::ffn::{Down, FfnWeights, Gate, ProjectionWeights, Up};
 /// fn swapped(
 ///     gate: ProjectionWeights<'_, Gate, 8, 16>,
 ///     up: ProjectionWeights<'_, Up, 8, 16>,
@@ -363,7 +363,7 @@ impl<'a, Role: ProjectionRole, const INPUT: usize, const OUTPUT: usize>
 /// The down projection must reverse the hidden/intermediate dimensions:
 ///
 /// ```compile_fail,E0308
-/// use cute_rs::ffn::{Down, FfnWeights, Gate, ProjectionWeights, Up};
+/// use qwen3_8b_cute::ffn::{Down, FfnWeights, Gate, ProjectionWeights, Up};
 /// fn wrong_down_orientation(
 ///     gate: ProjectionWeights<'_, Gate, 8, 16>,
 ///     up: ProjectionWeights<'_, Up, 8, 16>,

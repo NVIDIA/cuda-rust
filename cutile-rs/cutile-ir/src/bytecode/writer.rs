@@ -13,11 +13,14 @@ use std::collections::HashMap;
 use std::io::Write;
 
 use super::encoding::{patch_u32, patch_u64, EncodingWriter};
-use super::enums::{AttributeTag, BytecodeVersion, FunctionFlag, Section, TypeTag, MAGIC};
+use super::enums::{
+    AttributeTag, BytecodeVersion, FunctionFlag, PreviewAttributeTag, Section, TypeTag, MAGIC,
+};
 use super::opcode::Opcode;
 use crate::ir::SymbolVisibility;
 use crate::ir::{
-    Attribute, BlockId, Module, OpId, RegionId, TileElementType, Type, Value, ValueProducer,
+    Attribute, BlockId, Module, OpId, PreviewConstArg, RegionId, TileElementType, Type, Value,
+    ValueProducer,
 };
 use crate::requirements::{target_requirement, Feature};
 use crate::{Error, Result};
@@ -34,7 +37,12 @@ pub fn write_bytecode(module: &Module) -> Result<Vec<u8>> {
 }
 
 /// Serialize a [`Module`] with a specific bytecode version.
+///
+/// A module containing public-preview operations (`preview$call`) must be
+/// written at [`BytecodeVersion::V13_5`]; its header then carries the
+/// preview bit ([`BytecodeVersion::PREVIEW_TAG`]).
 pub fn write_bytecode_version(module: &Module, version: BytecodeVersion) -> Result<Vec<u8>> {
+    let version = version.without_preview();
     if version < BytecodeVersion::MIN_SUPPORTED {
         return Err(Error::BytecodeWrite(format!(
             "unsupported version {version}, minimum is {}",
@@ -50,6 +58,9 @@ pub fn write_bytecode_version(module: &Module, version: BytecodeVersion) -> Resu
             BytecodeVersion::SUPPORTED.map(|v| v.to_string()).join(", ")
         )));
     }
+    // A preview op's own version check (`write_op_body`) rejects a preview
+    // module written below 13.5.
+    let preview = module.uses_preview_ops();
 
     // Initialize writer context with all managers.
     let mut ctx = WriterCtx {
@@ -84,7 +95,14 @@ pub fn write_bytecode_version(module: &Module, version: BytecodeVersion) -> Resu
     }
 
     // 1. Header
-    write_header(&mut out, version);
+    write_header(
+        &mut out,
+        if preview {
+            version.with_preview()
+        } else {
+            version
+        },
+    );
 
     // 2. Global section
     write_global_section(&mut out, &mut ctx)?;
@@ -908,6 +926,12 @@ fn prescan_attribute(
                 prescan_attribute("", elem, strings, types);
             }
         }
+        Attribute::PreviewConstArg(PreviewConstArg::Str(s)) => {
+            strings.get_or_insert(s);
+        }
+        Attribute::PreviewConstArg(PreviewConstArg::Datatype(ty)) => {
+            types.get_or_insert(ty);
+        }
         _ => {}
     }
 }
@@ -1465,6 +1489,22 @@ pub(super) fn write_self_contained_attribute(
                 w.write_signed_varint(ub);
             }
         }
+        Attribute::PreviewConstArg(arg) => match arg {
+            PreviewConstArg::Int(v) => {
+                w.write_varint(PreviewAttributeTag::SymbolicExprInt as u64);
+                w.write_signed_varint(*v);
+            }
+            PreviewConstArg::Str(s) => {
+                w.write_varint(PreviewAttributeTag::SymbolicExprConstStr as u64);
+                let idx = strings.get_or_insert(s);
+                w.write_varint(idx);
+            }
+            PreviewConstArg::Datatype(ty) => {
+                w.write_varint(PreviewAttributeTag::ConcreteType as u64);
+                let idx = types.get_or_insert(ty);
+                w.write_varint(idx);
+            }
+        },
     }
     Ok(())
 }

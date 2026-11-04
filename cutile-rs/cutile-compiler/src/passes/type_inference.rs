@@ -15,8 +15,7 @@ use crate::compiler::shared_utils;
 use crate::compiler::tile_rust_type::TileRustType;
 use crate::error::JITError;
 use crate::generics::{
-    get_cga_from_generic_argument, GenericArgInference, GenericArgType, GenericVars, TypeInstance,
-    TypeInstanceUserType,
+    get_cga_from_generic_argument, GenericArgInference, GenericArgType, GenericVars,
 };
 use crate::passes::name_resolution::{DefKind, Res};
 use crate::passes::node_ids::{self, NodeId};
@@ -659,8 +658,10 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
                         Some(ty)
                     } else if let Some(ty) = self.infer_global_static_type(path)? {
                         Some(ty)
+                    } else if let Some(ty) = self.vars.get(&name).cloned() {
+                        Some(ty)
                     } else {
-                        self.vars.get(&name).cloned()
+                        self.infer_unit_struct_value_type(path)
                     }
                 } else if let Some(ty) = self.infer_associated_const_type(path)? {
                     Some(ty)
@@ -1378,12 +1379,16 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
                     Ok(InferredTy::Known(ty))
                 } else if let Some(ty) = self.infer_global_const_type(path)? {
                     Ok(InferredTy::Known(ty))
+                } else if let Some(ty) = self.infer_unit_struct_value_type(path) {
+                    Ok(InferredTy::Known(ty))
                 } else {
                     Ok(InferredTy::Unknown)
                 }
             }
             Expr::Path(path) => {
                 if let Some(ty) = self.infer_associated_const_type(path)? {
+                    Ok(InferredTy::Known(ty))
+                } else if let Some(ty) = self.infer_unit_struct_value_type(path) {
                     Ok(InferredTy::Known(ty))
                 } else {
                     Ok(InferredTy::Unknown)
@@ -2159,18 +2164,25 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
         }
     }
 
+    /// The type of a unit-struct value such as a tag (`Lower`, `Axis::<1>`):
+    /// a ZST marker, as compilation makes it.
+    fn infer_unit_struct_value_type(&self, path: &syn::ExprPath) -> Option<TileRustType> {
+        let res = self
+            .compiler
+            .modules
+            .name_resolver
+            .resolve_path(&path.path, &self.compiler.current_module());
+        if !matches!(res, Res::Def(DefKind::Struct, _)) {
+            return None;
+        }
+        self.infer_zst_marker_type(&Expr::Path(path.clone()))
+    }
+
     fn infer_zst_marker_type(&self, expr: &Expr) -> Option<TileRustType> {
         let Expr::Path(path_expr) = expr else {
             return None;
         };
-        let path_ty = Type::Path(syn::TypePath {
-            qself: None,
-            path: path_expr.path.clone(),
-        });
-        let type_instance = TypeInstance::UserType(TypeInstanceUserType {
-            maybe_generic_ty: path_ty,
-        });
-        Some(TileRustType::new_string(type_instance))
+        Some(self.compiler.zst_marker_type(&path_expr.path))
     }
 
     fn infer_tuple(
@@ -2381,13 +2393,31 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
                 );
             }
         }
+        // The call is resolved by its path in the scope of the module whose
+        // source holds it, as lowering does (see `resolve_function`): a
+        // same-named function of another module would infer from the wrong
+        // signature. An unresolvable path infers nothing here; lowering
+        // reports its error.
+        let Ok(resolved) = self
+            .compiler
+            .modules
+            .resolve_function(&path.path, &self.compiler.current_module())
+        else {
+            let _ = self.infer_call_arg_types(call.args.iter())?;
+            return Ok(expected);
+        };
         let ident = get_ident_from_path_expr(path).to_string();
-        // `coord((a, b, ...))` returns the arity-matched `Coord{N}`. The
-        // declared return type is the associated `C::Coord`, which bottom-up
-        // inference cannot project, so resolve it from the tuple arity here
-        // (needed when the expected type is not supplied by a concrete
-        // parameter, e.g. the generic `MappedPartitionMut::store` index).
-        if ident == "coord" && call.args.len() == 1 {
+        // Core's `coord((a, b, ...))`, whatever name the call uses, returns
+        // the arity-matched `Coord{N}`. The declared return type is the
+        // associated `C::Coord`, which bottom-up inference cannot project,
+        // so resolve it from the tuple arity here (needed when the expected
+        // type is not supplied by a concrete parameter, e.g. the generic
+        // `MappedPartitionMut::store` index).
+        let is_core_coord = resolved.as_ref().is_some_and(|(m, f)| {
+            Some(m.as_str()) == self.compiler.modules.name_resolver.core_module()
+                && f.sig.ident == "coord"
+        });
+        if is_core_coord && call.args.len() == 1 {
             if let Some(tuple) = self.tuple_expr_or_origin(&call.args[0]) {
                 let rank = tuple.elems.len();
                 let _ = self.infer_call_arg_types(call.args.iter())?;
@@ -2423,10 +2453,43 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
                 .compile_type(&option_ty, self.generic_vars, &HashMap::new());
         }
 
-        let Some((_, fn_item)) = self.compiler.modules.get_function_by_name(&ident) else {
+        let Some((module_name, fn_item)) = resolved else {
             let _ = self.infer_call_arg_types(call.args.iter())?;
             return Ok(expected);
         };
+
+        if crate::foreign_decl::is_foreign_fn(fn_item) {
+            // The result type follows from the callee's generic arguments
+            // (tuples included), resolved like the lowering does. Only the
+            // operands carry types; `&str` arguments are constants.
+            let decl = match crate::foreign_decl::ForeignFnDecl::from_item_fn(fn_item) {
+                Ok(Some(decl)) if call.args.len() == fn_item.sig.inputs.len() => decl,
+                _ => return Ok(expected),
+            };
+            let mut operand_fn = fn_item.clone();
+            operand_fn.sig = crate::foreign_decl::ForeignFnDecl::operand_signature(&fn_item.sig);
+            let mut operand_call = call.clone();
+            operand_call.args = decl
+                .params
+                .iter()
+                .map(|p| call.args[p.arg_index].clone())
+                .collect();
+            let arg_types = self.infer_function_call_arg_types(&operand_fn, &operand_call, None)?;
+            if arg_types.len() != operand_call.args.len() {
+                return Ok(expected);
+            }
+            let arg_rust_tys: Vec<_> = arg_types.iter().map(|t| t.rust_ty.clone()).collect();
+            return Ok(self
+                .compiler
+                .foreign_call_return_type(
+                    &module_name,
+                    fn_item,
+                    call,
+                    self.generic_vars,
+                    &arg_rust_tys,
+                )?
+                .or(expected));
+        }
 
         self.infer_signature_closure_args(fn_item, call, expected.as_ref())?;
 
@@ -2443,7 +2506,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
             }
         }
 
-        self.infer_function_return(fn_item, call, &arg_types, expected)
+        self.infer_function_return(&module_name, fn_item, call, &arg_types, expected)
     }
 
     fn infer_signature_closure_args(
@@ -2474,7 +2537,9 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
             // the hint doesn't apply, the strict check runs at inline time.
             let _ = generic_arg_inf.add_type_constraints(&return_type, &expected_return.rust_ty);
         }
-        generic_arg_inf.apply_provided_generics_fn_call(call, self.generic_vars);
+        generic_arg_inf.apply_provided_generics_fn_call(call, self.generic_vars, &|ty| {
+            self.compiler.string_tag_text(ty)
+        });
 
         for ((arg, param_type), signature) in call
             .args
@@ -2716,7 +2781,9 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
             // the hint doesn't apply, the strict check runs at inline time.
             let _ = generic_arg_inf.add_type_constraints(&return_type, &expected_return.rust_ty);
         }
-        generic_arg_inf.apply_provided_generics_fn_call(call, self.generic_vars);
+        generic_arg_inf.apply_provided_generics_fn_call(call, self.generic_vars, &|ty| {
+            self.compiler.string_tag_text(ty)
+        });
 
         let mut expected_arg_types = Vec::new();
         for param_type in param_types {
@@ -3039,6 +3106,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
             self.compiler.modules.primitives(),
         )?;
         let return_type = self.infer_method_return_type(
+            &module_name,
             &impl_item,
             &impl_method,
             call_arg_rust_tys,
@@ -3057,6 +3125,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
 
     fn infer_method_return_type(
         &mut self,
+        callee_module: &str,
         impl_item: &ItemImpl,
         impl_method: &ImplItemFn,
         call_arg_rust_tys: &[Type],
@@ -3068,13 +3137,27 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
         if arg_types.iter().any(type_has_impl_trait) || type_has_impl_trait(&return_type) {
             return Ok(None);
         }
+        let callee_params: HashSet<String> = impl_item
+            .generics
+            .type_params()
+            .chain(impl_method.sig.generics.type_params())
+            .map(|p| p.ident.to_string())
+            .collect();
+        let return_type =
+            self.compiler
+                .modules
+                .respell_string_tags(&return_type, callee_module, &callee_params);
         let mut generic_arg_inf = GenericArgInference::new_method(impl_item, impl_method);
         generic_arg_inf.map_args_to_params(
             &call_arg_rust_tys.to_vec(),
             Some(self_ty),
             self.generic_vars,
         )?;
-        generic_arg_inf.apply_provided_generics_method_call(method_call, self.generic_vars);
+        generic_arg_inf.apply_provided_generics_method_call(
+            method_call,
+            self.generic_vars,
+            &|ty| self.compiler.string_tag_text(ty),
+        );
         if !generic_arg_inf.verify() {
             return Ok(None);
         }
@@ -3110,6 +3193,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
 
     fn infer_function_return(
         &mut self,
+        callee_module: &str,
         fn_item: &ItemFn,
         call: &ExprCall,
         arg_types: &[TileRustType],
@@ -3126,9 +3210,21 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
         if fn_arg_types.iter().any(type_has_impl_trait) || type_has_impl_trait(&return_type) {
             return Ok(expected);
         }
+        let callee_params: HashSet<String> = fn_item
+            .sig
+            .generics
+            .type_params()
+            .map(|p| p.ident.to_string())
+            .collect();
+        let return_type =
+            self.compiler
+                .modules
+                .respell_string_tags(&return_type, callee_module, &callee_params);
         let mut generic_arg_inf = GenericArgInference::new_function(fn_item.sig.clone());
         generic_arg_inf.map_args_to_params(&call_arg_rust_tys, None, self.generic_vars)?;
-        generic_arg_inf.apply_provided_generics_fn_call(call, self.generic_vars);
+        generic_arg_inf.apply_provided_generics_fn_call(call, self.generic_vars, &|ty| {
+            self.compiler.string_tag_text(ty)
+        });
         if !generic_arg_inf.verify() {
             return Ok(expected);
         }
@@ -3162,11 +3258,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
             }
         }
 
-        if let Some(op_attrs) = self
-            .compiler
-            .modules
-            .get_cuda_tile_op_attrs(fn_item.sig.ident.to_string().as_str())
-        {
+        if let Some(op_attrs) = get_meta_list("cuda_tile :: op", &fn_item.attrs) {
             if let Some(output_type_params) = op_attrs.parse_string_arr("output_type_params") {
                 let arg_types_by_name = param_names
                     .iter()

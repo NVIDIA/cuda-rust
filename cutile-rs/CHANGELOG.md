@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Breaking changes
+
+The cuTile Rust crates move to 0.5.0 for these public API changes:
+
+- New `Opcode::PreviewCall` and `Attribute::PreviewConstArg` variants;
+  `TileirasOptions` gains `tilelibs` and is no longer `Copy`.
+- Functions resolve per module: use `CUDATileModules::resolve_function`;
+  `CUDATileModules::{functions, get_function_by_name, get_cuda_tile_op_attrs}`
+  and `NameResolver::{get_op_attrs, functions, find_all_definitions}` are
+  removed.
+- Changed signatures or fields: `ModuleItems`,
+  `apply_provided_generics_{fn,method}_call`, `compile_cuda_tile_op_call`,
+  `kernel_cache_slot`, `SiteResolution::new`, `TileKernel::jit_compile`.
+
 ### Added
 
 - CUDA 13.5 Tile IR bytecode, unicast/multicast pointer classification, multicast
@@ -24,6 +38,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   independent unicast and multicast modes. Two-GPU tests exercise system-scope
   signaling, peer loads/stores/atomic adds, multicast operations, and repeated
   buffer reuse with both launch orders.
+- Tile libraries (preview, CUDA 13.5): kernels call
+  `#[cutile::foreign] unsafe fn` declarations, linked with `.tilelib` libraries
+  chosen on the host; see the
+  [tile-library guide](cutile-book/guide/tile-libraries.md).
+- Foreign calls are ordered with every earlier and later load, store, atomic and
+  call through memory tokens.
+- Device functions take unit-struct tag values (`Lower`, `Axis::<1>`) and
+  dispatch on them through trait impls.
 
 ### Fixed
 
@@ -33,6 +55,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   13.5 format defines them. A flags varint added for likelihood hints made
   `tileiras` 13.5 reject every kernel with a runtime `if` or a `select`;
   likelihood hints on them are no longer serialized.
+- Calls resolve in the calling module's scope, so a module path names that
+  module's function and modules can define functions with the same name.
 
 ### Changed
 

@@ -103,6 +103,7 @@ guide/performance
 guide/autotuning
 guide/bounds-check-placement
 guide/interoperability
+guide/tile-libraries
 guide/debugging-and-profiling
 guide/useful-mental-models
 ```

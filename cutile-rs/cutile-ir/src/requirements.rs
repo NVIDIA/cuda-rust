@@ -144,6 +144,7 @@ features! {
     HopperTarget => ("target sm_90", V13_3, Only(90)),
     RubinTarget => ("target sm_107", V13_4, Only(107)),
     ProgrammaticDependentLaunch => ("programmatic dependent launch", V13_4, AtLeast(90)),
+    ForeignCall => ("preview$call (foreign tile-library call)", V13_5, Any),
 }
 
 /// Target names accepted by the dialect, paired with their earliest version
@@ -337,4 +338,5 @@ operations! {
     GdcWaitTko => GdcTokens,
     FPowI => IntegerPower,
     MemoryFenceAliasTko => AliasFence,
+    PreviewCall => ForeignCall,
 }

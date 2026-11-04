@@ -301,6 +301,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         block_id: BlockId,
         call_expr: &ExprCall,
         path_expr: &ExprPath,
+        fn_item: &ItemFn,
         generic_vars: &GenericVars,
         ctx: &mut CompilerContext,
         return_type: Option<TileRustType>,
@@ -316,7 +317,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             );
         }
 
-        let ident = get_ident_from_path_expr(path_expr).to_string();
+        let ident = fn_item.sig.ident.to_string();
         let is_pack = match ident.as_str() {
             "__pack_f4e2m1fnx2_tile" => true,
             "__unpack_f4e2m1fnx2_tile" => false,
@@ -515,7 +516,8 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         return_type: Option<TileRustType>,
     ) -> Result<Option<TileRustValue>, JITError> {
         let call_expr_func_str = call_expr.func.to_token_stream().to_string();
-        let ident = get_ident_from_path_expr(path_expr);
+        // The resolved function's name, not the call's: imports can rename.
+        let ident = &fn_item.sig.ident;
         let Some(compiler_op_name) = compiler_op_attrs.parse_string("name") else {
             return self.jit_error_result(
                 &call_expr.span(),
@@ -745,6 +747,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 block_id,
                 call_expr,
                 path_expr,
+                fn_item,
                 generic_vars,
                 ctx,
                 return_type,
@@ -2464,6 +2467,8 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     // collect_mutated_variables_from_block, carrying token SSA
                     // values through blocks, branches and loops uniformly. Then
                     // remove the immutable-token metadata copy-back workaround.
+                    // Foreign calls already order through regions with the
+                    // carried token of `compile_foreign::FFI_TOKEN_VAR`.
                     if ctx.inside_for || ctx.innermost_loop.is_some() || ctx.token_update_in_region
                     {
                         return self.jit_error_result(

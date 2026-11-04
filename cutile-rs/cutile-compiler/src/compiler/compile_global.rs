@@ -136,7 +136,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             );
         }
         match method_call.method.to_string().as_str() {
-            "load" => self.compile_global_load(module, block_id, method_call, generic_vars, info, return_type),
+            "load" => self.compile_global_load(module, block_id, method_call, generic_vars, ctx, info, return_type),
             "store" => self.compile_global_store(module, block_id, method_call, generic_vars, ctx, info, return_type),
             "atomic_add" => self.compile_global_atomic_add(module, block_id, method_call, generic_vars, ctx, info, return_type),
             method => self.jit_error_result(
@@ -152,6 +152,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         block_id: BlockId,
         method_call: &ExprMethodCall,
         generic_vars: &GenericVars,
+        ctx: &CompilerContext,
         info: GlobalInfo,
         return_type: Option<TileRustType>,
     ) -> Result<Option<TileRustValue>, JITError> {
@@ -185,10 +186,13 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             )
         })?;
 
+        // After a foreign call, wait for it (see `ffi_token`).
+        let ffi_token = super::compile_foreign::ffi_token(ctx);
         let builder = OpBuilder::new(Opcode::LoadPtrTko, self.ir_location(&method_call.span()))
             .result(tile_ir_ty)
             .result(TileIrType::Token)
             .operand(ptr)
+            .operands(ffi_token.iter().copied())
             .attr(
                 "memory_ordering_semantics",
                 Attribute::i32(memory_ordering_value),
@@ -200,7 +204,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     Attribute::i32(1),
                     Attribute::i32(0),
                     Attribute::i32(0),
-                    Attribute::i32(0),
+                    Attribute::i32(ffi_token.is_some() as i64),
                 ]),
             );
         let (op_id, results) = builder.build(module);
@@ -286,10 +290,12 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             )
         })?;
 
+        let ffi_token = super::compile_foreign::ffi_token(ctx);
         let builder = OpBuilder::new(Opcode::StorePtrTko, self.ir_location(&method_call.span()))
             .result(TileIrType::Token)
             .operand(ptr)
             .operand(value_ir)
+            .operands(ffi_token.iter().copied())
             .attr(
                 "memory_ordering_semantics",
                 Attribute::i32(memory_ordering_value),
@@ -301,7 +307,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     Attribute::i32(1),
                     Attribute::i32(1),
                     Attribute::i32(0),
-                    Attribute::i32(0),
+                    Attribute::i32(ffi_token.is_some() as i64),
                 ]),
             );
         let (op_id, results) = builder.build(module);
@@ -381,12 +387,14 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             AtomicMode::new("Add", elem_prefix)?
         } as i64;
 
+        let ffi_token = super::compile_foreign::ffi_token(ctx);
         let (op_id, results) =
             OpBuilder::new(Opcode::AtomicRMW, self.ir_location(&method_call.span()))
                 .result(tile_ir_ty)
                 .result(TileIrType::Token)
                 .operand(ptr)
                 .operand(value_ir)
+                .operands(ffi_token.iter().copied())
                 .attr(
                     "memory_ordering_semantics",
                     Attribute::i32(memory_ordering_value),
@@ -399,7 +407,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                         Attribute::i32(1),
                         Attribute::i32(1),
                         Attribute::i32(0),
-                        Attribute::i32(0),
+                        Attribute::i32(ffi_token.is_some() as i64),
                     ]),
                 )
                 .build(module);

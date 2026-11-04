@@ -10,6 +10,7 @@
 use crate::ast::SourceLocation;
 use crate::cuda_tile_runtime_utils::DEFAULT_OPT_LEVEL;
 use crate::error::{JITError, SpannedJITError};
+pub use crate::tile_library::TileLibrarySpec;
 use quote::ToTokens;
 use std::collections::BTreeMap;
 use syn::{Expr, Lit};
@@ -196,6 +197,10 @@ pub struct CompileOptions {
     /// Instrument memory accesses for Compute Sanitizer's memcheck tool
     /// (`tileiras --sanitize=memcheck`).
     pub sanitize_memcheck: bool,
+    /// Tile libraries this launch links in addition to the process-wide
+    /// defaults ([`crate::tile_library::set_default_tile_libraries`]); see
+    /// [`Self::tile_library`].
+    pub tile_libraries: Vec<TileLibrarySpec>,
 }
 
 impl Default for CompileOptions {
@@ -208,6 +213,7 @@ impl Default for CompileOptions {
             min_ctas_per_sm: None,
             codegen: CodegenMode::RELEASE.with_debug_info(BUILD_DEBUG_INFO),
             sanitize_memcheck: false,
+            tile_libraries: Vec::new(),
         }
     }
 }
@@ -260,6 +266,25 @@ impl CompileOptions {
 
     pub fn sanitize_memcheck(mut self, sanitize_memcheck: bool) -> Self {
         self.sanitize_memcheck = sanitize_memcheck;
+        self
+    }
+
+    /// Links `library` into this launch's kernel, in addition to the
+    /// process-wide defaults. A kernel that calls a `#[cutile::foreign]`
+    /// function needs the library implementing it here or in the defaults.
+    pub fn tile_library(mut self, library: TileLibrarySpec) -> Self {
+        self.tile_libraries.push(library);
+        self
+    }
+
+    /// These options with the process-wide default tile libraries put
+    /// before this launch's own: the libraries the kernel links.
+    pub fn with_default_tile_libraries(mut self) -> Self {
+        let mut libraries = crate::tile_library::default_tile_libraries();
+        if !libraries.is_empty() {
+            libraries.append(&mut self.tile_libraries);
+            self.tile_libraries = libraries;
+        }
         self
     }
 }

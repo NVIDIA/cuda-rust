@@ -28,8 +28,13 @@ pub fn decode_bytecode(data: &[u8]) -> Result<String> {
     let mut out = String::new();
 
     // Header
-    let version = r.read_header()?;
-    writeln!(out, "TileIR bytecode v{version}").unwrap();
+    let header_version = r.read_header()?;
+    let version = header_version.without_preview();
+    if header_version.is_preview() {
+        writeln!(out, "TileIR bytecode v{version} (preview)").unwrap();
+    } else {
+        writeln!(out, "TileIR bytecode v{version}").unwrap();
+    }
     writeln!(out).unwrap();
 
     // Collect raw sections first, then parse in dependency order.
@@ -811,7 +816,7 @@ fn parse_func_section(
 ) -> Result<Vec<String>> {
     let mut r = Reader::new(data);
     let count = r.read_varint()? as usize;
-    let mut funcs = Vec::with_capacity(count);
+    let mut funcs = Vec::with_capacity(count.min(data.len()));
 
     for _ in 0..count {
         let name_idx = r.read_varint()? as usize;
@@ -830,7 +835,8 @@ fn parse_func_section(
         };
         let kind = if is_kernel { "entry" } else { "func" };
 
-        // Skip optimization hints if present (self-contained attribute).
+        // Optimization hints and argument attributes are self-contained
+        // attributes; they are skipped, not displayed.
         if has_hints {
             skip_attribute(&mut r, types, 0)?;
         }

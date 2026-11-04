@@ -1030,7 +1030,9 @@ impl Instantiable for TypeInstanceStructuredType {
                                             .unwrap(),
                                     );
                                 } else {
-                                    panic!("Unexpected const arg {last_ident} for variadic type {maybe_generic_ty:#?}");
+                                    // A const argument of a non-tile type, such as
+                                    // the tag `Axis<N>`: not a structured type.
+                                    return None;
                                 }
                             } else if allows_extra_cga {
                                 // Map-shape metadata beyond the tile shape does not affect
@@ -1209,23 +1211,22 @@ impl Instantiable for TypeInstanceStructuredType {
                                 _ => panic!("Unexpected block expression."),
                             }
                         }
-                        _ => panic!("Unexpected const expression {const_expr:#?}"),
+                        // A literal argument of a non-tile type, such as the
+                        // tag `Axis::<1>`: not a structured type.
+                        _ => return None,
                     }
                 }
-                _ => panic!("Unexpected generic argument {generic_arg:#?}"),
+                _ => return None,
             }
         }
-        match shape {
-            Some(shape) => Some(Self {
-                generic_ty,
-                instance_ty,
-                primitive_type,
-                shape,
-            }),
-            _ => {
-                panic!("Unable to parse {maybe_generic_ty:#?} \n primitive_type = {primitive_type:#?} \n shape = {shape:#?}");
-            }
-        }
+        // Without a shape this is not a tile-like type (e.g. a tag).
+        let shape = shape?;
+        Some(Self {
+            generic_ty,
+            instance_ty,
+            primitive_type,
+            shape,
+        })
     }
 }
 
@@ -1425,10 +1426,16 @@ impl GenericArgInference {
         }
     }
     /// Applies explicitly provided generic arguments from a function call expression.
+    ///
+    /// `marker_type` gives the text of a type argument that names a string
+    /// tag, resolved in the caller's scope (see
+    /// `CUDATileFunctionCompiler::string_tag_text`); other type
+    /// arguments are stored by their last segment.
     pub fn apply_provided_generics_fn_call(
         &mut self,
         call_expr: &ExprCall,
         generic_vars: &GenericVars,
+        marker_type: &dyn Fn(&Type) -> Option<String>,
     ) {
         let Some(expr_generic_args) = get_call_expression_generics(call_expr) else {
             return;
@@ -1508,10 +1515,9 @@ impl GenericArgInference {
                         }
                     } else {
                         // This is a type (not a type variable).
-                        self.param2arg.insert(
-                            param.to_string(),
-                            Some((GenericArgType::Type, var_str.to_string())),
-                        );
+                        let arg = marker_type(arg_ty).unwrap_or_else(|| var_str.to_string());
+                        self.param2arg
+                            .insert(param.to_string(), Some((GenericArgType::Type, arg)));
                     };
                 }
                 GenericArgument::Const(c) => {
@@ -1528,11 +1534,14 @@ impl GenericArgInference {
         }
     }
 
-    /// Applies explicitly provided generic arguments from a method call expression.
+    /// Applies explicitly provided generic arguments from a method call
+    /// expression. `marker_type` is as for
+    /// [`Self::apply_provided_generics_fn_call`].
     pub fn apply_provided_generics_method_call(
         &mut self,
         method_call_expr: &ExprMethodCall,
         generic_vars: &GenericVars,
+        marker_type: &dyn Fn(&Type) -> Option<String>,
     ) {
         let Some(expr_generic_args) = &method_call_expr.turbofish else {
             return;
@@ -1621,10 +1630,9 @@ impl GenericArgInference {
                         }
                     } else {
                         // This is a type (not a type variable).
-                        self.param2arg.insert(
-                            param.to_string(),
-                            Some((GenericArgType::Type, var_str.to_string())),
-                        );
+                        let arg = marker_type(arg_ty).unwrap_or_else(|| var_str.to_string());
+                        self.param2arg
+                            .insert(param.to_string(), Some((GenericArgType::Type, arg)));
                     };
                 }
                 GenericArgument::Const(c) => {
@@ -1734,7 +1742,7 @@ impl GenericArgInference {
                             .inst_types
                             .insert(name.clone(), ast_string.to_string());
                     } else {
-                        // ZST marker types (for example `ordering::Acquire`
+                        // ZST tag types (for example `ordering::Acquire`
                         // and `scope::Device`) are ordinary concrete type
                         // arguments. They are not ElementType instances, but
                         // rustc has already accepted them against the method
@@ -2211,6 +2219,18 @@ impl GenericArgInference {
     }
 
     pub fn infer_type(&self, ty: &syn::Type, _generic_vars: &GenericVars) -> syn::Type {
+        // A tuple infers element by element.
+        match ty {
+            syn::Type::Tuple(tuple) => {
+                let mut result = tuple.clone();
+                for elem in result.elems.iter_mut() {
+                    *elem = self.infer_type(elem, _generic_vars);
+                }
+                return syn::Type::Tuple(result);
+            }
+            syn::Type::Paren(paren) => return self.infer_type(&paren.elem, _generic_vars),
+            _ => {}
+        }
         let arg_map = &self.param2arg;
         // println!("Infer generic args for {} using \n {arg_map:#?}", ty.to_token_stream().to_string());
         let Some(mut result_args) = maybe_generic_args(ty) else {

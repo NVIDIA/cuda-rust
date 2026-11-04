@@ -13,6 +13,9 @@ An explicit `CUTILE_BYTECODE_VERSION` must be supported; we do not downgrade it.
 `CUTILE_TILEIRAS_PATH` takes precedence over the toolkit directory. A newer
 driver does not make an older assembler understand newer bytecode.
 
+Calls to tile-library functions ([Tile Libraries](../guide/tile-libraries.md))
+need the selected version to be 13.5.
+
 <!-- BEGIN TILE IR REQUIREMENTS -->
 | Feature | 13.2 | 13.3 | 13.4 | 13.5 | Target requirement |
 |---|---|---|---|---|---|
@@ -57,6 +60,7 @@ driver does not make an older assembler understand newer bytecode.
 | target sm_90 | — | Yes | Yes | Yes | `sm_90` only |
 | target sm_107 | — | — | Yes | Yes | `sm_107` only |
 | programmatic dependent launch | — | — | Yes | Yes | `sm_90+` |
+| preview$call (foreign tile-library call) | — | — | — | Yes | Any supported target |
 
 | Target | Minimum emitted Tile IR version |
 |---|---|

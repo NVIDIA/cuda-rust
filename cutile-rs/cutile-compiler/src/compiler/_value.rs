@@ -577,7 +577,21 @@ impl TileRustValue {
         self.verify()?;
         let mut result = self.clone();
         match self.kind {
-            Kind::String => {}
+            Kind::String => {
+                // `self` holds the string from before the region (a branch,
+                // a loop, a block) that reassigns the variable. Region
+                // arguments and results carry no strings, so the string in
+                // a loop body and after the region is unknown: a use is an
+                // error, not the stale string. A string tag names its type
+                // and stays.
+                if let Some(Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(_),
+                    ..
+                })) = &result.string_literal
+                {
+                    result.string_literal = Some(Expr::Verbatim(Default::default()));
+                }
+            }
             Kind::PrimitiveType => {
                 result.value = Some(values[pos]);
                 pos += 1;

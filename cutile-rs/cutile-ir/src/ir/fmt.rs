@@ -15,7 +15,7 @@
 
 use std::fmt::Write;
 
-use super::attr::Attribute;
+use super::attr::{Attribute, PreviewConstArg};
 use super::module::{Global, Module};
 use super::types::*;
 use super::value::{BlockId, OpId, RegionId, Value};
@@ -715,6 +715,38 @@ impl<'a> ModulePrinter<'a> {
                     }
                 }
                 writeln!(out).unwrap();
+            }
+
+            // ---- PreviewCall: `@callee<[const_args]>($operands) attr-dict : functional-type` ----
+            Opcode::PreviewCall => {
+                let op = self.module.op(op_id);
+                let callee = find_str_attr(&op.attributes, "callee").unwrap_or("");
+                write!(out, " @{callee}").unwrap();
+                if let Some(Attribute::Array(args)) = find_attr(&op.attributes, "const_args") {
+                    if !args.is_empty() {
+                        let args: Vec<_> = args.iter().map(format_attr).collect();
+                        write!(out, "<[{}]>", args.join(", ")).unwrap();
+                    }
+                }
+                let operands: Vec<_> = op
+                    .operands
+                    .iter()
+                    .map(|v| format!("%{}", v.index()))
+                    .collect();
+                write!(out, "({})", operands.join(", ")).unwrap();
+                self.print_attr_dict(op_id, &["callee", "const_args"], out);
+                let operand_types: Vec<_> = op
+                    .operands
+                    .iter()
+                    .map(|&v| format_type(self.module.value_type(v)))
+                    .collect();
+                let result_types: Vec<_> = op.result_types.iter().map(format_type).collect();
+                write!(out, " : ({}) -> ", operand_types.join(", ")).unwrap();
+                if result_types.len() == 1 {
+                    writeln!(out, "{}", result_types[0]).unwrap();
+                } else {
+                    writeln!(out, "({})", result_types.join(", ")).unwrap();
+                }
             }
 
             // ---- Assert: `$condition, $message attr-dict : type($condition)` ----
@@ -2298,6 +2330,11 @@ fn format_attr(attr: &Attribute) -> String {
             let ub = b.ub.map(|v| v.to_string()).unwrap_or_else(|| "?".into());
             format!("#cuda_tile.bounded<{lb}, {ub}>")
         }
+        Attribute::PreviewConstArg(arg) => match arg {
+            PreviewConstArg::Int(v) => v.to_string(),
+            PreviewConstArg::Str(s) => format!("{s:?}"),
+            PreviewConstArg::Datatype(ty) => format_type(ty),
+        },
     }
 }
 

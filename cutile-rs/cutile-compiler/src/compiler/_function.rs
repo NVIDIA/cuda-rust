@@ -510,6 +510,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         compile_options: &crate::hints::CompileOptions,
     ) -> Result<Self, JITError> {
         // 1. Check module exists.
+        let module_name = modules.module_key(module_name);
         if !modules.modules().contains_key(module_name) {
             return Err(JITError::Generic(format!(
                 "Undefined module: {module_name}"
@@ -519,10 +520,9 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         // 2. KernelNaming.
         let kernel_naming = KernelNaming::new(function_name);
 
-        // 3. Look up function.
-        let (_, function) = modules
-            .functions()
-            .get(kernel_naming.public_name())
+        // 3. Look up function in the kernel's module.
+        let function = modules
+            .module_function(module_name, kernel_naming.public_name())
             .with_context(|| format!("Undefined function: {function_name}"))?;
 
         // 4. Parse entry_attrs.
@@ -577,6 +577,16 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 },
             )?;
         Self::add_module_const_vars_from_modules(modules, module_name, &mut generic_vars);
+        // A string tag the host names is spelled from its defining module,
+        // as one written in the kernel is (see `string_tag_path`).
+        for inst_type in generic_vars.inst_types.values_mut() {
+            let Ok(ty) = syn::parse_str::<syn::Type>(inst_type) else {
+                continue;
+            };
+            if let Some(marker) = modules.string_tag_type(&ty, module_name) {
+                *inst_type = marker.to_token_stream().to_string();
+            }
+        }
 
         // 9. generate_entry_point.
         let spec_args_map: HashMap<String, crate::specialization::SpecializationBits> = spec_args
@@ -608,8 +618,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
 
         // 10. Check namespace collision.
         if modules
-            .functions()
-            .get(kernel_naming.entry_name().as_str())
+            .module_function(module_name, kernel_naming.entry_name().as_str())
             .is_some()
         {
             return modules
@@ -717,6 +726,16 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 generic_vars.inst_bool.insert(name.clone(), value);
             }
         }
+    }
+
+    /// `ty` as the text of the string tag it names from the current
+    /// module, spelled from its defining module (see
+    /// [`crate::compiler::_module::string_tag_path`]), or `None` when
+    /// it names none.
+    pub(crate) fn string_tag_text(&self, ty: &syn::Type) -> Option<String> {
+        self.modules
+            .string_tag_type(ty, &self.current_module())
+            .map(|marker| marker.to_token_stream().to_string())
     }
 
     /// The module whose source is being compiled right now: the kernel's
@@ -989,7 +1008,11 @@ impl<'m> CUDATileFunctionCompiler<'m> {
 
     /// Compile the kernel function into a `cutile_ir::Module`.
     pub fn compile(&self) -> Result<Module, JITError> {
-        let mut module = Module::new(&self.module_name);
+        // The IR module has the kernel module's short name, the last
+        // segment of `module_name` when that is an absolute path (see
+        // `CUDATileModules::new`).
+        let short_name = self.module_name.rsplit("::").next().unwrap_or_default();
+        let mut module = Module::new(short_name);
         if let Some(item) = self.modules.modules().get(&self.module_name) {
             for attr in &item.attrs {
                 if attr.path().is_ident("noname") {
@@ -1230,6 +1253,13 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         ctx.default_terminator = Some(BlockTerminator::Return);
         ctx.fn_body = true;
         ctx.kernel_entry = true;
+        self.seed_ffi_token(
+            module,
+            block_id,
+            generic_vars,
+            &mut ctx,
+            &fn_item.sig.span(),
+        )?;
 
         let mut typed_fn_item = fn_item.clone();
         crate::passes::node_ids::assign_expr_ids(&mut typed_fn_item);

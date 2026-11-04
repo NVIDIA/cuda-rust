@@ -68,44 +68,34 @@ pub fn negotiate_bytecode_version(
 
     // Recent assemblers enumerate their supported input formats. Do not
     // infer this list from --version: tool and bytecode versions are distinct.
-    let listed = Command::new(tileiras).arg("--list-versions").output();
-    if let Err(e) = &listed {
-        emit_setup_diagnostic(format_args!(
+    match list_bytecode_versions(tileiras) {
+        Err(e) => emit_setup_diagnostic(format_args!(
             "could not launch {} --list-versions ({e}); falling back to compile probes",
             tileiras.display()
-        ));
-    }
-    if let Ok(output) = listed {
-        if output.status.success() {
-            let text = String::from_utf8_lossy(&output.stdout);
-            let versions: Option<Vec<_>> = text
-                .lines()
-                .filter(|s| !s.trim().is_empty())
-                .map(parse_bytecode_version)
-                .collect();
-            if let Some(versions) = versions.filter(|v| !v.is_empty()) {
-                if let Some(version) = requested {
-                    if versions.contains(&version) {
-                        return Ok(version);
-                    }
-                    return Err(std::io::Error::other(format!(
-                        "{BYTECODE_VERSION_ENV}={version} is not accepted by {} (supports {})",
-                        tileiras.display(),
-                        versions
-                            .iter()
-                            .map(ToString::to_string)
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )));
+        )),
+        Ok(None) => {}
+        Ok(Some(versions)) => {
+            if let Some(version) = requested {
+                if versions.contains(&version) {
+                    return Ok(version);
                 }
-                return BytecodeVersion::SUPPORTED.iter().rev()
-                    .find(|v| versions.contains(v)).copied()
-                    .ok_or_else(|| std::io::Error::other(format!(
-                        "{} accepts none of the bytecode versions this compiler can emit; cuTile requires CUDA 13.2 or newer (assembler supports {})",
-                        tileiras.display(), versions.iter().map(ToString::to_string)
-                            .collect::<Vec<_>>().join(", ")
-                    )));
+                return Err(std::io::Error::other(format!(
+                    "{BYTECODE_VERSION_ENV}={version} is not accepted by {} (supports {})",
+                    tileiras.display(),
+                    versions
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )));
             }
+            return BytecodeVersion::SUPPORTED.iter().rev()
+                .find(|v| versions.contains(v)).copied()
+                .ok_or_else(|| std::io::Error::other(format!(
+                    "{} accepts none of the bytecode versions this compiler can emit; cuTile requires CUDA 13.2 or newer (assembler supports {})",
+                    tileiras.display(), versions.iter().map(ToString::to_string)
+                        .collect::<Vec<_>>().join(", ")
+                )));
         }
     }
     // Older/custom assemblers may not implement --list-versions. Compile a
@@ -115,6 +105,21 @@ pub fn negotiate_bytecode_version(
         |version| vec![version],
     );
     probe_bytecode_versions(tileiras, &candidates)
+}
+
+/// The bytecode versions `tileiras --list-versions` reports, or `None` when
+/// the assembler cannot list them. Lines that are not versions (some builds
+/// print e.g. `internal`) are ignored.
+pub fn list_bytecode_versions(tileiras: &Path) -> std::io::Result<Option<Vec<BytecodeVersion>>> {
+    let output = Command::new(tileiras).arg("--list-versions").output()?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let versions: Vec<_> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(parse_bytecode_version)
+        .collect();
+    Ok((!versions.is_empty()).then_some(versions))
 }
 
 /// Parses an exact version; an explicit unsupported request is never clamped.
@@ -417,6 +422,22 @@ mod tests {
         }
         write_fake_tileiras_script(&path, "printf '13.1\\n'\n");
         assert!(negotiate_bytecode_version(&path, None).is_err());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn listing_tolerates_non_version_lines() {
+        let path = env::temp_dir().join(format!("cutile_listing_{}", Uuid::new_v4()));
+        let _cleanup = ScopedTempFile::new(path.clone());
+        // Some internal builds append a non-version line to the listing.
+        write_fake_tileiras_script(
+            &path,
+            "case \"$1\" in --list-versions) printf '13.1\\n13.2\\n13.3\\n13.4\\n13.5\\ninternal\\n';; *) exit 1;; esac\n",
+        );
+        assert_eq!(
+            negotiate_bytecode_version(&path, None).unwrap(),
+            BytecodeVersion::V13_5
+        );
     }
 
     #[test]

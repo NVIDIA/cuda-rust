@@ -3,7 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! CUDA 13.5 multicast contracts and versioned function/debug records.
+//! Tile IR 13.5: multicast contracts, versioned function and debug records,
+//! the public-preview `preview$call` (foreign tile-library calls) and the
+//! preview header bit.
+//!
+//! The toolkit checks run when the selected `tileiras` has a
+//! `cuda-tile-translate` next to it that accepts 13.5. They never need a
+//! GPU.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
 use cutile_ir::builder::{append_op, build_single_block_region, OpBuilder};
 use cutile_ir::bytecode::{write_bytecode_version, BytecodeVersion, Opcode};
 use cutile_ir::capabilities::TargetCapabilities;
@@ -391,4 +401,264 @@ fn debug_declaration_flags_require_13_5() {
             .to_string();
         assert!(error.contains("declaration flags"), "{error}");
     }
+}
+
+fn floc(line: u32, column: u32) -> Location {
+    Location::FileLineCol {
+        filename: "src/kernels/foreign.rs".to_string(),
+        line,
+        column,
+    }
+}
+
+fn kernel(name: &str, args: &[Type], body: impl FnOnce(&mut Module, BlockId, &[Value])) -> Module {
+    let mut module = Module::new("coverage_13_5");
+    let (region, block, values) = build_single_block_region(&mut module, args);
+    body(&mut module, block, &values);
+    let (ret, _) = OpBuilder::new(Opcode::Return, floc(9, 1)).build(&mut module);
+    append_op(&mut module, block, ret);
+    let (entry, _) = OpBuilder::new(Opcode::Entry, floc(3, 1))
+        .attr("sym_name", Attribute::String(name.into()))
+        .attr(
+            "function_type",
+            Attribute::Type(Type::Func(FuncType {
+                inputs: args.to_vec(),
+                results: vec![],
+            })),
+        )
+        .region(region)
+        .build(&mut module);
+    module.functions.push(entry);
+    module
+}
+
+fn zeros(module: &mut Module, block: BlockId, ty: &Type) -> Value {
+    let Type::Tile(t) = ty else {
+        panic!("zeros of a non-tile type")
+    };
+    let TileElementType::Scalar(scalar) = t.element_type else {
+        panic!("zeros of a pointer tile")
+    };
+    let (op, res) = OpBuilder::new(Opcode::Constant, Location::Unknown)
+        .attr(
+            "value",
+            Attribute::DenseElements(DenseElements {
+                element_type: Type::Tile(TileType {
+                    shape: vec![],
+                    element_type: TileElementType::Scalar(scalar),
+                }),
+                shape: t.shape.clone(),
+                data: vec![0; scalar.byte_width()],
+            }),
+        )
+        .result(ty.clone())
+        .build(module);
+    append_op(module, block, op);
+    res[0]
+}
+
+/// One `preview$call` with constant arguments, an implicit out operand and an
+/// ordering token, as the compiler emits for a foreign `cholesky` call.
+fn call(
+    module: &mut Module,
+    block: BlockId,
+    callee: &str,
+    const_args: Vec<PreviewConstArg>,
+    operands: &[Value],
+    results: &[Type],
+) -> Vec<Value> {
+    let (op, res) = OpBuilder::new(Opcode::PreviewCall, floc(5, 7))
+        .operands(operands.iter().copied())
+        .results(results.iter().cloned())
+        .attr("callee", Attribute::String(callee.into()))
+        .attr(
+            "const_args",
+            Attribute::Array(
+                const_args
+                    .into_iter()
+                    .map(Attribute::PreviewConstArg)
+                    .collect(),
+            ),
+        )
+        .build(module);
+    append_op(module, block, op);
+    res
+}
+
+fn cholesky_module() -> Module {
+    let a = tile(&[1, 32, 32], ScalarType::F64);
+    let info = tile(&[1], ScalarType::I32);
+    kernel("cholesky_entry", &[], |m, b, _| {
+        let a_val = zeros(m, b, &a);
+        let info_val = zeros(m, b, &info);
+        let (tok, tok_res) = OpBuilder::new(Opcode::MakeToken, Location::Unknown)
+            .result(Type::Token)
+            .build(m);
+        append_op(m, b, tok);
+        call(
+            m,
+            b,
+            "cholesky",
+            vec![
+                PreviewConstArg::Str("potrf".into()),
+                PreviewConstArg::Str("lower".into()),
+                PreviewConstArg::Int(1),
+                PreviewConstArg::Int(32),
+                PreviewConstArg::Datatype(Type::Scalar(ScalarType::F64)),
+            ],
+            &[a_val, info_val, tok_res[0]],
+            &[a.clone(), info.clone(), Type::Token],
+        );
+    })
+}
+
+fn write(module: &Module, version: BytecodeVersion) -> Result<Vec<u8>, cutile_ir::Error> {
+    cutile_ir::bytecode::write_bytecode_version(module, version)
+}
+
+#[test]
+fn preview_call_requires_13_5_and_sets_the_header_preview_bit() {
+    let module = cholesky_module();
+    assert!(module.uses_preview_ops());
+    let bytes = write(&module, BytecodeVersion::V13_5).unwrap();
+    assert_eq!(&bytes[..12], b"\x7fTileIR\x00\x0d\x05\x01\x00");
+    assert!(cutile_ir::decode_bytecode(&bytes)
+        .unwrap()
+        .contains("v13.5 (preview)"));
+    for old in [
+        BytecodeVersion::V13_2,
+        BytecodeVersion::V13_3,
+        BytecodeVersion::V13_4,
+    ] {
+        let message = write(&module, old).unwrap_err().to_string();
+        assert!(message.contains("13.5"), "{message}");
+    }
+}
+
+#[test]
+fn plain_13_5_modules_have_no_preview_bit_and_decode() {
+    let t = tile(&[4], ScalarType::F32);
+    let module = kernel("plain", &[t.clone(), t.clone()], |m, b, v| {
+        let (op, _) = OpBuilder::new(Opcode::AddF, Location::Unknown)
+            .operands(v.iter().copied())
+            .attr("rounding_mode", Attribute::i32(0))
+            .result(t.clone())
+            .build(m);
+        append_op(m, b, op);
+    });
+    assert!(!module.uses_preview_ops());
+    let bytes = write(&module, BytecodeVersion::V13_5).unwrap();
+    assert_eq!(&bytes[..12], b"\x7fTileIR\x00\x0d\x05\x00\x00");
+    let decoded = cutile_ir::decode_bytecode(&bytes).unwrap();
+    assert!(decoded.contains("v13.5\n"), "{decoded}");
+    assert!(decoded.contains("entry @plain"), "{decoded}");
+}
+
+/// A foreign call is checked against the selected version, negotiated or
+/// pinned with `CUTILE_BYTECODE_VERSION`, like every other feature: below
+/// 13.5 it is an error that names the requirement.
+#[test]
+fn foreign_calls_require_a_13_5_target() {
+    use cutile_ir::requirements::Feature;
+    let module = cholesky_module();
+    let target = TargetCapabilities::new(BytecodeVersion::V13_4, "sm_80");
+    let message = Feature::ForeignCall
+        .check(&target, &Location::Unknown)
+        .unwrap_err()
+        .message;
+    assert_eq!(
+        message,
+        "preview$call (foreign tile-library call) requires Tile IR 13.5 or newer; \
+         selected Tile IR 13.4, target sm_80"
+    );
+    let message = target.validate_module(&module).unwrap_err().message;
+    assert!(
+        message.contains("preview$call requires Tile IR 13.5 or newer; selected Tile IR 13.4"),
+        "{message}"
+    );
+    TargetCapabilities::new(BytecodeVersion::V13_5, "sm_80")
+        .validate_module(&module)
+        .unwrap();
+}
+
+#[test]
+fn preview_call_operands_must_be_tiles_or_tokens() {
+    let ptr = Type::Pointer(PointerType {
+        pointee: ScalarType::F32,
+    });
+    let module = kernel("bad", std::slice::from_ref(&ptr), |m, b, v| {
+        call(m, b, "f", vec![], v, &[tile(&[], ScalarType::F32)]);
+    });
+    let target = TargetCapabilities::new(BytecodeVersion::V13_5, "sm_80");
+    let message = target.validate_module(&module).unwrap_err().message;
+    assert!(message.contains("tiles or tokens"), "{message}");
+}
+
+/// `cuda-tile-translate` next to the selected `tileiras`, when it accepts
+/// 13.5 preview bytecode.
+fn translator() -> Option<PathBuf> {
+    let tileiras = cutile_ir::toolchain::tileiras_from_env();
+    let tileiras = if tileiras.components().count() == 1 {
+        which(&tileiras)?
+    } else {
+        tileiras
+    };
+    let translate = tileiras.parent()?.join("cuda-tile-translate");
+    if !translate.is_file()
+        || cutile_ir::toolchain::negotiate_bytecode_version(&tileiras, Some("13.5".as_ref()))
+            .is_err()
+    {
+        eprintln!("skipped: no cuda-tile-translate accepting Tile IR 13.5 next to {tileiras:?}");
+        return None;
+    }
+    Some(translate)
+}
+
+fn which(program: &Path) -> Option<PathBuf> {
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|dir| dir.join(program))
+        .find(|path| path.is_file())
+}
+
+fn to_mlir(translate: &Path, bytes: &[u8]) -> String {
+    let dir = std::env::temp_dir().join(format!("cutile-13-5-{}", uuid_like()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("module.tilebc");
+    std::fs::write(&file, bytes).unwrap();
+    let output = Command::new(translate)
+        .arg("--cudatilebc-to-mlir")
+        .arg("--preview=simt")
+        .arg(&file)
+        .output()
+        .unwrap();
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+fn uuid_like() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    format!("{}-{nanos}", std::process::id())
+}
+
+#[test]
+fn official_translator_reads_13_5_preview_calls() {
+    let Some(translate) = translator() else {
+        return;
+    };
+    let module = cholesky_module();
+    let mlir = to_mlir(&translate, &write(&module, BytecodeVersion::V13_5).unwrap());
+    assert!(
+        mlir.contains(r#"preview$call @cholesky<["potrf", "lower", 1, 32, f64]>"#),
+        "{mlir}"
+    );
+    assert!(mlir.contains("!cuda_tile.token"), "{mlir}");
 }

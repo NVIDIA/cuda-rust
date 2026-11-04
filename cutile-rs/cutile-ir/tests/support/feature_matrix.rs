@@ -120,6 +120,11 @@ pub fn readme_matrix() -> String {
             Feature::ProgrammaticDependentLaunch,
             "; driver `cuLaunchKernelEx` support",
         ),
+        (
+            "Foreign tile-library calls (`#[cutile::foreign]`, preview)",
+            Feature::ForeignCall,
+            "; a `tileiras` that lists it, run with `--preview=simt`",
+        ),
     ] {
         writeln!(
             out,

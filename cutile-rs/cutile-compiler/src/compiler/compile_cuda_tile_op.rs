@@ -375,40 +375,14 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         module: &mut Module,
         block_id: BlockId,
         call_expr: &ExprCall,
+        fn_item: &ItemFn,
         generic_args: &GenericVars,
         ctx: &mut CompilerContext,
         return_type: Option<TileRustType>,
     ) -> Result<Option<TileRustValue>, JITError> {
-        let Expr::Path(path) = &*call_expr.func else {
-            return self.jit_error_result(
-                &call_expr.func.span(),
-                "expected a function path in call expression",
-            );
-        };
-        let last_seg = path.path.segments.last().unwrap();
-        let rust_function_name = last_seg.ident.to_string();
+        let rust_function_name = fn_item.sig.ident.to_string();
 
-        let fn_item = self
-            .modules
-            .get_function_by_name(rust_function_name.as_str());
-        if fn_item.is_none() {
-            // If the name was brought into scope by a use statement that
-            // points to an unsupported source (stdlib, third-party crate,
-            // or an unannotated user module), append a hint pointing back
-            // to the import. Falls through to the bare error otherwise.
-            let primary = format!("undefined function `{rust_function_name}`");
-            let msg = match self.modules.unresolved_name_hint(&rust_function_name) {
-                Some(hint) => format!("{primary}: {hint}"),
-                None => primary,
-            };
-            return self.jit_error_result(&call_expr.func.span(), &msg);
-        }
-        let (_, fn_item) = fn_item.unwrap();
-
-        let op_attrs = match self
-            .modules
-            .get_cuda_tile_op_attrs(rust_function_name.as_str())
-        {
+        let op_attrs = match get_meta_list("cuda_tile :: op", &fn_item.attrs) {
             Some(op_attrs) => op_attrs,
             None => {
                 return self.jit_error_result(&call_expr.func.span(), "undefined operation call")
@@ -2616,15 +2590,9 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         ctx: &mut CompilerContext,
         return_type: Option<TileRustType>,
     ) -> Result<Option<TileRustValue>, JITError> {
-        let rust_function_name = {
-            let Expr::Path(path) = &*call_expr.func else {
-                return self.jit_error_result(
-                    &call_expr.func.span(),
-                    "expected a function path in call expression",
-                );
-            };
-            path.path.segments.last().unwrap().ident.to_string()
-        };
+        // The resolved op's own name, not the call path's last segment: a
+        // renamed import (`use exp_with_rounding as e`) calls it by another.
+        let rust_function_name = fn_item.sig.ident.to_string();
 
         let return_type = if return_type.is_none() {
             if rust_function_name.as_str() == "constant" {
@@ -3092,47 +3060,22 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     let elem_ty_str = return_type
                         .get_cuda_tile_element_type(self.modules.primitives())?
                         .unwrap_or("i32".to_string());
-                    let mut result_ir_ty = super::_type::scalar_from_name(&elem_ty_str)
-                        .map(|sc| {
-                            cutile_ir::ir::Type::Tile(cutile_ir::ir::TileType {
-                                shape: vec![],
-                                element_type: cutile_ir::ir::TileElementType::Scalar(sc),
-                            })
-                        })
-                        .unwrap_or_else(|| {
-                            cutile_ir::ir::Type::Tile(cutile_ir::ir::TileType {
-                                shape: vec![],
-                                element_type: cutile_ir::ir::TileElementType::Scalar(
-                                    cutile_ir::ir::ScalarType::I32,
-                                ),
-                            })
-                        });
-                    let mut data = crate::compiler::compile_expression::encode_literal_bytes(
+                    let scalar = super::_type::scalar_from_name(&elem_ty_str)
+                        .unwrap_or(cutile_ir::ir::ScalarType::I32);
+                    let data = crate::compiler::compile_expression::encode_literal_bytes(
                         &lit_value,
                         &elem_ty_str,
                     );
-                    // A scalar f4 tile is not a legal type, even when used
-                    // only as a constant-pool carrier. Keep the real tile
-                    // type and pack both nibbles of the splat byte.
-                    if super::_type::scalar_from_name(&elem_ty_str)
-                        == Some(cutile_ir::ir::ScalarType::F4E2M1FN)
-                    {
-                        result_ir_ty =
+                    let value = crate::compiler::compile_expression::splat_dense_elements(
+                        scalar,
+                        data,
+                        || {
                             super::_type::convert_type(&return_type).ok_or_else(|| {
                                 self.jit_error(&call_expr.span(), "constant requires a tile result")
-                            })?;
-                        if let Some(byte) = data.first_mut() {
-                            *byte = (*byte & 15) * 17;
-                        }
-                    }
-                    attrs.push((
-                        "value".to_string(),
-                        Attribute::DenseElements(cutile_ir::ir::DenseElements {
-                            element_type: result_ir_ty,
-                            shape: vec![],
-                            data,
-                        }),
-                    ));
+                            })
+                        },
+                    )?;
+                    attrs.push(("value".to_string(), Attribute::DenseElements(value)));
                 }
                 "rounding" => {
                     if attr_id != fn_params[i] {
@@ -3344,6 +3287,28 @@ impl<'m> CUDATileFunctionCompiler<'m> {
     }
 
     pub fn compile_cuda_tile_macro(
+        &self,
+        module: &mut Module,
+        block_id: BlockId,
+        mac: &syn::Macro,
+        generic_vars: &GenericVars,
+        ctx: &mut CompilerContext,
+        return_type: Option<TileRustType>,
+    ) -> Result<Option<TileRustValue>, JITError> {
+        let values_before = module.num_values();
+        let result = self.compile_cuda_tile_macro_ops(
+            module,
+            block_id,
+            mac,
+            generic_vars,
+            ctx,
+            return_type,
+        )?;
+        self.record_memory_accesses(module, block_id, ctx, values_before);
+        Ok(result)
+    }
+
+    fn compile_cuda_tile_macro_ops(
         &self,
         module: &mut Module,
         block_id: BlockId,

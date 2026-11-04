@@ -23,7 +23,7 @@ use crate::types::*;
 use cutile_ir::ir::{BlockId, Module};
 
 use quote::ToTokens;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use syn::{Expr, ExprCall, ExprMethodCall, ItemFn, Type};
 
 /// Port of `crate::compiler::utils::update_type_meta` for compiler2 value types.
@@ -62,6 +62,15 @@ fn update_type_meta(
     }
 }
 
+/// The names of the type parameters that `generics` declare.
+fn type_param_names(generics: &[&syn::Generics]) -> HashSet<String> {
+    generics
+        .iter()
+        .flat_map(|generics| generics.type_params())
+        .map(|param| param.ident.to_string())
+        .collect()
+}
+
 impl<'m> CUDATileFunctionCompiler<'m> {
     #[allow(clippy::ptr_arg)] // public signature stays as-is
     pub fn inline_function_call(
@@ -75,11 +84,34 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         ctx: &mut CompilerContext,
         return_type: Option<TileRustType>,
     ) -> Result<Option<TileRustValue>, JITError> {
-        let normalized_fn_item = crate::type_aliases::normalize_item_fn_param_type_aliases(
-            fn_item,
-            self.modules.type_aliases(),
-        )
-        .map_err(JITError::Generic)?;
+        let callee_generic_params = type_param_names(&[&fn_item.sig.generics]);
+        let mut normalized_fn_item = fn_item.clone();
+        for input in &mut normalized_fn_item.sig.inputs {
+            let syn::FnArg::Typed(param) = input else {
+                continue;
+            };
+            // Resolve tag aliases before the legacy flat alias map can
+            // substitute another module's same-named alias.
+            let scoped =
+                self.modules
+                    .respell_string_tags(&param.ty, module_name, &callee_generic_params);
+            let is_param = matches!(&scoped, Type::Path(p)
+                if p.path.get_ident().is_some_and(|id| callee_generic_params.contains(&id.to_string())));
+            let marker = if is_param {
+                None
+            } else {
+                self.modules.string_tag_type(&scoped, module_name)
+            };
+            *param.ty = match marker {
+                Some(marker) => marker,
+                None if is_param => scoped,
+                None => crate::type_aliases::normalize_type_aliases(
+                    &scoped,
+                    self.modules.type_aliases(),
+                )
+                .map_err(JITError::Generic)?,
+            };
+        }
         stacker::maybe_grow(STACK_RED_ZONE, STACK_GROW_SIZE, || {
             let fn_item = &normalized_fn_item;
             let _inline_function_call_debug_str = call_expr.to_token_stream().to_string();
@@ -116,6 +148,10 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             // - Have the type of parameters in the callee. This is an inductive property.
             let param_names = get_sig_param_names(&fn_item.sig);
             let (input_params, _output_param) = get_sig_types(&fn_item.sig, None);
+            // The declared parameter types are the callee's text: a string
+            // tag in them is respelled from its defining module as the
+            // callee's module resolves it, before it becomes the type of a
+            // value that generic inference sees.
             let mut call_variables = CompilerContext::empty();
             // The callee body is compiled into the caller's current block, so
             // the caller's loop context governs check hoisting inside it.
@@ -123,6 +159,10 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             call_variables.token_update_in_region =
                 ctx.token_update_in_region || ctx.inside_for || ctx.innermost_loop.is_some();
             call_variables.module_scope.push(module_name.clone());
+            // Foreign calls in the callee are ordered after the caller's
+            // accesses and earlier foreign calls, and later ones after them.
+            let ffi_before = super::compile_foreign::ffi_token(ctx);
+            super::compile_foreign::copy_ffi_tokens(ctx, &mut call_variables);
             // The callee's body block is a function body: a top-level `return`
             // there yields the call's value.
             call_variables.fn_body = true;
@@ -140,7 +180,11 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 let param_type = &input_params[i];
                 let mut param_val = call_arg_values[i].clone();
                 // TODO (hme): This may not be enough, depending on what level of inspection we require of compound / struct types.
-                param_val.ty.rust_ty = param_type.clone();
+                param_val.ty.rust_ty = self.modules.respell_string_tags(
+                    param_type,
+                    module_name,
+                    &callee_generic_params,
+                );
                 param_val.mutability = if sig_param_mutability[i] {
                     Mutability::Mutable
                 } else {
@@ -254,6 +298,8 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 &outer2inner_map,
                 "token".to_string(),
             );
+            super::compile_foreign::copy_ffi_tokens(&call_variables, ctx);
+            self.publish_ffi_token(module, block_id, ctx, ffi_before, &call_expr.span());
             // println!("exit_function_call: {}", call_expr.to_token_stream().to_string());
             if let Some(mut res) = result {
                 if let Some(rt) = return_type {
@@ -366,6 +412,10 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             // get_sig_param_names includes value for self if the signature contains self.
             let param_names = get_sig_param_names(&impl_method.sig);
             let (input_params, _output_param) = get_sig_types(&impl_method.sig, Some(self_ty));
+            // As for functions: string tags in the declared parameter
+            // types are respelled in the method's module.
+            let callee_generic_params =
+                type_param_names(&[&impl_item.generics, &impl_method.sig.generics]);
             let mut call_variables = CompilerContext::empty();
             // The callee body is compiled into the caller's current block, so
             // the caller's loop context governs check hoisting inside it.
@@ -373,6 +423,10 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             call_variables.token_update_in_region =
                 ctx.token_update_in_region || ctx.inside_for || ctx.innermost_loop.is_some();
             call_variables.module_scope.push(module_name.clone());
+            // Foreign calls in the callee are ordered after the caller's
+            // accesses and earlier foreign calls, and later ones after them.
+            let ffi_before = super::compile_foreign::ffi_token(ctx);
+            super::compile_foreign::copy_ffi_tokens(ctx, &mut call_variables);
             call_variables.fn_body = true;
             let mut outer2inner_map = HashMap::new();
             let sig_param_mutability = get_sig_param_mutability(&impl_method.sig);
@@ -381,7 +435,11 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 let param_type = &input_params[i];
                 let mut param_val = call_arg_values[i].clone();
                 // TODO (hme): This may not be enough, depending on what level of inspection we require of compound / struct types.
-                param_val.ty.rust_ty = param_type.clone();
+                param_val.ty.rust_ty = self.modules.respell_string_tags(
+                    param_type,
+                    &module_name,
+                    &callee_generic_params,
+                );
                 param_val.mutability = if sig_param_mutability[i] {
                     Mutability::Mutable
                 } else {
@@ -498,6 +556,8 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 &outer2inner_map,
                 "token".to_string(),
             );
+            super::compile_foreign::copy_ffi_tokens(&call_variables, ctx);
+            self.publish_ffi_token(module, block_id, ctx, ffi_before, &method_call_expr.span());
             // If this method advanced a mutable view's token (a store) inside a
             // loop threading that tensor's token, join the output into the loop
             // accumulator. A no-op outside such a loop.

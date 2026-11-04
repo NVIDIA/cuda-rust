@@ -702,6 +702,20 @@ pub(crate) fn verify_operation(
                 ));
             }
         }
+        PreviewCall => {
+            // Call sites pass and return concrete tiles; tokens are ordering
+            // edges only and are not passed to the extern function.
+            let is_tile_or_token = |ty: &Type| matches!(ty, Type::Tile(_) | Type::Token);
+            if !op
+                .operands
+                .iter()
+                .map(|v| module.value_type(*v))
+                .chain(&op.result_types)
+                .all(is_tile_or_token)
+            {
+                return Err(fail("operands and results must be tiles or tokens"));
+            }
+        }
         _ => {}
     }
     if op

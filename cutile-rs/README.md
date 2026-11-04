@@ -123,6 +123,7 @@ JIT error before assembly.
 | `f8e5m3fnu` | Tile IR 13.4 and `sm_107+` |
 | Scaled MMA with `f8e5m3fnu` scales | Tile IR 13.4 and `sm_107` only |
 | Programmatic dependent launch (unsafe, per launch) | Tile IR 13.4 and `sm_90+`; driver `cuLaunchKernelEx` support |
+| Foreign tile-library calls (`#[cutile::foreign]`, preview) | Tile IR 13.5; a `tileiras` that lists it, run with `--preview=simt` |
 <!-- END TILE IR REQUIREMENTS -->
 
 See the [version/feature matrix](https://nvidia.github.io/cuda-rust/cutile/latest/reference/compatibility.html),

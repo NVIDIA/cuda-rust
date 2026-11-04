@@ -501,6 +501,19 @@ pub(super) fn write_op_body(
                 write_operand_group(op, w, ctx, 3, 1)?;
             }
         }
+
+        // ----- Public preview -----
+        PreviewCall => {
+            // Matches `encode_PreviewCallOp`: variadic results, flags for the
+            // optional arg_attrs/res_attrs (never emitted), callee, constant
+            // arguments, then the sized operand list.
+            w.write_varint(op.result_types.len() as u64);
+            write_result_types(op, w, ctx)?;
+            w.write_varint(0);
+            write_inline_attr(op, "callee", w, ctx)?;
+            write_inline_attr(op, "const_args", w, ctx)?;
+            write_operands(op, w, ctx, true)?;
+        }
         LoadPtrTko => {
             write_result_types(op, w, ctx)?;
             let flags = flag_if_present(op, "memory_scope", 0)
@@ -1246,6 +1259,66 @@ mod tests {
                         .contains("13.4"));
                 }
             }
+        }
+    }
+
+    #[test]
+    fn preview_call_wire_layout_and_version_gate() {
+        use crate::ir::PreviewConstArg;
+        let t = Type::Tile(TileType {
+            shape: vec![4],
+            element_type: TileElementType::Scalar(ScalarType::F32),
+        });
+        let mut module = Module::new("preview_call");
+        let (_, _, args) = build_single_block_region(&mut module, &[t.clone(), Type::Token]);
+        let (op, _) = OpBuilder::new(Opcode::PreviewCall, Location::Unknown)
+            .operands(args.iter().copied())
+            .results([t.clone(), Type::Token])
+            .attr("callee", Attribute::String("f".into()))
+            .attr(
+                "const_args",
+                Attribute::Array(
+                    [
+                        PreviewConstArg::Int(-3),
+                        PreviewConstArg::Int(64),
+                        PreviewConstArg::Str("lower".into()),
+                        PreviewConstArg::Datatype(Type::Scalar(ScalarType::F64)),
+                    ]
+                    .into_iter()
+                    .map(Attribute::PreviewConstArg)
+                    .collect(),
+                ),
+            )
+            .build(&mut module);
+        // Name the table indices by interning in the writer's order.
+        let mut types = TypeManager::new();
+        let mut strings = StringManager::new();
+        let tile = types.get_or_insert(&t) as u8;
+        let token = types.get_or_insert(&Type::Token) as u8;
+        let callee = strings.get_or_insert("f") as u8;
+        let lower = strings.get_or_insert("lower") as u8;
+        let f64_ty = types.get_or_insert(&Type::Scalar(ScalarType::F64)) as u8;
+        #[rustfmt::skip]
+        let expected = vec![
+            2, tile, token, // results
+            0,              // no arg_attrs / res_attrs
+            callee,         // callee
+            4,              // constant arguments
+            0xD1, 0x01, 5,          // int -3 (zigzag)
+            0xD1, 0x01, 0x80, 0x01, // int 64
+            0xE4, 0x01, lower,      // string
+            0xDB, 0x01, f64_ty,     // datatype
+            2, 0, 1,        // operands
+        ];
+        assert_eq!(
+            op_body_bytes_version(&module, &args, op, BytecodeVersion::V13_5).unwrap(),
+            expected
+        );
+        for old in [BytecodeVersion::V13_3, BytecodeVersion::V13_4] {
+            assert!(op_body_bytes_version(&module, &args, op, old)
+                .unwrap_err()
+                .to_string()
+                .contains("13.5"));
         }
     }
 

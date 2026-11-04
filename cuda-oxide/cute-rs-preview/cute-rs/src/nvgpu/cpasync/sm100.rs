@@ -6,10 +6,10 @@
 //! SM100 1-CTA and 2-CTA cluster TMA copy atoms (`cutlass.cute.nvgpu.cpasync`).
 
 use super::TensorMap;
+use crate::arch::Barrier;
 use crate::layout::ReifySmem2D;
 use crate::nvgpu::tcgen05::{__compiler, SharedTile, Sm100SharedTile, SmemLayout};
 use core::marker::PhantomData;
-use cuda_device::barrier::Barrier;
 
 /// A cluster TMA copy whose descriptor and destination have the same layout.
 pub struct Sm100ClusterTmaCopy<Layout>(

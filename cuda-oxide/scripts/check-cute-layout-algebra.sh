@@ -226,6 +226,8 @@ for path in sorted(glob.glob("cuda-oxide/cute-rs-preview/cute-rs/src/**/*.rs", r
         for lineno, line in enumerate(f, 1):
             if "ctm_rs" in line or "ctm-rs" in line:
                 errors.append(f"{path}:{lineno}: `ctm_rs` is banned inside `cute-rs`: {line.strip()}")
+            if "/nvgpu/" in path and ("cuda_device" in line or "encode_no_swizzle_smem_desc" in line or "0x0000_0480" in line):
+                errors.append(f"{path}:{lineno}: raw `cuda_device` or manual descriptor bit-packing is banned in `cute-rs/src/nvgpu/` (lower through `__compiler` -> `dialect-cute`): {line.strip()}")
 
 # 4c. Direct CuTeDSL Python AST symbol & workload-helper purity check.
 for root_dir in (

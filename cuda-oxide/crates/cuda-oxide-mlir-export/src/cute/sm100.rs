@@ -46,6 +46,8 @@ pub(crate) fn register_cute_sm100_pack(
     registry.register_attribute::<CuteSm100EpiloguePlanAttr>(DropAttribute)?;
     registry.register_attribute::<CuteSm100ClusterCopyPlanAttr>(DropAttribute)?;
     registry.register_attribute::<CuteSm100PipelinePlanAttr>(DropAttribute)?;
+    registry.register_attribute::<CuteSm100ScaleCopyPlanAttr>(DropAttribute)?;
+    registry.register_attribute::<CuteSm100BlockScaledMmaPlanAttr>(DropAttribute)?;
     /// Bind a typed SM100 source operation to its verified plan reader and runtime action.
     macro_rules! register {
         ($op:ty, $kind:ident, $plan:ident) => {
@@ -80,6 +82,8 @@ pub(crate) fn register_cute_sm100_pack(
     register!(CuteSm100StoreCommitOp, StoreCommit, Store);
     register!(CuteSm100StoreAcquireOp, StoreAcquire, Store);
     register!(CuteSm100StoreTailOp, StoreTail, Store);
+    register!(CuteSm100BlockScaledCopyOp, BlockScaledCopy, ScaleCopy);
+    register!(CuteSm100BlockScaledGemmOp, BlockScaledGemm, BlockScaledMma);
     Ok(())
 }
 
@@ -124,6 +128,10 @@ pub(in crate::cute) enum Kind {
     StoreAcquire,
     /// Drain all outstanding TMA store groups.
     StoreTail,
+    /// Copy one 512-byte `(32, 4, 4)` scale atom from shared memory into TMEM.
+    BlockScaledCopy,
+    /// Issue one `K = 64` step of a group-one block-scaled `mxf4nvf4` MMA.
+    BlockScaledGemm,
 }
 /// Verified source plan retained until its runtime action has been emitted.
 enum Plan {
@@ -148,6 +156,12 @@ enum Plan {
     ),
     /// Maximum permitted number of pending TMA store groups.
     Store(#[doc = "Bound on outstanding hardware TMA store groups."] CuteTmaStorePipelineAttr),
+    /// CTA-group contract for one `tcgen05.cp` scale-atom copy.
+    ScaleCopy(#[doc = "CTA-group contract for scale-atom copy."] CuteSm100ScaleCopyPlanAttr),
+    /// Static shape and layout contract for one block-scaled `mxf4nvf4` MMA step.
+    BlockScaledMma(
+        #[doc = "Shape and layout contract for block-scaled MMA."] CuteSm100BlockScaledMmaPlanAttr,
+    ),
 }
 /// Pair a runtime action with the source-plan reader that validates its operands.
 struct Recipe {
@@ -271,6 +285,99 @@ impl OperationTranslation for Recipe {
                 let mut op = e.operation("nvvm.cp.async.bulk.wait_group", vec![])?;
                 integer_property(&mut op, "group", 32, groups as i128);
                 op.properties.insert("read".into(), MlirAttribute::Unit);
+                e.ops.push(op);
+            }
+            (BlockScaledCopy, Plan::ScaleCopy(p)) => {
+                let dst = e.cast("llvm.inttoptr", a[0].clone(), llvm_ptr_type(6)?)?;
+                let smem_ptr = e.llvm_ptr(a[1].clone(), 3)?;
+                let addr32 = e.cast("llvm.ptrtoint", smem_ptr, MlirType::Integer(32))?;
+                let addr64 = e.cast("arith.extui", addr32, MlirType::Integer(64))?;
+                let mask = e.constant(64, 0x3FFF0)?;
+                let shift4 = e.constant(64, 4)?;
+                let addr_masked = e.binary("arith.andi", addr64, mask)?;
+                let addr_bits = e.binary("arith.shrui", addr_masked, shift4)?;
+                let base_flags = e.constant(
+                    64,
+                    ((2048i128 >> 4) << 16) | ((128i128 >> 4) << 32) | (1i128 << 46),
+                )?;
+                let desc0 = e.binary("arith.ori", addr_bits, base_flags)?;
+                let step64 = e.cast("arith.extui", a[2].clone(), MlirType::Integer(64))?;
+                let c32 = e.constant(64, 32)?;
+                let step_off = e.binary("arith.muli", step64, c32)?;
+                let desc = e.binary("arith.addi", desc0, step_off)?;
+                let mut op = e.operation("nvvm.tcgen05.cp", vec![dst, desc])?;
+                property(
+                    &mut op,
+                    "group",
+                    &format!("#nvvm.cta_group<cta_{}>", p.cta_group),
+                )?;
+                property(&mut op, "shape", "#nvvm.tcgen05_cp_shape<shape_32x128b>")?;
+                property(&mut op, "multicast", "#nvvm.tcgen05_cp_multicast<warpx4>")?;
+                e.ops.push(op);
+            }
+            (BlockScaledGemm, Plan::BlockScaledMma(p)) => {
+                let d_ptr = e.cast("llvm.inttoptr", a[0].clone(), llvm_ptr_type(6)?)?;
+                let sfa_ptr = e.cast("llvm.inttoptr", a[3].clone(), llvm_ptr_type(6)?)?;
+                let sfb_ptr = e.cast("llvm.inttoptr", a[4].clone(), llvm_ptr_type(6)?)?;
+                let mask = e.constant(64, 0x3FFF0)?;
+                let shift4 = e.constant(64, 4)?;
+                let step64 = e.cast("arith.extui", a[7].clone(), MlirType::Integer(64))?;
+
+                let a_ptr = e.llvm_ptr(a[1].clone(), 3)?;
+                let a_addr32 = e.cast("llvm.ptrtoint", a_ptr, MlirType::Integer(32))?;
+                let a_addr64 = e.cast("arith.extui", a_addr32, MlirType::Integer(64))?;
+                let a_masked = e.binary("arith.andi", a_addr64, mask.clone())?;
+                let a_bits = e.binary("arith.shrui", a_masked, shift4.clone())?;
+                let a_flags = e.constant(
+                    64,
+                    ((2048i128 >> 4) << 16) | ((128i128 >> 4) << 32) | (1i128 << 46),
+                )?;
+                let a_desc0 = e.binary("arith.ori", a_bits, a_flags)?;
+                let c256 = e.constant(64, 256)?;
+                let a_step_off = e.binary("arith.muli", step64.clone(), c256)?;
+                let a_desc = e.binary("arith.addi", a_desc0, a_step_off)?;
+
+                let b_ptr = e.llvm_ptr(a[2].clone(), 3)?;
+                let b_addr32 = e.cast("llvm.ptrtoint", b_ptr, MlirType::Integer(32))?;
+                let b_addr64 = e.cast("arith.extui", b_addr32, MlirType::Integer(64))?;
+                let b_masked = e.binary("arith.andi", b_addr64, mask.clone())?;
+                let b_bits = e.binary("arith.shrui", b_masked, shift4.clone())?;
+                let lbo64 = e.cast("arith.extui", a[6].clone(), MlirType::Integer(64))?;
+                let lbo_masked = e.binary("arith.andi", lbo64.clone(), mask)?;
+                let lbo_shifted = e.binary("arith.shrui", lbo_masked, shift4)?;
+                let c16 = e.constant(64, 16)?;
+                let lbo_bits = e.binary("arith.shli", lbo_shifted, c16)?;
+                let b_sbo_flags = e.constant(64, ((128i128 >> 4) << 32) | (1i128 << 46))?;
+                let b_bits_lbo = e.binary("arith.ori", b_bits, lbo_bits)?;
+                let b_desc0 = e.binary("arith.ori", b_bits_lbo, b_sbo_flags)?;
+                let shift3 = e.constant(64, 3)?;
+                let b_step_stride = e.binary("arith.shrui", lbo64, shift3)?;
+                let b_step_off = e.binary("arith.muli", step64, b_step_stride)?;
+                let b_desc = e.binary("arith.addi", b_desc0, b_step_off)?;
+
+                let c3 = e.constant(32, 3)?;
+                let c17 = e.constant(32, 17)?;
+                let n_shr = e.binary("arith.shrui", a[5].clone(), c3)?;
+                let n_bits = e.binary("arith.shli", n_shr, c17)?;
+                let idesc_base = e.constant(32, (0x0000_0480u32 | ((p.m >> 4) << 24)) as i128)?;
+                let idesc = e.binary("arith.ori", idesc_base, n_bits)?;
+
+                let mut op = e.operation(
+                    "nvvm.tcgen05.mma.block_scale",
+                    vec![d_ptr, a_desc, b_desc, idesc, a[8].clone(), sfa_ptr, sfb_ptr],
+                )?;
+                property(&mut op, "mmaKind", "#nvvm.tcgen05_mma_kind<mxf4nvf4>")?;
+                property(&mut op, "ctaGroup", "#nvvm.cta_group<cta_1>")?;
+                property(
+                    &mut op,
+                    "collectorOp",
+                    "#nvvm.tcgen05_mma_collectorop<discard>",
+                )?;
+                property(
+                    &mut op,
+                    "scaleVecSize",
+                    "#nvvm.tcgen05_mma_scale_vec<block16>",
+                )?;
                 e.ops.push(op);
             }
             (kind, Plan::Pipeline(p)) => emit_pipeline(&mut e, kind, &a, &p)?,

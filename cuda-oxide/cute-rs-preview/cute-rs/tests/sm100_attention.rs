@@ -30,6 +30,12 @@ fn cute_rs_is_free_of_ctm_rs() {
             !source.contains("ctm_rs"),
             "{path} must not reference ctm_rs"
         );
+        if path.starts_with("src/nvgpu/") {
+            assert!(
+                !source.contains("cuda_device") && !source.contains("encode_no_swizzle_smem_desc"),
+                "{path} must lower through __compiler -> dialect-cute without raw cuda_device or manual descriptor bit-packing"
+            );
+        }
     }
 }
 

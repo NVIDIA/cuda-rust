@@ -5,9 +5,9 @@
 
 //! Exact compiler markers for SM100 `tcgen05` MMA, TMEM, and TMA operations.
 
+use crate::arch::Barrier;
 use crate::nvgpu::cpasync::TensorMap;
 use core::marker::PhantomData;
-use cuda_device::barrier::Barrier;
 /// Device-only marker allocating COLUMNS of group-two tensor memory.
 ///
 /// # Safety
@@ -204,4 +204,46 @@ pub unsafe fn tma_store<L, const G: u32>(
 ) {
     let _ = (desc, src, c0, c1, c2);
     unreachable!("CuTe compiler marker")
+}
+
+/// Device-only marker copying one 512-byte `(32, 4, 4)` scale atom from shared memory into TMEM.
+///
+/// # Safety
+/// The elected issuer must supply a valid 128-byte-aligned shared scale pointer and 4-column TMEM destination.
+#[inline(never)]
+pub unsafe fn sm100_block_scaled_copy(tmem_col: u32, s_scale: *mut u32, step: u32) {
+    let _ = (tmem_col, s_scale, step);
+    unreachable!("SM100 CuTe marker requires device compilation")
+}
+
+/// Device-only marker issuing one `K = 64` step of a group-one block-scaled `mxf4nvf4` MMA.
+///
+/// # Safety
+/// The elected issuer must supply live shared operand tiles `a` and `b` and populated TMEM scales.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+pub unsafe fn sm100_block_scaled_gemm<AL, BL, const M: u32, const K: u32>(
+    tmem_d: u32,
+    a: *mut f16,
+    b: *mut f16,
+    sfa_tmem: u32,
+    sfb_tmem: u32,
+    valid_n: u32,
+    b_lbo_bytes: u32,
+    step: u32,
+    accumulate: bool,
+) {
+    let _ = (
+        tmem_d,
+        a,
+        b,
+        sfa_tmem,
+        sfb_tmem,
+        valid_n,
+        b_lbo_bytes,
+        step,
+        accumulate,
+        PhantomData::<(AL, BL)>,
+    );
+    unreachable!("SM100 CuTe marker requires device compilation")
 }

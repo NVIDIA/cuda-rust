@@ -67,17 +67,6 @@ impl<Layout: ReifySmem2D, Role> Sm100SharedTile<Layout, Role> {
         let stage_bytes = crate::nvgpu::cpasync::size_in_bytes::<u8, Layout>() as usize;
         unsafe { Self::from_raw_bytes(smem_base.add(stage_offset_bytes + slot * stage_bytes)) }
     }
-
-    /// Return the CTA-shared byte offset of this tile's base pointer.
-    /// Used by `Sm100BlockScaledTiledMma` to encode hardware `Tcgen05SmemDescriptor`s.
-    ///
-    /// # Safety
-    /// `self.base` must point to valid shared memory belonging to the calling CTA.
-    #[must_use]
-    #[inline(always)]
-    pub unsafe fn shared_offset(&self) -> u64 {
-        unsafe { cuda_device::shared::cvta_generic_to_shared_offset(self.base.cast::<u8>()) }
-    }
 }
 
 /// A non-owning shared-memory view of staged 512-byte [`Sm120ScaleAtom`] blocks with an A/B role (`Mkl` or `Nkl`).
@@ -128,17 +117,6 @@ impl<Role> Sm100ScaleTile<Role> {
             )
         }
     }
-
-    /// Return the CTA-shared byte offset of this scale tile's base pointer.
-    /// Used to build the `Tcgen05SmemDescriptor` consumed by `tcgen05.cp.32x128b.warpx4`.
-    ///
-    /// # Safety
-    /// `self.base` must point to valid shared memory belonging to the calling CTA.
-    #[must_use]
-    #[inline(always)]
-    pub unsafe fn shared_offset(&self) -> u64 {
-        unsafe { cuda_device::shared::cvta_generic_to_shared_offset(self.base.cast::<u8>()) }
-    }
 }
 
 /// Non-owning shared tile, typed by its physical layout and MMA operand role.
@@ -180,11 +158,12 @@ impl<L: SmemLayout, Role> SharedTile<L, Role> {
     #[inline(always)]
     pub unsafe fn store_packed_8(&mut self, row: u32, col: u32, words: [u32; 4]) {
         let offset = L::crd2idx(row, col);
+        let packed = (words[0] as u128)
+            | ((words[1] as u128) << 32)
+            | ((words[2] as u128) << 64)
+            | ((words[3] as u128) << 96);
         unsafe {
-            *self
-                .as_ptr()
-                .add(offset)
-                .cast::<cuda_device::vector::U32x4>() = cuda_device::vector::U32x4(words);
+            *self.as_ptr().add(offset).cast::<u128>() = packed;
         }
     }
 }

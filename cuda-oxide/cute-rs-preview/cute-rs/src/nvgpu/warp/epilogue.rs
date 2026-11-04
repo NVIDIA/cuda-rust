@@ -315,7 +315,6 @@ impl Sm120EpilogueWarp128x128 {
 mod tests {
     use super::*;
     use crate::layout::ReifySmem2D;
-    use cuda_device::mma_frag;
 
     /// An epilogue half must have the shape, byte count and swizzle expected by one B128 TMA store.
     #[test]
@@ -339,7 +338,8 @@ mod tests {
                     let (atom_row, atom_col) = sm120_epilogue_atom_origin(warp, m_band, n_slot);
                     for lane in 0..32 {
                         for j in 0..4 {
-                            let (r, c) = mma_frag::acc_coords(lane, j);
+                            let r = (lane / 4) + ((j / 2) * 8);
+                            let c = ((lane % 4) * 2) + (j % 2);
                             let logical = (atom_row + r) * SM120_EPILOGUE_COLS + atom_col + c;
                             assert_eq!(
                                 owners[logical],

@@ -13,22 +13,30 @@ computation through cute-rs tensor views, layouts, partitions, register tiles,
 copies, reductions and MMA operations. This is a hard requirement, alongside
 numerical correctness and competitive measured performance.
 
-- A `*_cute` kernel imports `cute_rs` and, for instruction-level steps,
-  `ctm_rs`. It does not import `cuda_device`. Kernel entry attributes, thread
-  identifiers and shared-storage declarations come through the `ctm_rs`
-  re-exports. If a kernel needs something neither crate offers, add it to
-  cute-rs (or to ctm-rs when it is one instruction) as a typed operation; do
-  not reach past them.
+- A `*_cute` kernel imports `cute_rs` (and `ctm_rs` only for kernel entry
+  attributes `#[cuda_module]`, `#[kernel]`, `#[launch_bounds]`,
+  `#[launch_contract]`, `DisjointSlice`, `DynamicSharedArray`, and `thread`).
+  **Inside `cute-rs` itself (`cute-rs/src/`), `ctm-rs` is completely banned**
+  (not even in `Cargo.toml`).
+- **`cute-rs/src/` module structure must match CuTeDSL 1-to-1:**
+  `layout`, `tensor`, `atom`, `numeric`, `arch`, `nvgpu/{common, cpasync, warp, tcgen05}`,
+  `pipeline`, and `utils/{tmem_allocator, scheduler, blockscaled}`. Never add
+  model-specific folders (`attention/`, `ffn.rs`, `decoder.rs`, `reduction.rs`)
+  or legacy top-level hardware folders (`sm100/`, `copy/`, `mma/`, `epilogue/`)
+  inside `cute-rs/src/`.
+- **Inside `cute-rs/src/nvgpu/`, `cuda_device` and manual descriptor bit-packing
+  are completely banned:** All `nvgpu` copy/MMA operations must lower through
+  `__compiler::*` $\rightarrow$ `mir-importer` $\rightarrow$ `dialect-cute`
+  $\rightarrow$ `cuda-oxide-mlir-export` (or `cute_rs::arch` for 1-instruction
+  arch primitives). Both the 1-to-1 module tree and the `ctm-rs` / `nvgpu`
+  `cuda_device` bans are enforced by `scripts/check-cute-layout-algebra.sh` and
+  `cute-rs/tests/sm100_attention.rs`.
 - The deliverable is the exported MLIR, not a kernel that happens to run. The
   tensor computation must reach the CUTLASS compiler as `cute.*` operations;
   check with `CUDA_OXIDE_MLIR_OUTPUT=<file>` that the loads, copies and MMA
   steps appear as CuTe operations rather than scalar code. A kernel rewritten
   around a compiler gap or a missing operation is a workaround, and the
   repository rule applies: fix the compiler or add the operation.
-- Keep instruction-level CTM operations underneath reusable cute-rs
-  operations. CTM kernel declarations, launch contracts, thread identifiers and
-  ABI storage types may remain at kernel entry points. Explicit `*_ctm`
-  examples continue to demonstrate the lower-level instruction layer.
 - Do not hand-code hardware fragment packing, lane-to-value maps, or
   shared-memory swizzle formulas in cute-rs workload kernels. Describe those
   mappings using typed layouts and derive accesses from them.

@@ -79,11 +79,7 @@ impl<T, SmemL> TensorMap<T, SmemL> {
     /// kernel argument, and remain live through the prefetch.
     #[inline(always)]
     pub unsafe fn prefetch_descriptor(&self) {
-        unsafe {
-            cuda_device::tma::prefetch_tma_descriptor(
-                core::ptr::from_ref(self).cast::<cuda_device::TmaDescriptor>(),
-            )
-        };
+        unsafe { crate::arch::prefetch_tma_descriptor(core::ptr::from_ref(self).cast::<u8>()) };
     }
 
     /// Borrow the descriptor at `index` from a slice of descriptors without a bounds check.
@@ -279,7 +275,7 @@ pub unsafe fn copy_tma_2d<T, SmemL>(
     desc: *const TensorMap<T, SmemL>,
     coord: (usize, usize),
     dst_smem_tile: &mut crate::atom::cooperative::SmemTile<T, SmemL>,
-    barrier: *mut cuda_device::barrier::Barrier,
+    barrier: *mut crate::arch::Barrier,
 ) {
     let _ = (desc, coord, dst_smem_tile, barrier);
     unreachable!("cute-rs `copy_tma_2d` executed outside device compilation")

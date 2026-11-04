@@ -319,6 +319,21 @@ pub(crate) const CUTE_FNS: &[CuteFnSpec] = &[
         schema: &[SubstKind::Const],
     },
     CuteFnSpec {
+        canonical: "cute_rs::nvgpu::tcgen05::__compiler::sm100_block_scaled_copy",
+        func: CuteFn::Sm100(sm100::Sm100Fn::BlockScaledCopy),
+        schema: &[],
+    },
+    CuteFnSpec {
+        canonical: "cute_rs::nvgpu::tcgen05::__compiler::sm100_block_scaled_gemm",
+        func: CuteFn::Sm100(sm100::Sm100Fn::BlockScaledGemm),
+        schema: &[
+            SubstKind::Type,
+            SubstKind::Type,
+            SubstKind::Const,
+            SubstKind::Const,
+        ],
+    },
+    CuteFnSpec {
         canonical: "cute_rs::tensor::make_tensor_read",
         func: CuteFn::MakeTensorRead,
         schema: &[SubstKind::Type],

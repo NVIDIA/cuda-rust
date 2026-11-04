@@ -103,13 +103,14 @@ impl super::FragmentC {
     /// Visit this lane's four `(row, col)` output coordinates (`0..16`, `0..8`) in register order.
     #[inline(always)]
     pub fn store_with(self, lane: u32, mut write: impl FnMut(usize, usize, f32)) {
-        let mut i = 0;
-        while i < 4 {
-            cuda_device::thread::__unroll_config::<0>();
-            let (r, c) = coordinate::<CLayout, 8>(lane as usize, i);
-            write(r, c, self.0[i]);
-            i += 1;
-        }
+        let (r0, c0) = coordinate::<CLayout, 8>(lane as usize, 0);
+        write(r0, c0, self.0[0]);
+        let (r1, c1) = coordinate::<CLayout, 8>(lane as usize, 1);
+        write(r1, c1, self.0[1]);
+        let (r2, c2) = coordinate::<CLayout, 8>(lane as usize, 2);
+        write(r2, c2, self.0[2]);
+        let (r3, c3) = coordinate::<CLayout, 8>(lane as usize, 3);
+        write(r3, c3, self.0[3]);
     }
 }
 
@@ -164,7 +165,7 @@ impl Bf16Mma16x8x16 {
     #[must_use]
     #[inline(always)]
     pub unsafe fn mma_atom_call(self, c: FragmentC, a: FragmentA, b: FragmentB) -> FragmentC {
-        FragmentC(unsafe { cuda_device::wmma::mma_m16n8k16_f32_bf16(c.0, a.0, b.0) })
+        FragmentC(unsafe { crate::arch::mma_m16n8k16_f32_bf16(c.0, a.0, b.0) })
     }
 }
 /// A lane's immutable partition of the A operand.

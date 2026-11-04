@@ -13,20 +13,6 @@ use crate::layout::ReifySmem2D;
 use crate::utils::blockscaled::{Mkl, Nkl};
 use core::marker::PhantomData;
 
-/// Pack a 16-byte-aligned shared offset into a no-swizzle K-major `tcgen05` shared-memory descriptor.
-#[must_use]
-#[inline(always)]
-const fn encode_no_swizzle_smem_desc(
-    address: u64,
-    leading_dim_bytes: u32,
-    stride_bytes: u32,
-) -> u64 {
-    ((address & 0x3FFF0) >> 4)
-        | (((leading_dim_bytes as u64 & 0x3FFF0) >> 4) << 16)
-        | (((stride_bytes as u64 & 0x3FFF0) >> 4) << 32)
-        | (1u64 << 46)
-}
-
 /// Two-CTA FP16 tiled MMA with two N partitions sharing the A collector.
 ///
 /// The A collector holds an input so two MMA instructions can reuse it:
@@ -123,15 +109,12 @@ impl<
 /// (`OperandA`, `OperandB`, `Mkl`, `Nkl`) directly in Rust's type system.
 #[derive(Clone, Copy, Debug)]
 pub struct Sm100BlockScaledTiledMma<AL, BL, const M: u32 = 128, const K: u32 = 64> {
-    /// Hardware instruction descriptor (`Tcgen05InstructionDescriptor`) for `(M, valid_n)`.
-    /// Encodes `E2M1 × E2M1` operands, `E4M3` block scales (`SF_VEC = 16`), and `f32` accumulation.
-    idesc: u32,
+    /// Active N column count (`16..=256`, multiple of 16) for this block-scaled `TiledMma`.
+    /// Lowered into the `tcgen05.mma.cta_group::1.kind::mxf4nvf4.block_scale.block16` plan by `dialect-cute`.
+    valid_n: u32,
     /// Leading-dimension byte stride of the B shared-memory sub-tile (`valid_n * 16`).
     /// Separates the low 16 bytes (`K = 0..31`) from the high 16 bytes (`K = 32..63`) of each row.
     b_lbo_bytes: u32,
-    /// Byte stride between consecutive `K = 64` B shared-memory sub-tiles (`valid_n * 32`).
-    /// Advances the B `Tcgen05SmemDescriptor` base address across `step = 0..8`.
-    b_sub_bytes: u64,
     /// Zero-byte marker carrying the compile-time A and B shared-memory layout types (`AL`, `BL`).
     /// Checked against the [`Sm100SharedTile`] arguments passed to [`Self::gemm`].
     marker: PhantomData<(AL, BL)>,
@@ -163,11 +146,9 @@ impl<AL: ReifySmem2D, BL: ReifySmem2D, const M: u32, const K: u32>
     #[inline(always)]
     pub const fn new_with_lbo(valid_n: u32, b_lbo_bytes: u32) -> Self {
         let () = Self::VALID;
-        let idesc = 0x0000_0480u32 | ((valid_n >> 3) << 17) | ((M >> 4) << 24);
         Self {
-            idesc,
+            valid_n,
             b_lbo_bytes,
-            b_sub_bytes: (b_lbo_bytes as u64) * 2,
             marker: PhantomData,
         }
     }
@@ -179,9 +160,8 @@ impl<AL: ReifySmem2D, BL: ReifySmem2D, const M: u32, const K: u32>
     /// One elected lane in the CTA must issue this operation after `s_scale` is published in shared memory.
     #[inline(always)]
     pub unsafe fn copy<Role>(tmem_col: u32, s_scale: &Sm100ScaleTile<Role>, step: usize) {
-        let desc0 = encode_no_swizzle_smem_desc(unsafe { s_scale.shared_offset() }, 2048, 128);
         unsafe {
-            cuda_device::tcgen05::tcgen05_cp_32x128b_warpx4(tmem_col, desc0 + (step as u64) * 32);
+            __compiler::sm100_block_scaled_copy(tmem_col, s_scale.base, step as u32);
         }
     }
 
@@ -203,20 +183,18 @@ impl<AL: ReifySmem2D, BL: ReifySmem2D, const M: u32, const K: u32>
         step: usize,
         accumulate: bool,
     ) {
-        let a_desc0 = encode_no_swizzle_smem_desc(unsafe { a.shared_offset() }, 2048, 128);
-        let b_desc0 =
-            encode_no_swizzle_smem_desc(unsafe { b.shared_offset() }, self.b_lbo_bytes, 128);
-        let b_desc_step = self.b_sub_bytes >> 4;
         let _ = (Mkl, Nkl);
         unsafe {
-            cuda_device::tcgen05::tcgen05_mma_shared_mxf4nvf4_block_scale_block16::<1, 0>(
+            __compiler::sm100_block_scaled_gemm::<AL, BL, M, K>(
                 tmem_d,
-                a_desc0 + (step as u64) * 256,
-                b_desc0 + (step as u64) * b_desc_step,
-                self.idesc,
-                accumulate,
+                a.base,
+                b.base,
                 sfa_tmem,
                 sfb_tmem,
+                self.valid_n,
+                self.b_lbo_bytes,
+                step as u32,
+                accumulate,
             );
         }
     }

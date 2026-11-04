@@ -6,10 +6,10 @@
 //! Tensor-memory (`TMEM`) copy atoms and register fragments (`cutlass.cute.nvgpu.tcgen05.copy`).
 
 use super::__compiler;
+use crate::arch;
 use crate::layout::ReifySmem2D;
 use crate::nvgpu::cpasync::TensorMap;
 use core::marker::PhantomData;
-use cuda_device::{CuSimd, tcgen05 as tmem, thread};
 
 /// Pack a warp's 32-row group offset and a column displacement into a live TMEM address.
 #[must_use]
@@ -35,7 +35,7 @@ macro_rules! fragment {
             #[inline(always)]
             pub unsafe fn load(address: u32) -> Self {
                 let result = unsafe { Self::load_deferred(address) };
-                tmem::tcgen05_load_wait();
+                unsafe { arch::fence_view_async_tmem_load() };
                 result
             }
             /// Load without a completion wait, retaining register dependencies.
@@ -43,7 +43,7 @@ macro_rules! fragment {
             /// Same participation and producer obligations as `load`.
             #[inline(always)]
             pub unsafe fn load_deferred(address: u32) -> Self {
-                let raw = unsafe { tmem::$load(address) }.to_array();
+                let raw = unsafe { arch::$load(address) };
                 Self {
                     values: [$(f32::from_bits(raw[$idx])),+],
                 }
@@ -54,7 +54,7 @@ macro_rules! fragment {
             #[inline(always)]
             pub unsafe fn store(&self, address: u32) {
                 unsafe { self.store_deferred(address) };
-                tmem::tcgen05_store_wait();
+                unsafe { arch::fence_view_async_tmem_store() };
             }
             /// Store without waiting, allowing disjoint TMEM chunks to overlap.
             /// # Safety
@@ -70,46 +70,36 @@ macro_rules! fragment {
             #[inline(always)]
             pub unsafe fn store_packed(address: u32, raw: [u32; $n]) {
                 unsafe { Self::store_packed_deferred(address, raw) };
-                tmem::tcgen05_store_wait();
+                unsafe { arch::fence_view_async_tmem_store() };
             }
             /// Store packed words without waiting for completion.
             /// # Safety
             /// Same participation and explicit completion obligations as `store_deferred`.
             #[inline(always)]
             pub unsafe fn store_packed_deferred(address: u32, raw: [u32; $n]) {
-                unsafe { tmem::$store(address, CuSimd::new(raw)) };
+                unsafe { arch::$store(address, raw) };
             }
         }
     };
 }
-fragment!(
-    2,
-    tcgen05_ld_32x32b_x2_raw,
-    tcgen05_st_32x32b_x2_raw,
-    [0, 1]
-);
-fragment!(
-    4,
-    tcgen05_ld_32x32b_x4_raw,
-    tcgen05_st_32x32b_x4_raw,
-    [0, 1, 2, 3]
-);
+fragment!(2, tmem_load_32x32b_x2, tmem_store_32x32b_x2, [0, 1]);
+fragment!(4, tmem_load_32x32b_x4, tmem_store_32x32b_x4, [0, 1, 2, 3]);
 fragment!(
     8,
-    tcgen05_ld_32x32b_x8_raw,
-    tcgen05_st_32x32b_x8_raw,
+    tmem_load_32x32b_x8,
+    tmem_store_32x32b_x8,
     [0, 1, 2, 3, 4, 5, 6, 7]
 );
 fragment!(
     16,
-    tcgen05_ld_32x32b_x16_raw,
-    tcgen05_st_32x32b_x16_raw,
+    tmem_load_32x32b_x16,
+    tmem_store_32x32b_x16,
     [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 );
 fragment!(
     32,
-    tcgen05_ld_32x32b_x32_raw,
-    tcgen05_st_32x32b_x32_raw,
+    tmem_load_32x32b_x32,
+    tmem_store_32x32b_x32,
     [
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
         25, 26, 27, 28, 29, 30, 31
@@ -126,7 +116,7 @@ macro_rules! chunked_fragment {
             #[inline(always)]
             pub unsafe fn load(address: u32) -> Self {
                 let result = unsafe { Self::load_deferred(address) };
-                tmem::tcgen05_load_wait();
+                unsafe { arch::fence_view_async_tmem_load() };
                 result
             }
             /// Load x32 chunks without a completion wait.
@@ -134,14 +124,12 @@ macro_rules! chunked_fragment {
             /// Same participation and producer requirements as `load`.
             #[inline(always)]
             pub unsafe fn load_deferred(address: u32) -> Self {
-                $(let $chunk = unsafe { tmem::tcgen05_ld_32x32b_x32_raw(address + $offset) };)+
+                $(let $chunk = unsafe { arch::tmem_load_32x32b_x32(address + $offset) };)+
                 let mut values = [0.0; $n];
                 $(
-                    let raw = $chunk.to_array();
                     let mut i = 0;
                     while i < 32 {
-                        thread::__unroll_config::<0>();
-                        values[$offset + i] = f32::from_bits(raw[i]);
+                        values[$offset + i] = f32::from_bits($chunk[i]);
                         i += 1;
                     }
                 )+
@@ -153,7 +141,7 @@ macro_rules! chunked_fragment {
             #[inline(always)]
             pub unsafe fn store(&self, address: u32) {
                 unsafe { self.store_deferred(address) };
-                tmem::tcgen05_store_wait();
+                unsafe { arch::fence_view_async_tmem_store() };
             }
             /// Store x32 chunks without waiting for completion.
             /// # Safety
@@ -163,7 +151,6 @@ macro_rules! chunked_fragment {
                 let mut raw = [0; $n];
                 let mut i = 0;
                 while i < $n {
-                    thread::__unroll_config::<0>();
                     raw[i] = self.values[i].to_bits();
                     i += 1;
                 }
@@ -175,7 +162,7 @@ macro_rules! chunked_fragment {
             #[inline(always)]
             pub unsafe fn store_packed(address: u32, raw: [u32; $n]) {
                 unsafe { Self::store_packed_deferred(address, raw) };
-                tmem::tcgen05_store_wait();
+                unsafe { arch::fence_view_async_tmem_store() };
             }
             /// Store packed x32 chunks without waiting for completion.
             /// # Safety
@@ -186,11 +173,10 @@ macro_rules! chunked_fragment {
                     let mut chunk = [0; 32];
                     let mut i = 0;
                     while i < 32 {
-                        thread::__unroll_config::<0>();
                         chunk[i] = raw[$offset + i];
                         i += 1;
                     }
-                    unsafe { tmem::tcgen05_st_32x32b_x32_raw(address + $offset, CuSimd::new(chunk)) };
+                    unsafe { arch::tmem_store_32x32b_x32(address + $offset, chunk) };
                 )+
             }
         }

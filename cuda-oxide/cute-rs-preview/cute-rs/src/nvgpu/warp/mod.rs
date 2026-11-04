@@ -29,9 +29,9 @@
 //! provides the SM120 MXFP4 tiled family. Their operand contracts remain
 //! distinct from the common FP16 fragments defined here.
 //!
-//! [`FragmentC::mma_atom_call`] issues one `mma.sync` through `cuda_device`
-//! `mma_sync_aligned_m16n8k16_row_col_f32_f16_f16_f32`; [`bf16::Bf16Mma16x8x16::mma_atom_call`]
-//! does the same through `mma_sync_aligned_m16n8k16_row_col_f32_bf16_bf16_f32`.
+//! [`FragmentC::mma_atom_call`] issues one `mma.sync` through [`crate::arch::mma_m16n8k16_f32_f16`];
+//! [`bf16::Bf16Mma16x8x16::mma_atom_call`] does the same through
+//! [`crate::arch::mma_m16n8k16_f32_bf16`].
 //!
 pub mod bf16;
 pub mod block_scaled;
@@ -100,8 +100,6 @@ impl FragmentA {
 }
 
 /// One thread's four `f32` values from a 16x8 result tile.
-///
-/// `cuda_device::mma_frag` maps these four values to result coordinates.
 #[repr(transparent)]
 #[derive(Clone, Copy)]
 pub struct FragmentC(
@@ -119,7 +117,7 @@ impl FragmentC {
     #[must_use = "use the returned accumulator; mma_atom_call does not modify self in place"]
     #[inline(always)]
     pub unsafe fn mma_atom_call(self, a: FragmentA, b: FragmentB) -> Self {
-        Self(unsafe { cuda_device::wmma::mma_m16n8k16_f32_f16(self.0, a.0, b.0) })
+        Self(unsafe { crate::arch::mma_m16n8k16_f32_f16(self.0, a.0, b.0) })
     }
 }
 

@@ -273,12 +273,17 @@ pub mod tileir {
     }
 
     /// Raw view load with CUDA 13.5 TMA data-validity checking on sm_107.
-    /// `valid_check` must be a compile-time boolean. True requires TMA enabled.
+    /// `valid_check` must be a compile-time boolean. True requires TMA enabled,
+    /// a supported floating-point element type (for example, `f32`, `f16`, or
+    /// `bf16`), and relaxed or acquire ordering with a memory scope. Integer
+    /// element types and weak ordering do not support validity checking.
     /// The other arguments have the same meaning as [`load_view_raw`].
     ///
     /// # Safety
-    /// All requirements of [`load_view_raw`] apply. Validity checking does not
-    /// replace bounds checks, synchronization, or storage lifetime guarantees.
+    /// All requirements of [`load_view_raw`] apply. When checking is enabled,
+    /// the producer and consumer must use the element type's data-validity
+    /// protocol. Validity checking does not replace bounds checks,
+    /// synchronization, or storage lifetime guarantees.
     #[cuda_tile::op(name = "cuda_tile.load_view_tko", since = "V13_2")]
     #[cuda_tile::variadic_op(N = 6)]
     pub unsafe fn load_view_tko_valid_check<

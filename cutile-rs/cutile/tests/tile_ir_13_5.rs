@@ -94,9 +94,11 @@ mod kernels {
         };
     }
 
+    // Assembly-only: checked loads require a supported floating-point type
+    // and ordered memory semantics. Execution also needs a validity protocol.
     #[cutile::entry()]
-    fn validity(input: &Tensor<i32, { [8] }>) {
-        let view: Partition<i32, { [4] }> = unsafe {
+    fn validity(input: &Tensor<f32, { [8] }>) {
+        let view: Partition<f32, { [4] }> = unsafe {
             make_partition_view(
                 input,
                 shape![4],
@@ -105,12 +107,12 @@ mod kernels {
                 new_token_unordered(),
             )
         };
-        let (_value, _token): (Tile<i32, { [4] }>, Token) = unsafe {
+        let (_value, _token): (Tile<f32, { [4] }>, Token) = unsafe {
             load_view_tko_valid_check(
                 &view,
                 [0i32],
                 None,
-                ordering::Weak,
+                ordering::Acquire,
                 scope::Device,
                 tma::Enabled,
                 None,
@@ -152,16 +154,8 @@ mod kernels {
         let condition: Tile<bool, { [4] }> = constant(true, shape![4]);
         let first: Tile<i32, { [4] }> = constant(1, shape![4]);
         let second: Tile<i32, { [4] }> = constant(2, shape![4]);
-        let value: Tile<i32, { [4] }> = select(
-            with_likelihood(condition, Likelihood::<true>),
-            first,
-            second,
-        );
-        let value: Tile<i32, { [4] }> = select(
-            with_likelihood(condition, Likelihood::<false>),
-            value,
-            second,
-        );
+        let value: Tile<i32, { [4] }> = select(condition.likely::<true>(), first, second);
+        let value: Tile<i32, { [4] }> = select(condition.likely::<false>(), value, second);
         input.store(value);
     }
 
@@ -177,7 +171,23 @@ mod kernels {
     }
 
     fn hinted<const EXPECTED: bool>(condition: bool) -> bool {
-        likely::<EXPECTED>(condition)
+        condition.likely::<EXPECTED>()
+    }
+
+    fn hinted_mask<const EXPECTED: bool, const S: [i32; 2]>(
+        condition: Tile<bool, S>,
+    ) -> Tile<bool, S> {
+        condition.likely::<EXPECTED>()
+    }
+
+    #[cutile::entry()]
+    fn hinted_matrix_selection(input: &mut Tensor<i32, { [2, 2] }>) {
+        let data = input.load();
+        let zero: Tile<i32, { [2, 2] }> = constant(0, shape![2, 2]);
+        let mask = cmpi(data, zero, predicate::GreaterThan);
+        let hinted = hinted_mask::<true, { [2, 2] }>(mask);
+        let value = select(hinted, data, zero);
+        input.store(value);
     }
 
     fn forwarded<const EXPECTED: bool>(condition: bool) -> bool {
@@ -186,7 +196,7 @@ mod kernels {
 
     #[cutile::entry()]
     fn hinted_conditional(input: &mut Tensor<i32, { [4] }>, condition: i32) {
-        let value: Tile<i32, { [4] }> = if likely::<true>(condition != 0) {
+        let value: Tile<i32, { [4] }> = if (condition != 0).likely::<true>() {
             constant(1, shape![4])
         } else {
             constant(2, shape![4])
@@ -203,7 +213,7 @@ mod kernels {
     #[cutile::entry()]
     fn hinted_unit_region(input: &mut Tensor<i32, { [4] }>, condition: i32) {
         let mut value: Tile<i32, { [4] }> = constant(1, shape![4]);
-        if likely::<true>(condition != 0) {
+        if (condition != 0).likely::<true>() {
             value = constant(2, shape![4]);
         }
         input.store(value);
@@ -211,7 +221,7 @@ mod kernels {
 
     #[cutile::entry()]
     fn hinted_return(input: &mut Tensor<i32, { [4] }>, condition: i32) {
-        if likely::<false>(condition != 0) {
+        if (condition != 0).likely::<false>() {
             let value: Tile<i32, { [4] }> = constant(7, shape![4]);
             input.store(value);
             return;
@@ -237,11 +247,11 @@ mod kernels {
         let one: Tile<i32, { [4] }> = constant(1, shape![4]);
         let mut i = 0i32;
         while i < 8 {
-            if likely::<false>(i >= limit) {
+            if (i >= limit).likely::<false>() {
                 break;
             }
             i = i + 1;
-            if likely::<true>(i % 2 != 0) {
+            if (i % 2 != 0).likely::<true>() {
                 continue;
             }
             total = total + one;
@@ -256,9 +266,8 @@ mod kernels {
         let condition: Tile<bool, { [4] }> = cmpi(data, zero, predicate::GreaterThan);
         let yes: Tile<i32, { [4] }> = constant(11, shape![4]);
         let no: Tile<i32, { [4] }> = constant(22, shape![4]);
-        let a: Tile<i32, { [4] }> = select(with_likelihood(condition, Likelihood::<true>), yes, no);
-        let b: Tile<i32, { [4] }> =
-            select(with_likelihood(condition, Likelihood::<false>), yes, no);
+        let a: Tile<i32, { [4] }> = select(condition.likely::<true>(), yes, no);
+        let b: Tile<i32, { [4] }> = select(condition.likely::<false>(), yes, no);
         // Hinting a copy must not annotate the original condition.
         let c: Tile<i32, { [4] }> = select(condition, yes, no);
         input.store(a + b + c);
@@ -640,6 +649,18 @@ fn likelihood_is_forwarded_without_annotating_the_original_condition() {
             assert_eq!(selects[0].operands[0], selects[2].operands[0]);
             reference::verify_if_configured(&artifacts.bytecode().unwrap());
         }
+        let matrix = KernelCompiler::new(
+            kernels::__module_ast_self,
+            "kernels",
+            "hinted_matrix_selection",
+        )
+        .strides(&[("input", &[2, 1])])
+        .target("sm_100")
+        .bytecode_version(BytecodeVersion::V13_5)
+        .compile()
+        .unwrap();
+        assert!(format!("{:?}", matrix.module()).contains("LIKELY_TRUE"));
+        reference::verify_if_configured(&matrix.bytecode().unwrap());
         for (expected, name) in [(true, "LIKELY_TRUE"), (false, "LIKELY_FALSE")] {
             let artifacts =
                 KernelCompiler::new(kernels::__module_ast_self, "kernels", "generic_likelihood")

@@ -78,6 +78,10 @@ need the selected version to be 13.5.
 | `sm_121` | 13.2 |
 <!-- END TILE IR REQUIREMENTS -->
 
+The if/select optimization-hints row describes acceptance in the frontend IR.
+These hints are discarded when emitting 13.5 bytecode and have no backend
+performance effect.
+
 Requirements combine. For example, FP4 packing needs both the `pack/unpack`
 operations and the FP4 element type. A Hopper target requires Tile IR 13.3
 even when the operations themselves were available earlier.
@@ -101,7 +105,7 @@ We do not impose a blanket driver-version-at-least-toolkit-version check.
 The 13.5 surface includes unicast/multicast pointer classification,
 `multimem_load_reduce_view_tko`, `multimem_reduce_view_tko`,
 `multimem_store_view_tko`, atomic-view inbounds promises, TMA validity checking,
-condition hints, minimum residency hints, and function argument attributes.
+minimum residency hints, and function argument attributes.
 Named preview APIs for SIMT linking and fragment interchange are separate from
 this surface and are not implemented here.
 
@@ -116,26 +120,25 @@ A Tile IR token does not synchronize independent GPUs.
 See [Unsafe GPU communication](unsafe-comms.md) for unicast and multicast
 contracts, available synchronization primitives, and the runnable two-GPU example.
 
-Branch likelihood uses the safe `cutile::core::likely` API. It takes and
-returns a scalar `bool`, with a const-generic prediction like the existing
-value-wrapping assumption APIs:
+Likelihood uses the safe `Likely` extension trait, imported by
+`use cutile::core::*`. The receiver must be a scalar `bool` or a boolean
+`Tile`, and the method preserves its type and value:
 
 ```rust
-if likely::<true>(condition) {
+if condition.likely::<true>() {
     // Ordinary control flow; the existing DSL restrictions still apply.
 }
+let result = select(mask.likely::<false>(), a, b);
 ```
 
-Use `likely::<false>` to favor the false branch. The consuming `if` receives
-`condition_hint` metadata inside `discardable_perf_hints`; no extra device
-instruction or closure is introduced. A wrong likelihood never affects
-correctness. Hints are advisory and may be ignored. Copies and inline helper
-calls preserve the hint; boolean computations and control-flow joins may
-discard it, so apply it to the final condition.
+The prediction is advisory: an incorrect hint never affects correctness.
+Copies and inline helpers preserve the IR hint; boolean computations and
+control-flow joins may discard it. Apply it to the final condition.
 
-For boolean tiles, `select(with_likelihood(mask, Likelihood::<true>), a, b)`
-uses the existing typed hint form. Use `Likelihood::<false>` to favor `b`.
-Both APIs require Tile IR 13.5, including when passed through a helper.
+**Tile IR 13.5 discards likelihood hints during bytecode emission.** The
+methods currently require 13.5 but have no backend performance effect on
+that target. Ordinary `if` and `select` use the standard 13.5 encoding,
+without an optimization-hints field.
 
 Entry annotations accept
 `optimization_hints = (sm_100 = (min_ctas_per_sm = 2,),)` and a `default` group.

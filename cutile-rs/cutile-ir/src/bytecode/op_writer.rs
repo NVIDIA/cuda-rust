@@ -1093,6 +1093,9 @@ mod tests {
             constants: ConstantManager::new(),
             debug: DebugInfoCollector::new(),
         };
+        // Nested region operations record debug provenance as they serialize.
+        ctx.debug
+            .begin_function(&mut ctx.strings, "test", None, &Location::Unknown);
         let mut w = EncodingWriter::new();
         write_op_body(module.op(op), &mut w, &mut ctx)?;
         Ok(w.into_bytes())
@@ -1164,39 +1167,108 @@ mod tests {
         }
     }
 
-    /// Tile IR 13.5 adds no field to `select`, with or without a likelihood
-    /// hint: the hint is not serialized (cuTile Python's `encode_SelectOp`
-    /// is result type, then the three operands). `if` is the same: result
-    /// types, the condition, then the regions (`bytecode_validate` checks it
-    /// against the assembler).
+    /// The 13.5 wire format has no flags field on `select`. Advisory hints
+    /// must not shift its result type or operand IDs, even when present in IR.
     #[test]
     fn select_has_the_same_layout_in_13_5_with_or_without_hints() {
-        for (version, hinted) in [
-            (BytecodeVersion::V13_4, false),
-            (BytecodeVersion::V13_5, false),
-            (BytecodeVersion::V13_5, true),
+        for (version, hint) in [
+            (BytecodeVersion::V13_4, None),
+            (BytecodeVersion::V13_5, None),
+            (BytecodeVersion::V13_5, Some(true)),
+            (BytecodeVersion::V13_5, Some(false)),
         ] {
             let mut module = Module::new("select");
-            let (_, _, args) = build_single_block_region(&mut module, &vec![tile_f32(); 3]);
+            let condition_type = Type::Tile(TileType {
+                shape: vec![],
+                element_type: TileElementType::Scalar(ScalarType::I1),
+            });
+            let (_, _, args) =
+                build_single_block_region(&mut module, &[condition_type, tile_f32(), tile_f32()]);
             let mut builder = OpBuilder::new(Opcode::Select, Location::Unknown)
                 .operands(args.iter().copied())
                 .result(tile_f32());
-            if hinted {
-                builder = builder.attr("optimization_hints", condition_hint());
+            if let Some(expected) = hint {
+                builder = builder.attr("optimization_hints", condition_hint(expected));
             }
             let (op, _) = builder.build(&mut module);
             let bytes = op_body_bytes_version(&module, &args, op, version).unwrap();
-            assert_eq!(bytes, [1, 0, 1, 2], "{version}, hinted: {hinted}");
-            compare_python("Select", version, hinted, &bytes);
+            assert_eq!(bytes, [1, 0, 1, 2], "{version}, hint: {hint:?}");
+            compare_python("Select", version, hint.is_some(), &bytes);
         }
     }
 
-    /// A likelihood hint as the frontend attaches it to `select` and `if`.
-    fn condition_hint() -> Attribute {
+    /// Check the complete `if` body without an assembler: result count/types,
+    /// condition, region count, and both branches' yield operands. The 13.5
+    /// schema has no flags field between the result types and condition.
+    #[test]
+    fn if_has_the_same_layout_in_13_5_with_or_without_hints() {
+        for (version, hint) in [
+            (BytecodeVersion::V13_4, None),
+            (BytecodeVersion::V13_5, None),
+            (BytecodeVersion::V13_5, Some(true)),
+            (BytecodeVersion::V13_5, Some(false)),
+        ] {
+            for result_count in 0..=2 {
+                let mut module = Module::new("if");
+                let condition_type = Type::Tile(TileType {
+                    shape: vec![],
+                    element_type: TileElementType::Scalar(ScalarType::I1),
+                });
+                let (_, _, args) = build_single_block_region(
+                    &mut module,
+                    &[tile_f32(), tile_f32(), condition_type],
+                );
+                let mut builder = OpBuilder::new(Opcode::If, Location::Unknown).operand(args[2]);
+                for _ in 0..result_count {
+                    builder = builder.result(tile_f32());
+                }
+                if let Some(expected) = hint {
+                    builder = builder.attr("optimization_hints", condition_hint(expected));
+                }
+                for _ in 0..2 {
+                    let (region, block, _) = build_single_block_region(&mut module, &[]);
+                    let (yield_op, _) = OpBuilder::new(Opcode::Yield, Location::Unknown)
+                        .operands(args[..result_count].iter().copied())
+                        .build(&mut module);
+                    append_op(&mut module, block, yield_op);
+                    builder = builder.region(region);
+                }
+                let (op, _) = builder.build(&mut module);
+                // Result type ID 1 is tile<f32>; condition value ID 2 is
+                // followed immediately by the two-region count.
+                let (mut expected, branch) = match result_count {
+                    0 => (vec![0, 2, 2], vec![1, 0, 1, 0x6d, 0, 0]),
+                    1 => (vec![1, 1, 2, 2], vec![1, 0, 1, 0x6d, 0, 1, 0]),
+                    2 => (vec![2, 1, 1, 2, 2], vec![1, 0, 1, 0x6d, 0, 2, 0, 1]),
+                    _ => unreachable!(),
+                };
+                // Each region contains one block, no arguments, and one
+                // yield (opcode 0x6d) with zero results and sized operands.
+                expected.extend_from_slice(&branch);
+                expected.extend_from_slice(&branch);
+                assert_eq!(
+                    op_body_bytes_version(&module, &args, op, version).unwrap(),
+                    expected,
+                    "{version}, hint: {hint:?}, result count: {result_count}",
+                );
+            }
+        }
+    }
+
+    /// Match the likelihood metadata emitted by the frontend.
+    fn condition_hint(expected: bool) -> Attribute {
+        let hint = if expected {
+            "LIKELY_TRUE"
+        } else {
+            "LIKELY_FALSE"
+        };
         Attribute::OptimizationHints(crate::ir::OptimizationHints {
             entries: vec![(
-                "sm_100".into(),
-                vec![("expected".into(), Attribute::Bool(true))],
+                "default".into(),
+                vec![(
+                    "discardable_perf_hints".into(),
+                    Attribute::String(format!("{{\"condition_hint\":\"{hint}\"}}")),
+                )],
             )],
         })
     }

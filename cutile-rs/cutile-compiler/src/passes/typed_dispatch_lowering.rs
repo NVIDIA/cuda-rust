@@ -28,6 +28,12 @@ pub fn lower_dispatch_wrapper_call(
     let [Stmt::Expr(Expr::MethodCall(method_call), _)] = fn_item.block.stmts.as_slice() else {
         return None;
     };
+    // Method generic arguments may refer to the wrapper's generic parameters.
+    // Moving them to the caller without substitution loses that scope (or can
+    // bind a same-named caller parameter). Normal inlining instantiates them.
+    if method_call.turbofish.is_some() && !fn_item.sig.generics.params.is_empty() {
+        return None;
+    }
 
     let param_names = get_sig_param_names(&fn_item.sig);
     if param_names.len() != call_expr.args.len() {

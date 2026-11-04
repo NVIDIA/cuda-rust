@@ -26,8 +26,9 @@ The cuTile Rust crates move to 0.5.0 for these public API changes:
 - CUDA 13.5 Tile IR bytecode, unicast/multicast pointer classification, multicast
   load-reduce/reduce/store, atomic-view inbounds promises, TMA validity checking,
   and safe condition likelihood hints for ordinary select and if using
-  `likely::<true/false>(condition)` for scalar branches and typed
-  `with_likelihood(mask, Likelihood::<true/false>)` for select in `cutile::core`.
+  `condition.likely::<true/false>()` for scalar branches and boolean tiles
+  used by select, via `cutile::core::Likely`. Hints are discarded when
+  emitting 13.5 bytecode and have no backend performance effect.
   New raw memory operations are unsafe APIs in `cutile::tileir`.
   Minimum CTA residency is configurable in entry
   annotations or `CompileOptions`, including default architecture hints.

@@ -1,0 +1,11 @@
+error[E0599]: no method named `likely` found for type `i32` in the current scope
+ --> tests/ui/likely_non_boolean.rs:9:19
+  |
+9 |     let _ = value.likely::<true>();
+  |                   ^^^^^^ method not found in `i32`
+
+error[E0599]: no method named `likely` found for struct `cutile::core::Tile_1<E, D0>` in the current scope
+  --> tests/ui/likely_non_boolean.rs:13:19
+   |
+13 |     let _ = value.likely::<false>();
+   |                   ^^^^^^ method not found in `cutile::core::Tile_1<i32, 4>`

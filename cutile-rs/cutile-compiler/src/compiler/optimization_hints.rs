@@ -14,7 +14,7 @@ use std::collections::HashMap;
 // Re-export the shared hint types.
 pub use crate::hints::{OptimizationHints, SMHints};
 
-/// Read the boolean const generic used by the scalar likelihood API.
+/// Read the boolean const generic used by the likelihood intrinsic.
 pub fn condition_likelihood_arg(
     call: &syn::ExprCall,
     generics: &crate::generics::GenericVars,

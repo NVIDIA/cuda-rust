@@ -26,6 +26,7 @@ fn ui() {
     t.compile_fail("tests/ui/entry_unknown_key.rs");
     t.compile_fail("tests/ui/entry_non_literal_value.rs");
     t.compile_fail("tests/ui/global_*.rs");
+    t.compile_fail("tests/ui/likely_non_boolean.rs");
     t.compile_fail("tests/ui/unordered_partition_requires_unsafe.rs");
     // `#[cutile::foreign]` declarations are validated at expansion.
     t.compile_fail("tests/ui/foreign_*.rs");

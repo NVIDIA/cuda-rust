@@ -541,35 +541,6 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 let mut args =
                     self.compile_call_args(module, block_id, &call_expr.args, generic_vars, ctx)?;
                 let mut condition = args.remove(0);
-                if !matches!(&condition.ty.type_instance, TypeInstance::ElementType(instance) if instance.rust_element_instance_ty == "bool")
-                {
-                    return self
-                        .jit_error_result(&call_expr.span(), "likely requires a scalar bool");
-                }
-                condition.condition_likelihood = Some(expected);
-                Ok(Some(condition))
-            }
-            "with_likelihood" => {
-                if call_expr.args.len() != 2 {
-                    return self.jit_error_result(
-                        &call_expr.span(),
-                        "with_likelihood expects a condition and Likelihood<EXPECTED>",
-                    );
-                }
-                if let Some(caps) = &self.target_capabilities {
-                    cutile_ir::requirements::Feature::ControlFlowHints
-                        .requirement()
-                        .check(
-                            caps,
-                            "with_likelihood",
-                            &self.ir_location(&call_expr.span()),
-                        )
-                        .map_err(JITError::from)?;
-                }
-                let mut args =
-                    self.compile_call_args(module, block_id, &call_expr.args, generic_vars, ctx)?;
-                let hint = args.pop().unwrap();
-                let mut condition = args.pop().unwrap();
                 if condition
                     .ty
                     .get_instantiated_rust_element_type(self.modules.primitives())
@@ -578,42 +549,9 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 {
                     return self.jit_error_result(
                         &call_expr.span(),
-                        "with_likelihood requires a bool or boolean Tile",
+                        "likely requires a bool or boolean Tile",
                     );
                 }
-                let ty = hint.ty.type_instance.get_instantiated_type();
-                let syn::Type::Path(path) = ty else {
-                    return self
-                        .jit_error_result(&call_expr.span(), "expected Likelihood<EXPECTED>");
-                };
-                let segment = path.path.segments.last().unwrap();
-                let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
-                    return self.jit_error_result(
-                        &call_expr.span(),
-                        "Likelihood requires a boolean const generic",
-                    );
-                };
-                let expected = match arguments.args.first() {
-                    Some(GenericArgument::Const(Expr::Lit(syn::ExprLit {
-                        lit: Lit::Bool(value),
-                        ..
-                    }))) => Some(value.value),
-                    Some(GenericArgument::Const(Expr::Path(path))) => generic_vars
-                        .inst_bool
-                        .get(&get_ident_from_path_expr(path).to_string())
-                        .copied(),
-                    Some(GenericArgument::Type(syn::Type::Path(path))) => generic_vars
-                        .inst_bool
-                        .get(&get_ident_from_path(&path.path).to_string())
-                        .copied(),
-                    _ => None,
-                }
-                .ok_or_else(|| {
-                    self.jit_error(
-                        &call_expr.span(),
-                        "Likelihood requires a resolved boolean const generic",
-                    )
-                })?;
                 condition.condition_likelihood = Some(expected);
                 Ok(Some(condition))
             }

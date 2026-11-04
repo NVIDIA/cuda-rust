@@ -226,13 +226,6 @@ impl Float4E2M1FNx2 {
         Self(bits)
     }
 
-    /// Quantize two signed `f32` values into one packed `Float4E2M1FNx2` byte (`low` in bits 3..0, `high` in bits 7..4).
-    #[must_use]
-    #[inline(always)]
-    pub fn from_f32x2(low: f32, high: f32) -> Self {
-        Self(f32_to_e2m1(low) | (f32_to_e2m1(high) << 4))
-    }
-
     /// Return the original packed byte.
     #[must_use]
     #[inline(always)]
@@ -372,74 +365,6 @@ const fn e4m3_to_f32(byte: u8) -> f32 {
     }
 }
 
-/// Encode an `f32` value into the nearest finite `Float8E4M3FN` byte (`[-448.0, 448.0]`),
-/// returning `0x7f` for `NaN`.
-#[must_use]
-#[inline(always)]
-fn f32_to_e4m3(value: f32) -> u8 {
-    if value.is_nan() {
-        return 0x7f;
-    }
-    let sign = if value.is_sign_negative() {
-        0x80u8
-    } else {
-        0u8
-    };
-    let abs = value.abs();
-    if abs == 0.0 {
-        return sign;
-    }
-    let clamped = if abs > 448.0 { 448.0 } else { abs };
-    if clamped < (1.0 / 64.0) {
-        let mant = ((clamped * 512.0) + 0.5) as u32;
-        return sign | (if mant > 7 { 7 } else { mant } as u8);
-    }
-    let bits = clamped.to_bits();
-    let f32_exp = ((bits >> 23) & 0xff) as i32;
-    let e4m3_exp = f32_exp - 120;
-    if e4m3_exp <= 0 {
-        let mant = ((clamped * 512.0) + 0.5) as u32;
-        return sign | (if mant > 7 { 7 } else { mant } as u8);
-    }
-    let rounded_mant = (((bits >> 19) & 0x0f) + 1) >> 1;
-    let (mut exp, mut mant) = if rounded_mant >= 8 {
-        (e4m3_exp + 1, 0u32)
-    } else {
-        (e4m3_exp, rounded_mant)
-    };
-    if exp > 15 || (exp == 15 && mant == 7) {
-        exp = 15;
-        mant = 6;
-    }
-    sign | (((exp as u8) & 0x0f) << 3) | ((mant as u8) & 0x07)
-}
-
-/// Encode one signed `f32` value into its nearest 4-bit `Float4E2M1FN` nibble (`bits 3..0`).
-#[must_use]
-#[inline(always)]
-fn f32_to_e2m1(value: f32) -> u8 {
-    let sign = if value < 0.0 { 0x08u8 } else { 0x00u8 };
-    let abs = if value < 0.0 { -value } else { value };
-    let mag = if abs < 0.25 {
-        0
-    } else if abs < 0.75 {
-        1
-    } else if abs < 1.25 {
-        2
-    } else if abs < 1.75 {
-        3
-    } else if abs < 2.5 {
-        4
-    } else if abs < 3.5 {
-        5
-    } else if abs < 5.0 {
-        6
-    } else {
-        7
-    };
-    sign | mag
-}
-
 #[inline(always)]
 /// Decode the low FP4 E2M1 nibble, including its sign bit, to f32.
 fn e2m1_to_f32(nibble: u8) -> f32 {
@@ -477,20 +402,20 @@ fn ue8m0_to_f32(byte: u8) -> f32 {
 /// Compiler hooks for reduced-precision scalar and register-tile conversions.
 #[doc(hidden)]
 pub mod __compiler {
-    use super::{e4m3_to_f32, f32_to_e2m1, f32_to_e4m3};
-
     /// Convert one `f32` scalar into one `Float8E4M3FN` byte (`arith.truncf : f32 to f8E4M3FN`).
     #[must_use]
     #[inline(never)]
     pub fn cvt_f32_to_e4m3(value: f32) -> u8 {
-        f32_to_e4m3(value)
+        let _ = value;
+        unreachable!("CuTe numeric conversion marker requires device compilation")
     }
 
     /// Widen one `Float8E4M3FN` byte into `f32` (`arith.extf : f8E4M3FN to f32`).
     #[must_use]
     #[inline(never)]
     pub fn cvt_e4m3_to_f32(bits: u8) -> f32 {
-        e4m3_to_f32(bits)
+        let _ = bits;
+        unreachable!("CuTe numeric conversion marker requires device compilation")
     }
 
     /// Convert 8 `f32` scalars into 8 packed 4-bit `Float4E2M1FN` nibbles (`arith.truncf : vector<8xf32> to vector<8xf4E2M1FN>`).
@@ -507,14 +432,8 @@ pub mod __compiler {
         v6: f32,
         v7: f32,
     ) -> u32 {
-        (f32_to_e2m1(v0) as u32)
-            | ((f32_to_e2m1(v1) as u32) << 4)
-            | ((f32_to_e2m1(v2) as u32) << 8)
-            | ((f32_to_e2m1(v3) as u32) << 12)
-            | ((f32_to_e2m1(v4) as u32) << 16)
-            | ((f32_to_e2m1(v5) as u32) << 20)
-            | ((f32_to_e2m1(v6) as u32) << 24)
-            | ((f32_to_e2m1(v7) as u32) << 28)
+        let _ = (v0, v1, v2, v3, v4, v5, v6, v7);
+        unreachable!("CuTe numeric conversion marker requires device compilation")
     }
 }
 

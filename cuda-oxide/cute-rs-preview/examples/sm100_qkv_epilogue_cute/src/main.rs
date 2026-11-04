@@ -267,9 +267,7 @@ fn verify_outputs(
                 let inv_rms = 1.0f32 / (mean_sq + rms_eps).sqrt();
                 let gamma = if head < num_q_heads { gamma_q } else { gamma_k };
                 for (d, (&acc_d, &gamma_d)) in acc.iter().zip(gamma.iter()).enumerate() {
-                    let expected_f32 =
-                        cute_rs::Float8E4M3FN::from_f32(acc_d * inv_rms * gamma_d * inv_scale)
-                            .to_f32();
+                    let expected_f32 = (acc_d * inv_rms * gamma_d * inv_scale).clamp(-448.0, 448.0);
                     let got_byte = if head < num_q_heads {
                         q_out[(row * num_q_heads + head) * HEAD_DIM + d]
                     } else {
@@ -277,7 +275,7 @@ fn verify_outputs(
                         let slot = slots[row] as usize;
                         k_cache[(slot * num_kv_heads + kv_head) * HEAD_DIM + d]
                     };
-                    let got_f32 = cute_rs::Float8E4M3FN::from_bits(got_byte).to_f32();
+                    let got_f32 = cute_rs::E4M3x2::from_bytes(got_byte, 0).to_f32x2().0;
                     let err = (got_f32 - expected_f32).abs();
                     if err > max_err {
                         max_err = err;
@@ -293,9 +291,9 @@ fn verify_outputs(
                 let kv_head = head - (num_q_heads + num_kv_heads);
                 let slot = slots[row] as usize;
                 for (d, &acc_d) in acc.iter().enumerate() {
-                    let expected_f32 = cute_rs::Float8E4M3FN::from_f32(acc_d * inv_scale).to_f32();
+                    let expected_f32 = (acc_d * inv_scale).clamp(-448.0, 448.0);
                     let got_byte = v_cache[(slot * num_kv_heads + kv_head) * HEAD_DIM + d];
-                    let got_f32 = cute_rs::Float8E4M3FN::from_bits(got_byte).to_f32();
+                    let got_f32 = cute_rs::E4M3x2::from_bytes(got_byte, 0).to_f32x2().0;
                     let err = (got_f32 - expected_f32).abs();
                     if err > max_err {
                         max_err = err;

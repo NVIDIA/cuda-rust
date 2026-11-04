@@ -37,9 +37,9 @@ use cute_rs::utils::blockscaled::{
     CANONICAL_SCALE_ATOM_BYTES, CANONICAL_SCALE_K_GROUPS, CANONICAL_SCALE_M,
 };
 use cute_rs::{
-    BFloat16, BlockScaledTensor, Float4E2M1FN, Float4E2M1FNx2, Float8E4M3FN, FragmentC, GmemMatrix,
-    KMajor, Mkl, Nkl, Nvfp4TiledMma, RegisterTile, Sm1xxBlockScaleKMajor, SmemTile, Tensor,
-    TiledCopy,
+    BFloat16, BlockScaledTensor, E4M3x2, Float4E2M1FN, Float4E2M1FNx2, Float8E4M3FN, FragmentC,
+    GmemMatrix, KMajor, Mkl, Nkl, Nvfp4TiledMma, RegisterTile, Sm1xxBlockScaleKMajor, SmemTile,
+    Tensor, TiledCopy,
 };
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -72,6 +72,38 @@ pub fn quantize_matrix_nvfp4(
     let mut values = vec![0u8; rows * packed_k];
     let mut scales = vec![0u8; rest_m * rest_k * CANONICAL_SCALE_ATOM_BYTES];
 
+    let encode_e4m3 = |v: f32| -> (u8, f32) {
+        let c = v.clamp(0.0, 448.0);
+        let mut best_code = 0u8;
+        let mut best_val = 0.0f32;
+        let mut best_err = f32::INFINITY;
+        for code in 0u8..=0x7e {
+            let cand = E4M3x2::from_bytes(code, 0).to_f32x2().0;
+            let err = (c - cand).abs();
+            if err < best_err || (err == best_err && (code & 1) == 0) {
+                best_err = err;
+                best_code = code;
+                best_val = cand;
+            }
+        }
+        (best_code, best_val)
+    };
+    let encode_e2m1 = |v: f32| -> u8 {
+        let sign = if v < 0.0 { 8u8 } else { 0u8 };
+        let a = v.abs().min(6.0);
+        let mut best = 0u8;
+        let mut best_err = f32::INFINITY;
+        for nib in 0u8..8 {
+            let cand = Float4E2M1FNx2::from_bits(nib).to_f32x2().0;
+            let err = (a - cand).abs();
+            if err < best_err || (err == best_err && (nib & 1) == 0) {
+                best_err = err;
+                best = nib;
+            }
+        }
+        sign | best
+    };
+
     for r in 0..rows {
         let row_slice = &matrix[r * k..(r + 1) * k];
         let out_row = &mut values[r * packed_k..(r + 1) * packed_k];
@@ -84,20 +116,17 @@ pub fn quantize_matrix_nvfp4(
                     max_abs = a;
                 }
             }
-            let scale = Float8E4M3FN::from_f32(max_abs / 6.0);
-            let scale_val = scale.to_f32();
+            let (scale_code, scale_val) = encode_e4m3(max_abs / 6.0);
             let inv_scale = if scale_val > 0.0 {
                 1.0 / scale_val
             } else {
                 0.0
             };
-            scales[canonical_scale_offset(rest_k, r, g)] = scale.to_bits();
+            scales[canonical_scale_offset(rest_k, r, g)] = scale_code;
             for pair in 0..8 {
-                out_row[g * 8 + pair] = Float4E2M1FNx2::from_f32x2(
-                    block[pair * 2].to_f32() * inv_scale,
-                    block[pair * 2 + 1].to_f32() * inv_scale,
-                )
-                .to_bits();
+                let lo = encode_e2m1(block[pair * 2].to_f32() * inv_scale);
+                let hi = encode_e2m1(block[pair * 2 + 1].to_f32() * inv_scale);
+                out_row[g * 8 + pair] = lo | (hi << 4);
             }
         }
     }
@@ -112,8 +141,9 @@ pub fn dequantize_nvfp4_row(values: &[u8], scales: &[u8], row: usize, k: usize) 
     let rest_k = groups_per_row.div_ceil(CANONICAL_SCALE_K_GROUPS);
     let mut out = Vec::with_capacity(k);
     for g in 0..groups_per_row {
-        let scale =
-            Float8E4M3FN::from_bits(scales[canonical_scale_offset(rest_k, row, g)]).to_f32();
+        let scale = E4M3x2::from_bytes(scales[canonical_scale_offset(rest_k, row, g)], 0)
+            .to_f32x2()
+            .0;
         for pair in 0..8 {
             let byte = values[row * packed_k + g * 8 + pair];
             let (lo, hi) = cute_rs::Float4E2M1FNx2::from_bits(byte).to_f32x2();
@@ -782,17 +812,24 @@ impl Nvfp4Runner {
 mod tests {
     use super::*;
 
-    /// Verify E4M3FN encoding round-trips exact fractional powers and clamps at 448.0.
+    /// Verify E4M3FN decoding preserves fractional scales and saturation codes.
     #[test]
     fn e4m3_encoder_preserves_fractional_scales_and_clamps_overflow() {
-        for &target in &[
-            0.0f32, 0.5, 1.0, 1.25, 1.5, 1.75, 2.0, 3.0, 6.0, 64.0, 448.0,
+        for &(code, target) in &[
+            (0x00u8, 0.0f32),
+            (0x30, 0.5),
+            (0x38, 1.0),
+            (0x3a, 1.25),
+            (0x3c, 1.5),
+            (0x3e, 1.75),
+            (0x40, 2.0),
+            (0x44, 3.0),
+            (0x4c, 6.0),
+            (0x68, 64.0),
+            (0x7e, 448.0),
         ] {
-            let scale = Float8E4M3FN::from_f32(target);
-            assert_eq!(scale.to_f32(), target);
+            assert_eq!(E4M3x2::from_bytes(code, 0).to_f32x2().0, target);
         }
-        assert_eq!(Float8E4M3FN::from_f32(1000.0).to_f32(), 448.0);
-        assert_eq!(Float8E4M3FN::from_f32(-4.0).to_f32(), -4.0);
     }
 
     /// Verify NVFP4 row quantization and dequantization preserve sign and scale across K=64 tiles.

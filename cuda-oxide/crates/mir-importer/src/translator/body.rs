@@ -2665,6 +2665,31 @@ pub fn translate_body(
         }
     }
 
+    // Remove entry-block allocas that have zero uses after translating all
+    // reachable blocks (such as locals belonging exclusively to unreachable
+    // blocks or dropped panic-formatting blocks like `core::fmt::rt::Argument`).
+    // In normal builds `mem2reg` erases unused allocas; pruning them here keeps
+    // `--device-debug` (which skips `mem2reg`) from lowering dead panic types.
+    use pliron::linked_list::ContainsLinkedList;
+    let dead_allocas: Vec<Ptr<Operation>> = block_map[0]
+        .deref(ctx)
+        .iter(ctx)
+        .filter(|&op| {
+            Operation::get_op::<dialect_mir::ops::MirAllocaOp>(op, ctx).is_some()
+                && op.deref(ctx).get_result(0).uses(ctx).is_empty()
+        })
+        .collect();
+    if !dead_allocas.is_empty() {
+        use pliron::irbuild::{
+            listener::Recorder,
+            rewriter::{IRRewriter, Rewriter},
+        };
+        let mut rewriter = IRRewriter::<Recorder>::default();
+        for dead in dead_allocas {
+            rewriter.erase_operation(ctx, dead);
+        }
+    }
+
     Ok(op_ptr)
 }
 

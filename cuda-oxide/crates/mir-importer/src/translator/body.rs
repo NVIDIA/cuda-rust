@@ -1218,7 +1218,11 @@ fn debug_type_for_ty_at(ty: &Ty, depth: usize) -> Option<DebugLocalTypeKind> {
                 .or_else(|| {
                     Some(DebugLocalTypeKind::Pointer {
                         name: raw_pointer_name(pointee, mutability),
-                        size_bits: 64,
+                        size_bits: if is_declared_shared_pointer_stand_in(&pointee) {
+                            32
+                        } else {
+                            64
+                        },
                     })
                 })
         }
@@ -1227,7 +1231,11 @@ fn debug_type_for_ty_at(ty: &Ty, depth: usize) -> Option<DebugLocalTypeKind> {
                 .or_else(|| {
                     Some(DebugLocalTypeKind::Pointer {
                         name: reference_name(pointee, mutability),
-                        size_bits: 64,
+                        size_bits: if is_declared_shared_pointer_stand_in(&pointee) {
+                            32
+                        } else {
+                            64
+                        },
                     })
                 })
         }
@@ -1275,7 +1283,7 @@ fn debug_type_for_ty_at(ty: &Ty, depth: usize) -> Option<DebugLocalTypeKind> {
         TyKind::RigidTy(RigidTy::Array(elem_ty, len_const)) if depth < MAX_DEBUG_TYPE_DEPTH => {
             let count = array_len_const(&len_const)?;
             let element = debug_type_for_ty_at(&elem_ty, depth + 1)?;
-            let size_bits = layout_size_bits(ty)?;
+            let size_bits = element.size_bits().checked_mul(count)?;
             Some(DebugLocalTypeKind::Array {
                 name: format!("[{}; {count}]", short_ty_name(&elem_ty)),
                 size_bits,
@@ -1284,6 +1292,60 @@ fn debug_type_for_ty_at(ty: &Ty, depth: usize) -> Option<DebugLocalTypeKind> {
             })
         }
         _ => None,
+    }
+}
+
+/// Whether `pointee` is a `cuda_device` stand-in (`SharedArray` or `Barrier`)
+/// whose references/raw pointers lower to 32-bit `addrspace(3)` pointers.
+fn is_declared_shared_pointer_stand_in(pointee: &Ty) -> bool {
+    matches!(
+        pointee.kind(),
+        TyKind::RigidTy(RigidTy::Adt(adt_def, _))
+            if types::is_cuda_device_adt(&adt_def, "SharedArray")
+                || types::is_cuda_device_adt(&adt_def, "Barrier")
+    )
+}
+
+/// Resolve a `SharedArray<T, N>` or `Barrier` pointee stand-in to the physical
+/// element debug type stored in shared memory.
+fn debug_declared_shared_pointee_type(pointee: &Ty, depth: usize) -> Option<DebugLocalTypeKind> {
+    let TyKind::RigidTy(RigidTy::Adt(adt_def, substs)) = pointee.kind() else {
+        return None;
+    };
+    if types::is_cuda_device_adt(&adt_def, "SharedArray") {
+        let elem_ty = substs.0.iter().find_map(|arg| match arg {
+            rustc_public::ty::GenericArgKind::Type(t) => Some(t),
+            _ => None,
+        })?;
+        return debug_pointer_pointee_type(elem_ty, depth);
+    }
+    if types::is_cuda_device_adt(&adt_def, "Barrier") {
+        return Some(DebugLocalTypeKind::Basic {
+            name: "u64".to_string(),
+            size_bits: 64,
+            encoding: "DW_ATE_unsigned",
+        });
+    }
+    None
+}
+
+/// Narrow a top-level pointer debug type from 64-bit generic width to 32-bit
+/// `addrspace(3)` width when [`SlotAddrSpaceMap`] proves the local slot holds
+/// only shared-memory pointers.
+fn narrow_debug_type_to_shared_addr_space(ty: &DebugLocalTypeKind) -> DebugLocalTypeKind {
+    match ty {
+        DebugLocalTypeKind::Pointer { name, .. } => DebugLocalTypeKind::Pointer {
+            name: name.clone(),
+            size_bits: 32,
+        },
+        DebugLocalTypeKind::TypedPointer { name, pointee, .. } => {
+            DebugLocalTypeKind::TypedPointer {
+                name: name.clone(),
+                size_bits: 32,
+                pointee: pointee.clone(),
+            }
+        }
+        other => other.clone(),
     }
 }
 
@@ -1320,14 +1382,21 @@ fn debug_typed_pointer_type(
         return None;
     }
 
+    let is_shared_stand_in = is_declared_shared_pointer_stand_in(pointee);
+    let physical_size_bits = if is_shared_stand_in { 32 } else { size_bits };
+
     // Build and validate the bounded pointee first. The source-facing pointer
     // name is then derived from that accepted tree, so rejected pathological
     // source types cannot recurse or grow a name before the depth gate fires.
-    let pointee = debug_pointer_pointee_type(pointee, depth + 1)?;
+    let pointee = if is_shared_stand_in {
+        debug_declared_shared_pointee_type(pointee, depth + 1)?
+    } else {
+        debug_pointer_pointee_type(pointee, depth + 1)?
+    };
     let name = debug_pointer_name(kind, &pointee);
     Some(DebugLocalTypeKind::TypedPointer {
         name,
-        size_bits,
+        size_bits: physical_size_bits,
         pointee: Box::new(pointee),
     })
 }
@@ -1426,9 +1495,10 @@ fn debug_struct_type(
         }
         _ => return None,
     };
-    let size_bits = shape.size.bytes() as u64 * 8;
+    let mut size_bits = shape.size.bytes() as u64 * 8;
 
     let mut members = Vec::new();
+    let mut has_shrunk_shared_pointer_member = false;
     for (idx, (field_name, field_ty)) in fields.enumerate() {
         let offset_bytes = *offsets.get(idx)?;
         let Some(member_ty) = debug_type_for_ty_at(&field_ty, depth + 1) else {
@@ -1436,6 +1506,9 @@ fn debug_struct_type(
         };
         if member_ty.size_bits() == 0 {
             continue;
+        }
+        if layout_size_bits(&field_ty).is_some_and(|host_bits| member_ty.size_bits() < host_bits) {
+            has_shrunk_shared_pointer_member = true;
         }
         members.push(DebugTypeMember {
             name: field_name,
@@ -1446,6 +1519,15 @@ fn debug_struct_type(
 
     if members.is_empty() {
         return None;
+    }
+
+    if has_shrunk_shared_pointer_member {
+        let mut cursor_bits = 0u64;
+        for member in &mut members {
+            member.offset_bits = cursor_bits;
+            cursor_bits = cursor_bits.checked_add(member.ty.size_bits())?;
+        }
+        size_bits = cursor_bits;
     }
 
     Some(DebugLocalTypeKind::Struct {
@@ -1892,7 +1974,11 @@ fn emit_entry_allocas(
         if let Some(infos) = debug_locals.whole.get(&local)
             && let Some(info) = infos.first()
         {
-            llvm_export::ops::set_debug_local_variable(ctx, op, info.variable.clone());
+            let mut variable = info.variable.clone();
+            if target == address_space::SHARED {
+                variable.ty = narrow_debug_type_to_shared_addr_space(&variable.ty);
+            }
+            llvm_export::ops::set_debug_local_variable(ctx, op, variable);
             if debug_source_scopes
                 .is_some_and(|map| map.scopes.iter().any(|scope| scope.id == info.source_scope))
             {
@@ -1901,10 +1987,16 @@ fn emit_entry_allocas(
             op.deref_mut(ctx).set_loc(info.loc.clone());
             let aliases: Vec<_> = infos[1..]
                 .iter()
-                .map(|alias| DebugWholeVariableInfo {
-                    variable: alias.variable.clone(),
-                    source_scope: Some(alias.source_scope),
-                    declaration: alias.declaration.clone(),
+                .map(|alias| {
+                    let mut variable = alias.variable.clone();
+                    if target == address_space::SHARED {
+                        variable.ty = narrow_debug_type_to_shared_addr_space(&variable.ty);
+                    }
+                    DebugWholeVariableInfo {
+                        variable,
+                        source_scope: Some(alias.source_scope),
+                        declaration: alias.declaration.clone(),
+                    }
                 })
                 .collect();
             if !aliases.is_empty() {

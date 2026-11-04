@@ -733,9 +733,14 @@ impl<'a> ModuleExportState<'a> {
             }
             DebugLocalTypeKind::Pointer { name, size_bits } => {
                 let name = escape_debug_string(name);
+                let addr_space = if *size_bits == 32 {
+                    ", dwarfAddressSpace: 8"
+                } else {
+                    ""
+                };
                 format!(
                     "!DIDerivedType(tag: DW_TAG_pointer_type, name: \"{name}\", \
-                     baseType: null, size: {size_bits})"
+                     baseType: null, size: {size_bits}{addr_space})"
                 )
             }
             DebugLocalTypeKind::TypedPointer {
@@ -749,9 +754,14 @@ impl<'a> ModuleExportState<'a> {
                 );
                 let base = self.ensure_debug_type(pointee);
                 let name = escape_debug_string(name);
+                let addr_space = if *size_bits == 32 {
+                    ", dwarfAddressSpace: 8"
+                } else {
+                    ""
+                };
                 format!(
                     "!DIDerivedType(tag: DW_TAG_pointer_type, name: \"{name}\", \
-                     baseType: !{base}, size: {size_bits})"
+                     baseType: !{base}, size: {size_bits}{addr_space})"
                 )
             }
             DebugLocalTypeKind::Struct {
@@ -1213,6 +1223,17 @@ impl<'a> ModuleExportState<'a> {
 }
 
 fn split_file_and_directory(path: &Path) -> (String, String) {
+    let resolved;
+    let path = if path.is_relative()
+        && let Ok(cwd) = std::env::current_dir()
+        && cwd.join(path).exists()
+    {
+        resolved = cwd.join(path);
+        resolved.as_path()
+    } else {
+        path
+    };
+
     let filename = path
         .file_name()
         .filter(|name| !name.is_empty())
@@ -1307,6 +1328,44 @@ mod tests {
         assert_eq!(
             split_file_and_directory(Path::new("/tmp/cuda-oxide/kernel.rs")),
             ("kernel.rs".to_string(), "/tmp/cuda-oxide".to_string())
+        );
+        let (filename, directory) = split_file_and_directory(Path::new("Cargo.toml"));
+        assert_eq!(filename, "Cargo.toml");
+        assert!(
+            Path::new(&directory).is_absolute(),
+            "existing relative path should anchor to absolute compilation directory: {directory}"
+        );
+    }
+
+    #[test]
+    fn shared_32bit_pointers_emit_dwarf_address_space_8() {
+        let ctx = Context::new();
+        let mut state = ModuleExportState::new(
+            &ctx,
+            true,
+            super::super::DebugKind::Full,
+            None,
+            FunctionLocalStaticPlacement::CompileUnitGlobals,
+        );
+        let typed = DebugLocalTypeKind::TypedPointer {
+            name: "*mut u32".to_string(),
+            size_bits: 32,
+            pointee: Box::new(DebugLocalTypeKind::Basic {
+                name: "u32".to_string(),
+                size_bits: 32,
+                encoding: "DW_ATE_unsigned",
+            }),
+        };
+        let id = state.ensure_debug_type(&typed);
+        let node = &state
+            .debug_nodes
+            .iter()
+            .find(|(node_id, _)| *node_id == id)
+            .unwrap()
+            .1;
+        assert!(
+            node.contains("size: 32, dwarfAddressSpace: 8"),
+            "32-bit shared pointer should carry size 32 and dwarfAddressSpace 8: {node}"
         );
     }
 

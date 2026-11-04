@@ -162,6 +162,9 @@ pub fn translate_statement(
 
                 let store_op =
                     value_map.store_local(ctx, local, result_value, block_ptr, current_prev);
+                if let Some(store_op) = store_op {
+                    store_op.deref_mut(ctx).set_loc(loc);
+                }
                 Ok(store_op.or(current_prev))
             } else if place.projection.len() == 1 {
                 match &place.projection[0] {

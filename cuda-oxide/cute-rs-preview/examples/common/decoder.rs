@@ -211,6 +211,8 @@ impl<const H: usize, const I: usize, const QH: usize, const KVH: usize, const D:
 
 /// Private supertrait restricting normalization roles.
 mod sealed {
+    /// Sealed supertrait ensuring only first-party markers implement [`super::NormRole`].
+    /// External crates cannot add unverified normalization role types.
     pub trait Sealed {}
 }
 
@@ -266,7 +268,11 @@ impl NormRole for FinalNorm {}
 /// }
 /// ```
 pub struct NormWeights<'a, Role: NormRole, const WIDTH: usize> {
+    /// Immutably borrowed BF16 device buffer holding at least `WIDTH` elements.
+    /// Retains the allocation and stream lifetime for the duration of the view.
     buffer: &'a DeviceBuffer<BFloat16>,
+    /// Zero-sized type marker binding this weight vector to its normalization `Role`.
+    /// Prevents substituting query, key, input, or post-attention norms of equal width.
     role: PhantomData<Role>,
 }
 
@@ -293,7 +299,11 @@ impl<'a, Role: NormRole, const WIDTH: usize> NormWeights<'a, Role, WIDTH> {
 
 /// Borrowed BF16 bias for a projection with a specific role and output width.
 pub struct BiasWeights<'a, Role: ProjectionRole, const WIDTH: usize> {
+    /// Immutably borrowed BF16 device buffer holding at least `WIDTH` bias elements.
+    /// Retains the allocation lifetime while the projection view is active.
     buffer: &'a DeviceBuffer<BFloat16>,
+    /// Zero-sized type marker binding this bias vector to its projection `Role`.
+    /// Prevents passing a bias vector to a projection of a different semantic role.
     role: PhantomData<Role>,
 }
 
@@ -335,11 +345,23 @@ pub struct AttentionWeights<
     const KVWIDTH: usize,
     const D: usize,
 > {
+    /// Query projection weights of shape `[QWIDTH, H]` in BF16.
+    /// Maps hidden states into concatenated query heads.
     query: ProjectionWeights<'a, Query, H, QWIDTH>,
+    /// Key projection weights of shape `[KVWIDTH, H]` in BF16.
+    /// Maps hidden states into grouped key heads.
     key: ProjectionWeights<'a, Key, H, KVWIDTH>,
+    /// Value projection weights of shape `[KVWIDTH, H]` in BF16.
+    /// Maps hidden states into grouped value heads.
     value: ProjectionWeights<'a, Value, H, KVWIDTH>,
+    /// Attention output projection weights of shape `[H, QWIDTH]` in BF16.
+    /// Projects concatenated attention head outputs back to hidden width `H`.
     output: ProjectionWeights<'a, AttentionOutput, QWIDTH, H>,
+    /// Per-head query RMSNorm weights of width `D` applied before RoPE.
+    /// Shared across all query heads within the layer.
     query_norm: NormWeights<'a, QueryNorm, D>,
+    /// Per-head key RMSNorm weights of width `D` applied before RoPE.
+    /// Shared across all key heads within the layer.
     key_norm: NormWeights<'a, KeyNorm, D>,
 }
 
@@ -416,9 +438,17 @@ pub struct DecoderWeights<
     const KVWIDTH: usize,
     const D: usize,
 > {
+    /// Role-checked Q/K/V/O projections and QK-norm weights for the attention sublayer.
+    /// Validated against `H`, `QWIDTH`, `KVWIDTH`, and `D`.
     attention: AttentionWeights<'a, H, QWIDTH, KVWIDTH, D>,
+    /// Pre-attention RMSNorm weights of hidden width `H`.
+    /// Normalizes the residual stream before Q/K/V projection.
     input_norm: NormWeights<'a, InputNorm, H>,
+    /// Post-attention RMSNorm weights of hidden width `H`.
+    /// Normalizes the residual stream before the SwiGLU FFN sublayer.
     post_attention_norm: NormWeights<'a, PostAttentionNorm, H>,
+    /// Role-checked gate, up, and down projection weights for the SwiGLU FFN sublayer.
+    /// Validated for hidden width `H` and intermediate width `I`.
     ffn: FfnWeights<'a, H, I>,
 }
 
@@ -465,6 +495,8 @@ impl<'a, const H: usize, const I: usize, const QWIDTH: usize, const KVWIDTH: usi
 /// Checked vocabulary-table geometry independent of the token sequence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EmbeddingShape<const VOCAB: usize, const WIDTH: usize> {
+    /// Validated row-major `[VOCAB, WIDTH]` table extents and physical row stride.
+    /// Ensures the vocabulary is non-empty and addressable within BF16 byte bounds.
     table: RowMajorShape,
 }
 
@@ -491,7 +523,11 @@ impl<const VOCAB: usize, const WIDTH: usize> EmbeddingShape<VOCAB, WIDTH> {
 
 /// Borrowed BF16 embedding table with checked vocabulary and embedding width.
 pub struct EmbeddingWeights<'a, const VOCAB: usize, const WIDTH: usize> {
+    /// Immutably borrowed BF16 device buffer storing the `[VOCAB, WIDTH]` embedding table.
+    /// Validated to cover the full padded extent of `shape`.
     buffer: &'a DeviceBuffer<BFloat16>,
+    /// Checked `[VOCAB, WIDTH]` table geometry and row stride.
+    /// Used to validate token lookups and compute output shapes.
     shape: EmbeddingShape<VOCAB, WIDTH>,
 }
 
@@ -536,6 +572,8 @@ impl<'a, const VOCAB: usize, const WIDTH: usize> EmbeddingWeights<'a, VOCAB, WID
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TokenIds<'a, const VOCAB: usize> {
+    /// Host slice of token indices verified to lie strictly within `0..VOCAB`.
+    /// Prevents out-of-bounds embedding table reads when uploaded to the GPU.
     ids: &'a [u32],
 }
 

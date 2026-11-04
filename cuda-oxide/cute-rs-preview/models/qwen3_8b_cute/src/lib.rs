@@ -55,8 +55,6 @@ pub(crate) mod decode_linear;
 #[path = "../../qwen_decoder_cute/src/element_kernel.rs"]
 pub(crate) mod element_kernel;
 
-/// Shared BF16 Tensor-Core MMA projection and SwiGLU activation kernels.
-#[allow(dead_code)]
 /// Checked host metadata for BF16 attention and contiguous key/value caches.
 #[allow(dead_code)]
 #[path = "../../../examples/common/attention_metadata.rs"]
@@ -72,6 +70,7 @@ pub mod decoder;
 #[path = "../../../examples/common/ffn.rs"]
 pub mod ffn;
 
+/// Shared BF16 Tensor-Core MMA projection and SwiGLU activation kernels.
 #[allow(dead_code)]
 #[path = "../../../examples/ffn_cute/src/kernel.rs"]
 pub(crate) mod ffn_kernel;

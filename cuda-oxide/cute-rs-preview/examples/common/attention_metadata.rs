@@ -197,8 +197,14 @@ impl<const QH: usize, const KVH: usize, const D: usize> AttentionShape<QH, KVH, 
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AttentionWindow {
+    /// Number of query token rows in this attention window.
+    /// Zero is permitted for empty query batches.
     query_tokens: usize,
+    /// Number of initialized key/value token rows available in the cache.
+    /// Must be positive whenever `query_tokens > 0`.
     key_tokens: usize,
+    /// Absolute key index of the first causal query row, or `None` for noncausal attention.
+    /// When `Some(start)`, `start + query_tokens` never exceeds `key_tokens`.
     causal_start: Option<usize>,
 }
 

@@ -22,6 +22,7 @@ on:
   push:
     branches:
       - main
+      - "release/v0.5.x"
       - "pull-request/[0-9]+"
   workflow_dispatch:
 
@@ -75,6 +76,23 @@ jobs:
             any_changed:
               - '*'
               - '**'
+
+  dependency-security:
+    needs: changes
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.tile == 'true' ||
+      needs.changes.outputs.any_changed != 'true'
+    runs-on: linux-amd64-cpu4
+    container:
+      image: rust:1.98.0-bookworm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --version 0.19.0 --locked
+      - name: Check Tile dependencies including optional reference examples
+        run: cargo deny --workspace --all-features --locked check
 
   # Exercise the oldest Tile IR assembler, including its lack of
   # --list-versions. The separate 13.0 lane only checks shared host crates.

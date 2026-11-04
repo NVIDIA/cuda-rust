@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- Update the optional CPU-reference examples to Candle 0.11.1 and a patched
+  `zip` dependency. Check optional Tile dependencies in the security CI lane.
+
 ### Breaking changes
 
 The cuTile Rust crates move to 0.5.0 for these public API changes:

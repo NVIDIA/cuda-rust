@@ -5850,6 +5850,7 @@ fn full_device_debug_applies_only_the_targeted_debug_controls() {
             "base",
             "--cfg",
             FULL_DEBUG_GET_MUT_OUTLINE_CFG,
+            "-Cdebuginfo=2",
             "-Zmir-enable-passes=-ScalarReplacementOfAggregates,-SingleUseConsts"
         ]
     );
@@ -5873,6 +5874,7 @@ fn numeric_full_debug_alias_selects_the_same_rustc_controls() {
             "base",
             "--cfg",
             FULL_DEBUG_GET_MUT_OUTLINE_CFG,
+            "-Cdebuginfo=2",
             "-Zmir-enable-passes=-ScalarReplacementOfAggregates,-SingleUseConsts"
         ]
     );

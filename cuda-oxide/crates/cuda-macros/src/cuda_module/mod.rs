@@ -32,7 +32,6 @@ use crate::cuda_module::model::{
     CudaModuleKernel, add_cuda_module_disjoint_abi_bounds,
     add_cuda_module_disjoint_contract_bounds, add_cuda_module_uniform_bounds, cuda_module_params,
 };
-use crate::launch_attrs::rewrite_loop_unroll_attrs;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
@@ -629,13 +628,7 @@ fn cuda_module_kernel(
     let params = cuda_module_params(item_fn)?;
     let launch_contract =
         cuda_module_launch_contract(&item_fn.attrs, &item_fn.sig.ident, &params, cluster_dim)?;
-    // `#[cuda_module]` expands before both the nested function attributes and
-    // the recursive module rewrite. Mirror the evaluatability predicates that
-    // `#[kernel]` adds to each concrete entry for `#[unroll]` factors while
-    // retaining the nested module's path and inherited cfg attributes.
-    let mut configured_item = item_fn.clone();
-    rewrite_loop_unroll_attrs(&mut configured_item)?;
-    let mut generics = configured_item.sig.generics;
+    let mut generics = item_fn.sig.generics.clone();
     if let Some(contract) = launch_contract.as_ref() {
         add_cuda_module_disjoint_contract_bounds(&mut generics, &params, contract.domain);
     }

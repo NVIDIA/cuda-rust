@@ -124,14 +124,14 @@ fn score_max_ternary(values: &[f32; 64], previous: f32) -> f32 {
     let mut first = [0.0f32; 21];
     let mut i = 0;
     while i < 21 {
-        thread::__unroll_config::<0>();
+        thread::__unroll_config(0);
         first[i] = max3(values[i * 3], values[i * 3 + 1], values[i * 3 + 2]);
         i += 1;
     }
     let mut second = [0.0f32; 7];
     i = 0;
     while i < 7 {
-        thread::__unroll_config::<0>();
+        thread::__unroll_config(0);
         second[i] = max3(first[i * 3], first[i * 3 + 1], first[i * 3 + 2]);
         i += 1;
     }
@@ -406,7 +406,7 @@ unsafe fn softmax_tile<const LAST: bool>(
     // Only the final local tile can also be the partial final global tile.
     if LAST && tile * 128 + 128 > length {
         while i < 64 {
-            thread::__unroll_config::<0>();
+            thread::__unroll_config(0);
             if tile * 128 + (wid / 2) * 64 + i as u32 >= length {
                 values.values[i] = f32::NEG_INFINITY;
             }
@@ -454,13 +454,13 @@ unsafe fn softmax_tile<const LAST: bool>(
     let p_base = (state.probability_ticket % 2) * 4;
     i = 0;
     while i < 64 {
-        thread::__unroll_config::<0>();
+        thread::__unroll_config(0);
         // Match the source's 128-bit universal P copy.
         // B64 swizzling preserves each aligned group of eight FP16 values.
         let mut packed = [0u32; 4];
         let mut pair = 0;
         while pair < 4 {
-            thread::__unroll_config::<0>();
+            thread::__unroll_config(0);
             let scores = fma_packed_f32x2(
                 pack_f32x2(values.values[i + pair * 2], values.values[i + pair * 2 + 1]),
                 pack_f32x2(scale, scale),
@@ -483,7 +483,7 @@ unsafe fn softmax_tile<const LAST: bool>(
     let mut pair_sum = pack_f32x2(0.0, 0.0);
     i = 0;
     while i < 64 {
-        thread::__unroll_config::<0>();
+        thread::__unroll_config(0);
         pair_sum = add_packed_f32x2(pair_sum, pack_f32x2(values.values[i], values.values[i + 1]));
         i += 2;
     }

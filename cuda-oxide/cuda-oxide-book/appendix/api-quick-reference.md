@@ -168,8 +168,8 @@ derived from Rust `TypeId`, type names, compiler mangling, or hashes. Keep an ID
 stable while the policy's generated behavior remains unchanged and allocate a
 new value when that behavior changes.
 
-Policy-associated constants can currently be used in compile-time
-`launch_bounds` and partial-loop `unroll` expressions:
+Policy-associated constants can be used in compile-time `launch_bounds` and
+partial-loop `unroll` expressions:
 
 ```rust
 use cuda_device::{kernel, launch_bounds};
@@ -190,10 +190,6 @@ pub unsafe fn transform<P: VectorPolicy>(
     }
 }
 ```
-
-Generic policy expressions require `#![feature(generic_const_exprs)]`.
-`launch_contract` fields, cluster dimensions, and dynamic shared-memory sizes
-currently remain literal.
 
 See the
 [`policy_config`](https://github.com/NVIDIA/cuda-rust/tree/main/cuda-oxide/crates/rustc-codegen-cuda/examples/policy_config)

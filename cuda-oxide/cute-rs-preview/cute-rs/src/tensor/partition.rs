@@ -754,7 +754,7 @@ impl<'a, Element: TensorElement<Storage>, Layout: IndexLayout, Storage: Copy>
         let values = values.into_array();
         let mut i = 0;
         while i < N {
-            cuda_device::thread::__unroll_config::<0>();
+            cuda_device::thread::__unroll_config(0);
             unsafe {
                 self.store_at(i, values[i]);
             }
@@ -775,7 +775,7 @@ impl<'a, Element: TensorElement<Storage>, Layout: IndexLayout, Storage: Copy>
         let values = values.into_array();
         let mut i = 0;
         while i < N {
-            cuda_device::thread::__unroll_config::<0>();
+            cuda_device::thread::__unroll_config(0);
             unsafe {
                 self.store_at(lane + i * STRIDE, values[i]);
             }

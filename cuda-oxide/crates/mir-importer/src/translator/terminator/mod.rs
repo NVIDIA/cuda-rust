@@ -62,6 +62,7 @@ use super::types;
 use crate::error::{TranslationErr, TranslationResult};
 use crate::translator::facts::{
     eval_usize_const, is_cuda_device_fn, is_std_precondition_check, self_ty_is_shared_array,
+    u32_const_operand,
 };
 use crate::translator::location::span_to_location;
 use crate::translator::rvalue;
@@ -1111,21 +1112,16 @@ fn translate_call(
     // body, so we plant a `mir.unroll_hint` op right here, inside that loop
     // body. The loop-unroll pass later maps the hint back to its enclosing loop
     // (via LoopInfo) and consumes it, so it never reaches lowering. The factor
-    // is the call's const generic (`0` = full unroll). Then branch to the
+    // is the call's constant argument (`0` = full unroll). Then branch to the
     // target. The hint keeps the attribute's location for the warnings that
     // cite it; the branch is generated and, like the edges that replace the
     // kernel metadata markers, stays off the attribute line.
     // Match both the full path (`cuda_device::thread::__unroll_config`) and the
-    // re-exported short path (`cuda_device::__unroll_config`), mirroring the
-    // robust suffix match in `body::detect_unroll_config`.
+    // re-exported short path (`cuda_device::__unroll_config`).
     if is_cuda_device_const_marker(func, "__unroll_config") {
-        let Some(factor) = extract_unroll_factor(func) else {
-            return input_err!(
-                loc,
-                TranslationErr::invalid_op(
-                    "could not read the const-generic factor from an unroll marker",
-                )
-            );
+        let factor = match extract_unroll_factor(args) {
+            Ok(factor) => factor,
+            Err(error) => return input_err!(loc, TranslationErr::invalid_op(error)),
         };
         if factor == 1 || (factor > 1024 && factor != u32::MAX - 1) {
             return input_err!(
@@ -2324,47 +2320,27 @@ fn extract_closure_body_target(
     })
 }
 
-/// Read the const-generic `FACTOR` from a `__unroll_config::<FACTOR>()` callee
-/// (`0` = full unroll).
+/// Read the factor from an `__unroll_config(FACTOR)` call (`0` = full
+/// unroll).
 ///
-/// Returns `None` when the callee is malformed instead of silently turning the
-/// request into a full unroll.
-fn extract_unroll_factor(func: &mir::Operand) -> Option<u32> {
-    use rustc_public::ty::{RigidTy, TyConstKind, TyKind};
-    let mir::Operand::Constant(constant) = func else {
-        return None;
+/// The macros compute the argument in an inline `const` block, so in a
+/// monomorphized body it is an evaluated constant. Anything else is an error
+/// rather than silently turning the request into a full unroll.
+fn extract_unroll_factor(args: &[mir::Operand]) -> Result<u32, String> {
+    let [factor] = args else {
+        return Err(format!(
+            "an unroll marker has {} arguments; expected exactly 1",
+            args.len()
+        ));
     };
-    let TyKind::RigidTy(RigidTy::FnDef(definition, args)) = constant.const_.ty().kind() else {
-        return None;
-    };
-    let definition_name = definition.name();
-    if definition.krate().name.as_str() != "cuda_device"
-        || (definition_name != "__unroll_config" && !definition_name.ends_with("::__unroll_config"))
-        || args.0.len() != 1
-    {
-        return None;
-    }
-    if let Some(arg) = args.0.first()
-        && let rustc_public::ty::GenericArgKind::Const(c) = arg
-    {
-        return match c.kind() {
-            TyConstKind::Value(_, alloc) => {
-                alloc.read_uint().ok().and_then(|v| u32::try_from(v).ok())
-            }
-            _ => c
-                .eval_target_usize()
-                .ok()
-                .and_then(|v| u32::try_from(v).ok()),
-        };
-    }
-    None
+    u32_const_operand(factor, "unroll factor")
 }
 
 /// Match a compiler marker by its resolved definition, not by a debug string.
 ///
 /// A user function with the same spelling must remain an ordinary call. The
-/// `FnDef` identity also guarantees that generic arguments were type-checked by
-/// rustc before the importer reads them.
+/// `FnDef` identity also guarantees that the marker's arguments were
+/// type-checked by rustc before the importer reads them.
 fn is_cuda_device_const_marker(func: &mir::Operand, expected_name: &str) -> bool {
     use rustc_public::CrateDef;
     use rustc_public::ty::{RigidTy, TyKind};
@@ -3574,6 +3550,32 @@ fn try_dispatch_intrinsic(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An unroll marker carries exactly one factor, computed in an inline
+    /// `const` block. A marker with another argument count, or with a runtime
+    /// factor, is an error rather than a silent full unroll.
+    #[test]
+    fn unroll_marker_requires_one_constant_factor() {
+        let runtime = || {
+            mir::Operand::Copy(mir::Place {
+                local: 1,
+                projection: vec![],
+            })
+        };
+
+        assert_eq!(
+            extract_unroll_factor(&[]),
+            Err("an unroll marker has 0 arguments; expected exactly 1".to_string())
+        );
+        assert_eq!(
+            extract_unroll_factor(&[runtime(), runtime()]),
+            Err("an unroll marker has 2 arguments; expected exactly 1".to_string())
+        );
+        assert_eq!(
+            extract_unroll_factor(&[runtime()]),
+            Err("unroll factor is not a constant operand".to_string())
+        );
+    }
 
     #[test]
     fn foreign_signature_rejects_c_variadic_before_claiming_an_exact_abi() {

@@ -208,7 +208,7 @@ pub(crate) fn kernel_entry(attr: TokenStream, item: TokenStream) -> TokenStream 
     // written directly on loops inside the kernel body. We strip the attribute
     // from the loop expression (so rustc never sees an expression attribute,
     // keeping us off nightly `stmt_expr_attributes`) and inject an
-    // `__unroll_config::<FACTOR>()` or `__nounroll_config()` marker into the
+    // `__unroll_config(const { .. })` or `__nounroll_config()` marker into the
     // loop body. If the visitor hits a malformed attribute it records the
     // error so we can surface it as a compile error below.
     if let Err(err) = rewrite_loop_unroll_attrs(&mut input) {

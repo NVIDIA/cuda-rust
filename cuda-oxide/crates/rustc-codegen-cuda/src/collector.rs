@@ -821,7 +821,7 @@ fn is_ptx_asm_marker_path(fn_path: &str) -> bool {
         || has_arity_suffix(fn_path, "cuda_device::ptx::__ptx_asm_void_")
 }
 
-/// Returns true for the hidden `__unroll_config::<FACTOR>` and
+/// Returns true for the hidden `__unroll_config(factor)` and
 /// `__nounroll_config` marker functions.
 ///
 /// `#[unroll]` / `#[unroll(N)]` / `#[nounroll]` on a loop makes the `#[kernel]`
@@ -3295,7 +3295,8 @@ mod tests {
     #[test]
     fn unroll_markers_match_only_cuda_device_marker_names() {
         for path in [
-            "cuda_device::__unroll_config::<4>",
+            "cuda_device::__unroll_config",
+            "cuda_device::thread::__unroll_config",
             "cuda_device::thread::__unroll_config::<0>",
             "cuda_device::__nounroll_config",
             "cuda_device::thread::__nounroll_config",
@@ -3306,6 +3307,7 @@ mod tests {
             "cuda_device::thread::__nounroll_config_helper",
             "cuda_device::__unroll_configure::<4>",
             "my_kernels::__nounroll_config",
+            "my_kernels::cuda_device::__unroll_config",
             "my_kernels::cuda_device::__unroll_config::<4>",
             "cuda_device::thread::inner::__nounroll_config",
         ] {

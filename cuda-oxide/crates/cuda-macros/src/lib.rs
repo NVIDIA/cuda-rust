@@ -450,9 +450,9 @@ pub fn cuda_module(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// ```
 ///
 /// A factor may also be a typed `u32` policy constant, such as
-/// `#[unroll(P::UNROLL)]`. A generic expression currently requires Rust's
-/// `generic_const_exprs` feature. Partial factors must be in `2..=1024`; an
-/// invalid specialization fails compilation instead of becoming a no-op.
+/// `#[unroll(P::UNROLL)]`, which is evaluated for each specialization. Partial
+/// factors must be in `2..=1024`; an invalid specialization fails compilation
+/// instead of becoming a no-op.
 ///
 /// The pass currently recognizes explicit counted `while` loops and range `for`
 /// loops (`for i in a..b` and `(a..b).rev()`) over any integer counter,

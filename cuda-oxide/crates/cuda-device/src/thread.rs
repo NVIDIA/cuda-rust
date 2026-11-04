@@ -1406,31 +1406,43 @@ pub fn __unchecked_indexing_config<const ENABLED: bool>() {
 ///
 /// # Parameters
 ///
-/// - `FACTOR = 0` requests full unrolling of this loop and requires a
+/// - `factor = 0` requests full unrolling of this loop and requires a
 ///   compile-time-known trip count.
-/// - `FACTOR >= 2` requests partial unrolling of this loop by that factor.
+/// - `factor >= 2` requests partial unrolling of this loop by that factor.
 ///   It groups that many iterations; it does not limit the loop to that many
 ///   total iterations, and a remainder still runs.
+///
+/// The factor must be a constant. The macros compute it in an inline `const`
+/// block (`__unroll_config(const { __unroll_factor(N) })`), which rustc
+/// evaluates for each instance, so an expression such as `P::UNROLL` in
+/// generic code gives each instance its own factor.
 #[inline(never)]
-pub fn __unroll_config<const FACTOR: u32>() {
-    const { validate_unroll_factor(FACTOR) }
+pub fn __unroll_config(factor: u32) {
     // This function is detected at compile time and removed.
-    // The const generic FACTOR is extracted to set the loop-unroll request.
+    // Its constant argument is extracted to set the loop-unroll request.
     // No runtime code is generated.
+    let _ = factor;
 }
 
 /// Internal sentinel factor for `#[unroll(never)]`.
 #[doc(hidden)]
 pub const UNROLL_NEVER: u32 = u32::MAX - 1;
 
-const fn validate_unroll_factor(factor: u32) {
+/// Validates an `#[unroll]` factor and returns it unchanged.
+///
+/// The macros evaluate this in the inline `const` block that computes
+/// [`__unroll_config`]'s argument, so an invalid factor is a compile-time
+/// error for each instance that has one.
+#[doc(hidden)]
+pub const fn __unroll_factor(factor: u32) -> u32 {
     if factor == UNROLL_NEVER {
-        return;
+        return factor;
     }
     assert!(
         factor == 0 || (factor >= 2 && factor <= 1024),
         "partial unroll factor must be in 2..=1024, or 0 for full unrolling"
     );
+    factor
 }
 
 /// Compile-time "keep this loop rolled" marker (internal, do not call directly).

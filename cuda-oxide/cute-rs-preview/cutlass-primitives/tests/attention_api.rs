@@ -16,7 +16,7 @@ fn attention_primitives_accept_instruction_operands_and_canonical_storage() {
 #[test]
 fn unroll_marker_retains_its_canonical_definition() {
     assert_eq!(
-        core::any::type_name_of_val(&cutlass_primitives::thread::__unroll_config::<0>),
-        core::any::type_name_of_val(&cuda_device::thread::__unroll_config::<0>),
+        core::any::type_name_of_val(&cutlass_primitives::thread::__unroll_config),
+        core::any::type_name_of_val(&cuda_device::thread::__unroll_config),
     );
 }

@@ -17,12 +17,11 @@ use crate::cuda_module::model::{
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
-    Expr, FnArg, GenericParam, Ident, ItemFn, Pat, Path, Stmt, Token,
+    Expr, FnArg, Ident, ItemFn, Pat, Stmt, Token,
     parse::{Parse, ParseStream},
     parse_macro_input, parse_quote,
     punctuated::Punctuated,
     spanned::Spanned,
-    visit::{self, Visit},
     visit_mut::{self, VisitMut},
 };
 
@@ -339,69 +338,6 @@ fn validate_literal_max_threads(value: &ConstU32Expr) -> syn::Result<()> {
     }
 }
 
-/// Returns whether an expression names one of the function's type or const
-/// parameters and therefore needs a signature-level evaluatability witness.
-///
-/// Non-generic paths deliberately return false. In particular, a const item
-/// declared inside the function body is in scope at the generated marker but
-/// is not in scope in the function signature.
-fn const_expr_depends_on_generics(expr: &Expr, generics: &syn::Generics) -> bool {
-    let generic_names: Vec<&Ident> = generics
-        .params
-        .iter()
-        .filter_map(|parameter| match parameter {
-            GenericParam::Type(parameter) => Some(&parameter.ident),
-            GenericParam::Const(parameter) => Some(&parameter.ident),
-            GenericParam::Lifetime(_) => None,
-        })
-        .collect();
-    if generic_names.is_empty() {
-        return false;
-    }
-
-    struct GenericReference<'a> {
-        generic_names: &'a [&'a Ident],
-        found: bool,
-    }
-
-    impl<'ast> Visit<'ast> for GenericReference<'_> {
-        fn visit_path(&mut self, path: &'ast Path) {
-            if path.segments.iter().any(|segment| {
-                self.generic_names
-                    .iter()
-                    .any(|generic| segment.ident == **generic)
-            }) {
-                self.found = true;
-                return;
-            }
-            visit::visit_path(self, path);
-        }
-    }
-
-    let mut visitor = GenericReference {
-        generic_names: &generic_names,
-        found: false,
-    };
-    visitor.visit_expr(expr);
-    visitor.found
-}
-
-/// Make a generic constant expression evaluatable at each monomorphization.
-///
-/// rustc requires this bound for expressions such as `P::MAX_THREADS`. The
-/// marker itself supplies the expected `u32` type; the array length is only an
-/// evaluatability witness and never reaches device code.
-pub(crate) fn add_const_evaluatable_bound(generics: &mut syn::Generics, value: &ConstU32Expr) {
-    if value.literal_value.is_some() || !const_expr_depends_on_generics(&value.expr, generics) {
-        return;
-    }
-    let expr = &value.expr;
-    let predicate: syn::WherePredicate = parse_quote! {
-        [(); (#expr) as usize]:
-    };
-    generics.make_where_clause().predicates.push(predicate);
-}
-
 /// Arguments for the `#[unroll]` / `#[unroll(N)]` attribute.
 ///
 /// Bare `#[unroll]` parses to factor `0` (full unroll); `#[unroll(N)]` requires
@@ -477,8 +413,8 @@ impl Parse for UnrollArgs {
 /// attribute, the visitor:
 ///
 /// 1. removes the `unroll` attribute from the loop expr's `attrs`, and
-/// 2. inserts `cuda_device::thread::__unroll_config::<FACTOR>();` as the FIRST
-///    statement of that loop's body block.
+/// 2. inserts `cuda_device::thread::__unroll_config(const { .. FACTOR .. });`
+///    as the FIRST statement of that loop's body block.
 ///
 /// `FACTOR` follows [`UnrollArgs`]: bare `#[unroll]` => `0` (full unroll),
 /// `#[unroll(N)]` => `N`. `#[nounroll]` inserts
@@ -495,7 +431,6 @@ pub(crate) struct LoopUnrollAttrVisitor {
     /// First parse error encountered (e.g. a malformed `#[unroll(...)]`). The
     /// caller surfaces this as a compile error.
     pub(crate) error: Option<syn::Error>,
-    pub(crate) const_expressions: Vec<ConstU32Expr>,
 }
 
 impl LoopUnrollAttrVisitor {
@@ -534,9 +469,6 @@ impl LoopUnrollAttrVisitor {
                 return None;
             }
         };
-        if factor.literal_value.is_none() {
-            self.const_expressions.push(factor.clone());
-        }
         Some((factor, attr.span()))
     }
 
@@ -588,17 +520,18 @@ impl LoopUnrollAttrVisitor {
         }
     }
 
-    /// Build the `__unroll_config::<FACTOR>()` marker statement. The call
-    /// carries `span`, the `#[unroll]` attribute's, so diagnostics about the
-    /// loop point at the attribute. The braces around the factor keep the
-    /// macro's own span. On the attribute's span rustc treats them as written
-    /// by the user, and its `unused_braces` lint then reports every literal
-    /// factor with a fix-it that deletes the attribute.
+    /// Build the `__unroll_config(const { __unroll_factor(FACTOR) })` marker
+    /// statement. rustc evaluates and validates the factor in the inline
+    /// `const` block for each monomorphized function, so the factor may be an
+    /// expression over the function's generic parameters. The call carries
+    /// `span`, the `#[unroll]` attribute's, so diagnostics about the loop
+    /// point at the attribute.
     fn marker_stmt(factor: &ConstU32Expr, span: proc_macro2::Span) -> Stmt {
         let expr = &factor.expr;
-        let factor_arg = quote! { { #expr } };
         syn::parse_quote_spanned! {span=>
-            cuda_device::thread::__unroll_config::<#factor_arg>();
+            cuda_device::thread::__unroll_config(
+                const { cuda_device::thread::__unroll_factor(#expr) }
+            );
         }
     }
 }
@@ -641,9 +574,6 @@ pub(crate) fn rewrite_loop_unroll_attrs(input: &mut ItemFn) -> syn::Result<()> {
     visitor.visit_block_mut(&mut input.block);
     if let Some(err) = visitor.error {
         return Err(err);
-    }
-    for expression in &visitor.const_expressions {
-        add_const_evaluatable_bound(&mut input.sig.generics, expression);
     }
     Ok(())
 }

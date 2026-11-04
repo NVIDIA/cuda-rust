@@ -412,25 +412,11 @@ unsafe {
 }
 ```
 
-### Current limitations
+### Where policy expressions apply
 
-Policy expressions are currently supported first for:
-
-* `#[launch_bounds(...)]`
-* partial loop `#[unroll(...)]`
-
-Generic constant expressions require Rust's `generic_const_exprs` feature:
-
-```rust
-#![feature(generic_const_exprs)]
-#![allow(incomplete_features)]
-```
-
-The following values currently remain literal rather than policy-derived:
-
-* `launch_contract` fields
-* cluster dimensions
-* dynamic shared-memory sizes
+Policy expressions can be used in `#[launch_bounds(...)]` and partial loop
+`#[unroll(...)]`. `launch_contract` fields, cluster dimensions, and dynamic
+shared-memory sizes take literal values.
 
 A policy-derived maximum launch bound can still be combined with a host launch
 contract. The contract and the policy maximum are checked separately for each

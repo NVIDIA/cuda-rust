@@ -1216,6 +1216,14 @@ fn debug_type_for_ty_at(ty: &Ty, depth: usize) -> Option<DebugLocalTypeKind> {
         TyKind::RigidTy(RigidTy::RawPtr(pointee, mutability)) => {
             debug_typed_pointer_type(ty, &pointee, DebugPointerKind::Raw(mutability), depth)
                 .or_else(|| {
+                    debug_slice_fat_pointer_type(
+                        ty,
+                        &pointee,
+                        DebugPointerKind::Raw(mutability),
+                        depth,
+                    )
+                })
+                .or_else(|| {
                     Some(DebugLocalTypeKind::Pointer {
                         name: raw_pointer_name(pointee, mutability),
                         size_bits: if is_declared_shared_pointer_stand_in(&pointee) {
@@ -1228,6 +1236,14 @@ fn debug_type_for_ty_at(ty: &Ty, depth: usize) -> Option<DebugLocalTypeKind> {
         }
         TyKind::RigidTy(RigidTy::Ref(_, pointee, mutability)) => {
             debug_typed_pointer_type(ty, &pointee, DebugPointerKind::Reference(mutability), depth)
+                .or_else(|| {
+                    debug_slice_fat_pointer_type(
+                        ty,
+                        &pointee,
+                        DebugPointerKind::Reference(mutability),
+                        depth,
+                    )
+                })
                 .or_else(|| {
                     Some(DebugLocalTypeKind::Pointer {
                         name: reference_name(pointee, mutability),
@@ -1398,6 +1414,87 @@ fn debug_typed_pointer_type(
         name,
         size_bits: physical_size_bits,
         pointee: Box::new(pointee),
+    })
+}
+
+/// Describe a 16-byte slice or `str` fat pointer/reference as a two-field
+/// DWARF struct `{ data_ptr, length }`, matching `rustc`'s native slice debug
+/// layout consumed by `cuda-gdb` and Nsight VS Code.
+fn debug_slice_fat_pointer_type(
+    pointer: &Ty,
+    pointee: &Ty,
+    kind: DebugPointerKind,
+    depth: usize,
+) -> Option<DebugLocalTypeKind> {
+    if depth >= MAX_DEBUG_TYPE_DEPTH {
+        return None;
+    }
+
+    let size_bits = layout_size_bits(pointer)?;
+    let pointer_word_bits =
+        rustc_public::target::MachineInfo::target_pointer_width().bytes() as u64 * 8;
+    if size_bits != pointer_word_bits * 2 {
+        return None;
+    }
+
+    let (element_debug, is_str) = match pointee.kind() {
+        TyKind::RigidTy(RigidTy::Slice(elem_ty)) => {
+            (debug_pointer_pointee_type(&elem_ty, depth + 1)?, false)
+        }
+        TyKind::RigidTy(RigidTy::Str) => (
+            DebugLocalTypeKind::Basic {
+                name: "u8".to_string(),
+                size_bits: 8,
+                encoding: "DW_ATE_unsigned",
+            },
+            true,
+        ),
+        _ => return None,
+    };
+
+    let mutability = match kind {
+        DebugPointerKind::Raw(mutability) | DebugPointerKind::Reference(mutability) => mutability,
+    };
+    let elem_name = typed_pointer_pointee_display_name(&element_debug);
+    let data_ptr_name = match mutability {
+        mir::Mutability::Mut => format!("*mut {elem_name}"),
+        mir::Mutability::Not => format!("*const {elem_name}"),
+    };
+    let slice_target = if is_str {
+        "str".to_string()
+    } else {
+        format!("[{elem_name}]")
+    };
+    let slice_name = match kind {
+        DebugPointerKind::Raw(mir::Mutability::Mut) => format!("*mut {slice_target}"),
+        DebugPointerKind::Raw(mir::Mutability::Not) => format!("*const {slice_target}"),
+        DebugPointerKind::Reference(mir::Mutability::Mut) => format!("&mut {slice_target}"),
+        DebugPointerKind::Reference(mir::Mutability::Not) => format!("&{slice_target}"),
+    };
+
+    Some(DebugLocalTypeKind::Struct {
+        name: slice_name,
+        size_bits,
+        members: vec![
+            DebugTypeMember {
+                name: "data_ptr".to_string(),
+                offset_bits: 0,
+                ty: DebugLocalTypeKind::TypedPointer {
+                    name: data_ptr_name,
+                    size_bits: pointer_word_bits,
+                    pointee: Box::new(element_debug),
+                },
+            },
+            DebugTypeMember {
+                name: "length".to_string(),
+                offset_bits: pointer_word_bits,
+                ty: DebugLocalTypeKind::Basic {
+                    name: "usize".to_string(),
+                    size_bits: pointer_word_bits,
+                    encoding: "DW_ATE_unsigned",
+                },
+            },
+        ],
     })
 }
 
@@ -3623,8 +3720,22 @@ pub fn pointer_debug_types(
 
         assert_opaque_pointer(&debug_types[4], "*const _");
         assert_opaque_pointer(&debug_types[5], "*const _");
-        assert_opaque_pointer(&debug_types[6], "*const _");
-        assert_opaque_pointer(&debug_types[7], "&_");
+        assert!(matches!(
+            &debug_types[6],
+            Some(DebugLocalTypeKind::Struct {
+                name,
+                size_bits: 128,
+                members,
+            }) if name == "*const [u8]" && members.len() == 2
+        ));
+        assert!(matches!(
+            &debug_types[7],
+            Some(DebugLocalTypeKind::Struct {
+                name,
+                size_bits: 128,
+                members,
+            }) if name == "&str" && members.len() == 2
+        ));
         assert_opaque_pointer(&debug_types[8], "*const _");
         assert_opaque_pointer(&debug_types[9], "*const _");
         assert_opaque_pointer(&debug_types[10], "*const _");

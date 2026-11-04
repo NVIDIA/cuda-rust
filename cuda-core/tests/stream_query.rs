@@ -7,17 +7,17 @@
 //!
 //! Work is enqueued with `launch_host_function` rather than a kernel: the
 //! point under test is the driver's completion status for a stream, a host
-//! callback holds the stream busy for a known interval, and `cuda-core`'s own
-//! tests do not compile device code.
+//! callback holds the stream busy until the test releases it, and
+//! `cuda-core`'s own tests do not compile device code.
 
 use cuda_core::CudaContext;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-/// Long enough that the first query lands inside it on a loaded machine,
-/// short enough to keep the suite quick.
-const BUSY: Duration = Duration::from_millis(500);
+/// Stops a hang only. Expiring is recorded, and the test fails on it.
+const WATCHDOG: Duration = Duration::from_secs(30);
 
 #[test]
 fn an_idle_stream_reports_complete() {
@@ -34,37 +34,46 @@ fn an_idle_stream_reports_complete() {
 fn query_reports_in_flight_work_and_never_blocks() {
     let ctx = CudaContext::new(0).expect("failed to create CUDA context");
     let stream = ctx.new_stream().expect("failed to create stream");
+    let (started_tx, started) = mpsc::channel();
+    let (release, gate) = mpsc::channel::<()>();
     let finished = Arc::new(AtomicBool::new(false));
+    let watchdog_expired = Arc::new(AtomicBool::new(false));
 
     let callback_finished = finished.clone();
+    let callback_expired = watchdog_expired.clone();
     stream
         .launch_host_function(move || {
-            std::thread::sleep(BUSY);
+            let _ = started_tx.send(());
+            if let Err(RecvTimeoutError::Timeout) = gate.recv_timeout(WATCHDOG) {
+                callback_expired.store(true, Ordering::SeqCst);
+            }
             callback_finished.store(true, Ordering::SeqCst);
         })
         .expect("failed to enqueue the host callback");
+    started
+        .recv_timeout(WATCHDOG)
+        .expect("the host callback never started");
 
-    // The call itself must return while the callback is still running. A
-    // query() that fell back to synchronize() would pass an "is it done"
-    // assertion later on, so the check is on both the answer and the time
-    // taken to give it.
-    let before = Instant::now();
+    // The gate opens only after query() answers, so a query() that waited for
+    // the work (for example by falling back to synchronize()) could return
+    // only once the watchdog gave up, and would then report complete.
     let in_flight = stream.query().expect("query() failed on a busy stream");
-    let elapsed = before.elapsed();
-
     assert!(
-        !in_flight,
-        "a stream whose host callback is still sleeping must report incomplete"
+        !watchdog_expired.load(Ordering::SeqCst),
+        "query() waited for the gated work until the watchdog expired"
     );
     assert!(
-        elapsed < BUSY / 2,
-        "query() must return without waiting for the work, took {elapsed:?}"
+        !in_flight,
+        "a stream whose host callback is still gated must report incomplete"
     );
     assert!(
         !finished.load(Ordering::SeqCst),
         "the callback must still have been running when query() answered"
     );
 
+    release
+        .send(())
+        .expect("the host callback dropped its gate");
     stream.synchronize().expect("synchronize() failed");
     assert!(
         stream.query().expect("query() failed after synchronize()"),

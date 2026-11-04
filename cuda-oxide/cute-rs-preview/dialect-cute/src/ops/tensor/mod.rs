@@ -24,7 +24,7 @@
 use dialect_mir::types::{MirPtrType, address_space};
 use pliron::builtin::{
     op_interfaces::{NOpdsInterface, NResultsInterface, OneOpdInterface, OneResultInterface},
-    types::{IntegerType, Signedness},
+    types::{FP32Type, IntegerType, Signedness},
 };
 use pliron::common_traits::Verify;
 use pliron::context::{Context, Ptr};
@@ -787,6 +787,163 @@ impl Verify for CuteTensorStoreElementAbsOp {
                 op.loc(),
                 "cute.tensor_store_element_abs value must match the tensor logical type"
             );
+        }
+        Ok(())
+    }
+}
+
+/// Convert one `f32` scalar to one 8-bit `Float8E4M3FN` byte (`u8`) with nearest-even saturation
+/// (CuTeDSL `val.to(cutlass.Float8E4M3FN)`).
+#[pliron_op(
+    name = "cute.convert_f32_to_e4m3",
+    format,
+    interfaces = [NOpdsInterface<1>, NResultsInterface<1>, OneOpdInterface, OneResultInterface]
+)]
+pub struct CuteConvertF32ToE4m3Op;
+
+impl CuteConvertF32ToE4m3Op {
+    /// Build a detached `f32 -> Float8E4M3FN (u8)` conversion op.
+    pub fn new(ctx: &mut Context, value: Value) -> Self {
+        let result_ty = IntegerType::get(ctx, 8, Signedness::Unsigned).into();
+        Self {
+            op: Operation::new(
+                ctx,
+                Self::get_concrete_op_info(),
+                vec![result_ty],
+                vec![value],
+                vec![],
+                0,
+            ),
+        }
+    }
+
+    /// View an existing operation through this wrapper without allocating or verifying it.
+    pub fn wrap(op: Ptr<Operation>) -> Self {
+        Self { op }
+    }
+}
+
+impl Verify for CuteConvertF32ToE4m3Op {
+    fn verify(&self, ctx: &Context) -> Result<(), Error> {
+        let op = self.get_operation().deref(ctx);
+        if op.get_num_operands() != 1 || op.get_num_results() != 1 {
+            return verify_err!(
+                op.loc(),
+                "cute.convert_f32_to_e4m3 needs 1 operand and 1 result"
+            );
+        }
+        if op.get_operand(0).get_type(ctx) != FP32Type::get(ctx).into() {
+            return verify_err!(op.loc(), "cute.convert_f32_to_e4m3 operand must be f32");
+        }
+        if op.get_result(0).get_type(ctx) != IntegerType::get(ctx, 8, Signedness::Unsigned).into() {
+            return verify_err!(op.loc(), "cute.convert_f32_to_e4m3 result must be u8");
+        }
+        Ok(())
+    }
+}
+
+/// Widen one 8-bit `Float8E4M3FN` byte (`u8`) to `f32` (CuTeDSL `val.to(cutlass.Float32)`).
+#[pliron_op(
+    name = "cute.convert_e4m3_to_f32",
+    format,
+    interfaces = [NOpdsInterface<1>, NResultsInterface<1>, OneOpdInterface, OneResultInterface]
+)]
+pub struct CuteConvertE4m3ToF32Op;
+
+impl CuteConvertE4m3ToF32Op {
+    /// Build a detached `Float8E4M3FN (u8) -> f32` widening op.
+    pub fn new(ctx: &mut Context, bits: Value) -> Self {
+        let result_ty = FP32Type::get(ctx).into();
+        Self {
+            op: Operation::new(
+                ctx,
+                Self::get_concrete_op_info(),
+                vec![result_ty],
+                vec![bits],
+                vec![],
+                0,
+            ),
+        }
+    }
+
+    /// View an existing operation through this wrapper without allocating or verifying it.
+    pub fn wrap(op: Ptr<Operation>) -> Self {
+        Self { op }
+    }
+}
+
+impl Verify for CuteConvertE4m3ToF32Op {
+    fn verify(&self, ctx: &Context) -> Result<(), Error> {
+        let op = self.get_operation().deref(ctx);
+        if op.get_num_operands() != 1 || op.get_num_results() != 1 {
+            return verify_err!(
+                op.loc(),
+                "cute.convert_e4m3_to_f32 needs 1 operand and 1 result"
+            );
+        }
+        if op.get_operand(0).get_type(ctx) != IntegerType::get(ctx, 8, Signedness::Unsigned).into()
+        {
+            return verify_err!(op.loc(), "cute.convert_e4m3_to_f32 operand must be u8");
+        }
+        if op.get_result(0).get_type(ctx) != FP32Type::get(ctx).into() {
+            return verify_err!(op.loc(), "cute.convert_e4m3_to_f32 result must be f32");
+        }
+        Ok(())
+    }
+}
+
+/// Convert 8 `f32` values into 8 packed 4-bit `Float4E2M1FN` nibbles in one `u32`
+/// (CuTeDSL `vec.to(cutlass.Float4E2M1FN)`).
+#[pliron_op(
+    name = "cute.convert_f32x8_to_e2m1x8",
+    format,
+    interfaces = [NOpdsInterface<8>, NResultsInterface<1>, OneResultInterface]
+)]
+pub struct CuteConvertF32x8ToE2m1x8Op;
+
+impl CuteConvertF32x8ToE2m1x8Op {
+    /// Build a detached `8 × f32 -> packed e2m1x8 (u32)` conversion op.
+    pub fn new(ctx: &mut Context, values: Vec<Value>) -> Self {
+        let result_ty = IntegerType::get(ctx, 32, Signedness::Unsigned).into();
+        Self {
+            op: Operation::new(
+                ctx,
+                Self::get_concrete_op_info(),
+                vec![result_ty],
+                values,
+                vec![],
+                0,
+            ),
+        }
+    }
+
+    /// View an existing operation through this wrapper without allocating or verifying it.
+    pub fn wrap(op: Ptr<Operation>) -> Self {
+        Self { op }
+    }
+}
+
+impl Verify for CuteConvertF32x8ToE2m1x8Op {
+    fn verify(&self, ctx: &Context) -> Result<(), Error> {
+        let op = self.get_operation().deref(ctx);
+        if op.get_num_operands() != 8 || op.get_num_results() != 1 {
+            return verify_err!(
+                op.loc(),
+                "cute.convert_f32x8_to_e2m1x8 needs 8 operands and 1 result"
+            );
+        }
+        let f32_ty = FP32Type::get(ctx).into();
+        for i in 0..8 {
+            if op.get_operand(i).get_type(ctx) != f32_ty {
+                return verify_err!(
+                    op.loc(),
+                    "cute.convert_f32x8_to_e2m1x8 operands must all be f32"
+                );
+            }
+        }
+        if op.get_result(0).get_type(ctx) != IntegerType::get(ctx, 32, Signedness::Unsigned).into()
+        {
+            return verify_err!(op.loc(), "cute.convert_f32x8_to_e2m1x8 result must be u32");
         }
         Ok(())
     }

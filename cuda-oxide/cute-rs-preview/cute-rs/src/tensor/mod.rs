@@ -369,6 +369,117 @@ impl<T: Copy, const N: usize> RegisterTile<T, N> {
     pub fn into_array(self) -> [T; N] {
         self.0
     }
+
+    /// Convert this register tile to target numeric format `Dst` (CuTeDSL `TensorSSA.to(dtype)`).
+    #[must_use]
+    #[inline(always)]
+    pub fn to<Dst: ToNumeric<T, N>>(self) -> Dst::Output {
+        Dst::convert_tile(self)
+    }
+}
+
+impl<T: Copy> RegisterTile<T, 8> {
+    /// Concatenate two 8-element register tiles (`self` as elements `0..8`, `high` as elements `8..16`)
+    /// into one 16-element [`RegisterTile<T, 16>`].
+    #[must_use]
+    #[inline(always)]
+    pub const fn concat8(self, high: Self) -> RegisterTile<T, 16> {
+        let a = self.0;
+        let b = high.0;
+        RegisterTile([
+            a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], b[0], b[1], b[2], b[3], b[4], b[5],
+            b[6], b[7],
+        ])
+    }
+}
+
+/// Target numeric format for [`RegisterTile::to`] (CuTeDSL `TensorSSA.to(dtype)`).
+pub trait ToNumeric<Src: Copy, const N: usize> {
+    /// Resulting register representation (`u32` for 8×`Float4E2M1FN`, `u64` for 16×`Float4E2M1FN`,
+    /// or `RegisterTile<Self, N>` for byte-addressable numeric types).
+    type Output;
+
+    /// Convert `tile` into `Self::Output`.
+    #[must_use]
+    fn convert_tile(tile: RegisterTile<Src, N>) -> Self::Output;
+}
+
+impl ToNumeric<f32, 8> for crate::numeric::Float4E2M1FN {
+    type Output = u32;
+
+    #[inline(always)]
+    fn convert_tile(tile: RegisterTile<f32, 8>) -> u32 {
+        let [v0, v1, v2, v3, v4, v5, v6, v7] = tile.into_array();
+        crate::numeric::__compiler::cvt_f32x8_to_e2m1x8(v0, v1, v2, v3, v4, v5, v6, v7)
+    }
+}
+
+impl ToNumeric<f32, 16> for crate::numeric::Float4E2M1FN {
+    type Output = u64;
+
+    #[inline(always)]
+    fn convert_tile(tile: RegisterTile<f32, 16>) -> u64 {
+        let [
+            v0,
+            v1,
+            v2,
+            v3,
+            v4,
+            v5,
+            v6,
+            v7,
+            v8,
+            v9,
+            v10,
+            v11,
+            v12,
+            v13,
+            v14,
+            v15,
+        ] = tile.into_array();
+        let lo =
+            crate::numeric::__compiler::cvt_f32x8_to_e2m1x8(v0, v1, v2, v3, v4, v5, v6, v7) as u64;
+        let hi =
+            crate::numeric::__compiler::cvt_f32x8_to_e2m1x8(v8, v9, v10, v11, v12, v13, v14, v15)
+                as u64;
+        lo | (hi << 32)
+    }
+}
+
+impl<const N: usize> ToNumeric<f32, N> for crate::numeric::BFloat16 {
+    type Output = RegisterTile<crate::numeric::BFloat16, N>;
+
+    #[inline(always)]
+    fn convert_tile(tile: RegisterTile<f32, N>) -> Self::Output {
+        tile.map(crate::numeric::BFloat16::from_f32)
+    }
+}
+
+impl<const N: usize> ToNumeric<crate::numeric::BFloat16, N> for f32 {
+    type Output = RegisterTile<f32, N>;
+
+    #[inline(always)]
+    fn convert_tile(tile: RegisterTile<crate::numeric::BFloat16, N>) -> Self::Output {
+        tile.map(crate::numeric::BFloat16::to_f32)
+    }
+}
+
+impl<const N: usize> ToNumeric<f32, N> for crate::numeric::Float8E4M3FN {
+    type Output = RegisterTile<crate::numeric::Float8E4M3FN, N>;
+
+    #[inline(always)]
+    fn convert_tile(tile: RegisterTile<f32, N>) -> Self::Output {
+        tile.map(crate::numeric::Float8E4M3FN::from_f32)
+    }
+}
+
+impl<const N: usize> ToNumeric<crate::numeric::Float8E4M3FN, N> for f32 {
+    type Output = RegisterTile<f32, N>;
+
+    #[inline(always)]
+    fn convert_tile(tile: RegisterTile<crate::numeric::Float8E4M3FN, N>) -> Self::Output {
+        tile.map(crate::numeric::Float8E4M3FN::to_f32)
+    }
 }
 
 /// Elementwise sum of two equally sized register tiles (CuTeDSL `TensorSSA + TensorSSA`).
@@ -413,6 +524,16 @@ impl<T: Copy + Mul<Output = T>, const N: usize> Mul for RegisterTile<T, N> {
             i += 1;
         }
         self
+    }
+}
+
+/// Elementwise product of a register tile and a broadcast scalar (CuTeDSL `TensorSSA * scalar`).
+impl<T: Copy + Mul<Output = T>, const N: usize> Mul<T> for RegisterTile<T, N> {
+    type Output = Self;
+
+    #[inline(always)]
+    fn mul(self, rhs: T) -> Self::Output {
+        self.map(|x| x * rhs)
     }
 }
 

@@ -143,6 +143,12 @@ pub(crate) enum CuteFn {
     CopyTma2d,
     /// Issue a typed two-dimensional shared-to-global TMA store.
     CopyTmaS2g2d,
+    /// Convert one `f32` scalar to one `Float8E4M3FN` byte (`u8`).
+    CvtF32ToE4m3,
+    /// Widen one `Float8E4M3FN` byte (`u8`) to `f32`.
+    CvtE4m3ToF32,
+    /// Convert 8 `f32` scalars to 8 packed `Float4E2M1FN` nibbles (`u32`).
+    CvtF32x8ToE2m1x8,
 }
 
 /// Expected kind of one generic argument in a recognized function's substs.
@@ -662,6 +668,21 @@ pub(crate) const CUTE_FNS: &[CuteFnSpec] = &[
         canonical: "cute_rs::nvgpu::cpasync::copy_tma_s2g_2d",
         func: CuteFn::CopyTmaS2g2d,
         schema: &[SubstKind::Type, SubstKind::Type],
+    },
+    CuteFnSpec {
+        canonical: "cute_rs::numeric::__compiler::cvt_f32_to_e4m3",
+        func: CuteFn::CvtF32ToE4m3,
+        schema: &[],
+    },
+    CuteFnSpec {
+        canonical: "cute_rs::numeric::__compiler::cvt_e4m3_to_f32",
+        func: CuteFn::CvtE4m3ToF32,
+        schema: &[],
+    },
+    CuteFnSpec {
+        canonical: "cute_rs::numeric::__compiler::cvt_f32x8_to_e2m1x8",
+        func: CuteFn::CvtF32x8ToE2m1x8,
+        schema: &[],
     },
     CuteFnSpec {
         canonical: "cute_rs::atom::cooperative::copy_g2s",

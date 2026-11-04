@@ -89,6 +89,9 @@ pub fn register(ctx: &mut Context) {
     ops::tensor::CuteTensorLoadIntoOp::register(ctx);
     ops::tensor::CuteTensorStoreFromOp::register(ctx);
     ops::tensor::CuteTensorStoreElementAbsOp::register(ctx);
+    ops::tensor::CuteConvertF32ToE4m3Op::register(ctx);
+    ops::tensor::CuteConvertE4m3ToF32Op::register(ctx);
+    ops::tensor::CuteConvertF32x8ToE2m1x8Op::register(ctx);
     ops::gemv::CuteTensorMake2DOp::register(ctx);
     ops::gemv::CuteScaledViewMakeOp::register(ctx);
     ops::gemv::CuteScaledViewRowOp::register(ctx);

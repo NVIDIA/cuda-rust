@@ -746,6 +746,13 @@ pub fn cvt_e4m3x2_f32(lo: f32, hi: f32) -> u16 {
     cuda_device::convert::cvt_rn_satfinite_e4m3x2_f32(lo, hi)
 }
 
+/// Fast approximate reciprocal `1.0 / value` with flush-to-zero (`cute.arch.rcp_approx`).
+#[must_use]
+#[inline(always)]
+pub fn rcp_approx(value: f32) -> f32 {
+    reciprocal_ftz_f32(value)
+}
+
 /// Initialize a CTA-shared `mbarrier` with expected arrival count `count` (`cute.arch.mbarrier_init`).
 ///
 /// # Safety

@@ -1045,6 +1045,152 @@ pub(crate) fn emit_assume_div(
     Ok(emit_goto(ctx, *target_idx, goto_prev, block_map, loc))
 }
 
+/// `cute_rs::numeric::__compiler::cvt_f32_to_e4m3(value: f32) -> u8`
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_cvt_f32_to_e4m3(
+    ctx: &mut Context,
+    body: &mir::Body,
+    args: &[mir::Operand],
+    destination: &mir::Place,
+    target: &Option<usize>,
+    block_ptr: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    value_map: &mut ValueMap,
+    block_map: &[Ptr<BasicBlock>],
+    loc: Location,
+) -> TranslationResult<Ptr<Operation>> {
+    if args.len() != 1 || !destination.projection.is_empty() {
+        return input_err!(
+            loc,
+            TranslationErr::unsupported(
+                "cvt_f32_to_e4m3 expects 1 argument and direct destination".to_string()
+            )
+        );
+    }
+    let (val, prev) = translate_operand(
+        ctx,
+        body,
+        &args[0],
+        value_map,
+        block_ptr,
+        prev_op,
+        loc.clone(),
+    )?;
+    let op = dialect_cute::tensor_ops::CuteConvertF32ToE4m3Op::new(ctx, val).get_operation();
+    op.deref_mut(ctx).set_loc(loc.clone());
+    insert(ctx, op, block_ptr, prev.or(prev_op));
+    let res = op.deref(ctx).get_result(0);
+    let goto_prev = value_map
+        .store_local(ctx, destination.local, res, block_ptr, Some(op))
+        .unwrap_or(op);
+    let Some(target_idx) = target else {
+        return input_err!(
+            loc,
+            TranslationErr::unsupported(
+                "cvt_f32_to_e4m3 call without target not supported".to_string()
+            )
+        );
+    };
+    Ok(emit_goto(ctx, *target_idx, goto_prev, block_map, loc))
+}
+
+/// `cute_rs::numeric::__compiler::cvt_e4m3_to_f32(bits: u8) -> f32`
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_cvt_e4m3_to_f32(
+    ctx: &mut Context,
+    body: &mir::Body,
+    args: &[mir::Operand],
+    destination: &mir::Place,
+    target: &Option<usize>,
+    block_ptr: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    value_map: &mut ValueMap,
+    block_map: &[Ptr<BasicBlock>],
+    loc: Location,
+) -> TranslationResult<Ptr<Operation>> {
+    if args.len() != 1 || !destination.projection.is_empty() {
+        return input_err!(
+            loc,
+            TranslationErr::unsupported(
+                "cvt_e4m3_to_f32 expects 1 argument and direct destination".to_string()
+            )
+        );
+    }
+    let (val, prev) = translate_operand(
+        ctx,
+        body,
+        &args[0],
+        value_map,
+        block_ptr,
+        prev_op,
+        loc.clone(),
+    )?;
+    let op = dialect_cute::tensor_ops::CuteConvertE4m3ToF32Op::new(ctx, val).get_operation();
+    op.deref_mut(ctx).set_loc(loc.clone());
+    insert(ctx, op, block_ptr, prev.or(prev_op));
+    let res = op.deref(ctx).get_result(0);
+    let goto_prev = value_map
+        .store_local(ctx, destination.local, res, block_ptr, Some(op))
+        .unwrap_or(op);
+    let Some(target_idx) = target else {
+        return input_err!(
+            loc,
+            TranslationErr::unsupported(
+                "cvt_e4m3_to_f32 call without target not supported".to_string()
+            )
+        );
+    };
+    Ok(emit_goto(ctx, *target_idx, goto_prev, block_map, loc))
+}
+
+/// `cute_rs::numeric::__compiler::cvt_f32x8_to_e2m1x8(v0..v7: f32) -> u32`
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_cvt_f32x8_to_e2m1x8(
+    ctx: &mut Context,
+    body: &mir::Body,
+    args: &[mir::Operand],
+    destination: &mir::Place,
+    target: &Option<usize>,
+    block_ptr: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    value_map: &mut ValueMap,
+    block_map: &[Ptr<BasicBlock>],
+    loc: Location,
+) -> TranslationResult<Ptr<Operation>> {
+    if args.len() != 8 || !destination.projection.is_empty() {
+        return input_err!(
+            loc,
+            TranslationErr::unsupported(
+                "cvt_f32x8_to_e2m1x8 expects 8 arguments and direct destination".to_string()
+            )
+        );
+    }
+    let mut vals = Vec::with_capacity(8);
+    let mut cur_prev = prev_op;
+    for arg in args {
+        let (val, prev) =
+            translate_operand(ctx, body, arg, value_map, block_ptr, cur_prev, loc.clone())?;
+        cur_prev = prev.or(cur_prev);
+        vals.push(val);
+    }
+    let op = dialect_cute::tensor_ops::CuteConvertF32x8ToE2m1x8Op::new(ctx, vals).get_operation();
+    op.deref_mut(ctx).set_loc(loc.clone());
+    insert(ctx, op, block_ptr, cur_prev);
+    let res = op.deref(ctx).get_result(0);
+    let goto_prev = value_map
+        .store_local(ctx, destination.local, res, block_ptr, Some(op))
+        .unwrap_or(op);
+    let Some(target_idx) = target else {
+        return input_err!(
+            loc,
+            TranslationErr::unsupported(
+                "cvt_f32x8_to_e2m1x8 call without target not supported".to_string()
+            )
+        );
+    };
+    Ok(emit_goto(ctx, *target_idx, goto_prev, block_map, loc))
+}
+
 /// `cute_rs::copy::vector::store_tile::<T, N>(dst: *mut T, idx: usize, vals: &[T; N])`
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_store_tile(

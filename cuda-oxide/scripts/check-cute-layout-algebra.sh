@@ -253,7 +253,7 @@ for root_dir in (
 
 moe_cute_path = "cuda-oxide/cute-rs-preview/models/nemotron3_moe_cute/src/moe_192e.rs"
 if os.path.isfile(moe_cute_path):
-    subword_unpack_re = re.compile(r"(>>\s*(?:16|32|48|64|80|96|112)\b|0xFFFF_FFFF|0xFFFF_0000)")
+    subword_unpack_re = re.compile(r"(>>\s*(?:16|48|80|96|112)\b|0xFFFF_FFFF|0xFFFF_0000|encode_e4m3_rne|exact_inv_scale_e2m1|encode_pos_e2m1|encode_signed_e2m1)")
     with open(moe_cute_path, encoding="utf-8") as f:
         in_device_mod = False
         for lineno, line in enumerate(f, 1):
@@ -264,8 +264,18 @@ if os.path.isfile(moe_cute_path):
             if in_device_mod and not line.lstrip().startswith("//"):
                 if subword_unpack_re.search(line):
                     errors.append(
-                        f"{moe_cute_path}:{lineno}: sub-word bit-unpacking in *_cute kernel (use Tensor::local_tile / zipped_divide + RegisterTile): {line.strip()}"
+                        f"{moe_cute_path}:{lineno}: sub-word bit-unpacking or manual FP4/FP8 conversion in *_cute kernel (use Tensor/RegisterTile/Float8E4M3FN): {line.strip()}"
                     )
+
+main_cute_path = "cuda-oxide/cute-rs-preview/models/nemotron3_moe_cute/src/main.rs"
+if os.path.isfile(main_cute_path):
+    forbidden_main_re = re.compile(r"\b(dev_e4m3_to_f32|dev_f32_to_e4m3|dev_e4m3_inv_e2m1|fast_pos_e2m1)\b")
+    with open(main_cute_path, encoding="utf-8") as f:
+        for lineno, line in enumerate(f, 1):
+            if forbidden_main_re.search(line.split("//")[0]):
+                errors.append(
+                    f"{main_cute_path}:{lineno}: manual FP4/FP8 bit-conversion helper in cute-rs kernel (use Float8E4M3FN::from_f32/to_f32, arch::rcp_approx, and RegisterTile::to::<Float4E2M1FN>()): {line.strip()}"
+                )
 
 if errors:
     print("error: CuTeDSL source AST & cute-rs purity check failed:", file=sys.stderr)

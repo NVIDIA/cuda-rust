@@ -90,7 +90,9 @@ pub use pipeline::{
     PipelineTmaUmma, PipelineUmmaAsync, Producer,
 };
 pub use static_layout::{crd2idx_2d, idx2crd_2d};
-pub use tensor::{Contiguous1D, RegisterTile, Tensor, TensorElement, TensorMut, Tile1D, Zipped1D};
+pub use tensor::{
+    Contiguous1D, RegisterTile, Tensor, TensorElement, TensorMut, Tile1D, ToNumeric, Zipped1D,
+};
 pub use utils::blockscaled::{
     BlockScaledTensor, BlockScaledThreadRow, BlockScaledTile64, DenseBlockScaleKMajor, KMajor,
     LoadedBlockScaledTile64, LoadedNvfp4Tile64, MmaScalePair, MmaScaleQuad, Mxf4BlockScaledTensor,

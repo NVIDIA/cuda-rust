@@ -30,6 +30,7 @@ use dialect_cute::{
         CuteTensorRoleAttr,
     },
     tensor_ops::{
+        CuteConvertE4m3ToF32Op, CuteConvertF32ToE4m3Op, CuteConvertF32x8ToE2m1x8Op,
         CuteTensorBaseOp, CuteTensorIsFullOp, CuteTensorLoadIntoOp, CuteTensorMakeOp,
         CuteTensorSliceOp, CuteTensorStoreElementAbsOp, CuteTensorStoreFromOp,
         CuteTensorZippedDivideOp,
@@ -79,7 +80,138 @@ pub(crate) fn register_cute_elementwise_mappings(
     registry.register_operation::<CuteTensorLoadIntoOp>(TensorLoadIntoTranslation)?;
     registry.register_operation::<CuteTensorStoreFromOp>(TensorStoreFromTranslation)?;
     registry.register_operation::<CuteTensorStoreElementAbsOp>(TensorStoreElementAbsTranslation)?;
+    registry.register_operation::<CuteConvertF32ToE4m3Op>(ConvertF32ToE4m3Translation)?;
+    registry.register_operation::<CuteConvertE4m3ToF32Op>(ConvertE4m3ToF32Translation)?;
+    registry.register_operation::<CuteConvertF32x8ToE2m1x8Op>(ConvertF32x8ToE2m1x8Translation)?;
     Ok(())
+}
+
+/// Lower `cute.convert_f32_to_e4m3` (`f32 -> u8`) to `arith.truncf : f32 to f8E4M3FN` + `llvm.bitcast : f8E4M3FN to i8`.
+struct ConvertF32ToE4m3Translation;
+
+impl OperationTranslation for ConvertF32ToE4m3Translation {
+    fn translate(
+        &self,
+        ctx: &Context,
+        source: Ptr<Operation>,
+        input: OperationInput,
+        session: &mut TranslationSession<'_>,
+    ) -> Result<Vec<MlirOperation>, String> {
+        use pliron::common_traits::Verify;
+        CuteConvertF32ToE4m3Op::wrap(source)
+            .verify(ctx)
+            .map_err(|e| e.to_string())?;
+        expect_shape("cute.convert_f32_to_e4m3", &input, 1, 1)?;
+        let f8_ty = MlirType::Float(crate::MlirFloatType::Other("f8E4M3FN".into()));
+        let (f8_res, f8_val) = fresh(session, f8_ty);
+        let trunc = operation(
+            "arith.truncf",
+            vec![f8_res],
+            input.operands,
+            &input.location,
+        )?;
+        let bitcast = operation(
+            "arith.bitcast",
+            input.results,
+            vec![f8_val],
+            &input.location,
+        )?;
+        Ok(vec![trunc, bitcast])
+    }
+}
+
+/// Lower `cute.convert_e4m3_to_f32` (`u8 -> f32`) to `arith.bitcast : i8 to f8E4M3FN` + `arith.extf : f8E4M3FN to f32`.
+struct ConvertE4m3ToF32Translation;
+
+impl OperationTranslation for ConvertE4m3ToF32Translation {
+    fn translate(
+        &self,
+        ctx: &Context,
+        source: Ptr<Operation>,
+        input: OperationInput,
+        session: &mut TranslationSession<'_>,
+    ) -> Result<Vec<MlirOperation>, String> {
+        use pliron::common_traits::Verify;
+        CuteConvertE4m3ToF32Op::wrap(source)
+            .verify(ctx)
+            .map_err(|e| e.to_string())?;
+        expect_shape("cute.convert_e4m3_to_f32", &input, 1, 1)?;
+        let f8_ty = MlirType::Float(crate::MlirFloatType::Other("f8E4M3FN".into()));
+        let (f8_res, f8_val) = fresh(session, f8_ty);
+        let bitcast = operation(
+            "arith.bitcast",
+            vec![f8_res],
+            input.operands,
+            &input.location,
+        )?;
+        let ext = operation("arith.extf", input.results, vec![f8_val], &input.location)?;
+        Ok(vec![bitcast, ext])
+    }
+}
+
+/// Lower `cute.convert_f32x8_to_e2m1x8` (`8 × f32 -> u32`) to `arith.truncf : vector<8xf32> to vector<8xf4E2M1FN>` + `arith.bitcast`.
+struct ConvertF32x8ToE2m1x8Translation;
+
+impl OperationTranslation for ConvertF32x8ToE2m1x8Translation {
+    fn translate(
+        &self,
+        ctx: &Context,
+        source: Ptr<Operation>,
+        input: OperationInput,
+        session: &mut TranslationSession<'_>,
+    ) -> Result<Vec<MlirOperation>, String> {
+        use pliron::common_traits::Verify;
+        CuteConvertF32x8ToE2m1x8Op::wrap(source)
+            .verify(ctx)
+            .map_err(|e| e.to_string())?;
+        expect_shape("cute.convert_f32x8_to_e2m1x8", &input, 1, 8)?;
+        let vec8_f32 = MlirType::Vector {
+            shape: vec![8],
+            element: Box::new(MlirType::Float(crate::MlirFloatType::F32)),
+        };
+        let vec8_f4 = MlirType::Vector {
+            shape: vec![8],
+            element: Box::new(MlirType::Float(crate::MlirFloatType::Other(
+                "f4E2M1FN".into(),
+            ))),
+        };
+        let (undef_res, mut vec_val) = fresh(session, vec8_f32.clone());
+        let mut ops = vec![operation(
+            "llvm.mlir.undef",
+            vec![undef_res],
+            vec![],
+            &input.location,
+        )?];
+        for (idx, scalar) in input.operands.into_iter().enumerate() {
+            let (next_res, next_val) = fresh(session, vec8_f32.clone());
+            let mut ins = operation(
+                "vector.insert",
+                vec![next_res],
+                vec![scalar, vec_val],
+                &input.location,
+            )?;
+            ins.properties.insert(
+                "static_position".into(),
+                MlirAttribute::DenseI64Array(vec![idx as i64]),
+            );
+            ops.push(ins);
+            vec_val = next_val;
+        }
+        let (f4_res, f4_val) = fresh(session, vec8_f4);
+        ops.push(operation(
+            "arith.truncf",
+            vec![f4_res],
+            vec![vec_val],
+            &input.location,
+        )?);
+        ops.push(operation(
+            "arith.bitcast",
+            input.results,
+            vec![f4_val],
+            &input.location,
+        )?);
+        Ok(ops)
+    }
 }
 
 /// Preserve reviewed elementwise view layouts as CuTe memref types.

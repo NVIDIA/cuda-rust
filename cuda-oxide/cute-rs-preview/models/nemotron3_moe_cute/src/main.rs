@@ -322,56 +322,25 @@ pub fn f32_to_e2m1(value: f32) -> u8 {
 mod kernels {
     use super::*;
 
-    /// Decode one `Float8E4M3FN` scale byte into `f32` in 2 branchless IEEE 754 instructions!
-    /// Shifts the 7-bit `E4M3` exponent+mantissa into `f32` bits `26..20` (`subnormal/normal`) and multiplies by `2^120`.
+    /// Pack two 8-element `RegisterTile<f32, 8>` halves (`h0`, `h1`) into one 16-element (`64`-bit)
+    /// `Float4E2M1FN` word and its `Float8E4M3FN` block scale byte using CuTeDSL-style
+    /// `Float8E4M3FN::{from_f32, to_f32}`, `cute_rs::arch::rcp_approx`, and `RegisterTile::to::<Float4E2M1FN>()`.
     #[inline(always)]
-    fn dev_e4m3_to_f32(byte: u8) -> f32 {
-        f32::from_bits(((byte & 0x7f) as u32) << 20) * f32::from_bits(247 << 23)
-    }
-
-    /// Encode one non-negative `f32` scale factor (`max_abs / 6.0`) into `Float8E4M3FN` in 3 branchless instructions!
-    /// Multiplies by `2^-120` (`f32::from_bits(7 << 23)`) to align the `E4M3` exponent bias (`7`) and subnormals with `f32` bits `26..20`.
-    #[inline(always)]
-    fn dev_f32_to_e4m3(value: f32) -> u8 {
-        let clamped = if value > 448.0 {
-            448.0
-        } else if value > 0.0 {
-            value
-        } else {
-            0.0
-        };
-        let scaled = clamped * f32::from_bits(7 << 23);
-        let code = ((scaled.to_bits() + 0x80000) >> 20) as u8;
-        if code > 0x7e { 0x7e } else { code }
-    }
-
-    /// Compute `2^-126 / e4m3_to_f32(scale_code)` in 3 branchless instructions (`0` `div.rn.f32`!).
-    /// Uses 128-bit packed `bf16` reciprocal LUTs for the 3-bit `E4M3` mantissa (`0..7`) and `2^(7 - exp - 63)`.
-    #[inline(always)]
-    fn dev_e4m3_inv_e2m1(scale_code: u8) -> f32 {
-        let exp = (scale_code >> 3) as u32;
-        let mant = (scale_code & 7) as u32;
-        if exp == 0 {
-            let sub =
-                ((0x0392_03AB_03CD_0400_042B_0480_0500_0000u128 >> (mant * 16)) & 0xFFFF) as u32;
-            f32::from_bits(sub << 16)
-        } else {
-            let lut =
-                ((0x1F89_1F92_1F9E_1FAB_1FBA_1FCD_1FE4_2000u128 >> (mant * 16)) & 0xFFFF) as u32;
-            f32::from_bits(lut << 16) * f32::from_bits((71 - exp) << 23)
-        }
-    }
-
-    /// Encode one non-negative `f32` value already pre-multiplied by `inv_scale * 2^-126` (`f32::from_bits(1 << 23)`)
-    /// into its 4-bit `Float4E2M1FN` nibble (`0..7`) in 2 branchless bitwise instructions (`0` float comparisons!).
-    #[inline(always)]
-    fn fast_pos_e2m1(scaled_v: f32) -> u64 {
-        let bits = scaled_v.to_bits().min(0x01C0_0000);
-        ((bits + 0x0020_0000) >> 22) as u64
+    fn quantize_tile16_nvfp4(
+        h0: cute_rs::RegisterTile<f32, 8>,
+        h1: cute_rs::RegisterTile<f32, 8>,
+    ) -> (u64, u8) {
+        let amax0 = h0.fold(0.0f32, |m, v| m.max(v.abs()));
+        let amax = h1.fold(amax0, |m, v| m.max(v.abs()));
+        let scale = Float8E4M3FN::from_f32(amax * (1.0f32 / 6.0f32));
+        let inv_scale = cute_rs::arch::rcp_approx(scale.to_f32()).min(f32::MAX);
+        let lo = (h0 * inv_scale).to::<Float4E2M1FN>() as u64;
+        let hi = (h1 * inv_scale).to::<Float4E2M1FN>() as u64;
+        (lo | (hi << 32), scale.to_bits())
     }
 
     /// Quantize `[rows, k]` BF16 values into packed `Float4E2M1FN` bytes and canonical `(32, 4)` `Float8E4M3FN` scales
-    /// using `2 × u128` vector loads (`StridedTensor<u128>`), writing TMA-ready `[256, 256]` burst tiles
+    /// using `Tensor::local_tile::<8>` and `RegisterTile::to::<Float4E2M1FN>()`, writing TMA-ready `[256, 256]` burst tiles
     /// (`b_up_vals` / `sfb_up_scales`) for `B >= 4`, while zero-initializing `out_bf16`.
     #[kernel]
     pub fn quantize_activations_nvfp4(
@@ -397,79 +366,27 @@ mod kernels {
         let packed_k = k / 2;
         let val_base = row * packed_k + grp * 8;
 
-        let u128_base = (row * k + grp * 16) / 8;
+        let tile8_base = (row * k + grp * 16) / 8;
         if zero_out != 0 {
-            let mut out_u128 =
-                unsafe { StridedTensorMut::<u128>::from_disjoint_slice_as(&mut out_bf16) };
+            let zeros = cute_rs::RegisterTile::from_array([BFloat16::from_bits(0); 8]);
             unsafe {
-                out_u128.store_at(u128_base, 0u128);
-                out_u128.store_at(u128_base + 1, 0u128);
+                cute_rs::TensorMut::from_disjoint_slice(&mut out_bf16)
+                    .local_tile::<8>(tile8_base)
+                    .store(zeros);
+                cute_rs::TensorMut::from_disjoint_slice(&mut out_bf16)
+                    .local_tile::<8>(tile8_base + 1)
+                    .store(zeros);
             }
         }
 
         let (h0, h1) = unsafe {
-            let in_u128 = StridedTensor::<u128>::from_slice_as(input);
+            let in_t = cute_rs::Tensor::from_slice(input);
             (
-                in_u128.get_unchecked(u128_base),
-                in_u128.get_unchecked(u128_base + 1),
+                in_t.local_tile::<8>(tile8_base).load().to::<f32>(),
+                in_t.local_tile::<8>(tile8_base + 1).load().to::<f32>(),
             )
         };
-        let mut max_abs = 0.0f32;
-        let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15);
-        /// Unpack one `bf16` element from `h0` or `h1` into `f32` and update `max_abs`.
-        macro_rules! unpack_bf16 {
-            ($vi:ident, $src:ident, $idx:expr) => {
-                let b = (($src >> ($idx * 16)) & 0xFFFF) as u32;
-                $vi = f32::from_bits(b << 16);
-                let a = f32::from_bits((b << 16) & 0x7FFF_FFFF);
-                if a > max_abs {
-                    max_abs = a;
-                }
-            };
-        }
-        unpack_bf16!(v0, h0, 0);
-        unpack_bf16!(v1, h0, 1);
-        unpack_bf16!(v2, h0, 2);
-        unpack_bf16!(v3, h0, 3);
-        unpack_bf16!(v4, h0, 4);
-        unpack_bf16!(v5, h0, 5);
-        unpack_bf16!(v6, h0, 6);
-        unpack_bf16!(v7, h0, 7);
-        unpack_bf16!(v8, h1, 0);
-        unpack_bf16!(v9, h1, 1);
-        unpack_bf16!(v10, h1, 2);
-        unpack_bf16!(v11, h1, 3);
-        unpack_bf16!(v12, h1, 4);
-        unpack_bf16!(v13, h1, 5);
-        unpack_bf16!(v14, h1, 6);
-        unpack_bf16!(v15, h1, 7);
-
-        let scale_code = dev_f32_to_e4m3(max_abs * (1.0 / 6.0));
-        let inv_scale_e2m1 = dev_e4m3_inv_e2m1(scale_code);
-        /// Quantize one signed `f32` into its 4-bit `E2M1` nibble at bit shift `$sh`.
-        macro_rules! q_nib {
-            ($v:ident, $sh:expr) => {{
-                let sign = (($v.to_bits() >> 28) & 8) as u64;
-                let abs_v = f32::from_bits($v.to_bits() & 0x7FFF_FFFF);
-                (sign | fast_pos_e2m1(abs_v * inv_scale_e2m1)) << $sh
-            }};
-        }
-        let packed_u64 = q_nib!(v0, 0)
-            | q_nib!(v1, 4)
-            | q_nib!(v2, 8)
-            | q_nib!(v3, 12)
-            | q_nib!(v4, 16)
-            | q_nib!(v5, 20)
-            | q_nib!(v6, 24)
-            | q_nib!(v7, 28)
-            | q_nib!(v8, 32)
-            | q_nib!(v9, 36)
-            | q_nib!(v10, 40)
-            | q_nib!(v11, 44)
-            | q_nib!(v12, 48)
-            | q_nib!(v13, 52)
-            | q_nib!(v14, 56)
-            | q_nib!(v15, 60);
+        let (packed_u64, scale_code) = quantize_tile16_nvfp4(h0, h1);
 
         if rows == 1 {
             let scale_layout = Sm1xxBlockScaleKMajor::<16>::new(rows, k);
@@ -621,22 +538,31 @@ mod kernels {
             #[allow(static_mut_refs)]
             let smem_act_ro =
                 unsafe { StridedTensor::<f32>::from_raw_parts(SMEM_ACT.as_ptr(), 16, 1) };
-            let mut max_abs = 0.0f32;
-            let mut i = 0usize;
-            while i < 16 {
-                let v = unsafe { smem_act_ro.get_unchecked(i) };
-                if v > max_abs {
-                    max_abs = v;
-                }
-                i += 1;
-            }
-            let scale_code = dev_f32_to_e4m3(max_abs * (1.0 / 6.0));
-            let scale_val = dev_e4m3_to_f32(scale_code);
-            let inv_scale = if scale_val > 0.0 {
-                1.0 / scale_val
-            } else {
-                0.0
+            let h0 = unsafe {
+                cute_rs::RegisterTile::from_array([
+                    smem_act_ro.get_unchecked(0),
+                    smem_act_ro.get_unchecked(1),
+                    smem_act_ro.get_unchecked(2),
+                    smem_act_ro.get_unchecked(3),
+                    smem_act_ro.get_unchecked(4),
+                    smem_act_ro.get_unchecked(5),
+                    smem_act_ro.get_unchecked(6),
+                    smem_act_ro.get_unchecked(7),
+                ])
             };
+            let h1 = unsafe {
+                cute_rs::RegisterTile::from_array([
+                    smem_act_ro.get_unchecked(8),
+                    smem_act_ro.get_unchecked(9),
+                    smem_act_ro.get_unchecked(10),
+                    smem_act_ro.get_unchecked(11),
+                    smem_act_ro.get_unchecked(12),
+                    smem_act_ro.get_unchecked(13),
+                    smem_act_ro.get_unchecked(14),
+                    smem_act_ro.get_unchecked(15),
+                ])
+            };
+            let (packed_u64, scale_code) = quantize_tile16_nvfp4(h0, h1);
 
             let packed_k = intermediate_size / 2;
             let scale_layout =
@@ -644,20 +570,12 @@ mod kernels {
             let scale_idx = scale_layout.crd2idx(0, route, grp);
             let val_base = route * packed_k + grp * 8;
 
-            let mut vals_out = StridedTensorMut::from_disjoint_slice(&mut q_inter_vals);
+            let mut vals_u64_out =
+                unsafe { StridedTensorMut::<u64>::from_disjoint_slice_as(&mut q_inter_vals) };
             let mut scales_out = StridedTensorMut::from_disjoint_slice(&mut q_inter_scales);
             unsafe {
                 scales_out.store_at(scale_idx, scale_code);
-            }
-            let mut pair = 0usize;
-            while pair < 8 {
-                let x0 = unsafe { smem_act_ro.get_unchecked(pair * 2) } * inv_scale;
-                let x1 = unsafe { smem_act_ro.get_unchecked(pair * 2 + 1) } * inv_scale;
-                let packed = f32_to_e2m1(x0) | (f32_to_e2m1(x1) << 4);
-                unsafe {
-                    vals_out.store_at(val_base + pair, packed);
-                }
-                pair += 1;
+                vals_u64_out.store_at(val_base / 8, packed_u64);
             }
         }
     }
@@ -1032,36 +950,17 @@ mod kernels {
                     let mut n = row_off64;
                     while n < limit {
                         let base_u128 = n * 32 + sub_tile16;
-                        let q0 = smem_epi_u128.load_f32x4(base_u128);
-                        let q1 = smem_epi_u128.load_f32x4(base_u128 + 8);
-                        let q2 = smem_epi_u128.load_f32x4(base_u128 + 16);
-                        let q3 = smem_epi_u128.load_f32x4(base_u128 + 24);
-                        let m0 = q0.fold(0.0f32, |m, v| m.max(v));
-                        let m1 = q1.fold(m0, |m, v| m.max(v));
-                        let m2 = q2.fold(m1, |m, v| m.max(v));
-                        let max_abs = q3.fold(m2, |m, v| m.max(v));
-                        let scale_code = dev_f32_to_e4m3(max_abs * (1.0 / 6.0));
-                        let inv_e2m1 = dev_e4m3_inv_e2m1(scale_code);
-                        let a0 = q0.as_array();
-                        let a1 = q1.as_array();
-                        let a2 = q2.as_array();
-                        let a3 = q3.as_array();
-                        let packed_u64 = fast_pos_e2m1(a0[0] * inv_e2m1)
-                            | (fast_pos_e2m1(a0[1] * inv_e2m1) << 4)
-                            | (fast_pos_e2m1(a0[2] * inv_e2m1) << 8)
-                            | (fast_pos_e2m1(a0[3] * inv_e2m1) << 12)
-                            | (fast_pos_e2m1(a1[0] * inv_e2m1) << 16)
-                            | (fast_pos_e2m1(a1[1] * inv_e2m1) << 20)
-                            | (fast_pos_e2m1(a1[2] * inv_e2m1) << 24)
-                            | (fast_pos_e2m1(a1[3] * inv_e2m1) << 28)
-                            | (fast_pos_e2m1(a2[0] * inv_e2m1) << 32)
-                            | (fast_pos_e2m1(a2[1] * inv_e2m1) << 36)
-                            | (fast_pos_e2m1(a2[2] * inv_e2m1) << 40)
-                            | (fast_pos_e2m1(a2[3] * inv_e2m1) << 44)
-                            | (fast_pos_e2m1(a3[0] * inv_e2m1) << 48)
-                            | (fast_pos_e2m1(a3[1] * inv_e2m1) << 52)
-                            | (fast_pos_e2m1(a3[2] * inv_e2m1) << 56)
-                            | (fast_pos_e2m1(a3[3] * inv_e2m1) << 60);
+                        let q0 = smem_epi_u128.load_f32x4(base_u128).into_array();
+                        let q1 = smem_epi_u128.load_f32x4(base_u128 + 8).into_array();
+                        let q2 = smem_epi_u128.load_f32x4(base_u128 + 16).into_array();
+                        let q3 = smem_epi_u128.load_f32x4(base_u128 + 24).into_array();
+                        let h0 = cute_rs::RegisterTile::from_array([
+                            q0[0], q0[1], q0[2], q0[3], q1[0], q1[1], q1[2], q1[3],
+                        ]);
+                        let h1 = cute_rs::RegisterTile::from_array([
+                            q2[0], q2[1], q2[2], q2[3], q3[0], q3[1], q3[2], q3[3],
+                        ]);
+                        let (packed_u64, scale_code) = quantize_tile16_nvfp4(h0, h1);
                         let s_idx =
                             sm1xx_block_scale_crd2idx(group * 16 + grp / 4, n, grp % 4, 2, 1);
                         let u64_idx = sm100_noswizzle_burst_u64_crd2idx::<256>(group, n, grp, 2);
@@ -1706,25 +1605,33 @@ mod kernels {
                                     .max(u10.max(u11))
                                     .max(u12.max(u13).max(u14.max(u15)));
                                 let max_u = m0.max(m1);
-                                let scale_code = dev_f32_to_e4m3(max_u * scale_sq_div6);
-                                let inv_e2m1 = dev_e4m3_inv_e2m1(scale_code) * g_scale_sq;
-                                let packed_u64 = fast_pos_e2m1(u0 * inv_e2m1)
-                                    | (fast_pos_e2m1(u1 * inv_e2m1) << 4)
-                                    | (fast_pos_e2m1(u2 * inv_e2m1) << 8)
-                                    | (fast_pos_e2m1(u3 * inv_e2m1) << 12)
-                                    | (fast_pos_e2m1(u4 * inv_e2m1) << 16)
-                                    | (fast_pos_e2m1(u5 * inv_e2m1) << 20)
-                                    | (fast_pos_e2m1(u6 * inv_e2m1) << 24)
-                                    | (fast_pos_e2m1(u7 * inv_e2m1) << 28)
-                                    | (fast_pos_e2m1(u8 * inv_e2m1) << 32)
-                                    | (fast_pos_e2m1(u9 * inv_e2m1) << 36)
-                                    | (fast_pos_e2m1(u10 * inv_e2m1) << 40)
-                                    | (fast_pos_e2m1(u11 * inv_e2m1) << 44)
-                                    | (fast_pos_e2m1(u12 * inv_e2m1) << 48)
-                                    | (fast_pos_e2m1(u13 * inv_e2m1) << 52)
-                                    | (fast_pos_e2m1(u14 * inv_e2m1) << 56)
-                                    | (fast_pos_e2m1(u15 * inv_e2m1) << 60);
-                                (packed_u64, scale_code)
+                                let scale = Float8E4M3FN::from_f32(max_u * scale_sq_div6);
+                                let inv_scale = cute_rs::arch::rcp_approx(scale.to_f32())
+                                    .min(f32::MAX)
+                                    * g_scale_sq;
+                                let h0 = cute_rs::RegisterTile::from_array([
+                                    u0 * inv_scale,
+                                    u1 * inv_scale,
+                                    u2 * inv_scale,
+                                    u3 * inv_scale,
+                                    u4 * inv_scale,
+                                    u5 * inv_scale,
+                                    u6 * inv_scale,
+                                    u7 * inv_scale,
+                                ]);
+                                let h1 = cute_rs::RegisterTile::from_array([
+                                    u8 * inv_scale,
+                                    u9 * inv_scale,
+                                    u10 * inv_scale,
+                                    u11 * inv_scale,
+                                    u12 * inv_scale,
+                                    u13 * inv_scale,
+                                    u14 * inv_scale,
+                                    u15 * inv_scale,
+                                ]);
+                                let lo = h0.to::<Float4E2M1FN>() as u64;
+                                let hi = h1.to::<Float4E2M1FN>() as u64;
+                                (lo | (hi << 32), scale.to_bits())
                             }};
                         }
                         let (p0, s0) = quant16_relu2!(0);

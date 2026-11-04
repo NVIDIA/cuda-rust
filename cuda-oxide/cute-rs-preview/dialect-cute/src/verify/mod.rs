@@ -94,6 +94,7 @@ use crate::{
         CuteSchedulerNew1dOp, CuteWorkTileCoordinatesOp,
     },
     ops::tensor::{
+        CuteConvertE4m3ToF32Op, CuteConvertF32ToE4m3Op, CuteConvertF32x8ToE2m1x8Op,
         CuteTensorBaseOp, CuteTensorIsFullOp, CuteTensorLoadIntoOp, CuteTensorMakeOp,
         CuteTensorSliceOp, CuteTensorStoreElementAbsOp, CuteTensorStoreFromOp,
         CuteTensorZippedDivideOp,
@@ -176,6 +177,12 @@ fn verify_local_op(ctx: &Context, operation: Ptr<Operation>) -> Result {
         Some(verify_as!(CuteTensorStoreFromOp))
     } else if opid == CuteTensorStoreElementAbsOp::get_opid_static() {
         Some(verify_as!(CuteTensorStoreElementAbsOp))
+    } else if opid == CuteConvertF32ToE4m3Op::get_opid_static() {
+        Some(verify_as!(CuteConvertF32ToE4m3Op))
+    } else if opid == CuteConvertE4m3ToF32Op::get_opid_static() {
+        Some(verify_as!(CuteConvertE4m3ToF32Op))
+    } else if opid == CuteConvertF32x8ToE2m1x8Op::get_opid_static() {
+        Some(verify_as!(CuteConvertF32x8ToE2m1x8Op))
     } else if opid == CuteTensorMake2DOp::get_opid_static() {
         Some(verify_as!(CuteTensorMake2DOp))
     } else if opid == CuteScaledViewMakeOp::get_opid_static() {

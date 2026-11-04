@@ -27,11 +27,11 @@ use cute_rs::pipeline::sm100::SingleCtaRing;
 use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
 use cute_rs::utils::tmem_allocator::TmemAllocator;
 use cute_rs::{
-    BFloat16, Consumer, Mkl, Nkl, OperandA, OperandB, PipelineState, PipelineTmaAsync, Producer,
-    RowMajor, Sm100BlockScaledTiledMma, Sm100ScaleTile, Sm100SharedTile, SmemTile, Tensor,
-    TensorMap, TensorMut, copy_tma_2d, crd2idx_2d, crd2idx_row_major_2d, idx2crd_2d,
-    idx2crd_col_major_2d, idx2crd_row_major_2d, size_in_bytes, sm1xx_block_scale_crd2idx,
-    sm100_noswizzle_burst_u64_crd2idx,
+    BFloat16, Consumer, Float4E2M1FN, Float8E4M3FN, Mkl, Nkl, OperandA, OperandB, PipelineState,
+    PipelineTmaAsync, Producer, RowMajor, Sm100BlockScaledTiledMma, Sm100ScaleTile,
+    Sm100SharedTile, SmemTile, Tensor, TensorMap, TensorMut, copy_tma_2d, crd2idx_2d,
+    crd2idx_row_major_2d, idx2crd_2d, idx2crd_col_major_2d, idx2crd_row_major_2d, size_in_bytes,
+    sm1xx_block_scale_crd2idx, sm100_noswizzle_burst_u64_crd2idx,
 };
 
 /// Hidden dimension `H = 6,144` (`384` groups of `16` = `12` bursts of `K = 512`).
@@ -167,50 +167,9 @@ pub mod kernels_192e {
     /// Coordinates Warp 4 (Producer) and Warp 0 (MMA Consumer).
     type Fc2M256Pipeline = PipelineTmaAsync<2, 1, FC2_M256_STAGE_TX_BYTES>;
 
-    /// Encode one non-negative `f32` scale into `Float8E4M3FN` using round-to-nearest-even (`cvt_e4m3x2_f32`).
-    #[inline(always)]
-    fn encode_e4m3_rne(value: f32) -> u8 {
-        let clamped = value.clamp(0.0, 448.0);
-        (cute_rs::arch::cvt_e4m3x2_f32(clamped, 0.0) & 0xFF) as u8
-    }
-
-    /// Compute `2^-126 / e4m3_to_f32(scale_code)` in IEEE 754 `f32` using a branchless 64-bit mantissa LUT.
-    #[inline(always)]
-    fn exact_inv_scale_e2m1(scale_code: u8) -> f32 {
-        let code = scale_code & 0x7F;
-        if code == 0 {
-            return 0.0;
-        }
-        let (mant, exp) = idx2crd_col_major_2d(code as u32, 8);
-        if exp == 0 {
-            let shift = (mant - 1) * 8;
-            let top = ((0x0039_3A3C_4042_4850_u64 >> shift) & 0xFF) as u32;
-            let low = ((0x0025_ABCD_00AB_0000_u64 >> shift) & 0xFF) as u32;
-            f32::from_bits((top << 20) | (low << 12) | (low << 4) | (low & 1))
-        } else {
-            let shift = mant * 8;
-            let diff = ((0x776D_6255_4533_1C00u64 >> shift) & 0xFF) as u32;
-            let m_bits = (0x2000_0000u32 - (diff << 16)) | ((mant & 1) << 12);
-            f32::from_bits(m_bits) * f32::from_bits((71 - exp) << 23)
-        }
-    }
-
-    /// Encode one non-negative `f32` pre-multiplied by [`exact_inv_scale_e2m1`] into its 3-bit `E2M1` magnitude (`0..7`).
-    #[inline(always)]
-    fn encode_pos_e2m1(scaled_v: f32) -> u64 {
-        let bits = scaled_v.to_bits().min(0x01C0_0000);
-        (((bits + 0x001F_FFFF + ((bits >> 22) & 1)) >> 22) & 0x07) as u64
-    }
-
-    /// Encode one signed `f32` pre-multiplied by [`exact_inv_scale_e2m1`] into its 4-bit `E2M1` nibble (`0..15`).
-    #[inline(always)]
-    fn encode_signed_e2m1(scaled_v: f32) -> u64 {
-        let sign = if scaled_v < 0.0 { 8u64 } else { 0u64 };
-        sign | encode_pos_e2m1(scaled_v.abs())
-    }
-
     /// Pack two 8-element `RegisterTile<f32, 8>` halves (`h0`, `h1`) into one 16-element (`64`-bit)
-    /// `Float4E2M1FN` word and its `Float8E4M3FN` block scale byte.
+    /// `Float4E2M1FN` word and its `Float8E4M3FN` block scale byte using CuTeDSL-style
+    /// `Float8E4M3FN::{from_f32, to_f32}`, `cute_rs::arch::rcp_approx`, and `RegisterTile::to::<Float4E2M1FN>()`.
     #[inline(always)]
     fn quantize_tile16_nvfp4(
         h0: cute_rs::RegisterTile<f32, 8>,
@@ -218,27 +177,11 @@ pub mod kernels_192e {
     ) -> (u64, u8) {
         let amax0 = h0.fold(0.0f32, |m, v| m.max(v.abs()));
         let amax = h1.fold(amax0, |m, v| m.max(v.abs()));
-        let scale_code = encode_e4m3_rne(amax * (1.0f32 / 6.0f32));
-        let inv_scale = exact_inv_scale_e2m1(scale_code);
-        let a0 = h0.into_array();
-        let a1 = h1.into_array();
-        let packed_u64 = encode_signed_e2m1(a0[0] * inv_scale)
-            | (encode_signed_e2m1(a0[1] * inv_scale) << 4)
-            | (encode_signed_e2m1(a0[2] * inv_scale) << 8)
-            | (encode_signed_e2m1(a0[3] * inv_scale) << 12)
-            | (encode_signed_e2m1(a0[4] * inv_scale) << 16)
-            | (encode_signed_e2m1(a0[5] * inv_scale) << 20)
-            | (encode_signed_e2m1(a0[6] * inv_scale) << 24)
-            | (encode_signed_e2m1(a0[7] * inv_scale) << 28)
-            | (encode_signed_e2m1(a1[0] * inv_scale) << 32)
-            | (encode_signed_e2m1(a1[1] * inv_scale) << 36)
-            | (encode_signed_e2m1(a1[2] * inv_scale) << 40)
-            | (encode_signed_e2m1(a1[3] * inv_scale) << 44)
-            | (encode_signed_e2m1(a1[4] * inv_scale) << 48)
-            | (encode_signed_e2m1(a1[5] * inv_scale) << 52)
-            | (encode_signed_e2m1(a1[6] * inv_scale) << 56)
-            | (encode_signed_e2m1(a1[7] * inv_scale) << 60);
-        (packed_u64, scale_code)
+        let scale = Float8E4M3FN::from_f32(amax * (1.0f32 / 6.0f32));
+        let inv_scale = cute_rs::arch::rcp_approx(scale.to_f32()).min(f32::MAX);
+        let lo = (h0 * inv_scale).to::<Float4E2M1FN>() as u64;
+        let hi = (h1 * inv_scale).to::<Float4E2M1FN>() as u64;
+        (lo | (hi << 32), scale.to_bits())
     }
 
     /// Issue all 8 `K = 64` steps of one `K = 512` single-M-tile (`M = 128`) burst via

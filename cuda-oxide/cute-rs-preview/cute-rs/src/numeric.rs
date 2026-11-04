@@ -127,8 +127,42 @@ pub struct Float8E8M0FNU;
 ///
 /// Unlike [`Float8E8M0FNU`], E4M3 carries three fraction bits so each 16-element NVFP4
 /// block scale can represent fractional steps such as `1.5` (`max_val / 6.0`).
+#[repr(transparent)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Float8E4M3FN;
+pub struct Float8E4M3FN(#[doc = "Raw 8-bit E4M3FN storage byte."] u8);
+
+impl Float8E4M3FN {
+    /// Preserve an existing E4M3FN byte without conversion.
+    #[must_use]
+    #[inline(always)]
+    pub const fn from_bits(bits: u8) -> Self {
+        Self(bits)
+    }
+
+    /// Return the raw 8-bit E4M3FN storage byte.
+    #[must_use]
+    #[inline(always)]
+    pub const fn to_bits(self) -> u8 {
+        self.0
+    }
+
+    /// Round an `f32` value to `Float8E4M3FN` using round-to-nearest-even with finite saturation
+    /// (CuTeDSL `val.to(cutlass.Float8E4M3FN)`).
+    #[must_use]
+    #[inline(always)]
+    pub fn from_f32(value: f32) -> Self {
+        Self(__compiler::cvt_f32_to_e4m3(value))
+    }
+
+    /// Widen this `Float8E4M3FN` value to `f32` (CuTeDSL `val.to(cutlass.Float32)`).
+    #[must_use]
+    #[inline(always)]
+    pub fn to_f32(self) -> f32 {
+        __compiler::cvt_e4m3_to_f32(self.0)
+    }
+}
+
+impl TensorElement<Float8E4M3FN> for Float8E4M3FN {}
 
 /// Four neighboring [`Float8E8M0FNU`] scale bytes carried in one `u32`.
 ///
@@ -430,6 +464,50 @@ fn ue8m0_to_f32(byte: u8) -> f32 {
         // requiring a backend conversion intrinsic.
         0xff => f32::from_bits(0x7fff_ffff),
         exponent => f32::from_bits((exponent as u32) << 23),
+    }
+}
+
+/// Compiler hooks for reduced-precision scalar and register-tile conversions.
+#[doc(hidden)]
+pub mod __compiler {
+    use super::{e4m3_to_f32, f32_to_e2m1, f32_to_e4m3};
+
+    /// Convert one `f32` scalar into one `Float8E4M3FN` byte (`arith.truncf : f32 to f8E4M3FN`).
+    #[must_use]
+    #[inline(never)]
+    pub fn cvt_f32_to_e4m3(value: f32) -> u8 {
+        f32_to_e4m3(value)
+    }
+
+    /// Widen one `Float8E4M3FN` byte into `f32` (`arith.extf : f8E4M3FN to f32`).
+    #[must_use]
+    #[inline(never)]
+    pub fn cvt_e4m3_to_f32(bits: u8) -> f32 {
+        e4m3_to_f32(bits)
+    }
+
+    /// Convert 8 `f32` scalars into 8 packed 4-bit `Float4E2M1FN` nibbles (`arith.truncf : vector<8xf32> to vector<8xf4E2M1FN>`).
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    #[inline(never)]
+    pub fn cvt_f32x8_to_e2m1x8(
+        v0: f32,
+        v1: f32,
+        v2: f32,
+        v3: f32,
+        v4: f32,
+        v5: f32,
+        v6: f32,
+        v7: f32,
+    ) -> u32 {
+        (f32_to_e2m1(v0) as u32)
+            | ((f32_to_e2m1(v1) as u32) << 4)
+            | ((f32_to_e2m1(v2) as u32) << 8)
+            | ((f32_to_e2m1(v3) as u32) << 12)
+            | ((f32_to_e2m1(v4) as u32) << 16)
+            | ((f32_to_e2m1(v5) as u32) << 20)
+            | ((f32_to_e2m1(v6) as u32) << 24)
+            | ((f32_to_e2m1(v7) as u32) << 28)
     }
 }
 

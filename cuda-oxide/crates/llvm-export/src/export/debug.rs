@@ -575,7 +575,9 @@ impl<'a> ModuleExportState<'a> {
                 scope: callee_scope,
                 inlined_at,
             }
-        } else if let Some(span) = source_scope_data.span.as_ref() {
+        } else if parent.inlined_at.is_none()
+            && let Some(span) = source_scope_data.span.as_ref()
+        {
             ResolvedDebugScope {
                 scope: self.ensure_debug_lexical_block(parent.scope, span)?,
                 inlined_at: parent.inlined_at,

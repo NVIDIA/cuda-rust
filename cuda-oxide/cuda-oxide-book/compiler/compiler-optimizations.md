@@ -67,9 +67,9 @@ experience.
 
 ## Diagnosing locals that remain stack-backed
 
-An optimized verbose build also checks the exact LLVM IR that will be passed to
+An optimized build also checks the exact LLVM IR that will be passed to
 `llc`. If a Rust local's stack allocation survives both cuda-oxide `mem2reg` and
-LLVM's `-O2` scalar-replacement pipeline, cuda-oxide reports it before PTX
+LLVM's scalar-replacement passes, cuda-oxide reports it before PTX
 generation. For example:
 
 ```text
@@ -86,12 +86,31 @@ pattern is not one of the conservative cases cuda-oxide recognizes, the warning
 still identifies the local but gives a generic scalar-replacement explanation
 rather than guessing at the cause.
 
-The check runs only after a successful LLVM optimization pass and only in
-verbose mode:
+One case is reported in every optimized build, not just verbose ones: a local
+indexed by the counter of a loop that LLVM left rolled, when the loop's start,
+step, and bound are compile-time constants and every index into the local is
+computed from such counters and constants alone, so unrolling would make each
+index constant. A small counted loop that fills an array, such as
+`for e in 0..4 { r[e] = f(a[e]) }`, keeps the array in registers only if the
+loop is unrolled. When the body is too large for LLVM's unroll threshold, the
+array moves to local memory:
+
+```text
+warning: local `v` (`[F32x4; 8]`, 128 bytes) in `softmax` could not be promoted to registers
+  = note: indexed by the counter of a loop LLVM did not unroll, so the array stays in local memory
+  = help: add `#[unroll]` to that loop so every index becomes a constant
+```
+
+The check is deliberately narrow so the warning stays actionable: a loop whose
+trip count, step, or index depends on a runtime value is not reported by
+default, because `#[unroll]` could not make its indices constant. Every other
+case appears only in verbose mode:
 
 ```bash
 cargo oxide build <example> --verbose
 ```
+
+All of these checks run only after a successful LLVM optimization pass.
 
 This placement matters. Reporting immediately after cuda-oxide `mem2reg` would
 produce false positives for allocations that LLVM SROA removes later. The check

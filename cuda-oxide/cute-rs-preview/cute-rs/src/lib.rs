@@ -59,8 +59,8 @@ pub use layout::{
     C, ColMajor, ComposedLayout, CopyG2S, CopyUniversal, Layout, LeadingDim, RowMajor, Swizzle,
 };
 pub use numeric::{
-    BFloat16, E4M3x2, E4M3x4, Float4E2M1FN, Float4E2M1FNx2, Float8E4M3FN, Float8E8M0FNU, Mxf4E2M1,
-    UE8M0x2, UE8M0x4,
+    BFloat16, E4M3x2, E4M3x4, Float4E2M1FN, Float4E2M1FNx2, Float4E2M1FNx8, Float8E4M3FN,
+    Float8E8M0FNU, Mxf4E2M1, UE8M0x2, UE8M0x4,
 };
 pub use nvgpu::common::{Mkl, Nkl, OperandA, OperandB};
 pub use nvgpu::cpasync::{
@@ -91,7 +91,8 @@ pub use pipeline::{
 };
 pub use static_layout::{crd2idx_2d, idx2crd_2d};
 pub use tensor::{
-    Contiguous1D, RegisterTile, Tensor, TensorElement, TensorMut, Tile1D, ToNumeric, Zipped1D,
+    BitcastNumeric, Contiguous1D, ReductionOp, RegisterTile, Tensor, TensorElement, TensorMut,
+    TensorSSA, Tile1D, ToNumeric, Zipped1D,
 };
 pub use utils::blockscaled::{
     BlockScaledTensor, BlockScaledThreadRow, BlockScaledTile64, DenseBlockScaleKMajor, KMajor,

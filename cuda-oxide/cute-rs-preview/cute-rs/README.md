@@ -28,9 +28,9 @@ cutlass/utils/                            └── utils/
 | Module | CuTeDSL Counterpart | Contents |
 | --- | --- | --- |
 | `layout` | `cutlass.cute.core` | Static layout markers (`RowMajor`, `ColMajor`, `Swizzle`, `ComposedLayout`), `CopyG2S`, `CopyUniversal`, `LeadingDim` |
-| `tensor` | `cutlass.cute.tensor` | `Tensor`, `TensorMut`, `RegisterTile`, `zipped_divide`, `local_tile`, `partition::{StridedTensor, StridedTensorMut}` |
+| `tensor` | `cutlass.cute.tensor` | `Tensor`, `TensorMut`, `RegisterTile` (`TensorSSA`), `ReductionOp`, `zipped_divide`, `local_tile`, `partition::{StridedTensor, StridedTensorMut}` (lowered to MLIR `vector<NxT>` & `cute.*` ops) |
 | `atom` | `cutlass.cute.atom` | `TiledCopy`, `ThrCopy`, `SmemTile`, `copy_g2s`, `copy_s2g` |
-| `numeric` | `cutlass.cute.typing` | `f16`, `BFloat16`, `Float8E4M3FN`, `Float8E8M0FNU`, `Float4E2M1FN`, `Acquire` |
+| `numeric` | `cutlass.cute.typing` | `f16`, `BFloat16`, `Float8E4M3FN`, `Float8E8M0FNU`, `Float4E2M1FN`, `Float4E2M1FNx8`, `Acquire` |
 | `arch` | `cutlass.cute.arch` | Thread/warp/cluster coordinates, `NamedBarrier`, `mbarrier_*`, TMEM and warp reduction forwarders over `cuda-device` |
 | `nvgpu` | `cutlass.cute.nvgpu` | Hardware copy & MMA atoms (`cpasync`, `warp`, `tcgen05`), all lowered via `__compiler` $\rightarrow$ `dialect-cute` |
 | `pipeline` | `cutlass.pipeline` | `PipelineTmaAsync`, `PipelineTmaUmma`, `PipelineUmmaAsync`, `PipelineTmaStore`, `PipelineState`, `SingleCtaRing`, `TwoCtaRing` |

@@ -30,14 +30,17 @@ use dialect_cute::{
         CuteTensorRoleAttr,
     },
     tensor_ops::{
-        CuteConvertE4m3ToF32Op, CuteConvertF32ToE4m3Op, CuteConvertF32x8ToE2m1x8Op,
-        CuteTensorBaseOp, CuteTensorIsFullOp, CuteTensorLoadIntoOp, CuteTensorMakeOp,
-        CuteTensorSliceOp, CuteTensorStoreElementAbsOp, CuteTensorStoreFromOp,
-        CuteTensorZippedDivideOp,
+        CuteConvertE4m3ToF32Op, CuteConvertF32ToBf16Op, CuteConvertF32ToE4m3Op,
+        CuteConvertF32x8ToE2m1x8Op, CuteTensorBaseOp, CuteTensorIsFullOp, CuteTensorLoadIntoOp,
+        CuteTensorMakeOp, CuteTensorSliceOp, CuteTensorStoreElementAbsOp, CuteTensorStoreFromOp,
+        CuteTensorZippedDivideOp, CuteVectorBinaryOp, CuteVectorBitcastOp, CuteVectorBroadcastOp,
+        CuteVectorCastOp, CuteVectorConcatOp, CuteVectorOpAttr, CuteVectorReduceOp,
+        CuteVectorScalarOp, CuteVectorSliceOp, CuteVectorUnaryOp,
     },
     types::CuteTensorViewType,
 };
 use pliron::{
+    common_traits::Verify,
     context::{Context, Ptr},
     op::Op,
     operation::Operation,
@@ -80,10 +83,55 @@ pub(crate) fn register_cute_elementwise_mappings(
     registry.register_operation::<CuteTensorLoadIntoOp>(TensorLoadIntoTranslation)?;
     registry.register_operation::<CuteTensorStoreFromOp>(TensorStoreFromTranslation)?;
     registry.register_operation::<CuteTensorStoreElementAbsOp>(TensorStoreElementAbsTranslation)?;
+    registry.register_operation::<CuteConvertF32ToBf16Op>(ConvertF32ToBf16Translation)?;
     registry.register_operation::<CuteConvertF32ToE4m3Op>(ConvertF32ToE4m3Translation)?;
     registry.register_operation::<CuteConvertE4m3ToF32Op>(ConvertE4m3ToF32Translation)?;
     registry.register_operation::<CuteConvertF32x8ToE2m1x8Op>(ConvertF32x8ToE2m1x8Translation)?;
+    registry.register_attribute::<CuteVectorOpAttr>(DropAttribute)?;
+    registry.register_operation::<CuteVectorBroadcastOp>(VectorBroadcastTranslation)?;
+    registry.register_operation::<CuteVectorBinaryOp>(VectorBinaryTranslation)?;
+    registry.register_operation::<CuteVectorScalarOp>(VectorScalarTranslation)?;
+    registry.register_operation::<CuteVectorUnaryOp>(VectorUnaryTranslation)?;
+    registry.register_operation::<CuteVectorReduceOp>(VectorReduceTranslation)?;
+    registry.register_operation::<CuteVectorCastOp>(VectorCastTranslation)?;
+    registry.register_operation::<CuteVectorBitcastOp>(VectorBitcastTranslation)?;
+    registry.register_operation::<CuteVectorSliceOp>(VectorSliceTranslation)?;
+    registry.register_operation::<CuteVectorConcatOp>(VectorConcatTranslation)?;
     Ok(())
+}
+
+/// Lower `cute.convert_f32_to_bf16` (`f32 -> u16`) to `arith.truncf : f32 to bf16` + `arith.bitcast : bf16 to i16`.
+struct ConvertF32ToBf16Translation;
+
+impl OperationTranslation for ConvertF32ToBf16Translation {
+    fn translate(
+        &self,
+        ctx: &Context,
+        source: Ptr<Operation>,
+        input: OperationInput,
+        session: &mut TranslationSession<'_>,
+    ) -> Result<Vec<MlirOperation>, String> {
+        use pliron::common_traits::Verify;
+        CuteConvertF32ToBf16Op::wrap(source)
+            .verify(ctx)
+            .map_err(|e| e.to_string())?;
+        expect_shape("cute.convert_f32_to_bf16", &input, 1, 1)?;
+        let bf16_ty = MlirType::Float(crate::MlirFloatType::BF16);
+        let (bf16_res, bf16_val) = fresh(session, bf16_ty);
+        let trunc = operation(
+            "arith.truncf",
+            vec![bf16_res],
+            input.operands,
+            &input.location,
+        )?;
+        let bitcast = operation(
+            "arith.bitcast",
+            input.results,
+            vec![bf16_val],
+            &input.location,
+        )?;
+        Ok(vec![trunc, bitcast])
+    }
 }
 
 /// Lower `cute.convert_f32_to_e4m3` (`f32 -> u8`) to `arith.truncf : f32 to f8E4M3FN` + `llvm.bitcast : f8E4M3FN to i8`.
@@ -208,6 +256,619 @@ impl OperationTranslation for ConvertF32x8ToE2m1x8Translation {
             "arith.bitcast",
             input.results,
             vec![f4_val],
+            &input.location,
+        )?);
+        Ok(ops)
+    }
+}
+
+/// Assemble scalar SSA values into an MLIR `vector<NxT>` via `vector.from_elements`.
+fn vector_from_scalars(
+    session: &mut TranslationSession<'_>,
+    ops: &mut Vec<MlirOperation>,
+    scalars: Vec<MlirValueUse>,
+    location: &MlirLocation,
+) -> Result<MlirValueUse, String> {
+    let elem_ty = scalars
+        .first()
+        .ok_or_else(|| "vector_from_scalars requires at least 1 scalar".to_owned())?
+        .ty
+        .clone();
+    let vec_ty = MlirType::Vector {
+        shape: vec![scalars.len() as u64],
+        element: Box::new(elem_ty),
+    };
+    let (res, val) = fresh(session, vec_ty);
+    ops.push(operation(
+        "vector.from_elements",
+        vec![res],
+        scalars,
+        location,
+    )?);
+    Ok(val)
+}
+
+/// Select the MLIR `arith` binary op name for `kind` (`0=Add`, `1=Sub`, `2=Mul`, `3=Div`, `4=Max`)
+/// and signedness on `lane_ty`.
+fn vector_binop_name(
+    ctx: &Context,
+    lane_ty: TypeHandle,
+    kind: u64,
+) -> Result<&'static str, String> {
+    use pliron::builtin::types::{FP32Type, FP64Type, IntegerType};
+    let ty_ref = lane_ty.deref(ctx);
+    let is_float = ty_ref.is::<FP32Type>()
+        || ty_ref.is::<FP64Type>()
+        || ty_ref.is::<dialect_mir::types::MirFP16Type>();
+    if is_float {
+        return match kind {
+            0 => Ok("arith.addf"),
+            1 => Ok("arith.subf"),
+            2 => Ok("arith.mulf"),
+            3 => Ok("arith.divf"),
+            4 => Ok("arith.maxnumf"),
+            _ => Err(format!("unsupported float vector binop kind {kind}")),
+        };
+    }
+    if let Some(int_ty) = ty_ref.downcast_ref::<IntegerType>() {
+        return match kind {
+            0 => Ok("arith.addi"),
+            1 => Ok("arith.subi"),
+            2 => Ok("arith.muli"),
+            3 => Ok(if int_ty.is_signed() {
+                "arith.divsi"
+            } else {
+                "arith.divui"
+            }),
+            4 => Ok(if int_ty.is_signed() {
+                "arith.maxsi"
+            } else {
+                "arith.maxui"
+            }),
+            _ => Err(format!("unsupported integer vector binop kind {kind}")),
+        };
+    }
+    Err("unsupported lane type for vector arithmetic".into())
+}
+
+/// Lower `cute.vector_broadcast` to `vector.broadcast` + `vector.to_elements`.
+struct VectorBroadcastTranslation;
+
+impl OperationTranslation for VectorBroadcastTranslation {
+    fn translate(
+        &self,
+        ctx: &Context,
+        source: Ptr<Operation>,
+        input: OperationInput,
+        session: &mut TranslationSession<'_>,
+    ) -> Result<Vec<MlirOperation>, String> {
+        CuteVectorBroadcastOp::wrap(source)
+            .verify(ctx)
+            .map_err(stringify)?;
+        let n = input.results.len();
+        let elem_ty = input.operands[0].ty.clone();
+        let vec_ty = MlirType::Vector {
+            shape: vec![n as u64],
+            element: Box::new(elem_ty),
+        };
+        let (bcast_res, bcast_val) = fresh(session, vec_ty);
+        Ok(vec![
+            operation(
+                "vector.broadcast",
+                vec![bcast_res],
+                input.operands,
+                &input.location,
+            )?,
+            operation(
+                "vector.to_elements",
+                input.results,
+                vec![bcast_val],
+                &input.location,
+            )?,
+        ])
+    }
+}
+
+/// Lower `cute.vector_binary` to `vector.from_elements` + `arith.*` on `vector<NxT>` + `vector.to_elements`.
+struct VectorBinaryTranslation;
+
+impl OperationTranslation for VectorBinaryTranslation {
+    fn translate(
+        &self,
+        ctx: &Context,
+        source: Ptr<Operation>,
+        input: OperationInput,
+        session: &mut TranslationSession<'_>,
+    ) -> Result<Vec<MlirOperation>, String> {
+        let op = CuteVectorBinaryOp::wrap(source);
+        op.verify(ctx).map_err(stringify)?;
+        let kind = op
+            .get_attr_vec_bin_op(ctx)
+            .ok_or_else(|| "cute.vector_binary missing vec_bin_op attr".to_owned())?
+            .kind;
+        let lane_ty = source.deref(ctx).get_result(0).get_type(ctx);
+        let arith_name = vector_binop_name(ctx, lane_ty, kind)?;
+        let n = input.results.len();
+        let mut operands = input.operands;
+        let rhs_scalars = operands.split_off(n);
+        let lhs_scalars = operands;
+        let mut ops = Vec::new();
+        let lhs_vec = vector_from_scalars(session, &mut ops, lhs_scalars, &input.location)?;
+        let rhs_vec = vector_from_scalars(session, &mut ops, rhs_scalars, &input.location)?;
+        let (res_vec_def, res_vec_val) = fresh(session, lhs_vec.ty.clone());
+        ops.push(operation(
+            arith_name,
+            vec![res_vec_def],
+            vec![lhs_vec, rhs_vec],
+            &input.location,
+        )?);
+        ops.push(operation(
+            "vector.to_elements",
+            input.results,
+            vec![res_vec_val],
+            &input.location,
+        )?);
+        Ok(ops)
+    }
+}
+
+/// Lower `cute.vector_scalar` to `vector.from_elements` + `vector.broadcast` + `arith.*` + `vector.to_elements`.
+struct VectorScalarTranslation;
+
+impl OperationTranslation for VectorScalarTranslation {
+    fn translate(
+        &self,
+        ctx: &Context,
+        source: Ptr<Operation>,
+        input: OperationInput,
+        session: &mut TranslationSession<'_>,
+    ) -> Result<Vec<MlirOperation>, String> {
+        let op = CuteVectorScalarOp::wrap(source);
+        op.verify(ctx).map_err(stringify)?;
+        let kind = op
+            .get_attr_vec_scalar_op(ctx)
+            .ok_or_else(|| "cute.vector_scalar missing vec_scalar_op attr".to_owned())?
+            .kind;
+        let lane_ty = source.deref(ctx).get_result(0).get_type(ctx);
+        let arith_name = vector_binop_name(ctx, lane_ty, kind)?;
+        let mut lhs_scalars = input.operands;
+        let rhs_scalar = lhs_scalars
+            .pop()
+            .ok_or_else(|| "cute.vector_scalar missing scalar operand".to_owned())?;
+        let mut ops = Vec::new();
+        let lhs_vec = vector_from_scalars(session, &mut ops, lhs_scalars, &input.location)?;
+        let (rhs_vec_def, rhs_vec) = fresh(session, lhs_vec.ty.clone());
+        ops.push(operation(
+            "vector.broadcast",
+            vec![rhs_vec_def],
+            vec![rhs_scalar],
+            &input.location,
+        )?);
+        let (res_vec_def, res_vec_val) = fresh(session, lhs_vec.ty.clone());
+        ops.push(operation(
+            arith_name,
+            vec![res_vec_def],
+            vec![lhs_vec, rhs_vec],
+            &input.location,
+        )?);
+        ops.push(operation(
+            "vector.to_elements",
+            input.results,
+            vec![res_vec_val],
+            &input.location,
+        )?);
+        Ok(ops)
+    }
+}
+
+/// Lower `cute.vector_unary` to `vector.from_elements` + `arith.negf` / `math.absf` + `vector.to_elements`.
+struct VectorUnaryTranslation;
+
+impl OperationTranslation for VectorUnaryTranslation {
+    fn translate(
+        &self,
+        ctx: &Context,
+        source: Ptr<Operation>,
+        input: OperationInput,
+        session: &mut TranslationSession<'_>,
+    ) -> Result<Vec<MlirOperation>, String> {
+        use pliron::builtin::types::{FP32Type, FP64Type, IntegerType};
+        let op = CuteVectorUnaryOp::wrap(source);
+        op.verify(ctx).map_err(stringify)?;
+        let kind = op
+            .get_attr_vec_unary_op(ctx)
+            .ok_or_else(|| "cute.vector_unary missing vec_unary_op attr".to_owned())?
+            .kind;
+        let lane_ty = source.deref(ctx).get_result(0).get_type(ctx);
+        let is_float = {
+            let ty_ref = lane_ty.deref(ctx);
+            ty_ref.is::<FP32Type>()
+                || ty_ref.is::<FP64Type>()
+                || ty_ref.is::<dialect_mir::types::MirFP16Type>()
+        };
+        let mut ops = Vec::new();
+        let src_vec = vector_from_scalars(session, &mut ops, input.operands, &input.location)?;
+        let (res_vec_def, res_vec_val) = fresh(session, src_vec.ty.clone());
+        if kind == 1 {
+            ops.push(operation(
+                "math.absf",
+                vec![res_vec_def],
+                vec![src_vec],
+                &input.location,
+            )?);
+        } else if is_float {
+            ops.push(operation(
+                "arith.negf",
+                vec![res_vec_def],
+                vec![src_vec],
+                &input.location,
+            )?);
+        } else {
+            let width = lane_ty
+                .deref(ctx)
+                .downcast_ref::<IntegerType>()
+                .ok_or_else(|| "expected integer lane type for integer vector neg".to_owned())?
+                .width();
+            let (zero_s_def, zero_s_val) = fresh(session, MlirType::Integer(width));
+            ops.push(integer_constant(zero_s_def, 0, &input.location)?);
+            let (zero_v_def, zero_v_val) = fresh(session, src_vec.ty.clone());
+            ops.push(operation(
+                "vector.broadcast",
+                vec![zero_v_def],
+                vec![zero_s_val],
+                &input.location,
+            )?);
+            ops.push(operation(
+                "arith.subi",
+                vec![res_vec_def],
+                vec![zero_v_val, src_vec],
+                &input.location,
+            )?);
+        }
+        ops.push(operation(
+            "vector.to_elements",
+            input.results,
+            vec![res_vec_val],
+            &input.location,
+        )?);
+        Ok(ops)
+    }
+}
+
+/// Lower `cute.vector_reduce` to `vector.from_elements` + `vector.reduction`.
+struct VectorReduceTranslation;
+
+impl OperationTranslation for VectorReduceTranslation {
+    fn translate(
+        &self,
+        ctx: &Context,
+        source: Ptr<Operation>,
+        input: OperationInput,
+        session: &mut TranslationSession<'_>,
+    ) -> Result<Vec<MlirOperation>, String> {
+        let op = CuteVectorReduceOp::wrap(source);
+        op.verify(ctx).map_err(stringify)?;
+        let kind = op
+            .get_attr_vec_reduce_op(ctx)
+            .ok_or_else(|| "cute.vector_reduce missing vec_reduce_op attr".to_owned())?
+            .kind;
+        let kind_attr = match kind {
+            0 => "#vector.kind<add>",
+            1 => "#vector.kind<mul>",
+            2 => "#vector.kind<maxnumf>",
+            3 => "#vector.kind<minnumf>",
+            _ => return Err(format!("unsupported cute.vector_reduce kind {kind}")),
+        };
+        let mut scalars = input.operands;
+        let init_val = scalars
+            .pop()
+            .ok_or_else(|| "cute.vector_reduce missing init operand".to_owned())?;
+        let mut ops = Vec::new();
+        let src_vec = vector_from_scalars(session, &mut ops, scalars, &input.location)?;
+        let mut red = operation(
+            "vector.reduction",
+            input.results,
+            vec![src_vec, init_val],
+            &input.location,
+        )?;
+        red.properties
+            .insert("kind".into(), MlirAttribute::dialect(kind_attr.to_owned())?);
+        ops.push(red);
+        Ok(ops)
+    }
+}
+
+/// Lower `cute.vector_cast` to `vector.from_elements` + `arith.truncf` / `arith.extf` (+ `arith.bitcast`) + `vector.to_elements`.
+struct VectorCastTranslation;
+
+impl OperationTranslation for VectorCastTranslation {
+    fn translate(
+        &self,
+        ctx: &Context,
+        source: Ptr<Operation>,
+        input: OperationInput,
+        session: &mut TranslationSession<'_>,
+    ) -> Result<Vec<MlirOperation>, String> {
+        let op = CuteVectorCastOp::wrap(source);
+        op.verify(ctx).map_err(stringify)?;
+        let kind = op
+            .get_attr_vec_cast_op(ctx)
+            .ok_or_else(|| "cute.vector_cast missing vec_cast_op attr".to_owned())?
+            .kind;
+        let n = input.results.len() as u64;
+        let mut ops = Vec::new();
+        let src_vec = vector_from_scalars(session, &mut ops, input.operands, &input.location)?;
+        let dst_elem_ty = input.results[0].ty.clone();
+        let dst_vec_ty = MlirType::Vector {
+            shape: vec![n],
+            element: Box::new(dst_elem_ty),
+        };
+        let final_vec = match kind {
+            0 => {
+                // f32 -> BFloat16 (i16)
+                let bf16_vec_ty = MlirType::Vector {
+                    shape: vec![n],
+                    element: Box::new(MlirType::Float(crate::MlirFloatType::BF16)),
+                };
+                let (bf16_def, bf16_val) = fresh(session, bf16_vec_ty);
+                ops.push(operation(
+                    "arith.truncf",
+                    vec![bf16_def],
+                    vec![src_vec],
+                    &input.location,
+                )?);
+                let (i16_def, i16_val) = fresh(session, dst_vec_ty);
+                ops.push(operation(
+                    "arith.bitcast",
+                    vec![i16_def],
+                    vec![bf16_val],
+                    &input.location,
+                )?);
+                i16_val
+            }
+            1 => {
+                // BFloat16 (i16) -> f32
+                let bf16_vec_ty = MlirType::Vector {
+                    shape: vec![n],
+                    element: Box::new(MlirType::Float(crate::MlirFloatType::BF16)),
+                };
+                let (bf16_def, bf16_val) = fresh(session, bf16_vec_ty);
+                ops.push(operation(
+                    "arith.bitcast",
+                    vec![bf16_def],
+                    vec![src_vec],
+                    &input.location,
+                )?);
+                let (f32_def, f32_val) = fresh(session, dst_vec_ty);
+                ops.push(operation(
+                    "arith.extf",
+                    vec![f32_def],
+                    vec![bf16_val],
+                    &input.location,
+                )?);
+                f32_val
+            }
+            2 => {
+                // f32 -> Float8E4M3FN (i8)
+                let fp8_vec_ty = MlirType::Vector {
+                    shape: vec![n],
+                    element: Box::new(MlirType::Float(crate::MlirFloatType::Other(
+                        "f8E4M3FN".into(),
+                    ))),
+                };
+                let (fp8_def, fp8_val) = fresh(session, fp8_vec_ty);
+                ops.push(operation(
+                    "arith.truncf",
+                    vec![fp8_def],
+                    vec![src_vec],
+                    &input.location,
+                )?);
+                let (i8_def, i8_val) = fresh(session, dst_vec_ty);
+                ops.push(operation(
+                    "arith.bitcast",
+                    vec![i8_def],
+                    vec![fp8_val],
+                    &input.location,
+                )?);
+                i8_val
+            }
+            3 => {
+                // Float8E4M3FN (i8) -> f32
+                let fp8_vec_ty = MlirType::Vector {
+                    shape: vec![n],
+                    element: Box::new(MlirType::Float(crate::MlirFloatType::Other(
+                        "f8E4M3FN".into(),
+                    ))),
+                };
+                let (fp8_def, fp8_val) = fresh(session, fp8_vec_ty);
+                ops.push(operation(
+                    "arith.bitcast",
+                    vec![fp8_def],
+                    vec![src_vec],
+                    &input.location,
+                )?);
+                let (f32_def, f32_val) = fresh(session, dst_vec_ty);
+                ops.push(operation(
+                    "arith.extf",
+                    vec![f32_def],
+                    vec![fp8_val],
+                    &input.location,
+                )?);
+                f32_val
+            }
+            4 => {
+                // f32 -> f16
+                let (f16_def, f16_val) = fresh(session, dst_vec_ty);
+                ops.push(operation(
+                    "arith.truncf",
+                    vec![f16_def],
+                    vec![src_vec],
+                    &input.location,
+                )?);
+                f16_val
+            }
+            5 => {
+                // f16 -> f32
+                let (f32_def, f32_val) = fresh(session, dst_vec_ty);
+                ops.push(operation(
+                    "arith.extf",
+                    vec![f32_def],
+                    vec![src_vec],
+                    &input.location,
+                )?);
+                f32_val
+            }
+            _ => return Err(format!("unsupported cute.vector_cast kind {kind}")),
+        };
+        ops.push(operation(
+            "vector.to_elements",
+            input.results,
+            vec![final_vec],
+            &input.location,
+        )?);
+        Ok(ops)
+    }
+}
+
+/// Lower `cute.vector_bitcast` to `vector.from_elements` + `vector.bitcast` + `vector.to_elements`.
+struct VectorBitcastTranslation;
+
+impl OperationTranslation for VectorBitcastTranslation {
+    fn translate(
+        &self,
+        ctx: &Context,
+        source: Ptr<Operation>,
+        input: OperationInput,
+        session: &mut TranslationSession<'_>,
+    ) -> Result<Vec<MlirOperation>, String> {
+        CuteVectorBitcastOp::wrap(source)
+            .verify(ctx)
+            .map_err(stringify)?;
+        let m = input.results.len() as u64;
+        let dst_elem_ty = input.results[0].ty.clone();
+        let dst_vec_ty = MlirType::Vector {
+            shape: vec![m],
+            element: Box::new(dst_elem_ty),
+        };
+        let mut ops = Vec::new();
+        let src_vec = vector_from_scalars(session, &mut ops, input.operands, &input.location)?;
+        let (dst_vec_def, dst_vec_val) = fresh(session, dst_vec_ty);
+        ops.push(operation(
+            "vector.bitcast",
+            vec![dst_vec_def],
+            vec![src_vec],
+            &input.location,
+        )?);
+        ops.push(operation(
+            "vector.to_elements",
+            input.results,
+            vec![dst_vec_val],
+            &input.location,
+        )?);
+        Ok(ops)
+    }
+}
+
+/// Lower `cute.vector_slice` to `vector.from_elements` + `vector.extract_strided_slice` + `vector.to_elements`.
+struct VectorSliceTranslation;
+
+impl OperationTranslation for VectorSliceTranslation {
+    fn translate(
+        &self,
+        ctx: &Context,
+        source: Ptr<Operation>,
+        input: OperationInput,
+        session: &mut TranslationSession<'_>,
+    ) -> Result<Vec<MlirOperation>, String> {
+        let op = CuteVectorSliceOp::wrap(source);
+        op.verify(ctx).map_err(stringify)?;
+        let offset = op
+            .get_attr_vec_slice_op(ctx)
+            .ok_or_else(|| "cute.vector_slice missing vec_slice_op attr".to_owned())?
+            .extra as i64;
+        let m = input.results.len() as i64;
+        let dst_elem_ty = input.results[0].ty.clone();
+        let dst_vec_ty = MlirType::Vector {
+            shape: vec![m as u64],
+            element: Box::new(dst_elem_ty),
+        };
+        let mut ops = Vec::new();
+        let src_vec = vector_from_scalars(session, &mut ops, input.operands, &input.location)?;
+        let (dst_vec_def, dst_vec_val) = fresh(session, dst_vec_ty);
+        let mut slice_op = operation(
+            "vector.extract_strided_slice",
+            vec![dst_vec_def],
+            vec![src_vec],
+            &input.location,
+        )?;
+        let i64_attr = |v: i64| MlirAttribute::Integer {
+            value: v as i128,
+            ty: MlirType::Integer(64),
+        };
+        slice_op.properties.insert(
+            "offsets".into(),
+            MlirAttribute::Array(vec![i64_attr(offset)]),
+        );
+        slice_op
+            .properties
+            .insert("sizes".into(), MlirAttribute::Array(vec![i64_attr(m)]));
+        slice_op
+            .properties
+            .insert("strides".into(), MlirAttribute::Array(vec![i64_attr(1)]));
+        ops.push(slice_op);
+        ops.push(operation(
+            "vector.to_elements",
+            input.results,
+            vec![dst_vec_val],
+            &input.location,
+        )?);
+        Ok(ops)
+    }
+}
+
+/// Lower `cute.vector_concat` to `vector.from_elements` + `vector.shuffle` + `vector.to_elements`.
+struct VectorConcatTranslation;
+
+impl OperationTranslation for VectorConcatTranslation {
+    fn translate(
+        &self,
+        ctx: &Context,
+        source: Ptr<Operation>,
+        input: OperationInput,
+        session: &mut TranslationSession<'_>,
+    ) -> Result<Vec<MlirOperation>, String> {
+        CuteVectorConcatOp::wrap(source)
+            .verify(ctx)
+            .map_err(stringify)?;
+        let m = input.results.len();
+        let n = m / 2;
+        let dst_elem_ty = input.results[0].ty.clone();
+        let dst_vec_ty = MlirType::Vector {
+            shape: vec![m as u64],
+            element: Box::new(dst_elem_ty),
+        };
+        let mut operands = input.operands;
+        let hi_scalars = operands.split_off(n);
+        let lo_scalars = operands;
+        let mut ops = Vec::new();
+        let lo_vec = vector_from_scalars(session, &mut ops, lo_scalars, &input.location)?;
+        let hi_vec = vector_from_scalars(session, &mut ops, hi_scalars, &input.location)?;
+        let (dst_vec_def, dst_vec_val) = fresh(session, dst_vec_ty);
+        let mut shuf = operation(
+            "vector.shuffle",
+            vec![dst_vec_def],
+            vec![lo_vec, hi_vec],
+            &input.location,
+        )?;
+        shuf.properties.insert(
+            "mask".into(),
+            MlirAttribute::DenseI64Array((0..m as i64).collect()),
+        );
+        ops.push(shuf);
+        ops.push(operation(
+            "vector.to_elements",
+            input.results,
+            vec![dst_vec_val],
             &input.location,
         )?);
         Ok(ops)

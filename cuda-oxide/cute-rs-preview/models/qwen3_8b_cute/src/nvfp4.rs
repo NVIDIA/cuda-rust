@@ -38,7 +38,7 @@ use cute_rs::utils::blockscaled::{
 };
 use cute_rs::{
     BFloat16, BlockScaledTensor, Float4E2M1FN, Float8E4M3FN, FragmentC, GmemMatrix, KMajor, Mkl,
-    Nkl, Nvfp4TiledMma, RegisterTile, Sm1xxBlockScaleKMajor, SmemTile, Tensor, TiledCopy,
+    Nkl, Nvfp4TiledMma, ReductionOp, Sm1xxBlockScaleKMajor, SmemTile, Tensor, TiledCopy,
 };
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -219,18 +219,10 @@ pub(crate) mod kernels {
             let group = cute_rs::crd2idx_row_major_2d(tile, g, 4);
             let group_idx = cute_rs::crd2idx_row_major_2d(row, group, k / 16);
             let vec_base = cute_rs::crd2idx_row_major_2d(group_idx, 0, 2);
-            let lo_half =
-                unsafe { in_tensor.local_tile::<8>(vec_base).load() }.map(BFloat16::to_f32);
-            let hi_half =
-                unsafe { in_tensor.local_tile::<8>(vec_base + 1).load() }.map(BFloat16::to_f32);
-            let max_lo = lo_half.fold(0.0f32, |m, v| {
-                let a = if v < 0.0 { -v } else { v };
-                if a > m { a } else { m }
-            });
-            let max_abs = hi_half.fold(max_lo, |m, v| {
-                let a = if v < 0.0 { -v } else { v };
-                if a > m { a } else { m }
-            });
+            let lo_half = unsafe { in_tensor.local_tile::<8>(vec_base).load() }.to::<f32>();
+            let hi_half = unsafe { in_tensor.local_tile::<8>(vec_base + 1).load() }.to::<f32>();
+            let vec = lo_half.concat(hi_half);
+            let max_abs = vec.abs().reduce(ReductionOp::Max, 0.0f32);
             let scale = Float8E4M3FN::from_f32(max_abs * (scale_boost / 6.0));
             let inv_scale =
                 cute_rs::arch::rcp_approx(scale.to_f32() * inv_scale_boost).min(f32::MAX);
@@ -238,14 +230,10 @@ pub(crate) mod kernels {
             unsafe {
                 scales_out.store_at(scale_offset, scale.to_bits());
             }
-            let lo_u32 = (lo_half * inv_scale).to::<Float4E2M1FN>();
-            let hi_u32 = (hi_half * inv_scale).to::<Float4E2M1FN>();
-            let packed = RegisterTile::<u32, 2>::from_array([lo_u32, hi_u32]);
+            let q_vec = (vec * inv_scale).to::<Float4E2M1FN>();
             unsafe {
-                StridedTensorMut::<u64>::from_disjoint_slice_as(&mut out_values).store_at(
-                    group_idx,
-                    (packed.into_array()[0] as u64) | ((packed.into_array()[1] as u64) << 32),
-                );
+                StridedTensorMut::<u64>::from_disjoint_slice_as(&mut out_values)
+                    .store_at(group_idx, q_vec.bitcast::<u64, 1>()[0]);
             }
             g += 1;
         }

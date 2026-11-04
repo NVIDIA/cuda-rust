@@ -24,6 +24,24 @@ pub struct TmemFragment<const REGS: usize> {
     pub values: [f32; REGS],
 }
 
+impl<const REGS: usize> TmemFragment<REGS> {
+    /// View this lane's TMEM fragment as an immutable [`TensorSSA`](crate::tensor::TensorSSA) register vector.
+    #[must_use]
+    #[inline(always)]
+    pub const fn to_tensor_ssa(&self) -> crate::tensor::TensorSSA<f32, REGS> {
+        crate::tensor::TensorSSA::from_array(self.values)
+    }
+
+    /// Extract a contiguous `LEN`-element [`TensorSSA`](crate::tensor::TensorSSA) sub-vector starting at `OFFSET`.
+    #[must_use]
+    #[inline(always)]
+    pub fn slice<const OFFSET: usize, const LEN: usize>(
+        &self,
+    ) -> crate::tensor::TensorSSA<f32, LEN> {
+        self.to_tensor_ssa().slice::<OFFSET, LEN>()
+    }
+}
+
 /// Implement one native TMEM register width with explicit load/store completion variants.
 macro_rules! fragment {
     ($n:literal,$load:ident,$store:ident, [$($idx:literal),+]) => {

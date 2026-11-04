@@ -193,12 +193,27 @@ rust_idiom_allowlist = {
     "full_at_cursor", "empty_at_cursor", "acquire_cursor", "wait_cursor",
     "producer_expect_tx_cursor", "mma_full_cursor", "mma_empty_cursor",
     "thread_full_cursor", "thread_empty_cursor", "commit_threads",
-    "release_threads", "commit_mma", "release_mma",
+    "release_threads", "commit_mma", "release_mma", "to_tensor_ssa",
+    # Documented Tensor / TensorSSA / StridedTensor methods in cute-rs/src/tensor/
+    "len", "is_empty", "tile_count", "base", "is_full", "from_array",
+    "as_array", "into_array", "splat", "from_fn", "get", "set", "map",
+    "zip_map", "fold", "gather", "to", "bitcast", "reduce", "abs", "fmax",
+    "concat", "convert_tile", "bitcast_tile", "from_storage", "storage",
+    "layout", "from_slice", "from_slice_as", "from_mut_slice",
+    "from_disjoint_slice", "from_disjoint_slice_as", "from_raw_parts",
+    "from_shared_bytes", "store_at", "write_at", "update_at", "at_unchecked",
+    "get_unchecked", "ptr_at_unchecked", "ptr_at_2d_unchecked",
+    "offset_unchecked", "subview", "subview_unchecked", "reborrow",
+    "load_unchecked", "load_strided_unchecked", "load_f32x4",
+    "store_unchecked", "store_strided_unchecked",
+    "store_global_no_allocate_at", "store_global_no_allocate_words_at",
+    "atomic_add_bf16x2_at_2d", "crd2idx", "where_", "slice", "valid_len",
+    "map_to", "zip_map_to", "from_bits", "to_bits",
 }
 
 pub_fn_re = re.compile(r"^\s*pub\s+(?:const\s+)?(?:unsafe\s+)?fn\s+([a-zA-Z0-9_]+)")
 forbidden_cute_rs_re = re.compile(
-    r"\b(route_histogram|route_and_load|store_routed_token|unload_relu2|unload_dual_m|unload_triple_m|copy_scales_and_gemm|copy_b_scales_and_gemm|load_stationary_weights|stage_page_index|wait_and_read_page_index|read_page_index_and_release|rms_inv_std|quantize_and_store_e4m3|partition_pipeline_barriers|partition_triple_m_barriers)\b"
+    r"\b(route_histogram|route_and_load|store_routed_token|unload_relu2|unload_dual_m|unload_triple_m|copy_scales_and_gemm|copy_b_scales_and_gemm|load_stationary_weights|stage_page_index|wait_and_read_page_index|read_page_index_and_release|rms_inv_std|quantize_and_store_e4m3|partition_pipeline_barriers|partition_triple_m_barriers|to_u128|concat8|reduce_add|reduce_max)\b"
 )
 
 errors = []
@@ -230,9 +245,12 @@ for path in sorted(glob.glob("cuda-oxide/cute-rs-preview/cute-rs/src/**/*.rs", r
                 errors.append(f"{path}:{lineno}: software FP4/FP8 conversion helper is banned in `cute-rs` (lower through `__compiler` -> `dialect-cute`): {line.strip()}")
             if "/nvgpu/" in path and ("cuda_device" in line or "encode_no_swizzle_smem_desc" in line or "0x0000_0480" in line):
                 errors.append(f"{path}:{lineno}: raw `cuda_device` or manual descriptor bit-packing is banned in `cute-rs/src/nvgpu/` (lower through `__compiler` -> `dialect-cute`): {line.strip()}")
+            if path.endswith("tensor/mod.rs") and re.search(r"\bif\s+[NM]\s*==\s*(?:2|4|8|16)\b", line):
+                errors.append(f"{path}:{lineno}: hardcoded `if N == 2/4/8/16` software unroll ladder is banned in `cute-rs/src/tensor/mod.rs` (lower through `__compiler` -> `dialect-cute` vector ops): {line.strip()}")
 
-# 4c. Direct CuTeDSL Python AST symbol & workload-helper purity check.
+# 4c. Direct CuTeDSL Python AST symbol & workload-helper purity check across cute-rs/src/.
 for root_dir in (
+    "cuda-oxide/cute-rs-preview/cute-rs/src/tensor",
     "cuda-oxide/cute-rs-preview/cute-rs/src/nvgpu/tcgen05",
     "cuda-oxide/cute-rs-preview/cute-rs/src/pipeline",
     "cuda-oxide/cute-rs-preview/cute-rs/src/utils",
@@ -240,44 +258,89 @@ for root_dir in (
     for path in sorted(glob.glob(os.path.join(root_dir, "**", "*.rs"), recursive=True)):
         if path.endswith("__compiler.rs") or path.endswith("tests.rs"):
             continue
+        in_test_mod = False
+        in_compiler_mod = False
         with open(path, encoding="utf-8") as f:
             for lineno, line in enumerate(f, 1):
+                if re.match(r"^\s*#\[cfg\(test\)\]", line) or re.match(r"^\s*mod\s+tests\b", line):
+                    in_test_mod = True
+                if re.match(r"^\s*pub\s+mod\s+__compiler\s*\{", line):
+                    in_compiler_mod = True
+                elif in_compiler_mod and line.startswith("}"):
+                    in_compiler_mod = False
+                if in_test_mod or in_compiler_mod:
+                    continue
                 if forbidden_cute_rs_re.search(line):
-                    errors.append(f"{path}:{lineno}: workload-specific helper forbidden in cute-rs: {line.strip()}")
-                if "/nvgpu/tcgen05/" in path or path.endswith("tmem_allocator.rs") or path.endswith("pipeline/sm100.rs"):
+                    errors.append(f"{path}:{lineno}: workload-specific or non-CuTeDSL helper forbidden in cute-rs: {line.strip()}")
+                if (
+                    "/tensor/" in path
+                    or "/nvgpu/tcgen05/" in path
+                    or path.endswith("tmem_allocator.rs")
+                    or path.endswith("pipeline/sm100.rs")
+                ):
                     m = pub_fn_re.match(line)
                     if m and cutedsl_symbols:
                         fn_name = m.group(1)
+                        if path.endswith("tensor/mod.rs") and fn_name in {
+                            "make_tensor_read", "make_tensor_write",
+                            "zipped_divide_read", "zipped_divide_write",
+                            "slice_read", "slice_write",
+                            "tensor_tile_is_full", "tensor_tile_base",
+                            "tensor_load_tile", "tensor_store_tile",
+                            "tensor_store_element_abs",
+                        }:
+                            continue
                         if fn_name not in cutedsl_symbols and fn_name not in rust_idiom_allowlist:
                             errors.append(
                                 f"{path}:{lineno}: public function `{fn_name}` does not exist in CuTeDSL AST or cutedsl-comparison.md"
                             )
 
-moe_cute_path = "cuda-oxide/cute-rs-preview/models/nemotron3_moe_cute/src/moe_192e.rs"
-if os.path.isfile(moe_cute_path):
-    subword_unpack_re = re.compile(r"(>>\s*(?:16|48|80|96|112)\b|0xFFFF_FFFF|0xFFFF_0000|encode_e4m3_rne|exact_inv_scale_e2m1|encode_pos_e2m1|encode_signed_e2m1)")
-    with open(moe_cute_path, encoding="utf-8") as f:
-        in_device_mod = False
-        for lineno, line in enumerate(f, 1):
-            if "pub mod kernels_192e" in line:
-                in_device_mod = True
-            elif in_device_mod and line.startswith("}"):
-                in_device_mod = False
-            if in_device_mod and not line.lstrip().startswith("//"):
-                if subword_unpack_re.search(line):
-                    errors.append(
-                        f"{moe_cute_path}:{lineno}: sub-word bit-unpacking or manual FP4/FP8 conversion in *_cute kernel (use Tensor/RegisterTile/Float8E4M3FN): {line.strip()}"
-                    )
+# 4d. Strict CuTe kernel purity check on nemotron3_moe_cute (main.rs and moe_192e.rs):
+#     Inside device kernel modules (`mod kernels` / `pub mod kernels_192e`), forbid:
+#     - any bit-shift operator (`<<` or `>>`),
+#     - any scalar-unroll or bit-pack macro (`quant16_relu2`, `pack8`, `q_nib`, `st_relu2`, `st_dual16`, `st_triple16`),
+#     - any raw `TmemFragment.values[...]` scalar indexing (use `to_tensor_ssa()` / `slice::<OFFSET, LEN>()`),
+#     - any non-CuTeDSL `.to_u128()` or manual FP4/FP8 conversion helpers.
+kernel_purity_re = re.compile(
+    r"(?<!:)\s<<\s|\s>>\s"
+    r"|\.values\["
+    r"|\.to_u128\b"
+    r"|macro_rules!\s*(?:quant16_relu2|pack8|q_nib|st_relu2|st_dual16|st_triple16)\b"
+    r"|0xFFFF_FFFF|0xFFFF_0000"
+    r"|\b(?:dev_e4m3_to_f32|dev_f32_to_e4m3|dev_e4m3_inv_e2m1|fast_pos_e2m1|fn\s+f32_to_e2m1|encode_e4m3_rne|exact_inv_scale_e2m1|encode_pos_e2m1|encode_signed_e2m1)\b"
+)
 
-main_cute_path = "cuda-oxide/cute-rs-preview/models/nemotron3_moe_cute/src/main.rs"
-if os.path.isfile(main_cute_path):
-    forbidden_main_re = re.compile(r"\b(dev_e4m3_to_f32|dev_f32_to_e4m3|dev_e4m3_inv_e2m1|fast_pos_e2m1|fn\s+f32_to_e2m1)\b")
-    with open(main_cute_path, encoding="utf-8") as f:
-        for lineno, line in enumerate(f, 1):
-            if forbidden_main_re.search(line.split("//")[0]):
-                errors.append(
-                    f"{main_cute_path}:{lineno}: manual FP4/FP8 bit-conversion helper in cute-rs kernel (use Float8E4M3FN::from_f32/to_f32, arch::rcp_approx, and RegisterTile::to::<Float4E2M1FN>()): {line.strip()}"
-                )
+# Self-test that `kernel_purity_re` catches all forbidden patterns:
+for bad_sample in (
+    "let x = lo | (hi << 32);",
+    "let y = (s0 as u32) | ((s1 as u32) << 8);",
+    "let z = tid >> 5;",
+    "let v = frag.values[0];",
+    "let u = tile.to_u128();",
+    "macro_rules! quant16_relu2 {",
+    "macro_rules! pack8 {",
+):
+    if not kernel_purity_re.search(bad_sample):
+        sys.exit(f"error: kernel_purity_re self-test failed to catch: {bad_sample}")
+
+for moe_path in (
+    "cuda-oxide/cute-rs-preview/models/nemotron3_moe_cute/src/main.rs",
+    "cuda-oxide/cute-rs-preview/models/nemotron3_moe_cute/src/moe_192e.rs",
+):
+    if os.path.isfile(moe_path):
+        with open(moe_path, encoding="utf-8") as f:
+            in_device_mod = False
+            for lineno, line in enumerate(f, 1):
+                if re.match(r"^\s*(?:pub\s+)?mod\s+kernels(?:_192e)?\s*\{", line):
+                    in_device_mod = True
+                elif in_device_mod and line.startswith("}"):
+                    in_device_mod = False
+                if in_device_mod and not line.lstrip().startswith("//"):
+                    code = line.split("//")[0]
+                    if kernel_purity_re.search(code):
+                        errors.append(
+                            f"{moe_path}:{lineno}: manual bit-shifting, scalar fragment unrolling, or non-CuTeDSL op in *_cute kernel (use TensorSSA / Layout algebra): {line.strip()}"
+                        )
 
 if errors:
     print("error: CuTeDSL source AST & cute-rs purity check failed:", file=sys.stderr)

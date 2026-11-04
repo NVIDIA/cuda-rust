@@ -111,7 +111,7 @@ MANDATORY TYPE-ENCODED `cute-rs` ARCHITECTURE
 │     type SharedWeightScales = Sm100ScaleTile<Mkl>;                           │
 │     type SharedActScales    = Sm100ScaleTile<Nkl>;                           │
 │     type TiledMma = Sm100BlockScaledTiledMma<WeightTileSmem, ActTileSmem>;   │
-│     type StagedEpilogue = Sm100TmemStagedEpilogue<EpilogueSmem, 128>;        │
+│     type TmemEpilogue = Sm100TmemEpilogue<EpilogueSmem>;                     │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 

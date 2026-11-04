@@ -143,12 +143,32 @@ pub(crate) enum CuteFn {
     CopyTma2d,
     /// Issue a typed two-dimensional shared-to-global TMA store.
     CopyTmaS2g2d,
+    /// Convert one `f32` scalar to one `BFloat16` word (`u16`).
+    CvtF32ToBf16,
     /// Convert one `f32` scalar to one `Float8E4M3FN` byte (`u8`).
     CvtF32ToE4m3,
     /// Widen one `Float8E4M3FN` byte (`u8`) to `f32`.
     CvtE4m3ToF32,
     /// Convert 8 `f32` scalars to 8 packed `Float4E2M1FN` nibbles (`u32`).
     CvtF32x8ToE2m1x8,
+    /// Broadcast one scalar into an `N`-lane `RegisterTile<T, N>`.
+    RegisterTileBroadcast,
+    /// Elementwise binary operation on two `RegisterTile<T, N>` vectors.
+    RegisterTileBinary,
+    /// Elementwise binary operation on a `RegisterTile<T, N>` and a broadcast scalar.
+    RegisterTileScalar,
+    /// Elementwise unary operation on a `RegisterTile<T, N>`.
+    RegisterTileUnary,
+    /// Horizontal reduction over a `RegisterTile<f32, N>`.
+    RegisterTileReduce,
+    /// Elementwise numeric conversion on a `RegisterTile<Src, N>`.
+    RegisterTileCast,
+    /// Bit-preserving reinterpretation of a `RegisterTile<Src, N>` as `RegisterTile<Dst, M>`.
+    RegisterTileBitcast,
+    /// Contiguous sub-vector extraction from a `RegisterTile<T, N>`.
+    RegisterTileSlice,
+    /// Concatenate two `RegisterTile<T, N>` vectors into one `RegisterTile<T, M>`.
+    RegisterTileConcat,
 }
 
 /// Expected kind of one generic argument in a recognized function's substs.
@@ -670,6 +690,11 @@ pub(crate) const CUTE_FNS: &[CuteFnSpec] = &[
         schema: &[SubstKind::Type, SubstKind::Type],
     },
     CuteFnSpec {
+        canonical: "cute_rs::numeric::__compiler::cvt_f32_to_bf16",
+        func: CuteFn::CvtF32ToBf16,
+        schema: &[],
+    },
+    CuteFnSpec {
         canonical: "cute_rs::numeric::__compiler::cvt_f32_to_e4m3",
         func: CuteFn::CvtF32ToE4m3,
         schema: &[],
@@ -683,6 +708,66 @@ pub(crate) const CUTE_FNS: &[CuteFnSpec] = &[
         canonical: "cute_rs::numeric::__compiler::cvt_f32x8_to_e2m1x8",
         func: CuteFn::CvtF32x8ToE2m1x8,
         schema: &[],
+    },
+    CuteFnSpec {
+        canonical: "cute_rs::tensor::__compiler::register_tile_broadcast",
+        func: CuteFn::RegisterTileBroadcast,
+        schema: &[SubstKind::Type, SubstKind::Const],
+    },
+    CuteFnSpec {
+        canonical: "cute_rs::tensor::__compiler::register_tile_binary",
+        func: CuteFn::RegisterTileBinary,
+        schema: &[SubstKind::Type, SubstKind::Const, SubstKind::Const],
+    },
+    CuteFnSpec {
+        canonical: "cute_rs::tensor::__compiler::register_tile_scalar",
+        func: CuteFn::RegisterTileScalar,
+        schema: &[SubstKind::Type, SubstKind::Const, SubstKind::Const],
+    },
+    CuteFnSpec {
+        canonical: "cute_rs::tensor::__compiler::register_tile_unary",
+        func: CuteFn::RegisterTileUnary,
+        schema: &[SubstKind::Type, SubstKind::Const, SubstKind::Const],
+    },
+    CuteFnSpec {
+        canonical: "cute_rs::tensor::__compiler::register_tile_reduce",
+        func: CuteFn::RegisterTileReduce,
+        schema: &[SubstKind::Const, SubstKind::Const],
+    },
+    CuteFnSpec {
+        canonical: "cute_rs::tensor::__compiler::register_tile_cast",
+        func: CuteFn::RegisterTileCast,
+        schema: &[
+            SubstKind::Type,
+            SubstKind::Type,
+            SubstKind::Const,
+            SubstKind::Const,
+        ],
+    },
+    CuteFnSpec {
+        canonical: "cute_rs::tensor::__compiler::register_tile_bitcast",
+        func: CuteFn::RegisterTileBitcast,
+        schema: &[
+            SubstKind::Type,
+            SubstKind::Type,
+            SubstKind::Const,
+            SubstKind::Const,
+        ],
+    },
+    CuteFnSpec {
+        canonical: "cute_rs::tensor::__compiler::register_tile_slice",
+        func: CuteFn::RegisterTileSlice,
+        schema: &[
+            SubstKind::Type,
+            SubstKind::Const,
+            SubstKind::Const,
+            SubstKind::Const,
+        ],
+    },
+    CuteFnSpec {
+        canonical: "cute_rs::tensor::__compiler::register_tile_concat",
+        func: CuteFn::RegisterTileConcat,
+        schema: &[SubstKind::Type, SubstKind::Const, SubstKind::Const],
     },
     CuteFnSpec {
         canonical: "cute_rs::atom::cooperative::copy_g2s",

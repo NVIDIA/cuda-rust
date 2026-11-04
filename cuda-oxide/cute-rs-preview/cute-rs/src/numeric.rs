@@ -63,7 +63,7 @@ impl BFloat16 {
     #[must_use]
     #[inline(always)]
     pub fn from_f32(value: f32) -> Self {
-        Self(cuda_device::convert::f32_to_bf16_rne(value))
+        Self(__compiler::cvt_f32_to_bf16(value))
     }
 
     /// Widen to FP32 exactly, retaining all BF16 payload bits.
@@ -205,6 +205,37 @@ impl TensorElement<u8> for Float8E4M3FN {}
 impl TensorElement<f16> for Mxf4E2M1 {}
 impl TensorElement<u32> for UE8M0x4 {}
 impl TensorElement<u32> for E4M3x4 {}
+
+/// Eight neighboring [`Float4E2M1FN`] values packed into one 32-bit word (`u32`).
+///
+/// ```text
+/// u32: [FP4 7][FP4 6][FP4 5][FP4 4][FP4 3][FP4 2][FP4 1][FP4 0]
+/// ```
+///
+/// Serves as the 32-bit register carrier for 8-element and 16-element
+/// `TensorSSA<Float4E2M1FN, N>` vector conversions.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Float4E2M1FNx8(#[doc = "Eight packed 4-bit E2M1 nibbles in increasing K order."] u32);
+
+impl Float4E2M1FNx8 {
+    /// Wrap 32 packed bits as eight E2M1 values without changing them.
+    #[must_use]
+    #[inline(always)]
+    pub const fn from_bits(bits: u32) -> Self {
+        Self(bits)
+    }
+
+    /// Return the underlying 32-bit packed representation.
+    #[must_use]
+    #[inline(always)]
+    pub const fn to_bits(self) -> u32 {
+        self.0
+    }
+}
+
+impl TensorElement<u32> for Float4E2M1FNx8 {}
+impl TensorElement<Float4E2M1FNx8> for Float4E2M1FNx8 {}
 
 /// Two [`Float4E2M1FN`] values packed into one byte.
 ///
@@ -348,6 +379,13 @@ impl E4M3x2 {
 /// Compiler hooks for reduced-precision scalar and register-tile conversions.
 #[doc(hidden)]
 pub mod __compiler {
+    /// Convert one `f32` scalar into one `BFloat16` `u16` (`arith.truncf : f32 to bf16`).
+    #[must_use]
+    #[inline(never)]
+    pub fn cvt_f32_to_bf16(value: f32) -> u16 {
+        cuda_device::convert::f32_to_bf16_rne(value)
+    }
+
     /// Convert one `f32` scalar into one `Float8E4M3FN` byte (`arith.truncf : f32 to f8E4M3FN`).
     #[must_use]
     #[inline(never)]

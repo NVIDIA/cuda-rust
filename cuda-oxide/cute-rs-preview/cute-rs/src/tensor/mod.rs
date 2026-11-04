@@ -26,7 +26,7 @@
 pub mod partition;
 
 use core::marker::PhantomData;
-use core::ops::{Add, Div, Mul, Neg, Sub};
+use core::ops::{Add, Div, Index, IndexMut, Mul, Neg, Sub};
 
 use cuda_device::DisjointSlice;
 
@@ -175,12 +175,18 @@ impl<T: Copy, const N: usize> RegisterTile<T, N> {
         Self(values)
     }
 
+    /// Broadcast one scalar into every lane of the register tile
+    /// (CuTeDSL `cute.full((N,), value)` / `vector.broadcast`).
+    #[must_use]
+    #[inline(always)]
+    pub fn splat(value: T) -> Self {
+        if N == 0 {
+            return Self(core::array::from_fn(|_| value));
+        }
+        __compiler::register_tile_broadcast::<T, N>(value)
+    }
+
     /// Construct registers by visiting each coordinate exactly once in order.
-    ///
-    /// Empty tiles never call the producer. Nonempty tiles initialize all
-    /// storage with the first produced value before replacing the remaining
-    /// coordinates. No default value or uninitialized storage is required.
-    /// The explicit fixed-trip loop is fully unrolled during device compilation.
     #[must_use]
     #[inline(always)]
     pub fn from_fn(mut f: impl FnMut(usize) -> T) -> Self {
@@ -189,26 +195,6 @@ impl<T: Copy, const N: usize> RegisterTile<T, N> {
         }
         let first = f(0);
         let mut values = [first; N];
-        if N == 1 {
-            return Self(values);
-        } else if N == 2 {
-            values[1] = f(1);
-            return Self(values);
-        } else if N == 4 {
-            values[1] = f(1);
-            values[2] = f(2);
-            values[3] = f(3);
-            return Self(values);
-        } else if N == 8 {
-            values[1] = f(1);
-            values[2] = f(2);
-            values[3] = f(3);
-            values[4] = f(4);
-            values[5] = f(5);
-            values[6] = f(6);
-            values[7] = f(7);
-            return Self(values);
-        }
         let mut i = 1;
         while i < N {
             cuda_device::thread::__unroll_config::<0>();
@@ -219,52 +205,13 @@ impl<T: Copy, const N: usize> RegisterTile<T, N> {
     }
 
     /// Transform each register value, preserving the tile's element count.
-    ///
-    /// Calls `f` exactly once per element in increasing order, and never for an
-    /// empty tile. A different output element type requires an explicit
-    /// conversion in `f`; this method performs no implicit numeric conversion.
     #[must_use]
     #[inline(always)]
     pub fn map<U: Copy>(self, mut f: impl FnMut(T) -> U) -> RegisterTile<U, N> {
-        if N == 0 {
-            return RegisterTile::from_fn(|i| f(self.0[i]));
-        }
-        let first = f(self.0[0]);
-        let mut values = [first; N];
-        if N == 1 {
-            return RegisterTile(values);
-        } else if N == 2 {
-            values[1] = f(self.0[1]);
-            return RegisterTile(values);
-        } else if N == 4 {
-            values[1] = f(self.0[1]);
-            values[2] = f(self.0[2]);
-            values[3] = f(self.0[3]);
-            return RegisterTile(values);
-        } else if N == 8 {
-            values[1] = f(self.0[1]);
-            values[2] = f(self.0[2]);
-            values[3] = f(self.0[3]);
-            values[4] = f(self.0[4]);
-            values[5] = f(self.0[5]);
-            values[6] = f(self.0[6]);
-            values[7] = f(self.0[7]);
-            return RegisterTile(values);
-        }
-        let mut i = 1;
-        while i < N {
-            cuda_device::thread::__unroll_config::<0>();
-            values[i] = f(self.0[i]);
-            i += 1;
-        }
-        RegisterTile(values)
+        RegisterTile::from_fn(|i| f(self.0[i]))
     }
 
     /// Transform corresponding values of two equally sized register tiles.
-    ///
-    /// The shared `N` rejects different element counts at compile time. Calls `f`
-    /// exactly once per element in increasing order, and never for empty tiles.
-    /// Input and output types can differ, with conversions expressed in `f`.
     #[must_use]
     #[inline(always)]
     pub fn zip_map<U: Copy, V: Copy>(
@@ -272,70 +219,13 @@ impl<T: Copy, const N: usize> RegisterTile<T, N> {
         rhs: RegisterTile<U, N>,
         mut f: impl FnMut(T, U) -> V,
     ) -> RegisterTile<V, N> {
-        if N == 0 {
-            return RegisterTile::from_fn(|i| f(self.0[i], rhs.0[i]));
-        }
-        let first = f(self.0[0], rhs.0[0]);
-        let mut values = [first; N];
-        if N == 1 {
-            return RegisterTile(values);
-        } else if N == 2 {
-            values[1] = f(self.0[1], rhs.0[1]);
-            return RegisterTile(values);
-        } else if N == 4 {
-            values[1] = f(self.0[1], rhs.0[1]);
-            values[2] = f(self.0[2], rhs.0[2]);
-            values[3] = f(self.0[3], rhs.0[3]);
-            return RegisterTile(values);
-        } else if N == 8 {
-            values[1] = f(self.0[1], rhs.0[1]);
-            values[2] = f(self.0[2], rhs.0[2]);
-            values[3] = f(self.0[3], rhs.0[3]);
-            values[4] = f(self.0[4], rhs.0[4]);
-            values[5] = f(self.0[5], rhs.0[5]);
-            values[6] = f(self.0[6], rhs.0[6]);
-            values[7] = f(self.0[7], rhs.0[7]);
-            return RegisterTile(values);
-        }
-        let mut i = 1;
-        while i < N {
-            cuda_device::thread::__unroll_config::<0>();
-            values[i] = f(self.0[i], rhs.0[i]);
-            i += 1;
-        }
-        RegisterTile(values)
+        RegisterTile::from_fn(|i| f(self.0[i], rhs.0[i]))
     }
 
     /// Reduce this thread's registers in increasing element order.
-    ///
-    /// The initial value chooses the accumulation type explicitly. Calls `f`
-    /// exactly once per element; an empty tile returns `initial`. This does
-    /// not communicate between threads or reassociate floating-point sums.
     #[must_use]
     #[inline(always)]
     pub fn fold<U>(self, initial: U, mut f: impl FnMut(U, T) -> U) -> U {
-        if N == 0 {
-            return initial;
-        } else if N == 1 {
-            return f(initial, self.0[0]);
-        } else if N == 2 {
-            let a0 = f(initial, self.0[0]);
-            return f(a0, self.0[1]);
-        } else if N == 4 {
-            let a0 = f(initial, self.0[0]);
-            let a1 = f(a0, self.0[1]);
-            let a2 = f(a1, self.0[2]);
-            return f(a2, self.0[3]);
-        } else if N == 8 {
-            let a0 = f(initial, self.0[0]);
-            let a1 = f(a0, self.0[1]);
-            let a2 = f(a1, self.0[2]);
-            let a3 = f(a2, self.0[3]);
-            let a4 = f(a3, self.0[4]);
-            let a5 = f(a4, self.0[5]);
-            let a6 = f(a5, self.0[6]);
-            return f(a6, self.0[7]);
-        }
         let mut accumulator = initial;
         let mut i = 0;
         while i < N {
@@ -347,9 +237,6 @@ impl<T: Copy, const N: usize> RegisterTile<T, N> {
     }
 
     /// Gather register coordinates into another fixed-size register tile.
-    ///
-    /// Coordinates are checked against `N`. Repeated coordinates implement
-    /// broadcasts; reordered coordinates implement register permutations.
     #[must_use]
     #[inline(always)]
     pub fn gather<const M: usize>(self, coordinates: [usize; M]) -> RegisterTile<T, M> {
@@ -376,27 +263,131 @@ impl<T: Copy, const N: usize> RegisterTile<T, N> {
     pub fn to<Dst: ToNumeric<T, N>>(self) -> Dst::Output {
         Dst::convert_tile(self)
     }
+
+    /// Reinterpret the bits of this register tile as `RegisterTile<Dst, M>` of equal total bit width
+    /// (CuTeDSL `TensorSSA.bitcast(dtype)`).
+    #[must_use]
+    #[inline(always)]
+    pub fn bitcast<Dst: BitcastNumeric<T, N, M>, const M: usize>(self) -> RegisterTile<Dst, M> {
+        Dst::bitcast_tile(self)
+    }
+
+    /// Extract a contiguous `M`-element sub-vector starting at `OFFSET`
+    /// (CuTeDSL `TensorSSA[OFFSET:OFFSET + M]` / `vector.extract_strided_slice`).
+    #[must_use]
+    #[inline(always)]
+    pub fn slice<const OFFSET: usize, const M: usize>(&self) -> RegisterTile<T, M> {
+        const { assert!(OFFSET + M <= N) };
+        if M == 0 {
+            return RegisterTile(core::array::from_fn(|i| self.0[OFFSET + i]));
+        }
+        __compiler::register_tile_slice::<T, N, OFFSET, M>(self)
+    }
+}
+
+/// CuTeDSL-aligned alias (`cutlass.cute.TensorSSA`) for [`RegisterTile`].
+pub type TensorSSA<T, const N: usize> = RegisterTile<T, N>;
+
+/// Reduction operator for [`RegisterTile::reduce`] (`cutlass.cute.ReductionOp`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReductionOp {
+    /// Elementwise sum reduction (`ReductionOp.ADD`).
+    Add,
+    /// Elementwise product reduction (`ReductionOp.MUL`).
+    Mul,
+    /// Elementwise maximum reduction (`ReductionOp.MAX`).
+    Max,
+    /// Elementwise minimum reduction (`ReductionOp.MIN`).
+    Min,
+}
+
+impl<T: Copy, const N: usize> Index<usize> for RegisterTile<T, N> {
+    type Output = T;
+
+    #[inline(always)]
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.0[index]
+    }
+}
+
+impl<T: Copy, const N: usize> IndexMut<usize> for RegisterTile<T, N> {
+    #[inline(always)]
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.0[index]
+    }
+}
+
+impl<const N: usize> RegisterTile<f32, N> {
+    /// Elementwise absolute value (CuTeDSL `abs(TensorSSA)` / `math.absf : vector<Nxf32>`).
+    #[must_use]
+    #[inline(always)]
+    pub fn abs(self) -> Self {
+        if N == 0 {
+            return self;
+        }
+        __compiler::register_tile_unary::<f32, N, 1>(&self)
+    }
+
+    /// Elementwise maximum with a broadcast scalar (`cute.arch.fmax` / `arith.maxnumf : vector<Nxf32>`).
+    #[must_use]
+    #[inline(always)]
+    pub fn fmax(self, rhs: f32) -> Self {
+        if N == 0 {
+            return self;
+        }
+        __compiler::register_tile_scalar::<f32, N, 4>(&self, rhs)
+    }
+
+    /// Reduce all elements using `op` starting from `init_val`
+    /// (CuTeDSL `TensorSSA.reduce(op, init_val)` / `vector.reduction`).
+    #[must_use]
+    #[inline(always)]
+    pub fn reduce(self, op: ReductionOp, init_val: f32) -> f32 {
+        if N == 0 {
+            return init_val;
+        }
+        match op {
+            ReductionOp::Add => __compiler::register_tile_reduce::<N, 0>(&self, init_val),
+            ReductionOp::Mul => __compiler::register_tile_reduce::<N, 1>(&self, init_val),
+            ReductionOp::Max => __compiler::register_tile_reduce::<N, 2>(&self, init_val),
+            ReductionOp::Min => __compiler::register_tile_reduce::<N, 3>(&self, init_val),
+        }
+    }
+}
+
+impl<T: Copy> RegisterTile<T, 2> {
+    /// Concatenate two 2-element register tiles into one 4-element [`RegisterTile<T, 4>`]
+    /// (`vector.shuffle`).
+    #[must_use]
+    #[inline(always)]
+    pub fn concat(self, high: Self) -> RegisterTile<T, 4> {
+        __compiler::register_tile_concat::<T, 2, 4>(&self, &high)
+    }
+}
+
+impl<T: Copy> RegisterTile<T, 4> {
+    /// Concatenate two 4-element register tiles into one 8-element [`RegisterTile<T, 8>`]
+    /// (`vector.shuffle`).
+    #[must_use]
+    #[inline(always)]
+    pub fn concat(self, high: Self) -> RegisterTile<T, 8> {
+        __compiler::register_tile_concat::<T, 4, 8>(&self, &high)
+    }
 }
 
 impl<T: Copy> RegisterTile<T, 8> {
-    /// Concatenate two 8-element register tiles (`self` as elements `0..8`, `high` as elements `8..16`)
-    /// into one 16-element [`RegisterTile<T, 16>`].
+    /// Concatenate two 8-element register tiles into one 16-element [`RegisterTile<T, 16>`]
+    /// (`vector.shuffle`).
     #[must_use]
     #[inline(always)]
-    pub const fn concat8(self, high: Self) -> RegisterTile<T, 16> {
-        let a = self.0;
-        let b = high.0;
-        RegisterTile([
-            a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], b[0], b[1], b[2], b[3], b[4], b[5],
-            b[6], b[7],
-        ])
+    pub fn concat(self, high: Self) -> RegisterTile<T, 16> {
+        __compiler::register_tile_concat::<T, 8, 16>(&self, &high)
     }
 }
 
 /// Target numeric format for [`RegisterTile::to`] (CuTeDSL `TensorSSA.to(dtype)`).
 pub trait ToNumeric<Src: Copy, const N: usize> {
-    /// Resulting register representation (`u32` for 8×`Float4E2M1FN`, `u64` for 16×`Float4E2M1FN`,
-    /// or `RegisterTile<Self, N>` for byte-addressable numeric types).
+    /// Resulting [`RegisterTile`] representation.
     type Output;
 
     /// Convert `tile` into `Self::Output`.
@@ -405,20 +396,21 @@ pub trait ToNumeric<Src: Copy, const N: usize> {
 }
 
 impl ToNumeric<f32, 8> for crate::numeric::Float4E2M1FN {
-    type Output = u32;
+    type Output = RegisterTile<crate::numeric::Float4E2M1FNx8, 1>;
 
     #[inline(always)]
-    fn convert_tile(tile: RegisterTile<f32, 8>) -> u32 {
+    fn convert_tile(tile: RegisterTile<f32, 8>) -> Self::Output {
         let [v0, v1, v2, v3, v4, v5, v6, v7] = tile.into_array();
-        crate::numeric::__compiler::cvt_f32x8_to_e2m1x8(v0, v1, v2, v3, v4, v5, v6, v7)
+        let bits = crate::numeric::__compiler::cvt_f32x8_to_e2m1x8(v0, v1, v2, v3, v4, v5, v6, v7);
+        RegisterTile([crate::numeric::Float4E2M1FNx8::from_bits(bits)])
     }
 }
 
 impl ToNumeric<f32, 16> for crate::numeric::Float4E2M1FN {
-    type Output = u64;
+    type Output = RegisterTile<crate::numeric::Float4E2M1FNx8, 2>;
 
     #[inline(always)]
-    fn convert_tile(tile: RegisterTile<f32, 16>) -> u64 {
+    fn convert_tile(tile: RegisterTile<f32, 16>) -> Self::Output {
         let [
             v0,
             v1,
@@ -437,12 +429,89 @@ impl ToNumeric<f32, 16> for crate::numeric::Float4E2M1FN {
             v14,
             v15,
         ] = tile.into_array();
-        let lo =
-            crate::numeric::__compiler::cvt_f32x8_to_e2m1x8(v0, v1, v2, v3, v4, v5, v6, v7) as u64;
+        let lo = crate::numeric::__compiler::cvt_f32x8_to_e2m1x8(v0, v1, v2, v3, v4, v5, v6, v7);
         let hi =
-            crate::numeric::__compiler::cvt_f32x8_to_e2m1x8(v8, v9, v10, v11, v12, v13, v14, v15)
-                as u64;
-        lo | (hi << 32)
+            crate::numeric::__compiler::cvt_f32x8_to_e2m1x8(v8, v9, v10, v11, v12, v13, v14, v15);
+        RegisterTile([
+            crate::numeric::Float4E2M1FNx8::from_bits(lo),
+            crate::numeric::Float4E2M1FNx8::from_bits(hi),
+        ])
+    }
+}
+
+impl<const N: usize> ToNumeric<f16, N> for f32 {
+    type Output = RegisterTile<f32, N>;
+
+    #[inline(always)]
+    fn convert_tile(tile: RegisterTile<f16, N>) -> Self::Output {
+        if N == 0 {
+            return RegisterTile(core::array::from_fn(|_| 0.0f32));
+        }
+        __compiler::register_tile_cast::<f16, f32, N, 5>(&tile)
+    }
+}
+
+impl<const N: usize> ToNumeric<f32, N> for f16 {
+    type Output = RegisterTile<f16, N>;
+
+    #[inline(always)]
+    fn convert_tile(tile: RegisterTile<f32, N>) -> Self::Output {
+        if N == 0 {
+            return RegisterTile(core::array::from_fn(|_| 0.0f16));
+        }
+        __compiler::register_tile_cast::<f32, f16, N, 4>(&tile)
+    }
+}
+
+/// Bit-preserving reinterpretation target for [`RegisterTile::bitcast`]
+/// (CuTeDSL `TensorSSA.bitcast(dtype)` / `vector.bitcast`).
+pub trait BitcastNumeric<Src: Copy, const N: usize, const M: usize>: Copy {
+    /// Reinterpret the bits of `tile` (`N` elements of `Src`) as `M` elements of `Self`.
+    #[must_use]
+    fn bitcast_tile(tile: RegisterTile<Src, N>) -> RegisterTile<Self, M>;
+}
+
+impl BitcastNumeric<crate::numeric::Float4E2M1FNx8, 1, 1> for u32 {
+    #[inline(always)]
+    fn bitcast_tile(tile: RegisterTile<crate::numeric::Float4E2M1FNx8, 1>) -> RegisterTile<u32, 1> {
+        __compiler::register_tile_bitcast::<crate::numeric::Float4E2M1FNx8, u32, 1, 1>(&tile)
+    }
+}
+
+impl BitcastNumeric<crate::numeric::Float4E2M1FNx8, 2, 1> for u64 {
+    #[inline(always)]
+    fn bitcast_tile(tile: RegisterTile<crate::numeric::Float4E2M1FNx8, 2>) -> RegisterTile<u64, 1> {
+        __compiler::register_tile_bitcast::<crate::numeric::Float4E2M1FNx8, u64, 2, 1>(&tile)
+    }
+}
+
+impl BitcastNumeric<crate::numeric::Float4E2M1FNx8, 2, 8> for u8 {
+    #[inline(always)]
+    fn bitcast_tile(tile: RegisterTile<crate::numeric::Float4E2M1FNx8, 2>) -> RegisterTile<u8, 8> {
+        __compiler::register_tile_bitcast::<crate::numeric::Float4E2M1FNx8, u8, 2, 8>(&tile)
+    }
+}
+
+impl BitcastNumeric<crate::numeric::Float4E2M1FNx8, 4, 1> for u128 {
+    #[inline(always)]
+    fn bitcast_tile(
+        tile: RegisterTile<crate::numeric::Float4E2M1FNx8, 4>,
+    ) -> RegisterTile<u128, 1> {
+        __compiler::register_tile_bitcast::<crate::numeric::Float4E2M1FNx8, u128, 4, 1>(&tile)
+    }
+}
+
+impl BitcastNumeric<crate::numeric::Float8E4M3FN, 4, 1> for u32 {
+    #[inline(always)]
+    fn bitcast_tile(tile: RegisterTile<crate::numeric::Float8E4M3FN, 4>) -> RegisterTile<u32, 1> {
+        __compiler::register_tile_bitcast::<crate::numeric::Float8E4M3FN, u32, 4, 1>(&tile)
+    }
+}
+
+impl BitcastNumeric<crate::numeric::BFloat16, 8, 1> for u128 {
+    #[inline(always)]
+    fn bitcast_tile(tile: RegisterTile<crate::numeric::BFloat16, 8>) -> RegisterTile<u128, 1> {
+        __compiler::register_tile_bitcast::<crate::numeric::BFloat16, u128, 8, 1>(&tile)
     }
 }
 
@@ -451,7 +520,12 @@ impl<const N: usize> ToNumeric<f32, N> for crate::numeric::BFloat16 {
 
     #[inline(always)]
     fn convert_tile(tile: RegisterTile<f32, N>) -> Self::Output {
-        tile.map(crate::numeric::BFloat16::from_f32)
+        if N == 0 {
+            return RegisterTile(core::array::from_fn(|_| {
+                crate::numeric::BFloat16::from_bits(0)
+            }));
+        }
+        __compiler::register_tile_cast::<f32, crate::numeric::BFloat16, N, 0>(&tile)
     }
 }
 
@@ -460,7 +534,10 @@ impl<const N: usize> ToNumeric<crate::numeric::BFloat16, N> for f32 {
 
     #[inline(always)]
     fn convert_tile(tile: RegisterTile<crate::numeric::BFloat16, N>) -> Self::Output {
-        tile.map(crate::numeric::BFloat16::to_f32)
+        if N == 0 {
+            return RegisterTile(core::array::from_fn(|_| 0.0f32));
+        }
+        __compiler::register_tile_cast::<crate::numeric::BFloat16, f32, N, 1>(&tile)
     }
 }
 
@@ -469,7 +546,12 @@ impl<const N: usize> ToNumeric<f32, N> for crate::numeric::Float8E4M3FN {
 
     #[inline(always)]
     fn convert_tile(tile: RegisterTile<f32, N>) -> Self::Output {
-        tile.map(crate::numeric::Float8E4M3FN::from_f32)
+        if N == 0 {
+            return RegisterTile(core::array::from_fn(|_| {
+                crate::numeric::Float8E4M3FN::from_bits(0)
+            }));
+        }
+        __compiler::register_tile_cast::<f32, crate::numeric::Float8E4M3FN, N, 2>(&tile)
     }
 }
 
@@ -478,7 +560,10 @@ impl<const N: usize> ToNumeric<crate::numeric::Float8E4M3FN, N> for f32 {
 
     #[inline(always)]
     fn convert_tile(tile: RegisterTile<crate::numeric::Float8E4M3FN, N>) -> Self::Output {
-        tile.map(crate::numeric::Float8E4M3FN::to_f32)
+        if N == 0 {
+            return RegisterTile(core::array::from_fn(|_| 0.0f32));
+        }
+        __compiler::register_tile_cast::<crate::numeric::Float8E4M3FN, f32, N, 3>(&tile)
     }
 }
 
@@ -487,13 +572,38 @@ impl<T: Copy + Add<Output = T>, const N: usize> Add for RegisterTile<T, N> {
     type Output = Self;
 
     #[inline(always)]
-    fn add(mut self, rhs: Self) -> Self::Output {
-        let mut i = 0;
-        while i < N {
-            self.0[i] = self.0[i] + rhs.0[i];
-            i += 1;
+    fn add(self, rhs: Self) -> Self::Output {
+        if N == 0 {
+            return self;
         }
-        self
+        #[cfg(target_os = "cuda")]
+        {
+            __compiler::register_tile_binary::<T, N, 0>(&self, &rhs)
+        }
+        #[cfg(not(target_os = "cuda"))]
+        {
+            Self(core::array::from_fn(|i| self.0[i] + rhs.0[i]))
+        }
+    }
+}
+
+/// Elementwise sum of a register tile and a broadcast scalar (CuTeDSL `TensorSSA + scalar`).
+impl<T: Copy + Add<Output = T>, const N: usize> Add<T> for RegisterTile<T, N> {
+    type Output = Self;
+
+    #[inline(always)]
+    fn add(self, rhs: T) -> Self::Output {
+        if N == 0 {
+            return self;
+        }
+        #[cfg(target_os = "cuda")]
+        {
+            __compiler::register_tile_scalar::<T, N, 0>(&self, rhs)
+        }
+        #[cfg(not(target_os = "cuda"))]
+        {
+            Self(core::array::from_fn(|i| self.0[i] + rhs))
+        }
     }
 }
 
@@ -502,13 +612,38 @@ impl<T: Copy + Sub<Output = T>, const N: usize> Sub for RegisterTile<T, N> {
     type Output = Self;
 
     #[inline(always)]
-    fn sub(mut self, rhs: Self) -> Self::Output {
-        let mut i = 0;
-        while i < N {
-            self.0[i] = self.0[i] - rhs.0[i];
-            i += 1;
+    fn sub(self, rhs: Self) -> Self::Output {
+        if N == 0 {
+            return self;
         }
-        self
+        #[cfg(target_os = "cuda")]
+        {
+            __compiler::register_tile_binary::<T, N, 1>(&self, &rhs)
+        }
+        #[cfg(not(target_os = "cuda"))]
+        {
+            Self(core::array::from_fn(|i| self.0[i] - rhs.0[i]))
+        }
+    }
+}
+
+/// Elementwise difference of a register tile and a broadcast scalar (CuTeDSL `TensorSSA - scalar`).
+impl<T: Copy + Sub<Output = T>, const N: usize> Sub<T> for RegisterTile<T, N> {
+    type Output = Self;
+
+    #[inline(always)]
+    fn sub(self, rhs: T) -> Self::Output {
+        if N == 0 {
+            return self;
+        }
+        #[cfg(target_os = "cuda")]
+        {
+            __compiler::register_tile_scalar::<T, N, 1>(&self, rhs)
+        }
+        #[cfg(not(target_os = "cuda"))]
+        {
+            Self(core::array::from_fn(|i| self.0[i] - rhs))
+        }
     }
 }
 
@@ -517,13 +652,18 @@ impl<T: Copy + Mul<Output = T>, const N: usize> Mul for RegisterTile<T, N> {
     type Output = Self;
 
     #[inline(always)]
-    fn mul(mut self, rhs: Self) -> Self::Output {
-        let mut i = 0;
-        while i < N {
-            self.0[i] = self.0[i] * rhs.0[i];
-            i += 1;
+    fn mul(self, rhs: Self) -> Self::Output {
+        if N == 0 {
+            return self;
         }
-        self
+        #[cfg(target_os = "cuda")]
+        {
+            __compiler::register_tile_binary::<T, N, 2>(&self, &rhs)
+        }
+        #[cfg(not(target_os = "cuda"))]
+        {
+            Self(core::array::from_fn(|i| self.0[i] * rhs.0[i]))
+        }
     }
 }
 
@@ -533,47 +673,209 @@ impl<T: Copy + Mul<Output = T>, const N: usize> Mul<T> for RegisterTile<T, N> {
 
     #[inline(always)]
     fn mul(self, rhs: T) -> Self::Output {
-        self.map(|x| x * rhs)
+        if N == 0 {
+            return self;
+        }
+        #[cfg(target_os = "cuda")]
+        {
+            __compiler::register_tile_scalar::<T, N, 2>(&self, rhs)
+        }
+        #[cfg(not(target_os = "cuda"))]
+        {
+            Self(core::array::from_fn(|i| self.0[i] * rhs))
+        }
     }
 }
 
 /// Elementwise quotient of two equally sized register tiles (CuTeDSL `TensorSSA / TensorSSA`
 /// for floating-point lanes).
-///
-/// Each lane divides with the element type's own `/`: integer lanes truncate
-/// toward zero and panic on a zero divisor like the scalar operator does.
-/// CuTeDSL differs on integer vectors: its `/` converts both operands to f32
-/// and divides in floating point, and its `//` floors. Parity holds for
-/// floating-point lanes only.
 impl<T: Copy + Div<Output = T>, const N: usize> Div for RegisterTile<T, N> {
     type Output = Self;
 
     #[inline(always)]
-    fn div(mut self, rhs: Self) -> Self::Output {
-        let mut i = 0;
-        while i < N {
-            self.0[i] = self.0[i] / rhs.0[i];
-            i += 1;
+    fn div(self, rhs: Self) -> Self::Output {
+        if N == 0 {
+            return self;
         }
-        self
+        #[cfg(target_os = "cuda")]
+        {
+            __compiler::register_tile_binary::<T, N, 3>(&self, &rhs)
+        }
+        #[cfg(not(target_os = "cuda"))]
+        {
+            Self(core::array::from_fn(|i| self.0[i] / rhs.0[i]))
+        }
     }
 }
 
 /// Elementwise negation of a register tile (CuTeDSL `-TensorSSA`).
-///
-/// Each lane is negated with the element type's own `-`, so a `+0.0` lane
-/// becomes `-0.0`; CuTeDSL computes `0 - x`, which leaves that lane `+0.0`.
 impl<T: Copy + Neg<Output = T>, const N: usize> Neg for RegisterTile<T, N> {
     type Output = Self;
 
     #[inline(always)]
-    fn neg(mut self) -> Self::Output {
-        let mut i = 0;
-        while i < N {
-            self.0[i] = -self.0[i];
-            i += 1;
+    fn neg(self) -> Self::Output {
+        if N == 0 {
+            return self;
         }
-        self
+        #[cfg(target_os = "cuda")]
+        {
+            __compiler::register_tile_unary::<T, N, 0>(&self)
+        }
+        #[cfg(not(target_os = "cuda"))]
+        {
+            Self(core::array::from_fn(|i| -self.0[i]))
+        }
+    }
+}
+
+/// Compiler hooks lowering [`RegisterTile`] (`TensorSSA`) operations to `dialect-cute` vector ops
+/// (`vector.broadcast`, `arith.*`, `math.absf`, `vector.reduction`, `vector.bitcast`,
+/// `vector.extract_strided_slice`, `vector.shuffle`).
+#[doc(hidden)]
+pub mod __compiler {
+    use super::RegisterTile;
+
+    /// Broadcast `value` across `N` lanes (`cute.vector_broadcast` -> `vector.broadcast`).
+    #[must_use]
+    #[inline(never)]
+    pub fn register_tile_broadcast<T: Copy, const N: usize>(value: T) -> RegisterTile<T, N> {
+        RegisterTile([value; N])
+    }
+
+    /// Elementwise binary op (`0=Add`, `1=Sub`, `2=Mul`, `3=Div`) (`cute.vector_binary`).
+    #[must_use]
+    #[inline(never)]
+    pub fn register_tile_binary<T: Copy, const N: usize, const OP: u8>(
+        lhs: &RegisterTile<T, N>,
+        _rhs: &RegisterTile<T, N>,
+    ) -> RegisterTile<T, N> {
+        *lhs
+    }
+
+    /// Elementwise vector-scalar op (`0=Add`, `1=Sub`, `2=Mul`, `3=Div`, `4=Max`) (`cute.vector_scalar`).
+    #[must_use]
+    #[inline(never)]
+    pub fn register_tile_scalar<T: Copy, const N: usize, const OP: u8>(
+        lhs: &RegisterTile<T, N>,
+        rhs: T,
+    ) -> RegisterTile<T, N> {
+        RegisterTile(core::array::from_fn(|i| {
+            let size = core::mem::size_of::<T>();
+            if OP == 4 && size == 4 {
+                let a = unsafe { core::mem::transmute_copy::<T, f32>(&lhs.0[i]) };
+                let b = unsafe { core::mem::transmute_copy::<T, f32>(&rhs) };
+                let r = a.max(b);
+                unsafe { core::mem::transmute_copy::<f32, T>(&r) }
+            } else {
+                lhs.0[i]
+            }
+        }))
+    }
+
+    /// Elementwise unary op (`0=Neg`, `1=Abs`) (`cute.vector_unary`).
+    #[must_use]
+    #[inline(never)]
+    pub fn register_tile_unary<T: Copy, const N: usize, const OP: u8>(
+        src: &RegisterTile<T, N>,
+    ) -> RegisterTile<T, N> {
+        RegisterTile(core::array::from_fn(|i| {
+            if OP == 1 && core::mem::size_of::<T>() == 4 {
+                let a = unsafe { core::mem::transmute_copy::<T, f32>(&src.0[i]) }.abs();
+                unsafe { core::mem::transmute_copy::<f32, T>(&a) }
+            } else {
+                src.0[i]
+            }
+        }))
+    }
+
+    /// Horizontal reduction (`0=Add`, `1=Mul`, `2=Max`, `3=Min`) (`cute.vector_reduce` -> `vector.reduction`).
+    #[must_use]
+    #[inline(never)]
+    pub fn register_tile_reduce<const N: usize, const OP: u8>(
+        src: &RegisterTile<f32, N>,
+        init: f32,
+    ) -> f32 {
+        src.0.iter().copied().fold(init, |acc, v| match OP {
+            0 => acc + v,
+            1 => acc * v,
+            2 => acc.max(v),
+            _ => acc.min(v),
+        })
+    }
+
+    /// Elementwise numeric cast (`cute.vector_cast` -> `arith.truncf` / `arith.extf`).
+    #[must_use]
+    #[inline(never)]
+    pub fn register_tile_cast<Src: Copy, Dst: Copy, const N: usize, const KIND: u8>(
+        src: &RegisterTile<Src, N>,
+    ) -> RegisterTile<Dst, N> {
+        RegisterTile(core::array::from_fn(|i| match KIND {
+            0 => {
+                let v = unsafe { core::mem::transmute_copy::<Src, f32>(&src.0[i]) };
+                let b = crate::numeric::BFloat16::from_f32(v);
+                unsafe { core::mem::transmute_copy::<crate::numeric::BFloat16, Dst>(&b) }
+            }
+            1 => {
+                let b = unsafe {
+                    core::mem::transmute_copy::<Src, crate::numeric::BFloat16>(&src.0[i])
+                };
+                let v = b.to_f32();
+                unsafe { core::mem::transmute_copy::<f32, Dst>(&v) }
+            }
+            2 => {
+                let v = unsafe { core::mem::transmute_copy::<Src, f32>(&src.0[i]) };
+                let b = crate::numeric::Float8E4M3FN::from_f32(v);
+                unsafe { core::mem::transmute_copy::<crate::numeric::Float8E4M3FN, Dst>(&b) }
+            }
+            3 => {
+                let b = unsafe {
+                    core::mem::transmute_copy::<Src, crate::numeric::Float8E4M3FN>(&src.0[i])
+                };
+                let v = b.to_f32();
+                unsafe { core::mem::transmute_copy::<f32, Dst>(&v) }
+            }
+            4 => {
+                let v = unsafe { core::mem::transmute_copy::<Src, f32>(&src.0[i]) } as f16;
+                unsafe { core::mem::transmute_copy::<f16, Dst>(&v) }
+            }
+            _ => {
+                let v = unsafe { core::mem::transmute_copy::<Src, f16>(&src.0[i]) } as f32;
+                unsafe { core::mem::transmute_copy::<f32, Dst>(&v) }
+            }
+        }))
+    }
+
+    /// Bit-preserving vector reinterpretation (`cute.vector_bitcast` -> `vector.bitcast`).
+    #[must_use]
+    #[inline(never)]
+    pub fn register_tile_bitcast<Src: Copy, Dst: Copy, const N: usize, const M: usize>(
+        src: &RegisterTile<Src, N>,
+    ) -> RegisterTile<Dst, M> {
+        const {
+            assert!(N * core::mem::size_of::<Src>() == M * core::mem::size_of::<Dst>());
+        }
+        unsafe { core::mem::transmute_copy(src) }
+    }
+
+    /// Contiguous sub-vector extraction (`cute.vector_slice` -> `vector.extract_strided_slice`).
+    #[must_use]
+    #[inline(never)]
+    pub fn register_tile_slice<T: Copy, const N: usize, const OFFSET: usize, const M: usize>(
+        src: &RegisterTile<T, N>,
+    ) -> RegisterTile<T, M> {
+        RegisterTile(core::array::from_fn(|i| src.0[OFFSET + i]))
+    }
+
+    /// Concatenate two `N`-element register tiles into one `M`-element register tile (`cute.vector_concat` -> `vector.shuffle`).
+    #[must_use]
+    #[inline(never)]
+    pub fn register_tile_concat<T: Copy, const N: usize, const M: usize>(
+        low: &RegisterTile<T, N>,
+        high: &RegisterTile<T, N>,
+    ) -> RegisterTile<T, M> {
+        RegisterTile(core::array::from_fn(|i| {
+            if i < N { low.0[i] } else { high.0[i - N] }
+        }))
     }
 }
 

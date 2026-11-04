@@ -52,14 +52,13 @@ use cute_rs::arch::{
     elect_one_sync, make_warp_uniform, mbarrier_init_fence, rsqrt_f32, setmaxregister_decrease,
     setmaxregister_increase, tcgen05_fence_before_thread_sync, thread_idx, warp_idx,
 };
-use cute_rs::attention::sm100::pipeline::{
+use cute_rs::nvgpu::cpasync::TmaCopy;
+use cute_rs::nvgpu::tcgen05::{MmaSs, SharedTile, SharedTileArray, TmemFragment, tmem_row_address};
+use cute_rs::pipeline::sm100::{
     AsyncCompletion, AsyncCopyReuse, Consumer, Producer, RingCursor, TensorMemory, TwoCtaRing,
 };
-use cute_rs::attention::sm100::{
-    MmaSs, SharedTile, SharedTileArray, TmaCopy, TmemFragment, tmem_row_address,
-};
-use cute_rs::sm100::{Sm100DeallocBarrier, Sm100Tmem};
 use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
+use cute_rs::utils::tmem_allocator::{Sm100DeallocBarrier, Sm100Tmem};
 use cute_rs::{
     ColMajor, ComposedLayout, GlobalStoreTile, OperandA, OperandB, PersistentTileSchedulerParams,
     RowMajor, Swizzle, TensorMap, crd2idx_col_major_2d, crd2idx_row_major_2d, crd2idx_row_major_3d,

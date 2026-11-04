@@ -22,12 +22,12 @@ use rustc_public::ty::{GenericArgKind, GenericArgs, RigidTy, Ty, TyKind};
 use super::smem_mma::canonical_data_placement;
 use super::tensor::{canonical_adt_path, const_arg, exact_schema, unsigned_const};
 
-/// Exact defining path of `cute_rs::epilogue::sm120::Sm120Epilogue128x128`; public reexports do not change it.
-const EPILOGUE_TILE: &str = "cute_rs::epilogue::sm120::Sm120Epilogue128x128";
-/// Exact defining path of `cute_rs::epilogue::sm120::Sm120EpilogueWarp128x128`; public reexports do not change it.
-const EPILOGUE_WARP_SLICE: &str = "cute_rs::epilogue::sm120::Sm120EpilogueWarp128x128";
-/// Exact defining path of `cute_rs::mma::block_scaled::fragments::Mxf4AccumulatorTile2x8`; public reexports do not change it.
-const ACCUMULATOR: &str = "cute_rs::mma::block_scaled::fragments::Mxf4AccumulatorTile2x8";
+/// Exact defining path of `cute_rs::nvgpu::warp::epilogue::Sm120Epilogue128x128`; public reexports do not change it.
+const EPILOGUE_TILE: &str = "cute_rs::nvgpu::warp::epilogue::Sm120Epilogue128x128";
+/// Exact defining path of `cute_rs::nvgpu::warp::epilogue::Sm120EpilogueWarp128x128`; public reexports do not change it.
+const EPILOGUE_WARP_SLICE: &str = "cute_rs::nvgpu::warp::epilogue::Sm120EpilogueWarp128x128";
+/// Exact defining path of `cute_rs::nvgpu::warp::block_scaled::fragments::Mxf4AccumulatorTile2x8`; public reexports do not change it.
+const ACCUMULATOR: &str = "cute_rs::nvgpu::warp::block_scaled::fragments::Mxf4AccumulatorTile2x8";
 /// Exact defining path of `cute_rs::pipeline::PipelineTmaStore`; public reexports do not change it.
 const TMA_STORE_PIPELINE: &str = "cute_rs::pipeline::PipelineTmaStore";
 

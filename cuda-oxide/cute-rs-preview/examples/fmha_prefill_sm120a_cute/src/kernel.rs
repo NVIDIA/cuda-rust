@@ -14,7 +14,7 @@ use cute_rs::arch::{
     NamedBarrier, cp_async_commit_group, cp_async_wait_group, exp2_ftz_f32, fmax_f32,
     reciprocal_ftz_f32, threadquad_reduce_max_f32, threadquad_reduce_sum_f32,
 };
-use cute_rs::markers::{
+use cute_rs::layout::{
     C, ComposedLayout, CopyG2S, CopyUniversal, Layout, LeadingDim, RowMajor, Swizzle,
 };
 use cute_rs::{FragmentA, FragmentBPair, FragmentC, GmemMatrix, SmemTile, TiledCopy};

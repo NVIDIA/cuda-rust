@@ -1291,8 +1291,7 @@ pub mod kernels_192e {
 
                     let mut n = row8;
                     while n < limit {
-                        let route =
-                            slice_read(group_routes, group * GROUP_TILE_ROWS + n) as usize;
+                        let route = slice_read(group_routes, group * GROUP_TILE_ROWS + n) as usize;
                         let token = route >> 2;
                         let sw = global_scale * bf16_to_f32(slice_read(routing_weights, route));
                         let q0_a = *smem_epi0_u128.add(n * 32 + col16 * 2);

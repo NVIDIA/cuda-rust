@@ -27,7 +27,7 @@ use cute_rs::arch::{
     NamedBarrier, block_idx_in_cluster, cluster_arrive_relaxed, cluster_wait, elect_one_sync,
     fence_view_async_shared, mbarrier_init_fence,
 };
-use cute_rs::sm100::PipelineTmaStore;
+use cute_rs::pipeline::PipelineTmaStoreSm100 as PipelineTmaStore;
 use cute_rs::tensor::partition::StridedTensor;
 use cute_rs::{
     ComposedLayout, OperandA, OperandB, PipelineTmaUmma, PipelineUmmaAsync, RowMajor,

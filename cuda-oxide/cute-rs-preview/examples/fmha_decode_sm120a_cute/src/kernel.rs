@@ -17,8 +17,8 @@ use cute_rs::arch::{
     NamedBarrier, exp2_f32, quad_sum_f32, reciprocal_ftz_f32, warp_reduction_max_f32,
     warp_reduction_sum_f32,
 };
-use cute_rs::copy::cooperative::finish_async_copies;
-use cute_rs::markers::{C, ComposedLayout, CopyG2S, Layout, LeadingDim, RowMajor, Swizzle};
+use cute_rs::atom::cooperative::finish_async_copies;
+use cute_rs::layout::{C, ComposedLayout, CopyG2S, Layout, LeadingDim, RowMajor, Swizzle};
 use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
 use cute_rs::{GmemMatrix, SmemTile, TiledCopy};
 

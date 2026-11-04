@@ -63,15 +63,14 @@ impl BFloat16 {
     #[must_use]
     #[inline(always)]
     pub fn from_f32(value: f32) -> Self {
-        let bits = value.to_bits();
-        Self(((bits.wrapping_add(0x7FFF + ((bits >> 16) & 1))) >> 16) as u16)
+        Self(cuda_device::convert::f32_to_bf16_rne(value))
     }
 
     /// Widen to FP32 exactly, retaining all BF16 payload bits.
     #[must_use]
     #[inline(always)]
     pub fn to_f32(self) -> f32 {
-        ctm_rs::convert::bf16_to_f32(self.0)
+        cuda_device::convert::bf16_to_f32(self.0)
     }
 }
 
@@ -87,11 +86,11 @@ impl TensorElement<BFloat16> for BFloat16 {}
 pub fn silu_bf16(value: BFloat16) -> BFloat16 {
     let value = value.to_f32();
     let sigmoid = if value >= 0.0 {
-        let e = ctm_rs::float::ex2_approx_f32(-value * core::f32::consts::LOG2_E);
-        ctm_rs::float::rcp_approx_ftz_f32(1.0 + e)
+        let e = crate::arch::exp2_f32(-value * core::f32::consts::LOG2_E);
+        crate::arch::reciprocal_ftz_f32(1.0 + e)
     } else {
-        let e = ctm_rs::float::ex2_approx_f32(value * core::f32::consts::LOG2_E);
-        e * ctm_rs::float::rcp_approx_ftz_f32(1.0 + e)
+        let e = crate::arch::exp2_f32(value * core::f32::consts::LOG2_E);
+        e * crate::arch::reciprocal_ftz_f32(1.0 + e)
     };
     BFloat16::from_f32(value * sigmoid)
 }

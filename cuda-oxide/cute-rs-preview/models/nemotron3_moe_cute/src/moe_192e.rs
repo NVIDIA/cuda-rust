@@ -21,10 +21,11 @@ use cute_rs::arch::{
     NamedBarrier, fence_view_async_shared, fence_view_async_tmem_load,
     tcgen05_fence_after_thread_sync, tcgen05_fence_before_thread_sync,
 };
-use cute_rs::attention::sm100::pipeline::SingleCtaRing;
-use cute_rs::attention::sm100::{TmemAllocator, TmemFragment, tmem_row_address};
-use cute_rs::copy::tma::{TmaEncodeOptions, create_tensor_map_tiled_with_options};
+use cute_rs::nvgpu::cpasync::{TmaEncodeOptions, create_tensor_map_tiled_with_options};
+use cute_rs::nvgpu::tcgen05::{TmemFragment, tmem_row_address};
+use cute_rs::pipeline::sm100::SingleCtaRing;
 use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
+use cute_rs::utils::tmem_allocator::TmemAllocator;
 use cute_rs::{
     BFloat16, Consumer, Mkl, Nkl, OperandA, OperandB, PipelineState, PipelineTmaAsync, Producer,
     RowMajor, Sm100BlockScaledTiledMma, Sm100ScaleTile, Sm100SharedTile, SmemTile, Tensor,

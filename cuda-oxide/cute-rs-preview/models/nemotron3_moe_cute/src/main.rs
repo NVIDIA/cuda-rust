@@ -69,8 +69,6 @@
 
 #![feature(f16)]
 
-use core::marker::PhantomData;
-use ctm_rs::mbarrier::Barrier;
 use ctm_rs::memory::{DisjointSlice, DynamicSharedArray, SharedArray};
 use ctm_rs::{cuda_module, kernel, launch_bounds, launch_contract, thread};
 use cuda_core::{
@@ -80,13 +78,14 @@ use cute_rs::arch::{
     NamedBarrier, fence_view_async_shared, fence_view_async_tmem_load,
     tcgen05_fence_after_thread_sync, tcgen05_fence_before_thread_sync,
 };
-use cute_rs::attention::sm100::pipeline::SingleCtaRing;
-use cute_rs::attention::sm100::{TmemAllocator, TmemFragment, tmem_row_address};
-use cute_rs::block_scaled::{
+use cute_rs::nvgpu::cpasync::{TmaEncodeOptions, create_tensor_map_tiled_with_options};
+use cute_rs::nvgpu::tcgen05::{TmemFragment, tmem_row_address};
+use cute_rs::pipeline::sm100::SingleCtaRing;
+use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
+use cute_rs::utils::blockscaled::{
     CANONICAL_SCALE_ATOM_BYTES, CANONICAL_SCALE_K_GROUPS, CANONICAL_SCALE_M, Sm1xxBlockScaleKMajor,
 };
-use cute_rs::copy::tma::{TmaEncodeOptions, create_tensor_map_tiled_with_options};
-use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
+use cute_rs::utils::tmem_allocator::TmemAllocator;
 use cute_rs::{
     BFloat16, BlockScaledTensor, ComposedLayout, Consumer, Float4E2M1FN, Float8E4M3FN, KMajor, Mkl,
     Nkl, OperandA, OperandB, PipelineState, PipelineTmaAsync, Producer, RowMajor,
@@ -201,7 +200,7 @@ type SharedActTile = Sm100SharedTile<ActTileSmem, OperandB>;
 
 /// Role-checked shared-memory B operand tile for `128`-token groups (`OperandB` role + `ActTile128Smem` layout).
 /// Paired with [`SharedWeightTile`] inside [`Sm100BlockScaledTiledMma::copy_b_scales_and_gemm_128_burst`].
-type SharedAct128Tile = Sm100SharedTile<ActTile128Smem, OperandB>;
+type SharedAct128Tile = Sm100SharedTile<ActTile128Smem, OperandA>;
 
 /// Role-checked shared-memory A scale tile (`Mkl` role + canonical `Sm120ScaleAtom` layout).
 /// Stages `W_up` / `W_down` `Float8E4M3FN` scales before `tcgen05.cp` copies them into TMEM.
@@ -496,7 +495,7 @@ mod kernels {
                     let (r_u32, g_u32) = idx2crd_col_major_2d(perms[slot] as u32, 256);
                     let (g, r) = (g_u32 as usize, r_u32 as usize);
                     let u64_idx = sm100_noswizzle_burst_u64_crd2idx::<256>(g, r, grp, 2);
-                    let s_idx = sm1xx_block_scale_crd2idx(g, r, grp, 2, 16);
+                    let s_idx = sm1xx_block_scale_crd2idx(g * 16 + grp / 4, r, grp % 4, 2, 1);
                     b_u64_out.store_at(u64_idx, packed_u64);
                     sfb_out.store_at(s_idx, scale_code);
                     slot += 1;
@@ -592,6 +591,7 @@ mod kernels {
         let relu = if scaled > 0.0 { scaled } else { 0.0 };
         let activated = relu * relu;
 
+        #[allow(static_mut_refs)]
         let mut smem_act =
             unsafe { StridedTensorMut::<f32>::from_raw_parts(SMEM_ACT.as_mut_ptr(), 16, 1) };
         if lane == 0 {
@@ -604,6 +604,7 @@ mod kernels {
         }
 
         if tid == 0 {
+            #[allow(static_mut_refs)]
             let smem_act_ro =
                 unsafe { StridedTensor::<f32>::from_raw_parts(SMEM_ACT.as_ptr(), 16, 1) };
             let mut max_abs = 0.0f32;
@@ -781,7 +782,7 @@ mod kernels {
         tmem_d: u32,
         sfa_tmem_base: u32,
         sfb_tmem_base: u32,
-        s_a: &SharedWeightTile,
+        s_a: &Sm100SharedTile<WeightTileSmem, OperandB>,
         s_b: &SharedAct128Tile,
         s_sfb: &SharedActScales,
         first_burst: bool,
@@ -791,7 +792,7 @@ mod kernels {
                 let sa = sfa_tmem_base + ($s as u32) * 4;
                 let sb = sfb_tmem_base + ($s as u32) * 4;
                 TiledMma128::copy(sb, s_sfb, $s);
-                tiled_mma.gemm(tmem_d, s_a, s_b, sa, sb, $s, $acc);
+                tiled_mma.gemm(tmem_d, s_b, s_a, sb, sa, $s, $acc);
             }};
         }
         unsafe {
@@ -885,6 +886,7 @@ mod kernels {
             }
             if warp_id == 0 {
                 TmemAllocator::<512, 1>::allocate(slot_ptr);
+                TmemAllocator::<512, 1>::relinquish_alloc_permit();
             }
             pipeline.init(0);
 
@@ -964,7 +966,7 @@ mod kernels {
                     if tid < 128 {
                         let tmem_row_base = tmem_row_address(tmem_addr, warp_id, 0);
                         let mut n_base = 0usize;
-                        while n_base + 16 <= limit {
+                        while n_base < valid_n {
                             let r0 =
                                 TmemFragment::<16>::load_deferred(tmem_row_base + (n_base as u32));
                             let mut c = 0usize;
@@ -1006,11 +1008,16 @@ mod kernels {
                             packed_u64 |= fast_pos_e2m1(vals[idx_e] * inv_e2m1) << (idx_e * 4);
                             idx_e += 1;
                         }
-                        let s_idx = sm1xx_block_scale_crd2idx(group, n, grp, 2, 16);
+                        let s_idx =
+                            sm1xx_block_scale_crd2idx(group * 16 + grp / 4, n, grp % 4, 2, 1);
                         let u64_idx = sm100_noswizzle_burst_u64_crd2idx::<256>(group, n, grp, 2);
                         scales_out.store_at(s_idx, scale_code);
                         vals_u64_out.store_at(u64_idx, packed_u64);
                         n += 64;
+                    }
+                    if g_idx + 1 < groups_per_cta && tid == 0 {
+                        b_free_ring.commit_threads((g_idx * 2) as u32);
+                        b_free_ring.commit_threads((g_idx * 2 + 1) as u32);
                     }
                     fence_view_async_shared();
                     NamedBarrier::<1, 512>::sync();
@@ -1142,6 +1149,7 @@ mod kernels {
             }
             if warp_id == 0 {
                 TmemAllocator::<512, 1>::allocate(slot_ptr);
+                TmemAllocator::<512, 1>::relinquish_alloc_permit();
             }
             pipeline.init(0);
 
@@ -1218,7 +1226,7 @@ mod kernels {
                     if tid < 128 {
                         let tmem_row_base = tmem_row_address(tmem_addr, warp_id, 0);
                         let mut n_base = 0usize;
-                        while n_base + 16 <= limit {
+                        while n_base < valid_n {
                             let r0 =
                                 TmemFragment::<16>::load_deferred(tmem_row_base + (n_base as u32));
                             let mut c = 0usize;
@@ -1422,6 +1430,7 @@ mod kernels {
             }
             if warp_id == 0 {
                 TmemAllocator::<512, 1>::allocate(slot_ptr);
+                TmemAllocator::<512, 1>::relinquish_alloc_permit();
             }
             b_pipeline.init(0);
 
@@ -1431,8 +1440,8 @@ mod kernels {
                 while step < total_steps {
                     let slot = b_prod.index();
                     let w_burst = step & 1;
-                    if step >= 4 {
-                        b_free_ring.wait((step - 4) as u32);
+                    if step >= 2 {
+                        b_free_ring.wait((step - 2) as u32);
                     }
                     b_pipeline.producer_acquire(&b_prod);
                     let b_bar = b_pipeline.producer_expect_tx(&b_prod);
@@ -1501,8 +1510,11 @@ mod kernels {
                                 );
                             }
                             let slot = b_cons.index();
-                            let s_a =
-                                SharedWeightTile::from_stage_bytes(dyn_smem, SMEM_A_OFFSET, burst);
+                            let s_a = Sm100SharedTile::<WeightTileSmem, OperandB>::from_stage_bytes(
+                                dyn_smem,
+                                SMEM_A_OFFSET,
+                                burst,
+                            );
                             let s_b =
                                 SharedAct128Tile::from_stage_bytes(dyn_smem, SMEM_B_OFFSET, slot);
                             let s_sfb = SharedActScales::from_stage_bytes(
@@ -1524,7 +1536,7 @@ mod kernels {
                             b_pipeline.consumer_release(&b_cons);
                             b_cons.advance();
                         }
-                        if step + 4 < total_steps {
+                        if step + 2 < total_steps {
                             b_free_ring.commit_mma(step as u32);
                         }
                         if burst == 1 {
@@ -1663,6 +1675,7 @@ mod kernels {
             }
             if warp_id == 0 {
                 TmemAllocator::<512, 1>::allocate(slot_ptr);
+                TmemAllocator::<512, 1>::relinquish_alloc_permit();
             }
             b_pipeline.init(0);
 
@@ -1672,8 +1685,8 @@ mod kernels {
                 while step < total_steps {
                     let slot = b_prod.index();
                     let w_burst = step & 1;
-                    if step >= 4 {
-                        b_free_ring.wait((step - 4) as u32);
+                    if step >= 2 {
+                        b_free_ring.wait((step - 2) as u32);
                     }
                     b_pipeline.producer_acquire(&b_prod);
                     let b_bar = b_pipeline.producer_expect_tx(&b_prod);
@@ -1747,8 +1760,11 @@ mod kernels {
                                 );
                             }
                             let slot = b_cons.index();
-                            let s_a =
-                                SharedWeightTile::from_stage_bytes(dyn_smem, SMEM_A_OFFSET, burst);
+                            let s_a = Sm100SharedTile::<WeightTileSmem, OperandB>::from_stage_bytes(
+                                dyn_smem,
+                                SMEM_A_OFFSET,
+                                burst,
+                            );
                             let s_b =
                                 SharedAct128Tile::from_stage_bytes(dyn_smem, SMEM_B_OFFSET, slot);
                             let s_sfb = SharedActScales::from_stage_bytes(
@@ -1770,7 +1786,7 @@ mod kernels {
                             b_pipeline.consumer_release(&b_cons);
                             b_cons.advance();
                         }
-                        if step + 4 < total_steps {
+                        if step + 2 < total_steps {
                             b_free_ring.commit_mma(step as u32);
                         }
                         if burst == 1 {

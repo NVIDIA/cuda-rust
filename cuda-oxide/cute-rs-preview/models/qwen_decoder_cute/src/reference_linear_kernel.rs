@@ -23,7 +23,9 @@ use cute_rs::BFloat16;
 #[cuda_module]
 pub mod kernels {
     use super::*;
-    use cute_rs::mma::bf16::{APartition, BPartition, Bf16Mma16x8x16, FragmentC, PackedDecode};
+    use cute_rs::nvgpu::warp::bf16::{
+        APartition, BPartition, Bf16Mma16x8x16, FragmentC, PackedDecode,
+    };
     use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
     use cute_rs::{RegisterTile, Tensor};
 

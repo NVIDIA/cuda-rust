@@ -15,8 +15,8 @@ use cute_rs::BFloat16;
 #[cuda_module]
 pub mod kernels {
     use super::*;
-    use cute_rs::mma::bf16::{Bf16Mma16x8x16, FragmentC, PackedDecode};
     use cute_rs::numeric::silu_bf16 as silu;
+    use cute_rs::nvgpu::warp::bf16::{Bf16Mma16x8x16, FragmentC, PackedDecode};
 
     /// Read `(row, col)` from an element-strided row-major BF16 matrix.
     ///

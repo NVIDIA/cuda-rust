@@ -9,7 +9,7 @@ use ctm_rs::{
     thread,
 };
 use cute_rs::arch::NamedBarrier;
-use cute_rs::markers::{C, ComposedLayout, CopyG2S, Layout, LeadingDim, RowMajor, Swizzle};
+use cute_rs::layout::{C, ComposedLayout, CopyG2S, Layout, LeadingDim, RowMajor, Swizzle};
 use cute_rs::static_layout::StaticLayout;
 use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
 use cute_rs::{BFloat16, GmemMatrix, RegisterTile, SmemTile, TiledCopy};
@@ -225,7 +225,7 @@ pub mod kernels {
                 values,
                 tid as u32,
             );
-            cute_rs::copy::cooperative::finish_async_copies::<1, 128>();
+            cute_rs::atom::cooperative::finish_async_copies::<1, 128>();
 
             let query_base = (query_row * query_heads as usize + query_head) * 128;
             // Four neighboring lanes sum 32 dimensions apiece. Two passes

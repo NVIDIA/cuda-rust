@@ -34,14 +34,14 @@ use cute_rs::arch::{
     setmaxregister_increase, unpack_f32x2_hi, unpack_f32x2_lo, vote_all_sync,
     warp_reduction_max_f32, warp_reduction_sum_f32,
 };
-use cute_rs::attention::sm100::pipeline::{
+use cute_rs::nvgpu::cpasync::TmaCopy;
+use cute_rs::nvgpu::tcgen05::{MmaSs, SharedTile, SharedTileArray, TmemFragment, tmem_row_address};
+use cute_rs::pipeline::sm100::{
     AsyncCompletion, AsyncCopyReuse, Consumer, LocalMemory, LocalShared, Producer, RingCursor,
     SharedReuse, SharedToAsync, TensorMemory, TwoCtaRing,
 };
-use cute_rs::attention::sm100::{
-    MmaSs, SharedTile, SharedTileArray, TmaCopy, TmemAllocator, TmemFragment, tmem_row_address,
-};
 use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
+use cute_rs::utils::tmem_allocator::TmemAllocator;
 use cute_rs::{
     ColMajor, ComposedLayout, GlobalStoreTile, OperandA, OperandB, RegisterTile, RowMajor, Swizzle,
     TensorMap, size_in_bytes,

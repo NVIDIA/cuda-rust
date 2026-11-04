@@ -7,6 +7,10 @@
 mod attention;
 /// CuTe shared-memory staging, 64-key partial attention, and split merging.
 mod attention_kernel;
+/// Checked host metadata for BF16 attention and contiguous key/value caches.
+#[allow(dead_code)]
+#[path = "../../common/attention_metadata.rs"]
+pub(crate) mod attention_metadata;
 /// Independent FP64 grouped-query attention oracle.
 mod attention_reference;
 /// GPU fixtures for causal windows, split tails, and incremental attention.

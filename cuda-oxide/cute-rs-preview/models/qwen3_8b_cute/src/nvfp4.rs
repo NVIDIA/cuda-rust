@@ -22,6 +22,7 @@
 //! assert_eq!(reconstructed.len(), 64);
 //! ```
 
+use crate::ffn::{ProjectionRole, ProjectionWeights};
 use crate::model::Batch;
 use crate::operator::Result;
 use ctm_rs::memory::{DisjointSlice, DynamicSharedArray};
@@ -29,13 +30,12 @@ use ctm_rs::{cuda_module, kernel, launch_bounds, thread};
 use cuda_core::LaunchConfig;
 use cuda_core::{CudaStream, DeviceBuffer};
 use cute_rs::arch::NamedBarrier;
-use cute_rs::block_scaled::{
+use cute_rs::atom::cooperative::finish_async_copies;
+use cute_rs::layout::{C, ComposedLayout, CopyG2S, Layout, LeadingDim, RowMajor, Swizzle};
+use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
+use cute_rs::utils::blockscaled::{
     CANONICAL_SCALE_ATOM_BYTES, CANONICAL_SCALE_K_GROUPS, CANONICAL_SCALE_M,
 };
-use cute_rs::copy::cooperative::finish_async_copies;
-use cute_rs::ffn::{ProjectionRole, ProjectionWeights};
-use cute_rs::markers::{C, ComposedLayout, CopyG2S, Layout, LeadingDim, RowMajor, Swizzle};
-use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
 use cute_rs::{
     BFloat16, BlockScaledTensor, Float4E2M1FN, Float4E2M1FNx2, Float8E4M3FN, FragmentC, GmemMatrix,
     KMajor, Mkl, Nkl, Nvfp4TiledMma, RegisterTile, Sm1xxBlockScaleKMajor, SmemTile, Tensor,

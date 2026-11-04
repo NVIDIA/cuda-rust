@@ -39,10 +39,10 @@ const LAYOUT: &str = "cute_layout::markers::Layout";
 const ROW_MAJOR: &str = "cute_layout::markers::RowMajor";
 /// Exact defining path of `cute_layout::markers::ColMajor`; public reexports do not change it.
 const COL_MAJOR: &str = "cute_layout::markers::ColMajor";
-/// Exact defining path of `cute_rs::markers::CopyG2S`; public reexports do not change it.
-const COPY_G2S: &str = "cute_rs::markers::CopyG2S";
-/// Exact defining path of `cute_rs::markers::LeadingDim`; public reexports do not change it.
-const LEADING_DIM: &str = "cute_rs::markers::LeadingDim";
+/// Exact defining path of `cute_rs::layout::CopyG2S`; public reexports do not change it.
+const COPY_G2S: &str = "cute_rs::layout::CopyG2S";
+/// Exact defining path of `cute_rs::layout::LeadingDim`; public reexports do not change it.
+const LEADING_DIM: &str = "cute_rs::layout::LeadingDim";
 /// Exact defining path of `cute_layout::markers::Swizzle`; public reexports do not change it.
 const SWIZZLE: &str = "cute_layout::markers::Swizzle";
 /// Exact defining path of `cute_layout::markers::ComposedLayout`; public reexports do not change it.

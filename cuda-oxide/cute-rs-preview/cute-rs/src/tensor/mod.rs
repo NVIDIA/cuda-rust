@@ -30,7 +30,7 @@ use core::ops::{Add, Div, Mul, Neg, Sub};
 
 use cuda_device::DisjointSlice;
 
-use crate::copy::vector::{assume, load_tile, store_tile};
+use crate::atom::vector::{assume, load_tile, store_tile};
 
 /// Says which Rust storage type may hold one or more logical elements.
 ///
@@ -211,7 +211,7 @@ impl<T: Copy, const N: usize> RegisterTile<T, N> {
         }
         let mut i = 1;
         while i < N {
-            ctm_rs::thread::__unroll_config::<0>();
+            cuda_device::thread::__unroll_config::<0>();
             values[i] = f(i);
             i += 1;
         }
@@ -253,7 +253,7 @@ impl<T: Copy, const N: usize> RegisterTile<T, N> {
         }
         let mut i = 1;
         while i < N {
-            ctm_rs::thread::__unroll_config::<0>();
+            cuda_device::thread::__unroll_config::<0>();
             values[i] = f(self.0[i]);
             i += 1;
         }
@@ -299,7 +299,7 @@ impl<T: Copy, const N: usize> RegisterTile<T, N> {
         }
         let mut i = 1;
         while i < N {
-            ctm_rs::thread::__unroll_config::<0>();
+            cuda_device::thread::__unroll_config::<0>();
             values[i] = f(self.0[i], rhs.0[i]);
             i += 1;
         }
@@ -339,7 +339,7 @@ impl<T: Copy, const N: usize> RegisterTile<T, N> {
         let mut accumulator = initial;
         let mut i = 0;
         while i < N {
-            ctm_rs::thread::__unroll_config::<0>();
+            cuda_device::thread::__unroll_config::<0>();
             accumulator = f(accumulator, self.0[i]);
             i += 1;
         }

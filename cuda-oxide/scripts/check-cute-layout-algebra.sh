@@ -202,7 +202,37 @@ forbidden_cute_rs_re = re.compile(
 )
 
 errors = []
-for root_dir in ("cuda-oxide/cute-rs-preview/cute-rs/src/sm100", "cuda-oxide/cute-rs-preview/cute-rs/src/attention/sm100"):
+
+# 4a. Enforce 1-to-1 CuTeDSL top-level module layout in `cute-rs/src/`.
+allowed_top_entries = {
+    "arch.rs", "atom", "layout.rs", "lib.rs", "numeric.rs",
+    "nvgpu", "pipeline", "tensor", "utils",
+}
+actual_top_entries = set(os.listdir("cuda-oxide/cute-rs-preview/cute-rs/src"))
+unexpected_top = sorted(actual_top_entries - allowed_top_entries)
+if unexpected_top:
+    errors.append(
+        f"cuda-oxide/cute-rs-preview/cute-rs/src: non-CuTeDSL top-level entries {unexpected_top} (allowed: {sorted(allowed_top_entries)})"
+    )
+
+# 4b. Enforce complete `ctm-rs` / `ctm_rs` ban inside `cute-rs`.
+cargo_toml_path = "cuda-oxide/cute-rs-preview/cute-rs/Cargo.toml"
+with open(cargo_toml_path, encoding="utf-8") as f:
+    if "ctm-rs" in f.read():
+        errors.append(f"{cargo_toml_path}: `ctm-rs` dependency is banned inside `cute-rs`")
+
+for path in sorted(glob.glob("cuda-oxide/cute-rs-preview/cute-rs/src/**/*.rs", recursive=True)):
+    with open(path, encoding="utf-8") as f:
+        for lineno, line in enumerate(f, 1):
+            if "ctm_rs" in line or "ctm-rs" in line:
+                errors.append(f"{path}:{lineno}: `ctm_rs` is banned inside `cute-rs`: {line.strip()}")
+
+# 4c. Direct CuTeDSL Python AST symbol & workload-helper purity check.
+for root_dir in (
+    "cuda-oxide/cute-rs-preview/cute-rs/src/nvgpu/tcgen05",
+    "cuda-oxide/cute-rs-preview/cute-rs/src/pipeline",
+    "cuda-oxide/cute-rs-preview/cute-rs/src/utils",
+):
     for path in sorted(glob.glob(os.path.join(root_dir, "**", "*.rs"), recursive=True)):
         if path.endswith("__compiler.rs") or path.endswith("tests.rs"):
             continue
@@ -210,13 +240,14 @@ for root_dir in ("cuda-oxide/cute-rs-preview/cute-rs/src/sm100", "cuda-oxide/cut
             for lineno, line in enumerate(f, 1):
                 if forbidden_cute_rs_re.search(line):
                     errors.append(f"{path}:{lineno}: workload-specific helper forbidden in cute-rs: {line.strip()}")
-                m = pub_fn_re.match(line)
-                if m and cutedsl_symbols:
-                    fn_name = m.group(1)
-                    if fn_name not in cutedsl_symbols and fn_name not in rust_idiom_allowlist:
-                        errors.append(
-                            f"{path}:{lineno}: public function `{fn_name}` does not exist in CuTeDSL AST or cutedsl-comparison.md"
-                        )
+                if "/nvgpu/tcgen05/" in path or path.endswith("tmem_allocator.rs") or path.endswith("pipeline/sm100.rs"):
+                    m = pub_fn_re.match(line)
+                    if m and cutedsl_symbols:
+                        fn_name = m.group(1)
+                        if fn_name not in cutedsl_symbols and fn_name not in rust_idiom_allowlist:
+                            errors.append(
+                                f"{path}:{lineno}: public function `{fn_name}` does not exist in CuTeDSL AST or cutedsl-comparison.md"
+                            )
 
 moe_cute_path = "cuda-oxide/cute-rs-preview/models/nemotron3_moe_cute/src/moe_192e.rs"
 if os.path.isfile(moe_cute_path):

@@ -14,7 +14,7 @@
 //! coordinates described by the layout; no reference to those holes is formed.
 use crate::tensor::{RegisterTile, TensorElement};
 use core::marker::PhantomData;
-use ctm_rs::memory::DisjointSlice;
+use cuda_device::DisjointSlice;
 
 /// Sealed supertrait module preventing external crates from implementing [`IndexLayout`].
 /// Ensures every [`IndexLayout`] upholds the originating storage bounds proof.
@@ -728,7 +728,7 @@ impl<'a, Element: TensorElement<Storage>, Layout: IndexLayout, Storage: Copy>
         let values = values.into_array();
         let mut i = 0;
         while i < N {
-            ctm_rs::thread::__unroll_config::<0>();
+            cuda_device::thread::__unroll_config::<0>();
             unsafe {
                 self.store_at(i, values[i]);
             }
@@ -749,7 +749,7 @@ impl<'a, Element: TensorElement<Storage>, Layout: IndexLayout, Storage: Copy>
         let values = values.into_array();
         let mut i = 0;
         while i < N {
-            ctm_rs::thread::__unroll_config::<0>();
+            cuda_device::thread::__unroll_config::<0>();
             unsafe {
                 self.store_at(lane + i * STRIDE, values[i]);
             }
@@ -757,7 +757,7 @@ impl<'a, Element: TensorElement<Storage>, Layout: IndexLayout, Storage: Copy>
         }
     }
 
-    /// Store an aligned `N`-element [`GlobalStoreTile`](crate::copy::vector::GlobalStoreTile) at
+    /// Store an aligned `N`-element [`GlobalStoreTile`](crate::atom::vector::GlobalStoreTile) at
     /// logical coordinate `index` without allocating in L1 cache.
     ///
     /// # Safety
@@ -767,12 +767,12 @@ impl<'a, Element: TensorElement<Storage>, Layout: IndexLayout, Storage: Copy>
     pub unsafe fn store_global_no_allocate_at<const N: usize>(
         &mut self,
         index: usize,
-        values: &crate::copy::vector::GlobalStoreTile<Storage, N>,
+        values: &crate::atom::vector::GlobalStoreTile<Storage, N>,
     ) where
-        Storage: crate::copy::vector::GlobalStoreElement,
+        Storage: crate::atom::vector::GlobalStoreElement,
     {
         unsafe {
-            crate::copy::vector::store_global_no_allocate(
+            crate::atom::vector::store_global_no_allocate(
                 self.base.add(self.layout.crd2idx(index)),
                 values,
             );
@@ -790,10 +790,10 @@ impl<'a, Element: TensorElement<Storage>, Layout: IndexLayout, Storage: Copy>
     pub unsafe fn store_global_no_allocate_words_at<const N: usize>(
         &mut self,
         index: usize,
-        values: &crate::copy::vector::GlobalStoreTile<u32, N>,
+        values: &crate::atom::vector::GlobalStoreTile<u32, N>,
     ) {
         unsafe {
-            crate::copy::vector::store_global_no_allocate(
+            crate::atom::vector::store_global_no_allocate(
                 self.base.add(self.layout.crd2idx(index)).cast::<u32>(),
                 values,
             );

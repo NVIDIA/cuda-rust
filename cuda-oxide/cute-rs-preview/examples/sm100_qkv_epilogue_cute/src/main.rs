@@ -12,7 +12,7 @@
 mod kernel;
 
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer, LaunchConfig1D, sys};
-use cute_rs::attention::sm100::create_tensor_map_tiled;
+use cute_rs::nvgpu::cpasync::sm100_host::create_tensor_map_tiled;
 use kernel::{DYNAMIC_SMEM_BYTES, THREADS, WLayout, XLayout, kernels};
 use serde_json::{Value, json};
 use std::{

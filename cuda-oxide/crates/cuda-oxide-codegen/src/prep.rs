@@ -95,6 +95,17 @@ pub fn prepare_mir_module(
                     .to_string(),
             ));
         }
+        if has_wgmma_mma_operations(ctx, module) {
+            let mut analyses = pliron::pass::AnalysisManager::default();
+            pliron::opts::mem2reg::mem2reg(module, ctx, &mut analyses).map_err(|error| {
+                PipelineError::Verification {
+                    name: "mem2reg".to_string(),
+                    message: error.disp(ctx).to_string(),
+                    operation: None,
+                }
+            })?;
+            verify_operation(ctx, module, "module post-wgmma-debug-mem2reg")?;
+        }
         return Ok(Vec::new());
     }
 
@@ -234,6 +245,32 @@ pub fn prepare_mir_module(
         &mut analyses,
     )?;
     Ok(warnings)
+}
+
+/// Return whether `root` contains any pointer-form WGMMA MMA operation whose
+/// accumulator lifetime must be fused into register SSA values before lowering.
+fn has_wgmma_mma_operations(ctx: &Context, root: Ptr<Operation>) -> bool {
+    use dialect_nvvm::ops::{
+        WgmmaMmaM64N64K8F32Tf32Op, WgmmaMmaM64N64K16F32Bf16Op, WgmmaMmaM64N64K16F32F16Op,
+        WgmmaMmaM64N128K16F32Bf16Op,
+    };
+
+    let mut pending = vec![root];
+    while let Some(operation) = pending.pop() {
+        if Operation::is_op::<WgmmaMmaM64N64K16F32Bf16Op>(operation, ctx)
+            || Operation::is_op::<WgmmaMmaM64N64K16F32F16Op>(operation, ctx)
+            || Operation::is_op::<WgmmaMmaM64N64K8F32Tf32Op>(operation, ctx)
+            || Operation::is_op::<WgmmaMmaM64N128K16F32Bf16Op>(operation, ctx)
+        {
+            return true;
+        }
+        for region in operation.deref(ctx).regions() {
+            for block in region.deref(ctx).iter(ctx) {
+                pending.extend(block.deref(ctx).iter(ctx));
+            }
+        }
+    }
+    false
 }
 
 fn has_high_level_cute_operations(ctx: &Context, root: Ptr<Operation>) -> bool {

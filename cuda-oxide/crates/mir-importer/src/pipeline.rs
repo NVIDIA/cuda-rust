@@ -97,7 +97,7 @@ pub struct CollectedFunction {
     /// threaded through.
     ///
     /// `mir-lower` turns the request into the matching LLVM function attribute
-    /// on the definition, so the matched LLVM middle-end (`opt -O2`) honors it
+    /// on the definition, so the matched LLVM middle-end (`opt -O3`) honors it
     /// before PTX generation; no separate inliner pass is added. This keeps
     /// helper boundaries, `#[inline(never)]` ones included, from depending
     /// entirely on optimizer heuristics.

@@ -43,7 +43,7 @@ variables remain in stable memory locations for cuda-gdb.
    and export LLVM IR. By default, ordinary float operations carry the
    `contract` fast-math flag so NVPTX can fuse `fmul+fadd` into `fma.rn.f32`
    (matching nvcc's `--fmad=true`). `--no-fmad` omits that permission.
-6. **Optimize** — Run `opt -O2` (via `LlvmToolchain`) on the exported IR.
+6. **Optimize** — Run `opt -O3` (via `LlvmToolchain`) on the exported IR.
    Skipped for full-debug builds (`-G`) so locals stay inspectable under
    cuda-gdb. Override with `CUDA_OXIDE_NO_OPT=1`.
 7. **Generate** — Invoke `llc -fp-contract=fast` for PTX (or emit NVVM IR).

@@ -334,7 +334,7 @@ impl<'a> ModuleExportState<'a> {
         let output_before = output.len();
 
         // Rust-local allocas carry an encoded provenance name into textual LLVM IR.
-        // `opt -O2` preserves SSA names on instructions that survive, so the
+        // `opt -O3` preserves SSA names on instructions that survive, so the
         // post-optimization local-memory diagnostic can attribute a remaining
         // alloca without relying on non-semantic metadata preservation.
         if let Some(LlvmOp::Alloca(alloca)) = llvm_op.as_ref()
@@ -1747,7 +1747,7 @@ impl<'a> ModuleExportState<'a> {
 
         // Every device call is emitted `convergent` (attr group #0). GPU code is
         // convergent-by-default (as in Clang/nvcc): if the callee transitively
-        // performs a barrier / shuffle / vote, `opt -O2` must not sink or
+        // performs a barrier / shuffle / vote, `opt -O3` must not sink or
         // duplicate the call across divergent control flow. opt strips the
         // attribute from calls it proves never reach a convergent op.
         write!(output, ")").unwrap();

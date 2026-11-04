@@ -404,7 +404,7 @@ reject_symbol_shape "${llvm_ir}" llvm "${overaligned_symbol}" \
 # Optimization may scalarize the aggregate stores and removes the address
 # low-bit computation once the alloca is provably aligned, but the surviving
 # dynamic spill must remain align 32 throughout. Where it survives depends on
-# the middle-end: with plain -O2 the external helper is kept and owns the
+# the middle-end: with plain -O3 the external helper is kept and owns the
 # spill, while internalizing non-root helpers lets `opt` inline it into the
 # kernel and delete the definition. Assert on whichever function actually
 # carries the code in each artifact.

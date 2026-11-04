@@ -883,7 +883,7 @@ fn propagate_return_abi_alignment(
 /// `#[inline(never)]` is `noinline`. This is the only place that names the
 /// LLVM keywords; the dialect records the request, not the LLVM attribute.
 ///
-/// `opt -O2` honors the keyword before `llc`; this adds no inliner pass. The
+/// `opt -O3` honors the keyword before `llc`; this adds no inliner pass. The
 /// goal is to preserve Rust's inline intent for device helpers in both
 /// directions, rather than leaving helper boundaries solely to optimizer
 /// heuristics.

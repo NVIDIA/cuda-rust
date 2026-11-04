@@ -1212,7 +1212,7 @@ impl<'a> ModuleExportState<'a> {
             // GPU code is convergent-by-default, as in Clang/nvcc: a function
             // that (transitively) performs a barrier / shuffle / vote must not
             // have those ops sunk or duplicated into divergent control flow by
-            // `opt -O2`. Without this, an inlined `grid::sync()` / warp collective
+            // `opt -O3`. Without this, an inlined `grid::sync()` / warp collective
             // gets its `bar.sync.aligned` pushed into a `tid`-dependent branch
             // and deadlocks. opt's FunctionAttrs strips `convergent` from
             // functions it proves never reach a convergent op.

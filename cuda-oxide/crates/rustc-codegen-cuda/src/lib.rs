@@ -333,6 +333,7 @@ extern crate rustc_codegen_llvm;
 mod collector;
 mod device_codegen;
 mod generated_intrinsics;
+mod libm_calls;
 mod materialize;
 
 use rustc_codegen_ssa::traits::CodegenBackend;
@@ -590,6 +591,8 @@ impl CodegenBackend for CudaCodegenBackend {
     fn provide(&self, providers: &mut rustc_middle::util::Providers) {
         // Delegate to LLVM backend
         self.llvm_backend.provide(providers);
+        // keep `libm` calls visible to the importer's libdevice rerouting
+        libm_calls::provide(providers);
     }
 
     /// Main codegen entry point - this is where device/host splitting happens.

@@ -20,6 +20,16 @@
 //! user function whose path contains "libm", and it must compile as a
 //! regular device call, never be rerouted to `__nv_expf`.
 //!
+//! `sqrt`/`sqrtf` and `fma`/`fmaf` pin the libm functions that dispatch to a
+//! per-host `arch` module (x86 `sqrtss` inline asm, aarch64 `fsqrt`). They are
+//! small enough that rustc would MIR-inline them into the kernel, asm and all,
+//! before the call could be rerouted; the backend keeps calls to libm's free
+//! functions so they reach libdevice like the rest. `libm_arch_f32` also pins
+//! the `Libm::<f32>` helper methods, whose f32 names lack the `f` suffix: they
+//! must inline down to the free `sqrtf`/`sinf` rather than reach the importer
+//! as `sqrt`/`sin` calls. It has no `+1000.0` guard lane, so its tolerance is
+//! tight enough to notice a lost or wrong term.
+//!
 //! Run with:
 //!   cargo oxide run libm_math
 
@@ -44,10 +54,6 @@ mod kernels {
     use super::*;
 
     /// f32 libm entry points.
-    // libm::sqrtf / libm::sqrt are not exercised: libm routes sqrt
-    // through an arch-specific inline-asm wrapper that rustc MIR-inlines
-    // into the kernel before the call-site interception can fire, so
-    // sqrt is not yet supported via libm (f32::sqrt / f64::sqrt work).
     #[kernel]
     pub fn libm_f32(x: &[f32], mut out: DisjointSlice<f32>) {
         let idx = thread::index_1d();
@@ -79,7 +85,22 @@ mod kernels {
             let t = libm::atan2(v, 2.0f64);
             let r = libm::rint(v * 2.5);
             let mm = libm::fmax(v, 1.0) + libm::fmin(v, 2.0);
-            *o = trig + e + p + t + r + mm;
+            let arch = libm::sqrt(v) + libm::fma(v, 1.5, 0.25);
+            *o = trig + e + p + t + r + mm + arch;
+        }
+    }
+
+    /// The f32 libm entry points that dispatch to a per-host `arch` module,
+    /// and the `Libm::<f32>` helpers that forward to the free functions.
+    #[kernel]
+    pub fn libm_arch_f32(x: &[f32], mut out: DisjointSlice<f32>) {
+        let idx = thread::index_1d();
+        let i = idx.get();
+        if let Some(o) = out.get_mut(idx) {
+            let v = x[i];
+            let arch = libm::sqrtf(v) + libm::fmaf(v, 1.5, 0.25);
+            let helper = libm::Libm::<f32>::sqrt(v) + libm::Libm::<f32>::sin(v);
+            *o = arch + helper;
         }
     }
 }
@@ -135,7 +156,8 @@ fn main() {
             + (v.max(1.0) + v.min(2.0))
             + sn * cs
             + (v + 1000.0);
-        if (o32[i] - want).abs() > 1e-3 * want.abs().max(1.0) {
+        // a NaN from a broken lowering compares false and would otherwise pass
+        if o32[i].is_nan() || (o32[i] - want).abs() > 1e-3 * want.abs().max(1.0) {
             println!("f32 mismatch at {i}: got {} want {want}", o32[i]);
             ok = false;
         }
@@ -145,9 +167,30 @@ fn main() {
             + v.powf(1.5)
             + v.atan2(2.0)
             + (v * 2.5).round_ties_even()
-            + (v.max(1.0) + v.min(2.0));
-        if (o64[i] - want).abs() > 1e-9 * want.abs().max(1.0) {
+            + (v.max(1.0) + v.min(2.0))
+            + (v.sqrt() + v.mul_add(1.5, 0.25));
+        if o64[i].is_nan() || (o64[i] - want).abs() > 1e-9 * want.abs().max(1.0) {
             println!("f64 mismatch at {i}: got {} want {want}", o64[i]);
+            ok = false;
+        }
+    }
+
+    let mut oa_dev = DeviceBuffer::<f32>::zeroed(&stream, N).unwrap();
+    // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
+    unsafe {
+        module.libm_arch_f32(
+            &stream,
+            LaunchConfig::for_num_elems(N as u32),
+            &x32_dev,
+            &mut oa_dev,
+        )
+    }
+    .expect("libm_arch_f32 launch failed");
+    let oa = oa_dev.to_host_vec(&stream).unwrap();
+    for (i, (&v, &got)) in x32.iter().zip(&oa).enumerate() {
+        let want = (v.sqrt() + v.mul_add(1.5, 0.25)) + (v.sqrt() + v.sin());
+        if got.is_nan() || (got - want).abs() > 1e-5 * want.abs().max(1.0) {
+            println!("f32 arch mismatch at {i}: got {got} want {want}");
             ok = false;
         }
     }

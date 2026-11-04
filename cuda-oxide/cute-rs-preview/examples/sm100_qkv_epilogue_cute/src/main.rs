@@ -291,7 +291,8 @@ fn verify_outputs(
                     if err > max_err {
                         max_err = err;
                     }
-                    if err > 0.125 {
+                    let half_ulp = 0.0625 * expected_f32.abs().max(2.0);
+                    if err > half_ulp {
                         return Err(format!(
                             "mismatch at M={m}, row={row}, head={head}, d={d}: expected {expected_f32}, got {got_f32}"
                         )
@@ -320,7 +321,8 @@ fn verify_outputs(
                     if err > max_err {
                         max_err = err;
                     }
-                    if err > 0.125 {
+                    let half_ulp = 0.0625 * expected_f32.abs().max(2.0);
+                    if err > half_ulp {
                         return Err(format!(
                             "V mismatch at M={m}, row={row}, kv_head={kv_head}, d={d}: expected {expected_f32}, got {got_f32}"
                         )

@@ -263,7 +263,7 @@ unsafe fn load_qk(
 ) {
     pages.wait(page_ticket);
     let page = *smem
-        .add(PT + (page_ticket as usize % 8) * 256)
+        .add(PT + (page_ticket as usize % 4) * 256)
         .cast::<i32>();
     if first {
         query.acquire(q_ticket);
@@ -334,7 +334,7 @@ unsafe fn load_v(
     // Every lane now owns its page index in a register; release the slot
     // before issuing V copies so the page producer can advance.
     let page = *smem
-        .add(PT + (page_ticket as usize % 8) * 256)
+        .add(PT + (page_ticket as usize % 4) * 256)
         .cast::<i32>();
     pages.consumer_release(page_ticket);
     let mut kpart = 0;
@@ -602,7 +602,7 @@ pub mod kernels {
                         while tile < end_tile {
                             pages.acquire(page_ticket);
                             let dst = smem
-                                .add(PT + (page_ticket as usize % 8) * 256)
+                                .add(PT + (page_ticket as usize % 4) * 256)
                                 .cast::<u32>();
                             if lane == 0 {
                                 let src = page_table

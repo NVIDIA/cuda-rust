@@ -2530,8 +2530,36 @@ pub fn translate_body(
     // Unwind-only cleanup blocks are skipped here (see
     // [`non_unwind_successors`]) and patched with `mir.unreachable` below.
     let mut blocks_processed: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut rpo_visited = vec![false; body.blocks.len()];
+    let mut postorder = Vec::with_capacity(reachable.len());
+    fn dfs_postorder(
+        node: usize,
+        succs: &[Vec<usize>],
+        reachable: &std::collections::BTreeSet<usize>,
+        visited: &mut [bool],
+        postorder: &mut Vec<usize>,
+    ) {
+        if node >= visited.len() || visited[node] || !reachable.contains(&node) {
+            return;
+        }
+        visited[node] = true;
+        if let Some(children) = succs.get(node) {
+            for &succ in children {
+                dfs_postorder(succ, succs, reachable, visited, postorder);
+            }
+        }
+        postorder.push(node);
+    }
+    dfs_postorder(
+        0,
+        rustc_mono_successors,
+        &reachable,
+        &mut rpo_visited,
+        &mut postorder,
+    );
+    postorder.reverse();
 
-    for idx in reachable.iter().copied() {
+    for idx in postorder {
         let mir_block = &body.blocks[idx];
         let block_ptr = block_map[idx];
         let entry_prev_op = if idx == 0 { entry_last_op } else { None };

@@ -184,8 +184,8 @@ pub mod kernels_192e {
         let (mant, exp) = idx2crd_col_major_2d(code as u32, 8);
         if exp == 0 {
             let shift = (mant - 1) * 8;
-            let top = ((0x393A_3C40_4248_50u64 >> shift) & 0xFF) as u32;
-            let low = ((0x25AB_CD00_AB00_00u64 >> shift) & 0xFF) as u32;
+            let top = ((0x0039_3A3C_4042_4850_u64 >> shift) & 0xFF) as u32;
+            let low = ((0x0025_ABCD_00AB_0000_u64 >> shift) & 0xFF) as u32;
             f32::from_bits((top << 20) | (low << 12) | (low << 4) | (low & 1))
         } else {
             let shift = mant * 8;
@@ -220,8 +220,8 @@ pub mod kernels_192e {
         let amax = h1.fold(amax0, |m, v| m.max(v.abs()));
         let scale_code = encode_e4m3_rne(amax * (1.0f32 / 6.0f32));
         let inv_scale = exact_inv_scale_e2m1(scale_code);
-        let a0 = h0.as_array();
-        let a1 = h1.as_array();
+        let a0 = h0.into_array();
+        let a1 = h1.into_array();
         let packed_u64 = encode_signed_e2m1(a0[0] * inv_scale)
             | (encode_signed_e2m1(a0[1] * inv_scale) << 4)
             | (encode_signed_e2m1(a0[2] * inv_scale) << 8)
@@ -255,13 +255,18 @@ pub mod kernels_192e {
         sfb_tile: &SharedActScales,
         first_burst: bool,
     ) {
+        let mma = *tiled_mma;
+        let a = *a_tile;
+        let b = *b_tile;
+        let sfa = *sfa_tile;
+        let sfb = *sfb_tile;
         macro_rules! step_single {
             ($s:expr, $acc:expr) => {{
                 let sa = sfa_tmem_base + ($s as u32) * 4;
                 let sb = sfb_tmem_base + ($s as u32) * 4;
-                TiledMma128::copy(sa, sfa_tile, $s);
-                TiledMma128::copy(sb, sfb_tile, $s);
-                tiled_mma.gemm(tmem_d, a_tile, b_tile, sa, sb, $s, $acc);
+                TiledMma128::copy(sa, &sfa, $s);
+                TiledMma128::copy(sb, &sfb, $s);
+                mma.gemm(tmem_d, &a, &b, sa, sb, $s, $acc);
             }};
         }
         unsafe {
@@ -294,16 +299,23 @@ pub mod kernels_192e {
         sfb_tile: &SharedActScales,
         first_burst: bool,
     ) {
+        let mma = *tiled_mma;
+        let a0 = *a0_tile;
+        let a1 = *a1_tile;
+        let b = *b_tile;
+        let sfa0 = *sfa0_tile;
+        let sfa1 = *sfa1_tile;
+        let sfb = *sfb_tile;
         macro_rules! step_dual {
             ($s:expr, $acc:expr) => {{
                 let sa0 = sfa0_tmem_base + ($s as u32) * 4;
                 let sa1 = sfa1_tmem_base + ($s as u32) * 4;
                 let sb = sfb_tmem_base + ($s as u32) * 4;
-                TiledMma128::copy(sa0, sfa0_tile, $s);
-                TiledMma128::copy(sa1, sfa1_tile, $s);
-                TiledMma128::copy(sb, sfb_tile, $s);
-                tiled_mma.gemm(tmem_d, a0_tile, b_tile, sa0, sb, $s, $acc);
-                tiled_mma.gemm(tmem_d + 128, a1_tile, b_tile, sa1, sb, $s, $acc);
+                TiledMma128::copy(sa0, &sfa0, $s);
+                TiledMma128::copy(sa1, &sfa1, $s);
+                TiledMma128::copy(sb, &sfb, $s);
+                mma.gemm(tmem_d, &a0, &b, sa0, sb, $s, $acc);
+                mma.gemm(tmem_d + 128, &a1, &b, sa1, sb, $s, $acc);
             }};
         }
         unsafe {
@@ -339,19 +351,28 @@ pub mod kernels_192e {
         sfb_tile: &SharedActScales,
         first_burst: bool,
     ) {
+        let mma = *tiled_mma;
+        let a0 = *a0_tile;
+        let a1 = *a1_tile;
+        let a2 = *a2_tile;
+        let b = *b_tile;
+        let sfa0 = *sfa0_tile;
+        let sfa1 = *sfa1_tile;
+        let sfa2 = *sfa2_tile;
+        let sfb = *sfb_tile;
         macro_rules! step_triple {
             ($s:expr, $acc:expr) => {{
                 let sa0 = sfa0_tmem_base + ($s as u32) * 4;
                 let sa1 = sfa1_tmem_base + ($s as u32) * 4;
                 let sa2 = sfa2_tmem_base + ($s as u32) * 4;
                 let sb = sfb_tmem_base + ($s as u32) * 4;
-                TiledMma128::copy(sa0, sfa0_tile, $s);
-                TiledMma128::copy(sa1, sfa1_tile, $s);
-                TiledMma128::copy(sa2, sfa2_tile, $s);
-                TiledMma128::copy(sb, sfb_tile, $s);
-                tiled_mma.gemm(tmem_d, a0_tile, b_tile, sa0, sb, $s, $acc);
-                tiled_mma.gemm(tmem_d + 128, a1_tile, b_tile, sa1, sb, $s, $acc);
-                tiled_mma.gemm(tmem_d + 256, a2_tile, b_tile, sa2, sb, $s, $acc);
+                TiledMma128::copy(sa0, &sfa0, $s);
+                TiledMma128::copy(sa1, &sfa1, $s);
+                TiledMma128::copy(sa2, &sfa2, $s);
+                TiledMma128::copy(sb, &sfb, $s);
+                mma.gemm(tmem_d, &a0, &b, sa0, sb, $s, $acc);
+                mma.gemm(tmem_d + 128, &a1, &b, sa1, sb, $s, $acc);
+                mma.gemm(tmem_d + 256, &a2, &b, sa2, sb, $s, $acc);
             }};
         }
         unsafe {
@@ -696,6 +717,11 @@ pub mod kernels_192e {
     /// Stage 3 (`K3`): `5`-Warp (`160`-thread) Persistent K-Streaming `tcgen05` `FC1 + ReLU² + NVFP4 Requantize`
     /// (`I = 1,536, H = 6,144`, `12` bursts of `K = 512`) using `PipelineTmaAsync`, `SingleCtaRing`,
     /// `TmemAllocator`, `TmemFragment`, and `Sm100BlockScaledTiledMma::{copy, gemm}`.
+    ///
+    /// # Safety
+    ///
+    /// Must be launched with `160` threads per block (`5` warps), at least `148,480` bytes of
+    /// 1024-byte-aligned dynamic shared memory, and valid TMA descriptors and slices.
     #[launch_bounds(160)]
     #[launch_contract(
         domain = 1,
@@ -963,6 +989,11 @@ pub mod kernels_192e {
 
     /// Stage 4a (`K4` for `B <= 16`): `5`-Warp (`160`-thread) Persistent Dual-M-Tile (`M = 256` = `2 × 128`)
     /// K-Streaming `tcgen05` `FC2` with Fused Top-4 `BF16x2` Atomic Combine (`limit <= 16`).
+    ///
+    /// # Safety
+    ///
+    /// Must be launched with `160` threads per block (`5` warps), at least `222,208` bytes of
+    /// 1024-byte-aligned dynamic shared memory, and valid TMA descriptors and slices.
     #[launch_bounds(160)]
     #[launch_contract(
         domain = 1,
@@ -1313,6 +1344,11 @@ pub mod kernels_192e {
 
     /// Stage 4b (`K4` for `B = 32, 64, 128`): `5`-Warp (`160`-thread) Persistent Dual-M-Tile (`M = 256` = `2 × 128`)
     /// K-Streaming `tcgen05` `FC2` writing `grouped_out` (`BFloat16`) via `Tensor` / `TensorMut` (`cute.copy`).
+    ///
+    /// # Safety
+    ///
+    /// Must be launched with `160` threads per block (`5` warps), at least `222,208` bytes of
+    /// 1024-byte-aligned dynamic shared memory, and valid TMA descriptors and slices.
     #[launch_bounds(160)]
     #[launch_contract(
         domain = 1,
@@ -1615,6 +1651,11 @@ pub mod kernels_192e {
 
     /// Stage 4c (`K4` for `B = 256`): `5`-Warp (`160`-thread) Triple-M-Tile (`M = 384` = `3 × 128`)
     /// K-Streaming `tcgen05` `FC2` (`16` M384-tiles × `8` groups = `128 <= 148` CTAs in 1 single wave!).
+    ///
+    /// # Safety
+    ///
+    /// Must be launched with `160` threads per block (`5` warps), at least `222,208` bytes of
+    /// 1024-byte-aligned dynamic shared memory, and valid TMA descriptors and slices.
     #[launch_bounds(160)]
     #[launch_contract(
         domain = 1,

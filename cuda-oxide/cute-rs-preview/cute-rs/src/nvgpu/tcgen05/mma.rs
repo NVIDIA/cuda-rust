@@ -107,7 +107,7 @@ impl<
 /// Mirrors CuTeDSL's `MmaMXF4NVF4Op` `TiledMma` + `Cp4x32x128bOp` (`cute.copy` + `cute.gemm`)
 /// while encoding the A and B shared-memory tile layouts (`AL`, `BL`) and operand roles
 /// (`OperandA`, `OperandB`, `Mkl`, `Nkl`) directly in Rust's type system.
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub struct Sm100BlockScaledTiledMma<AL, BL, const M: u32 = 128, const K: u32 = 64> {
     /// Active N column count (`16..=256`, multiple of 16) for this block-scaled `TiledMma`.
     /// Lowered into the `tcgen05.mma.cta_group::1.kind::mxf4nvf4.block_scale.block16` plan by `dialect-cute`.
@@ -118,6 +118,14 @@ pub struct Sm100BlockScaledTiledMma<AL, BL, const M: u32 = 128, const K: u32 = 6
     /// Zero-byte marker carrying the compile-time A and B shared-memory layout types (`AL`, `BL`).
     /// Checked against the [`Sm100SharedTile`] arguments passed to [`Self::gemm`].
     marker: PhantomData<(AL, BL)>,
+}
+
+impl<AL, BL, const M: u32, const K: u32> Copy for Sm100BlockScaledTiledMma<AL, BL, M, K> {}
+impl<AL, BL, const M: u32, const K: u32> Clone for Sm100BlockScaledTiledMma<AL, BL, M, K> {
+    #[inline(always)]
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
 impl<AL: ReifySmem2D, BL: ReifySmem2D, const M: u32, const K: u32>

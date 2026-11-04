@@ -859,14 +859,14 @@ pub unsafe fn mma_m16n8k16_f32_bf16(c: [f32; 4], a: [u32; 4], b: [u32; 2]) -> [f
     unsafe { cuda_device::wmma::mma_m16n8k16_f32_bf16(c, a, b) }
 }
 
-/// Load `N` 32-bit registers per lane from TMEM (`tcgen05.ld.sync.aligned.32x32b.x2.b32`).
+/// Load `2` 32-bit registers per lane from TMEM (`tcgen05.ld.sync.aligned.32x32b.x2.b32`).
 ///
 /// # Safety
 /// All 32 lanes must participate with a valid TMEM row-group address.
 #[must_use]
 #[inline(always)]
-pub unsafe fn tmem_load_32x32b_x2(address: u32) -> [u32; 2] {
-    unsafe { cuda_device::tcgen05::tcgen05_ld_32x32b_x2_raw(address).to_array() }
+pub unsafe fn tmem_load_32x32b_x2(address: u32) -> cuda_device::CuSimd<u32, 2> {
+    unsafe { cuda_device::tcgen05::tcgen05_ld_32x32b_x2_raw(address) }
 }
 
 /// Load 4 32-bit registers per lane from TMEM (`tcgen05.ld.sync.aligned.32x32b.x4.b32`).
@@ -875,8 +875,8 @@ pub unsafe fn tmem_load_32x32b_x2(address: u32) -> [u32; 2] {
 /// All 32 lanes must participate with a valid TMEM row-group address.
 #[must_use]
 #[inline(always)]
-pub unsafe fn tmem_load_32x32b_x4(address: u32) -> [u32; 4] {
-    unsafe { cuda_device::tcgen05::tcgen05_ld_32x32b_x4_raw(address).to_array() }
+pub unsafe fn tmem_load_32x32b_x4(address: u32) -> cuda_device::CuSimd<u32, 4> {
+    unsafe { cuda_device::tcgen05::tcgen05_ld_32x32b_x4_raw(address) }
 }
 
 /// Load 8 32-bit registers per lane from TMEM (`tcgen05.ld.sync.aligned.32x32b.x8.b32`).
@@ -885,8 +885,8 @@ pub unsafe fn tmem_load_32x32b_x4(address: u32) -> [u32; 4] {
 /// All 32 lanes must participate with a valid TMEM row-group address.
 #[must_use]
 #[inline(always)]
-pub unsafe fn tmem_load_32x32b_x8(address: u32) -> [u32; 8] {
-    unsafe { cuda_device::tcgen05::tcgen05_ld_32x32b_x8_raw(address).to_array() }
+pub unsafe fn tmem_load_32x32b_x8(address: u32) -> cuda_device::CuSimd<u32, 8> {
+    unsafe { cuda_device::tcgen05::tcgen05_ld_32x32b_x8_raw(address) }
 }
 
 /// Load 16 32-bit registers per lane from TMEM (`tcgen05.ld.sync.aligned.32x32b.x16.b32`).
@@ -895,8 +895,8 @@ pub unsafe fn tmem_load_32x32b_x8(address: u32) -> [u32; 8] {
 /// All 32 lanes must participate with a valid TMEM row-group address.
 #[must_use]
 #[inline(always)]
-pub unsafe fn tmem_load_32x32b_x16(address: u32) -> [u32; 16] {
-    unsafe { cuda_device::tcgen05::tcgen05_ld_32x32b_x16_raw(address).to_array() }
+pub unsafe fn tmem_load_32x32b_x16(address: u32) -> cuda_device::CuSimd<u32, 16> {
+    unsafe { cuda_device::tcgen05::tcgen05_ld_32x32b_x16_raw(address) }
 }
 
 /// Load 32 32-bit registers per lane from TMEM (`tcgen05.ld.sync.aligned.32x32b.x32.b32`).
@@ -905,8 +905,18 @@ pub unsafe fn tmem_load_32x32b_x16(address: u32) -> [u32; 16] {
 /// All 32 lanes must participate with a valid TMEM row-group address.
 #[must_use]
 #[inline(always)]
-pub unsafe fn tmem_load_32x32b_x32(address: u32) -> [u32; 32] {
-    unsafe { cuda_device::tcgen05::tcgen05_ld_32x32b_x32_raw(address).to_array() }
+pub unsafe fn tmem_load_32x32b_x32(address: u32) -> cuda_device::CuSimd<u32, 32> {
+    unsafe { cuda_device::tcgen05::tcgen05_ld_32x32b_x32_raw(address) }
+}
+
+/// Load 64 32-bit registers per lane from TMEM (`tcgen05.ld.sync.aligned.32x32b.x64.b32`).
+///
+/// # Safety
+/// All 32 lanes must participate with a valid TMEM row-group address.
+#[must_use]
+#[inline(always)]
+pub unsafe fn tmem_load_32x32b_x64(address: u32) -> cuda_device::CuSimd<u32, 64> {
+    unsafe { cuda_device::tcgen05::tcgen05_ld_32x32b_x64_raw(address) }
 }
 
 /// Store 2 32-bit registers per lane to TMEM (`tcgen05.st.sync.aligned.32x32b.x2.b32`).
@@ -961,5 +971,16 @@ pub unsafe fn tmem_store_32x32b_x16(address: u32, raw: [u32; 16]) {
 pub unsafe fn tmem_store_32x32b_x32(address: u32, raw: [u32; 32]) {
     unsafe {
         cuda_device::tcgen05::tcgen05_st_32x32b_x32_raw(address, cuda_device::CuSimd::new(raw))
+    }
+}
+
+/// Store 64 32-bit registers per lane to TMEM (`tcgen05.st.sync.aligned.32x32b.x64.b32`).
+///
+/// # Safety
+/// All 32 lanes must participate with a valid TMEM row-group address.
+#[inline(always)]
+pub unsafe fn tmem_store_32x32b_x64(address: u32, raw: [u32; 64]) {
+    unsafe {
+        cuda_device::tcgen05::tcgen05_st_32x32b_x64_raw(address, cuda_device::CuSimd::new(raw))
     }
 }

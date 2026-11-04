@@ -248,7 +248,11 @@ impl<const STAGES: usize, const CONSUMER_WARPS: u32, const TX_BYTES: u32>
     #[must_use]
     #[inline(always)]
     pub unsafe fn from_shared_bytes(smem_base: *mut u8, byte_offset: usize) -> Self {
-        unsafe { Self::from_raw_base(smem_base.add(byte_offset).cast::<Barrier>()) }
+        unsafe {
+            __compiler::tma_load_pipeline_from_raw_base(
+                smem_base.add(byte_offset).cast::<Barrier>(),
+            )
+        }
     }
 
     /// Use separately allocated full and empty barrier arrays.

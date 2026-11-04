@@ -269,8 +269,8 @@ fn main() -> Result<()> {
     let context = CudaContext::new(0)?;
     let stream = context.default_stream();
     let runner = Runner::new(stream.clone())?;
-    check_product_rounding(&runner, &stream)?;
     check_pending_input(&runner, &stream)?;
+    check_product_rounding(&runner, &stream)?;
     operator::validate_prepared_tables()?;
     let standard = RotarySpec::<128>::standard(1e6, 65536)?;
     let mut positions: Vec<_> = (0..71).map(|i| [i * 13; 3]).collect();

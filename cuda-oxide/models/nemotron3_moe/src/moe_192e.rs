@@ -21,6 +21,8 @@
 //! └────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 //! ```
 
+#![allow(clippy::needless_range_loop)]
+
 use crate::encode_tma_2d;
 use cuda_core::{
     CudaContext, CudaStream, DeviceBuffer, IntoResult, LaunchConfig, LaunchConfig1D, sys,
@@ -2639,7 +2641,7 @@ fn host_quant_dequant_nvfp4(x: &[f32], rows: usize, cols: usize) -> Vec<f32> {
 }
 
 /// Generate the `nonuniform` or `changed-routes` inputs and compute the exact quantization-aware
-/// `FP32` reference output matching `scripts/fixture.py`.
+/// `FP32` reference output matching the analytical NVFP4 reference.
 fn build_nonuniform_case(
     batch: usize,
     changed_routes: bool,

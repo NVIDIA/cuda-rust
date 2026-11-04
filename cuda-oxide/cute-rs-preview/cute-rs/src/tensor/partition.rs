@@ -193,8 +193,17 @@ impl<'a, T: Copy + TensorElement<T>> StridedTensor<'a, T> {
     #[allow(clippy::manual_slice_size_calculation)]
     #[inline(always)]
     pub unsafe fn from_slice_as<S: Copy>(storage: &'a [S]) -> Self {
+        let ptr = storage.as_ptr().cast::<T>();
         let len = (storage.len() * core::mem::size_of::<S>()) / core::mem::size_of::<T>();
-        unsafe { Self::from_raw_parts(storage.as_ptr().cast::<T>(), len, 1) }
+        let view = unsafe { core::slice::from_raw_parts(ptr, len) };
+        let _ = crate::tensor::Tensor::from_slice(view)
+            .local_tile::<1>(0)
+            .base();
+        Self {
+            base: ptr,
+            layout: Strided1D { len, stride: 1 },
+            borrow: PhantomData,
+        }
     }
     /// Borrow the logical elements of a strided storage range.
     ///
@@ -223,7 +232,11 @@ impl<'a, T: Copy + TensorElement<T>> StridedTensor<'a, T> {
         byte_offset: usize,
         len: usize,
     ) -> Self {
-        unsafe { Self::from_raw_parts(smem_base.add(byte_offset).cast::<T>(), len, 1) }
+        Self {
+            base: unsafe { smem_base.add(byte_offset).cast::<T>() },
+            layout: Strided1D { len, stride: 1 },
+            borrow: PhantomData,
+        }
     }
 }
 impl<'a, Element: TensorElement<Storage>, Storage: Copy>
@@ -556,8 +569,17 @@ impl<'a, T: Copy + TensorElement<T>> StridedTensorMut<'a, T> {
     /// must be an exact multiple of `size_of::<T>()`.
     #[inline(always)]
     pub unsafe fn from_disjoint_slice_as<S: Copy>(storage: &'a mut DisjointSlice<'_, S>) -> Self {
+        let ptr = storage.as_mut_ptr().cast::<T>();
         let len = (storage.len() * core::mem::size_of::<S>()) / core::mem::size_of::<T>();
-        unsafe { Self::from_raw_parts(storage.as_mut_ptr().cast::<T>(), len, 1) }
+        let view = unsafe { core::slice::from_raw_parts(ptr.cast_const(), len) };
+        let _ = crate::tensor::Tensor::from_slice(view)
+            .local_tile::<1>(0)
+            .base();
+        Self {
+            base: ptr,
+            layout: Strided1D { len, stride: 1 },
+            borrow: PhantomData,
+        }
     }
     /// Borrow writable strided storage with an externally established extent.
     /// # Safety
@@ -585,7 +607,11 @@ impl<'a, T: Copy + TensorElement<T>> StridedTensorMut<'a, T> {
         byte_offset: usize,
         len: usize,
     ) -> Self {
-        unsafe { Self::from_raw_parts(smem_base.add(byte_offset).cast::<T>(), len, 1) }
+        Self {
+            base: unsafe { smem_base.add(byte_offset).cast::<T>() },
+            layout: Strided1D { len, stride: 1 },
+            borrow: PhantomData,
+        }
     }
 }
 impl<'a, Element: TensorElement<Storage>, Layout: IndexLayout, Storage: Copy>

@@ -167,6 +167,17 @@ pub fn prepare_mir_module(
         message: error.disp(ctx).to_string(),
         operation: None,
     })?;
+    mir_transforms::forward_compiler_result_bundles::forward_constant_projected_aggregates(
+        module,
+        ctx,
+        &mut analyses,
+        preparation.verbose,
+    )
+    .map_err(|error| PipelineError::Verification {
+        name: "post-mem2reg constant-projected aggregate forwarding".to_string(),
+        message: error.disp(ctx).to_string(),
+        operation: None,
+    })?;
     verify_operation(
         ctx,
         module,
@@ -225,6 +236,18 @@ pub fn prepare_mir_module(
             operation: None,
         })?;
     verify_operation(ctx, module, "module post-unroll")?;
+    mir_transforms::forward_compiler_result_bundles::forward_constant_projected_aggregates(
+        module,
+        ctx,
+        &mut analyses,
+        preparation.verbose,
+    )
+    .map_err(|error| PipelineError::Verification {
+        name: "post-unroll constant-projected aggregate forwarding".to_string(),
+        message: error.disp(ctx).to_string(),
+        operation: None,
+    })?;
+    verify_operation(ctx, module, "module post-unroll-aggregate-forwarding")?;
 
     run_optional_mir_passes(
         ctx,

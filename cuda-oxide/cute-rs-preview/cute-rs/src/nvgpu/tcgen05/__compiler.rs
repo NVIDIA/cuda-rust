@@ -12,7 +12,7 @@ use core::marker::PhantomData;
 ///
 /// # Safety
 /// The allocating warps and shared address slot must satisfy
-/// [`Sm100Tmem::alloc`](super::Sm100Tmem::alloc).
+/// [`Sm100Tmem::alloc`](crate::utils::tmem_allocator::Sm100Tmem::alloc).
 #[inline(never)]
 pub unsafe fn sm100_tmem_alloc<const COLUMNS: u32>(token: *mut u32) {
     let _ = token;
@@ -22,7 +22,7 @@ pub unsafe fn sm100_tmem_alloc<const COLUMNS: u32>(token: *mut u32) {
 ///
 /// # Safety
 /// Both allocating warps must rendezvous after every asynchronous user has
-/// finished, as [`Sm100Tmem::dealloc`](super::Sm100Tmem::dealloc) requires.
+/// finished, as [`Sm100Tmem::dealloc`](crate::utils::tmem_allocator::Sm100Tmem::dealloc) requires.
 #[inline(never)]
 pub unsafe fn sm100_tmem_dealloc<const COLUMNS: u32>(tmem: u32) {
     let _ = tmem;

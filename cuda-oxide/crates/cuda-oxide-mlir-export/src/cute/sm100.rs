@@ -289,22 +289,47 @@ impl OperationTranslation for Recipe {
             }
             (BlockScaledCopy, Plan::ScaleCopy(p)) => {
                 let dst = e.cast("llvm.inttoptr", a[0].clone(), llvm_ptr_type(6)?)?;
-                let smem_ptr = e.llvm_ptr(a[1].clone(), 3)?;
-                let addr32 = e.cast("llvm.ptrtoint", smem_ptr, MlirType::Integer(32))?;
-                let addr64 = e.cast("arith.extui", addr32, MlirType::Integer(64))?;
-                let mask = e.constant(64, 0x3FFF0)?;
-                let shift4 = e.constant(64, 4)?;
-                let addr_masked = e.binary("arith.andi", addr64, mask)?;
-                let addr_bits = e.binary("arith.shrui", addr_masked, shift4)?;
-                let base_flags = e.constant(
-                    64,
-                    ((2048i128 >> 4) << 16) | ((128i128 >> 4) << 32) | (1i128 << 46),
-                )?;
-                let desc0 = e.binary("arith.ori", addr_bits, base_flags)?;
-                let step64 = e.cast("arith.extui", a[2].clone(), MlirType::Integer(64))?;
-                let c32 = e.constant(64, 32)?;
-                let step_off = e.binary("arith.muli", step64, c32)?;
-                let desc = e.binary("arith.addi", desc0, step_off)?;
+                let desc0 = if let Some(cached) =
+                    e.session.smem_desc_cache.get(&(a[1].id, 2048)).cloned()
+                {
+                    cached
+                } else {
+                    let smem_ptr = e.llvm_ptr(a[1].clone(), 3)?;
+                    let addr64 = e.cast("llvm.ptrtoint", smem_ptr, MlirType::Integer(64))?;
+                    let mask = e.constant(64, 0x3FFF0)?;
+                    let shift4 = e.constant(64, 4)?;
+                    let addr_masked = e.binary("arith.andi", addr64, mask)?;
+                    let addr_bits = e.binary("arith.shrui", addr_masked, shift4)?;
+                    let base_flags = e.constant(
+                        64,
+                        ((2048i128 >> 4) << 16) | ((128i128 >> 4) << 32) | (1i128 << 46),
+                    )?;
+                    let d0 = e.binary("arith.ori", addr_bits, base_flags)?;
+                    e.session
+                        .smem_desc_cache
+                        .insert((a[1].id, 2048), d0.clone());
+                    d0
+                };
+                let const_step = source
+                    .deref(ctx)
+                    .get_operand(2)
+                    .defining_op()
+                    .and_then(|op| Operation::get_op::<dialect_mir::ops::MirConstantOp>(op, ctx))
+                    .and_then(|c| c.get_attr_value(ctx))
+                    .map(|attr| attr.value().to_u64() as i128);
+                let desc = match const_step {
+                    Some(0) => desc0,
+                    Some(k) => {
+                        let off = e.constant(64, k * 32)?;
+                        e.binary("arith.addi", desc0, off)?
+                    }
+                    None => {
+                        let step64 = e.cast("arith.extui", a[2].clone(), MlirType::Integer(64))?;
+                        let c32 = e.constant(64, 32)?;
+                        let step_off = e.binary("arith.muli", step64, c32)?;
+                        e.binary("arith.addi", desc0, step_off)?
+                    }
+                };
                 let mut op = e.operation("nvvm.tcgen05.cp", vec![dst, desc])?;
                 property(
                     &mut op,
@@ -316,51 +341,101 @@ impl OperationTranslation for Recipe {
                 e.ops.push(op);
             }
             (BlockScaledGemm, Plan::BlockScaledMma(p)) => {
+                let b_rows = p.b_layout.0.outer().shape.flatten()[0] as i128;
+                let b_lbo = b_rows * 16;
                 let d_ptr = e.cast("llvm.inttoptr", a[0].clone(), llvm_ptr_type(6)?)?;
                 let sfa_ptr = e.cast("llvm.inttoptr", a[3].clone(), llvm_ptr_type(6)?)?;
                 let sfb_ptr = e.cast("llvm.inttoptr", a[4].clone(), llvm_ptr_type(6)?)?;
-                let mask = e.constant(64, 0x3FFF0)?;
-                let shift4 = e.constant(64, 4)?;
-                let step64 = e.cast("arith.extui", a[7].clone(), MlirType::Integer(64))?;
+                let const_step = source
+                    .deref(ctx)
+                    .get_operand(7)
+                    .defining_op()
+                    .and_then(|op| Operation::get_op::<dialect_mir::ops::MirConstantOp>(op, ctx))
+                    .and_then(|c| c.get_attr_value(ctx))
+                    .map(|attr| attr.value().to_u64() as i128);
 
-                let a_ptr = e.llvm_ptr(a[1].clone(), 3)?;
-                let a_addr32 = e.cast("llvm.ptrtoint", a_ptr, MlirType::Integer(32))?;
-                let a_addr64 = e.cast("arith.extui", a_addr32, MlirType::Integer(64))?;
-                let a_masked = e.binary("arith.andi", a_addr64, mask.clone())?;
-                let a_bits = e.binary("arith.shrui", a_masked, shift4.clone())?;
-                let a_flags = e.constant(
-                    64,
-                    ((2048i128 >> 4) << 16) | ((128i128 >> 4) << 32) | (1i128 << 46),
-                )?;
-                let a_desc0 = e.binary("arith.ori", a_bits, a_flags)?;
-                let c256 = e.constant(64, 256)?;
-                let a_step_off = e.binary("arith.muli", step64.clone(), c256)?;
-                let a_desc = e.binary("arith.addi", a_desc0, a_step_off)?;
+                let a_desc0 = if let Some(cached) =
+                    e.session.smem_desc_cache.get(&(a[1].id, 2048)).cloned()
+                {
+                    cached
+                } else {
+                    let a_ptr = e.llvm_ptr(a[1].clone(), 3)?;
+                    let a_addr64 = e.cast("llvm.ptrtoint", a_ptr, MlirType::Integer(64))?;
+                    let mask = e.constant(64, 0x3FFF0)?;
+                    let shift4 = e.constant(64, 4)?;
+                    let a_masked = e.binary("arith.andi", a_addr64, mask)?;
+                    let a_bits = e.binary("arith.shrui", a_masked, shift4)?;
+                    let a_flags = e.constant(
+                        64,
+                        ((2048i128 >> 4) << 16) | ((128i128 >> 4) << 32) | (1i128 << 46),
+                    )?;
+                    let d0 = e.binary("arith.ori", a_bits, a_flags)?;
+                    e.session
+                        .smem_desc_cache
+                        .insert((a[1].id, 2048), d0.clone());
+                    d0
+                };
 
-                let b_ptr = e.llvm_ptr(a[2].clone(), 3)?;
-                let b_addr32 = e.cast("llvm.ptrtoint", b_ptr, MlirType::Integer(32))?;
-                let b_addr64 = e.cast("arith.extui", b_addr32, MlirType::Integer(64))?;
-                let b_masked = e.binary("arith.andi", b_addr64, mask.clone())?;
-                let b_bits = e.binary("arith.shrui", b_masked, shift4.clone())?;
-                let lbo64 = e.cast("arith.extui", a[6].clone(), MlirType::Integer(64))?;
-                let lbo_masked = e.binary("arith.andi", lbo64.clone(), mask)?;
-                let lbo_shifted = e.binary("arith.shrui", lbo_masked, shift4)?;
-                let c16 = e.constant(64, 16)?;
-                let lbo_bits = e.binary("arith.shli", lbo_shifted, c16)?;
-                let b_sbo_flags = e.constant(64, ((128i128 >> 4) << 32) | (1i128 << 46))?;
-                let b_bits_lbo = e.binary("arith.ori", b_bits, lbo_bits)?;
-                let b_desc0 = e.binary("arith.ori", b_bits_lbo, b_sbo_flags)?;
-                let shift3 = e.constant(64, 3)?;
-                let b_step_stride = e.binary("arith.shrui", lbo64, shift3)?;
-                let b_step_off = e.binary("arith.muli", step64, b_step_stride)?;
-                let b_desc = e.binary("arith.addi", b_desc0, b_step_off)?;
+                let b_desc0 = if let Some(cached) =
+                    e.session.smem_desc_cache.get(&(a[2].id, b_lbo)).cloned()
+                {
+                    cached
+                } else {
+                    let b_ptr = e.llvm_ptr(a[2].clone(), 3)?;
+                    let b_addr64 = e.cast("llvm.ptrtoint", b_ptr, MlirType::Integer(64))?;
+                    let mask = e.constant(64, 0x3FFF0)?;
+                    let shift4 = e.constant(64, 4)?;
+                    let b_masked = e.binary("arith.andi", b_addr64, mask)?;
+                    let b_bits = e.binary("arith.shrui", b_masked, shift4)?;
+                    let b_flags = e.constant(
+                        64,
+                        ((b_lbo >> 4) << 16) | ((128i128 >> 4) << 32) | (1i128 << 46),
+                    )?;
+                    let d0 = e.binary("arith.ori", b_bits, b_flags)?;
+                    e.session
+                        .smem_desc_cache
+                        .insert((a[2].id, b_lbo), d0.clone());
+                    d0
+                };
 
-                let c3 = e.constant(32, 3)?;
-                let c17 = e.constant(32, 17)?;
-                let n_shr = e.binary("arith.shrui", a[5].clone(), c3)?;
-                let n_bits = e.binary("arith.shli", n_shr, c17)?;
-                let idesc_base = e.constant(32, (0x0000_0480u32 | ((p.m >> 4) << 24)) as i128)?;
-                let idesc = e.binary("arith.ori", idesc_base, n_bits)?;
+                let (a_desc, b_desc) = match const_step {
+                    Some(0) => (a_desc0, b_desc0),
+                    Some(k) => {
+                        let a_off = e.constant(64, k * 256)?;
+                        let b_off = e.constant(64, k * b_rows * 2)?;
+                        (
+                            e.binary("arith.addi", a_desc0, a_off)?,
+                            e.binary("arith.addi", b_desc0, b_off)?,
+                        )
+                    }
+                    None => {
+                        let step64 = e.cast("arith.extui", a[7].clone(), MlirType::Integer(64))?;
+                        let c256 = e.constant(64, 256)?;
+                        let a_step_off = e.binary("arith.muli", step64.clone(), c256)?;
+                        let b_step_stride = e.constant(64, b_rows * 2)?;
+                        let b_step_off = e.binary("arith.muli", step64, b_step_stride)?;
+                        (
+                            e.binary("arith.addi", a_desc0, a_step_off)?,
+                            e.binary("arith.addi", b_desc0, b_step_off)?,
+                        )
+                    }
+                };
+                let _ = &a[6];
+
+                let idesc =
+                    if let Some(cached) = e.session.idesc_cache.get(&(a[5].id, p.m)).cloned() {
+                        cached
+                    } else {
+                        let c3 = e.constant(32, 3)?;
+                        let c17 = e.constant(32, 17)?;
+                        let n_shr = e.binary("arith.shrui", a[5].clone(), c3)?;
+                        let n_bits = e.binary("arith.shli", n_shr, c17)?;
+                        let idesc_base =
+                            e.constant(32, (0x0000_0480u32 | ((p.m >> 4) << 24)) as i128)?;
+                        let id = e.binary("arith.ori", idesc_base, n_bits)?;
+                        e.session.idesc_cache.insert((a[5].id, p.m), id.clone());
+                        id
+                    };
 
                 let mut op = e.operation(
                     "nvvm.tcgen05.mma.block_scale",

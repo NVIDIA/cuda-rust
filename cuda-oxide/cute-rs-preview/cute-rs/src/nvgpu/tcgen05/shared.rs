@@ -22,6 +22,14 @@ pub struct Sm100SharedTile<Layout, Role> {
     marker: PhantomData<(Layout, Role)>,
 }
 
+impl<Layout, Role> Copy for Sm100SharedTile<Layout, Role> {}
+impl<Layout, Role> Clone for Sm100SharedTile<Layout, Role> {
+    #[inline(always)]
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
 impl<Layout: ReifySmem2D, Role> Sm100SharedTile<Layout, Role> {
     /// Interpret existing shared storage using `Layout`.
     ///
@@ -79,6 +87,14 @@ pub struct Sm100ScaleTile<Role> {
     /// Zero-byte marker distinguishing A-side (`Mkl`) from B-side (`Nkl`) scale tiles at compile time.
     /// Pairs with [`Sm120ScaleAtom`] to document the canonical `(32, 4, 4)` layout invariant.
     marker: PhantomData<(Sm120ScaleAtom, Role)>,
+}
+
+impl<Role> Copy for Sm100ScaleTile<Role> {}
+impl<Role> Clone for Sm100ScaleTile<Role> {
+    #[inline(always)]
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
 impl<Role> Sm100ScaleTile<Role> {

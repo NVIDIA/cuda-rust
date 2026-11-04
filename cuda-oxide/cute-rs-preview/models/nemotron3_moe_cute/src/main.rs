@@ -225,12 +225,10 @@ const TMA_BURST_TX_BYTES: u32 = size_in_bytes::<u8, WeightTileSmem>()
     + size_in_bytes::<u16, ScaleTmaSmem>()
     + size_in_bytes::<u16, ScaleBTmaSmem>();
 
-/// Bytes copied by TMA per `128`-row `K = 512` burst (`32 KB A + 32 KB B + 4 KB SFA + 4 KB SFB = 73,728` bytes).
-/// Statically verified by `dialect-cute` for `Act128Pipeline`.
-const TMA_BURST_128_TX_BYTES: u32 = size_in_bytes::<u8, WeightTileSmem>()
-    + size_in_bytes::<u8, ActTile128Smem>()
-    + size_in_bytes::<u16, ScaleTmaSmem>()
-    + size_in_bytes::<u16, ScaleTmaSmem>();
+/// Bytes copied by TMA per `128`-row `K = 512` burst (`32,768` B + `4,096` SFB = `36,864` bytes).
+/// Statically verified by `dialect-cute` for `Act128Pipeline` and `Weight128Pipeline`.
+const TMA_BURST_128_TX_BYTES: u32 =
+    size_in_bytes::<u8, ActTile128Smem>() + size_in_bytes::<u16, ScaleTmaSmem>();
 
 /// Number of compute warps (`16` warps = `512` threads) that run the epilogue for `B <= 1024`.
 /// Only `Warp 0` (`1` consumer warp) participates in `MainloopPipeline`!
@@ -252,6 +250,10 @@ const TCGEN05_128_THREADS: u32 = 192;
 /// Streams `Burst 0` (`slot 0`) and `Burst 1` (`slot 1`) of `A`, `B`, `SFA`, and `SFB` concurrently
 /// with `0` `barrier_cta_sync` calls in the mainloop and `1` single `mbarrier` wait after all 16 MMA steps!
 type MainloopPipeline = PipelineTmaAsync<2, 1, TMA_BURST_TX_BYTES>;
+
+/// 2-Stage stationary weight TMA pipeline (`PipelineTmaAsync<2, 1, 36_864>`) for `B >= 2048`.
+/// Loads the 2 stationary `K = 512` weight bursts (`A` + `SFA`) once per CTA!
+type Weight128Pipeline = PipelineTmaAsync<2, 1, TMA_BURST_128_TX_BYTES>;
 
 /// 4-Stage streaming token TMA pipeline (`PipelineTmaAsync<4, 1, 36_864>`) for `B >= 2048`.
 /// Streams `128`-token `B` (`SMEM_B[0..3]`) and `SFB` (`SMEM_SFB[0..3]`) bursts concurrently with 2-stage TMEM MMA!
@@ -489,17 +491,23 @@ mod kernels {
                     .load()
                     .into_array()
             };
-            unsafe {
-                let mut slot = 0usize;
-                while slot < TOP_K {
-                    let (r_u32, g_u32) = idx2crd_col_major_2d(perms[slot] as u32, 256);
+            let u64_grp_base = sm100_noswizzle_burst_u64_crd2idx::<256>(0, 0, grp, 2);
+            let s_grp_base = sm1xx_block_scale_crd2idx(grp / 4, 0, grp % 4, 2, 1);
+            macro_rules! scatter_256 {
+                ($perm:expr) => {{
+                    let (r_u32, g_u32) = idx2crd_col_major_2d($perm as u32, 256);
                     let (g, r) = (g_u32 as usize, r_u32 as usize);
-                    let u64_idx = sm100_noswizzle_burst_u64_crd2idx::<256>(g, r, grp, 2);
-                    let s_idx = sm1xx_block_scale_crd2idx(g * 16 + grp / 4, r, grp % 4, 2, 1);
+                    let u64_idx = g * 16384 + u64_grp_base + r * 2;
+                    let s_idx = g * 16384 + s_grp_base + sm1xx_block_scale_crd2idx(0, r, 0, 2, 1);
                     b_u64_out.store_at(u64_idx, packed_u64);
                     sfb_out.store_at(s_idx, scale_code);
-                    slot += 1;
-                }
+                }};
+            }
+            unsafe {
+                scatter_256!(perms[0]);
+                scatter_256!(perms[1]);
+                scatter_256!(perms[2]);
+                scatter_256!(perms[3]);
             }
         } else {
             let mut b_u64_out =
@@ -511,17 +519,23 @@ mod kernels {
                     .load()
                     .into_array()
             };
-            unsafe {
-                let mut slot = 0usize;
-                while slot < TOP_K {
-                    let (r_u32, g_u32) = idx2crd_col_major_2d(perms[slot] as u32, 128);
+            let u64_grp_base = sm100_noswizzle_burst_u64_crd2idx::<128>(0, 0, grp, 2);
+            let s_grp_base = sm1xx_block_scale_crd2idx(0, 0, grp, 1, 16);
+            macro_rules! scatter_128 {
+                ($perm:expr) => {{
+                    let (r_u32, g_u32) = idx2crd_col_major_2d($perm as u32, 128);
                     let (g, r) = (g_u32 as usize, r_u32 as usize);
-                    let u64_idx = sm100_noswizzle_burst_u64_crd2idx::<128>(g, r, grp, 2);
-                    let s_idx = sm1xx_block_scale_crd2idx(g, r, grp, 1, 16);
+                    let u64_idx = g * 8192 + u64_grp_base + r * 2;
+                    let s_idx = g * 8192 + s_grp_base + sm1xx_block_scale_crd2idx(0, r, 0, 1, 16);
                     b_u64_out.store_at(u64_idx, packed_u64);
                     sfb_out.store_at(s_idx, scale_code);
-                    slot += 1;
-                }
+                }};
+            }
+            unsafe {
+                scatter_128!(perms[0]);
+                scatter_128!(perms[1]);
+                scatter_128!(perms[2]);
+                scatter_128!(perms[3]);
             }
         }
     }
@@ -749,16 +763,21 @@ mod kernels {
         copy_sfa: bool,
         first_burst: bool,
     ) {
+        let mma = *tiled_mma;
+        let a = *s_a;
+        let b = *s_b;
+        let sfa = *s_sfa;
+        let sfb = *s_sfb;
         macro_rules! step_256 {
             ($s:expr, $acc:expr) => {{
                 let sa = sfa_tmem_base + ($s as u32) * 4;
                 let sb = sfb_tmem_base + ($s as u32) * 8;
                 if copy_sfa {
-                    TiledMma::copy(sa, s_sfa, $s);
+                    TiledMma::copy(sa, &sfa, $s);
                 }
-                TiledMma::copy(sb, s_sfb, $s * 2);
-                TiledMma::copy(sb + 4, s_sfb, $s * 2 + 1);
-                tiled_mma.gemm(tmem_d, s_a, s_b, sa, sb, $s, $acc);
+                TiledMma::copy(sb, &sfb, $s * 2);
+                TiledMma::copy(sb + 4, &sfb, $s * 2 + 1);
+                mma.gemm(tmem_d, &a, &b, sa, sb, $s, $acc);
             }};
         }
         unsafe {
@@ -787,12 +806,16 @@ mod kernels {
         s_sfb: &SharedActScales,
         first_burst: bool,
     ) {
+        let mma = *tiled_mma;
+        let a = *s_a;
+        let b = *s_b;
+        let sfb = *s_sfb;
         macro_rules! step_128 {
             ($s:expr, $acc:expr) => {{
                 let sa = sfa_tmem_base + ($s as u32) * 4;
                 let sb = sfb_tmem_base + ($s as u32) * 4;
-                TiledMma128::copy(sb, s_sfb, $s);
-                tiled_mma.gemm(tmem_d, s_b, s_a, sb, sa, $s, $acc);
+                TiledMma128::copy(sb, &sfb, $s);
+                mma.gemm(tmem_d, &b, &a, sb, sa, $s, $acc);
             }};
         }
         unsafe {
@@ -810,15 +833,16 @@ mod kernels {
     /// Copy all 8 `(32, 4, 4)` A scale atoms of one `K = 512` burst into `sfa_tmem_base` via `TiledMma128::copy`.
     #[inline(always)]
     unsafe fn copy_a_scales_burst_128(sfa_tmem_base: u32, s_sfa: &SharedWeightScales) {
+        let sfa = *s_sfa;
         unsafe {
-            TiledMma128::copy(sfa_tmem_base, s_sfa, 0);
-            TiledMma128::copy(sfa_tmem_base + 4, s_sfa, 1);
-            TiledMma128::copy(sfa_tmem_base + 8, s_sfa, 2);
-            TiledMma128::copy(sfa_tmem_base + 12, s_sfa, 3);
-            TiledMma128::copy(sfa_tmem_base + 16, s_sfa, 4);
-            TiledMma128::copy(sfa_tmem_base + 20, s_sfa, 5);
-            TiledMma128::copy(sfa_tmem_base + 24, s_sfa, 6);
-            TiledMma128::copy(sfa_tmem_base + 28, s_sfa, 7);
+            TiledMma128::copy(sfa_tmem_base, &sfa, 0);
+            TiledMma128::copy(sfa_tmem_base + 4, &sfa, 1);
+            TiledMma128::copy(sfa_tmem_base + 8, &sfa, 2);
+            TiledMma128::copy(sfa_tmem_base + 12, &sfa, 3);
+            TiledMma128::copy(sfa_tmem_base + 16, &sfa, 4);
+            TiledMma128::copy(sfa_tmem_base + 20, &sfa, 5);
+            TiledMma128::copy(sfa_tmem_base + 24, &sfa, 6);
+            TiledMma128::copy(sfa_tmem_base + 28, &sfa, 7);
         }
     }
 
@@ -965,18 +989,35 @@ mod kernels {
                     );
                     if tid < 128 {
                         let tmem_row_base = tmem_row_address(tmem_addr, warp_id, 0);
+                        let (c_lo4_u32, c_hi32_u32) = idx2crd_col_major_2d(tid as u32, 4);
+                        let (c_mid4_u32, c_top8_u32) = idx2crd_col_major_2d(c_hi32_u32, 4);
+                        let col_perm = (c_mid4_u32 * 32 + c_top8_u32 * 4 + c_lo4_u32) as usize;
                         let mut n_base = 0usize;
-                        while n_base < valid_n {
+                        while n_base + 32 <= valid_n {
+                            let r0 =
+                                TmemFragment::<16>::load_deferred(tmem_row_base + (n_base as u32));
+                            let r1 = TmemFragment::<16>::load_deferred(
+                                tmem_row_base + ((n_base + 16) as u32),
+                            );
+                            let mut c = 0usize;
+                            while c < 16 {
+                                let u0 = (r0.values[c] * g_scale).max(0.0);
+                                let u1 = (r1.values[c] * g_scale).max(0.0);
+                                smem_epi.store_at((n_base + c) * 128 + col_perm, u0 * u0);
+                                smem_epi.store_at((n_base + 16 + c) * 128 + col_perm, u1 * u1);
+                                c += 1;
+                            }
+                            n_base += 32;
+                        }
+                        if n_base < valid_n {
                             let r0 =
                                 TmemFragment::<16>::load_deferred(tmem_row_base + (n_base as u32));
                             let mut c = 0usize;
                             while c < 16 {
-                                let a0 = r0.values[c] * g_scale;
-                                let u0 = a0.max(0.0);
-                                smem_epi.store_at((n_base + c) * 128 + tid, u0 * u0);
+                                let u0 = (r0.values[c] * g_scale).max(0.0);
+                                smem_epi.store_at((n_base + c) * 128 + col_perm, u0 * u0);
                                 c += 1;
                             }
-                            n_base += 16;
                         }
                         fence_view_async_tmem_load();
                     }
@@ -986,28 +1027,41 @@ mod kernels {
                     let (sub_tile16_u32, row_off64_u32) = idx2crd_col_major_2d(tid as u32, 8);
                     let (sub_tile16, row_off64) = (sub_tile16_u32 as usize, row_off64_u32 as usize);
                     let grp = tile_m128 * 8 + sub_tile16;
-                    let smem_epi_ro =
-                        StridedTensor::<f32>::from_shared_bytes(dyn_smem, SMEM_B_OFFSET, 256 * 128);
+                    let smem_epi_u128 =
+                        StridedTensor::<u128>::from_shared_bytes(dyn_smem, SMEM_B_OFFSET, 256 * 32);
                     let mut n = row_off64;
                     while n < limit {
-                        let base = n * 128 + sub_tile16 * 16;
-                        let mut max_abs = 0.0f32;
-                        let mut vals = [0.0f32; 16];
-                        let mut i = 0usize;
-                        while i < 16 {
-                            let v = smem_epi_ro.get_unchecked(base + i);
-                            vals[i] = v;
-                            max_abs = max_abs.max(v);
-                            i += 1;
-                        }
+                        let base_u128 = n * 32 + sub_tile16;
+                        let q0 = smem_epi_u128.load_f32x4(base_u128);
+                        let q1 = smem_epi_u128.load_f32x4(base_u128 + 8);
+                        let q2 = smem_epi_u128.load_f32x4(base_u128 + 16);
+                        let q3 = smem_epi_u128.load_f32x4(base_u128 + 24);
+                        let m0 = q0.fold(0.0f32, |m, v| m.max(v));
+                        let m1 = q1.fold(m0, |m, v| m.max(v));
+                        let m2 = q2.fold(m1, |m, v| m.max(v));
+                        let max_abs = q3.fold(m2, |m, v| m.max(v));
                         let scale_code = dev_f32_to_e4m3(max_abs * (1.0 / 6.0));
                         let inv_e2m1 = dev_e4m3_inv_e2m1(scale_code);
-                        let mut packed_u64 = 0u64;
-                        let mut idx_e = 0usize;
-                        while idx_e < 16 {
-                            packed_u64 |= fast_pos_e2m1(vals[idx_e] * inv_e2m1) << (idx_e * 4);
-                            idx_e += 1;
-                        }
+                        let a0 = q0.as_array();
+                        let a1 = q1.as_array();
+                        let a2 = q2.as_array();
+                        let a3 = q3.as_array();
+                        let packed_u64 = fast_pos_e2m1(a0[0] * inv_e2m1)
+                            | (fast_pos_e2m1(a0[1] * inv_e2m1) << 4)
+                            | (fast_pos_e2m1(a0[2] * inv_e2m1) << 8)
+                            | (fast_pos_e2m1(a0[3] * inv_e2m1) << 12)
+                            | (fast_pos_e2m1(a1[0] * inv_e2m1) << 16)
+                            | (fast_pos_e2m1(a1[1] * inv_e2m1) << 20)
+                            | (fast_pos_e2m1(a1[2] * inv_e2m1) << 24)
+                            | (fast_pos_e2m1(a1[3] * inv_e2m1) << 28)
+                            | (fast_pos_e2m1(a2[0] * inv_e2m1) << 32)
+                            | (fast_pos_e2m1(a2[1] * inv_e2m1) << 36)
+                            | (fast_pos_e2m1(a2[2] * inv_e2m1) << 40)
+                            | (fast_pos_e2m1(a2[3] * inv_e2m1) << 44)
+                            | (fast_pos_e2m1(a3[0] * inv_e2m1) << 48)
+                            | (fast_pos_e2m1(a3[1] * inv_e2m1) << 52)
+                            | (fast_pos_e2m1(a3[2] * inv_e2m1) << 56)
+                            | (fast_pos_e2m1(a3[3] * inv_e2m1) << 60);
                         let s_idx =
                             sm1xx_block_scale_crd2idx(group * 16 + grp / 4, n, grp % 4, 2, 1);
                         let u64_idx = sm100_noswizzle_burst_u64_crd2idx::<256>(group, n, grp, 2);
@@ -1226,7 +1280,21 @@ mod kernels {
                     if tid < 128 {
                         let tmem_row_base = tmem_row_address(tmem_addr, warp_id, 0);
                         let mut n_base = 0usize;
-                        while n_base < valid_n {
+                        while n_base + 32 <= valid_n {
+                            let r0 =
+                                TmemFragment::<16>::load_deferred(tmem_row_base + (n_base as u32));
+                            let r1 = TmemFragment::<16>::load_deferred(
+                                tmem_row_base + ((n_base + 16) as u32),
+                            );
+                            let mut c = 0usize;
+                            while c < 16 {
+                                smem_epi.store_at((n_base + c) * 128 + tid, r0.values[c]);
+                                smem_epi.store_at((n_base + 16 + c) * 128 + tid, r1.values[c]);
+                                c += 1;
+                            }
+                            n_base += 32;
+                        }
+                        if n_base < valid_n {
                             let r0 =
                                 TmemFragment::<16>::load_deferred(tmem_row_base + (n_base as u32));
                             let mut c = 0usize;
@@ -1234,72 +1302,73 @@ mod kernels {
                                 smem_epi.store_at((n_base + c) * 128 + tid, r0.values[c]);
                                 c += 1;
                             }
-                            n_base += 16;
                         }
                         fence_view_async_tmem_load();
                     }
                     tcgen05_fence_before_thread_sync();
                     NamedBarrier::<1, 512>::sync();
 
-                    let col16 = tid & 15;
-                    let row_off32 = tid >> 4;
+                    let (col4_u32, row_off128_u32) = idx2crd_col_major_2d(tid as u32, 4);
+                    let (col4, row_off128) = (col4_u32 as usize, row_off128_u32 as usize);
                     let output_t = StridedTensorMut::from_disjoint_slice(&mut output);
-                    let col_bf16 = tile_m128 * 128 + col16 * 8;
-                    let smem_epi_ro =
-                        StridedTensor::<f32>::from_shared_bytes(dyn_smem, SMEM_B_OFFSET, 256 * 128);
+                    let col_bf16_base = tile_m128 * 128 + col4 * 4;
+                    let smem_epi_u128 =
+                        StridedTensor::<u128>::from_shared_bytes(dyn_smem, SMEM_B_OFFSET, 256 * 32);
 
-                    let mut n = row_off32;
-                    while n < limit {
-                        if n >= 128 && n < 128 + 32 && g_idx + 1 < groups_per_cta {
+                    let half_n = valid_n.min(128);
+                    let half_mask = half_n - 1;
+                    let n_rot = (expert * (half_n / 4)) & half_mask;
+                    let mut n_step = row_off128;
+                    while n_step < valid_n {
+                        let n = (n_step & 128) | ((n_step + n_rot) & half_mask);
+                        if n < limit {
+                            let route = group_routes_t.get_unchecked(group * 256 + n) as usize;
+                            let token = route / 4;
+                            let sw = g_scale * routing_weights_t.get_unchecked(route).to_f32();
+                            let base_u128 = n * 32 + col4;
+                            macro_rules! add_quad {
+                                ($k:expr) => {{
+                                    let q =
+                                        smem_epi_u128.load_f32x4(base_u128 + $k * 4).into_array();
+                                    let c = col_bf16_base + $k * 16;
+                                    output_t.atomic_add_bf16x2_at_2d(
+                                        token,
+                                        c,
+                                        hidden_size,
+                                        BFloat16::from_f32(q[0] * sw),
+                                        BFloat16::from_f32(q[1] * sw),
+                                    );
+                                    output_t.atomic_add_bf16x2_at_2d(
+                                        token,
+                                        c + 2,
+                                        hidden_size,
+                                        BFloat16::from_f32(q[2] * sw),
+                                        BFloat16::from_f32(q[3] * sw),
+                                    );
+                                }};
+                            }
+                            add_quad!(0);
+                            add_quad!(1);
+                            add_quad!(2);
+                            add_quad!(3);
+                            add_quad!(4);
+                            add_quad!(5);
+                            add_quad!(6);
+                            add_quad!(7);
+                        }
+                        if g_idx + 1 < groups_per_cta && n_step < 128 {
                             fence_view_async_shared();
                             NamedBarrier::<1, 512>::sync();
                             if tid == 0 {
                                 b_free_ring.commit_threads((g_idx * 2) as u32);
                             }
                         }
-                        let route = group_routes_t.get_unchecked(group * 256 + n) as usize;
-                        let token = route >> 2;
-                        let sw = g_scale * routing_weights_t.get_unchecked(route).to_f32();
-                        let base = n * 128 + col16 * 8;
-                        let sc =
-                            |i: usize| BFloat16::from_f32(smem_epi_ro.get_unchecked(base + i) * sw);
-                        output_t.atomic_add_bf16x2_at_2d(
-                            token,
-                            col_bf16,
-                            hidden_size,
-                            sc(0),
-                            sc(1),
-                        );
-                        output_t.atomic_add_bf16x2_at_2d(
-                            token,
-                            col_bf16 + 2,
-                            hidden_size,
-                            sc(2),
-                            sc(3),
-                        );
-                        output_t.atomic_add_bf16x2_at_2d(
-                            token,
-                            col_bf16 + 4,
-                            hidden_size,
-                            sc(4),
-                            sc(5),
-                        );
-                        output_t.atomic_add_bf16x2_at_2d(
-                            token,
-                            col_bf16 + 6,
-                            hidden_size,
-                            sc(6),
-                            sc(7),
-                        );
-                        n += 32;
+                        n_step += 128;
                     }
                     if g_idx + 1 < groups_per_cta {
                         fence_view_async_shared();
                         NamedBarrier::<1, 512>::sync();
                         if tid == 0 {
-                            if limit <= 128 {
-                                b_free_ring.commit_threads((g_idx * 2) as u32);
-                            }
                             b_free_ring.commit_threads((g_idx * 2 + 1) as u32);
                         }
                     }
@@ -1419,6 +1488,7 @@ mod kernels {
 
         unsafe {
             let b_pipeline = Act128Pipeline::from_shared_bytes(dyn_smem, PIPELINE_OFFSET);
+            let w_pipeline = Weight128Pipeline::from_shared_bytes(dyn_smem, PIPELINE_OFFSET + 256);
             if tid == 0 {
                 w_up_tma.prefetch_descriptor();
                 b_up_tma.prefetch_descriptor();
@@ -1432,29 +1502,41 @@ mod kernels {
                 TmemAllocator::<512, 1>::allocate(slot_ptr);
                 TmemAllocator::<512, 1>::relinquish_alloc_permit();
             }
+            w_pipeline.init(0);
             b_pipeline.init(0);
 
             if warp_id == 5 && (tid & 31) == 0 {
-                let mut b_prod = PipelineState::<Producer, 4>::new();
-                let mut step = 0usize;
-                while step < total_steps {
-                    let slot = b_prod.index();
-                    let w_burst = step & 1;
-                    if step >= 2 {
-                        b_free_ring.wait((step - 2) as u32);
-                    }
-                    b_pipeline.producer_acquire(&b_prod);
-                    let b_bar = b_pipeline.producer_expect_tx(&b_prod);
+                let mut w_prod = PipelineState::<Producer, 2>::new();
+                let mut w_burst = 0usize;
+                while w_burst < 2 {
+                    let w_slot = w_prod.index();
+                    w_pipeline.producer_acquire(&w_prod);
+                    let w_bar = w_pipeline.producer_expect_tx(&w_prod);
                     let mut a_tile = SmemTile::<u8, WeightTileSmem>::from_stage_bytes(
                         dyn_smem,
                         SMEM_A_OFFSET,
-                        w_burst,
+                        w_slot,
                     );
                     let mut sfa_tile = SmemTile::<u16, ScaleTmaSmem>::from_stage_bytes(
                         dyn_smem,
                         SMEM_SFA_OFFSET,
-                        w_burst,
+                        w_slot,
                     );
+                    copy_tma_2d(w_up_tma, (w_outer, w_burst), &mut a_tile, w_bar);
+                    copy_tma_2d(sfa_up_tma, (w_outer * 2 + w_burst, 0), &mut sfa_tile, w_bar);
+                    w_prod.advance();
+                    w_burst += 1;
+                }
+
+                let mut b_prod = PipelineState::<Producer, 4>::new();
+                let mut step = 0usize;
+                while step < total_steps {
+                    let slot = b_prod.index();
+                    if step >= 4 {
+                        b_free_ring.wait((step - 4) as u32);
+                    }
+                    b_pipeline.producer_acquire(&b_prod);
+                    let b_bar = b_pipeline.producer_expect_tx(&b_prod);
                     let mut b_tile = SmemTile::<u8, ActTile128Smem>::from_stage_bytes(
                         dyn_smem,
                         SMEM_B_OFFSET,
@@ -1465,8 +1547,6 @@ mod kernels {
                         SMEM_SFB_OFFSET,
                         slot,
                     );
-                    copy_tma_2d(w_up_tma, (w_outer, w_burst), &mut a_tile, b_bar);
-                    copy_tma_2d(sfa_up_tma, (w_outer * 2 + w_burst, 0), &mut sfa_tile, b_bar);
                     copy_tma_2d(b_up_tma, (group_start * 2 + step, 0), &mut b_tile, b_bar);
                     copy_tma_2d(
                         sfb_up_tma,
@@ -1477,12 +1557,32 @@ mod kernels {
                     b_prod.advance();
                     step += 1;
                 }
+                w_pipeline.producer_tail(w_prod);
                 b_pipeline.producer_tail(b_prod);
             } else if warp_id == 4 {
                 let tmem_addr = TmemAllocator::<512, 1>::retrieve_ptr(slot_ptr);
                 let sfa_tmem_base = tmem_addr + 256;
                 let sfb_tmem_base = tmem_addr + 320;
                 let tiled_mma = TiledMma128::new_with_lbo(128, 2048);
+
+                if (tid & 31) == 0 {
+                    let mut w_cons = PipelineState::<Consumer, 2>::new();
+                    let mut w_burst = 0usize;
+                    while w_burst < 2 {
+                        let w_slot = w_cons.index();
+                        w_pipeline.consumer_wait(&w_cons);
+                        let s_sfa = SharedWeightScales::from_stage_bytes(
+                            dyn_smem,
+                            SMEM_SFA_OFFSET,
+                            4096,
+                            w_slot,
+                        );
+                        copy_a_scales_burst_128(sfa_tmem_base + (w_burst as u32) * 32, &s_sfa);
+                        w_pipeline.consumer_release(&w_cons);
+                        w_cons.advance();
+                        w_burst += 1;
+                    }
+                }
 
                 let mut b_cons = PipelineState::<Consumer, 4>::new();
                 let mut g_idx = 0usize;
@@ -1497,18 +1597,6 @@ mod kernels {
                         let step = g_idx * 2 + burst;
                         if (tid & 31) == 0 {
                             b_pipeline.consumer_wait(&b_cons);
-                            if g_idx == 0 {
-                                let s_sfa = SharedWeightScales::from_stage_bytes(
-                                    dyn_smem,
-                                    SMEM_SFA_OFFSET,
-                                    4096,
-                                    burst,
-                                );
-                                copy_a_scales_burst_128(
-                                    sfa_tmem_base + (burst as u32) * 32,
-                                    &s_sfa,
-                                );
-                            }
                             let slot = b_cons.index();
                             let s_a = Sm100SharedTile::<WeightTileSmem, OperandB>::from_stage_bytes(
                                 dyn_smem,
@@ -1536,7 +1624,7 @@ mod kernels {
                             b_pipeline.consumer_release(&b_cons);
                             b_cons.advance();
                         }
-                        if step + 2 < total_steps {
+                        if step + 4 < total_steps {
                             b_free_ring.commit_mma(step as u32);
                         }
                         if burst == 1 {
@@ -1549,9 +1637,12 @@ mod kernels {
             } else if warp_id < 4 {
                 let tmem_addr = TmemAllocator::<512, 1>::retrieve_ptr(slot_ptr);
                 let g_scale = w_up_global_t.get_unchecked(expert);
-                let mut vals_u64_out =
-                    StridedTensorMut::<u64>::from_disjoint_slice_as(&mut q_inter_vals);
-                let mut scales_out = StridedTensorMut::from_disjoint_slice(&mut q_inter_scales);
+                let scale_sq_div6 = g_scale * g_scale * (1.0f32 / 6.0f32);
+                let g_scale_sq = g_scale * g_scale;
+                let mut vals_u128_out =
+                    StridedTensorMut::<u128>::from_disjoint_slice_as(&mut q_inter_vals);
+                let mut scales_u32_out =
+                    StridedTensorMut::<u32>::from_disjoint_slice_as(&mut q_inter_scales);
 
                 let mut g_idx = 0usize;
                 while g_idx < groups_per_cta {
@@ -1575,35 +1666,83 @@ mod kernels {
                                 tmem_free_ring.commit_threads(g_idx as u32);
                             }
                         }
-                        let mut sub = 0usize;
-                        while sub < 4 {
-                            let base_c = sub * 16;
-                            let mut max_abs = 0.0f32;
-                            let mut vals = [0.0f32; 16];
-                            let mut i = 0usize;
-                            while i < 16 {
-                                let u = (frag.values[base_c + i] * g_scale).max(0.0);
-                                let sq = u * u;
-                                vals[i] = sq;
-                                max_abs = max_abs.max(sq);
-                                i += 1;
-                            }
-                            let scale_code = dev_f32_to_e4m3(max_abs * (1.0 / 6.0));
-                            let inv_e2m1 = dev_e4m3_inv_e2m1(scale_code);
-                            let mut packed_u64 = 0u64;
-                            let mut j = 0usize;
-                            while j < 16 {
-                                packed_u64 |= fast_pos_e2m1(vals[j] * inv_e2m1) << (j * 4);
-                                j += 1;
-                            }
-                            let grp = tile_m128 * 8 + half_m * 4 + sub;
-                            let u64_idx =
-                                sm100_noswizzle_burst_u64_crd2idx::<128>(group, tid, grp, 2);
-                            let s_idx = sm1xx_block_scale_crd2idx(group, tid, grp, 1, 16);
-                            vals_u64_out.store_at(u64_idx, packed_u64);
-                            scales_out.store_at(s_idx, scale_code);
-                            sub += 1;
+                        macro_rules! quant16_relu2 {
+                            ($base:expr) => {{
+                                let r0 = frag.values[$base].max(0.0f32);
+                                let r1 = frag.values[$base + 1].max(0.0f32);
+                                let r2 = frag.values[$base + 2].max(0.0f32);
+                                let r3 = frag.values[$base + 3].max(0.0f32);
+                                let r4 = frag.values[$base + 4].max(0.0f32);
+                                let r5 = frag.values[$base + 5].max(0.0f32);
+                                let r6 = frag.values[$base + 6].max(0.0f32);
+                                let r7 = frag.values[$base + 7].max(0.0f32);
+                                let r8 = frag.values[$base + 8].max(0.0f32);
+                                let r9 = frag.values[$base + 9].max(0.0f32);
+                                let r10 = frag.values[$base + 10].max(0.0f32);
+                                let r11 = frag.values[$base + 11].max(0.0f32);
+                                let r12 = frag.values[$base + 12].max(0.0f32);
+                                let r13 = frag.values[$base + 13].max(0.0f32);
+                                let r14 = frag.values[$base + 14].max(0.0f32);
+                                let r15 = frag.values[$base + 15].max(0.0f32);
+                                let u0 = r0 * r0;
+                                let u1 = r1 * r1;
+                                let u2 = r2 * r2;
+                                let u3 = r3 * r3;
+                                let u4 = r4 * r4;
+                                let u5 = r5 * r5;
+                                let u6 = r6 * r6;
+                                let u7 = r7 * r7;
+                                let u8 = r8 * r8;
+                                let u9 = r9 * r9;
+                                let u10 = r10 * r10;
+                                let u11 = r11 * r11;
+                                let u12 = r12 * r12;
+                                let u13 = r13 * r13;
+                                let u14 = r14 * r14;
+                                let u15 = r15 * r15;
+                                let m0 = u0.max(u1).max(u2.max(u3)).max(u4.max(u5).max(u6.max(u7)));
+                                let m1 = u8
+                                    .max(u9)
+                                    .max(u10.max(u11))
+                                    .max(u12.max(u13).max(u14.max(u15)));
+                                let max_u = m0.max(m1);
+                                let scale_code = dev_f32_to_e4m3(max_u * scale_sq_div6);
+                                let inv_e2m1 = dev_e4m3_inv_e2m1(scale_code) * g_scale_sq;
+                                let packed_u64 = fast_pos_e2m1(u0 * inv_e2m1)
+                                    | (fast_pos_e2m1(u1 * inv_e2m1) << 4)
+                                    | (fast_pos_e2m1(u2 * inv_e2m1) << 8)
+                                    | (fast_pos_e2m1(u3 * inv_e2m1) << 12)
+                                    | (fast_pos_e2m1(u4 * inv_e2m1) << 16)
+                                    | (fast_pos_e2m1(u5 * inv_e2m1) << 20)
+                                    | (fast_pos_e2m1(u6 * inv_e2m1) << 24)
+                                    | (fast_pos_e2m1(u7 * inv_e2m1) << 28)
+                                    | (fast_pos_e2m1(u8 * inv_e2m1) << 32)
+                                    | (fast_pos_e2m1(u9 * inv_e2m1) << 36)
+                                    | (fast_pos_e2m1(u10 * inv_e2m1) << 40)
+                                    | (fast_pos_e2m1(u11 * inv_e2m1) << 44)
+                                    | (fast_pos_e2m1(u12 * inv_e2m1) << 48)
+                                    | (fast_pos_e2m1(u13 * inv_e2m1) << 52)
+                                    | (fast_pos_e2m1(u14 * inv_e2m1) << 56)
+                                    | (fast_pos_e2m1(u15 * inv_e2m1) << 60);
+                                (packed_u64, scale_code)
+                            }};
                         }
+                        let (p0, s0) = quant16_relu2!(0);
+                        let (p1, s1) = quant16_relu2!(16);
+                        let (p2, s2) = quant16_relu2!(32);
+                        let (p3, s3) = quant16_relu2!(48);
+                        let grp = tile_m128 * 8 + half_m * 4;
+                        let s_idx = sm1xx_block_scale_crd2idx(group, tid, grp, 1, 16);
+                        let u64_0 = sm100_noswizzle_burst_u64_crd2idx::<128>(group, tid, grp, 2);
+                        let u64_2 =
+                            sm100_noswizzle_burst_u64_crd2idx::<128>(group, tid, grp + 2, 2);
+                        let sc4 = (s0 as u32)
+                            | ((s1 as u32) << 8)
+                            | ((s2 as u32) << 16)
+                            | ((s3 as u32) << 24);
+                        scales_u32_out.store_at(s_idx / 4, sc4);
+                        vals_u128_out.store_at(u64_0 / 2, (p0 as u128) | ((p1 as u128) << 64));
+                        vals_u128_out.store_at(u64_2 / 2, (p2 as u128) | ((p3 as u128) << 64));
                         half_m += 1;
                     }
                     g_idx += 1;
@@ -1642,7 +1781,7 @@ mod kernels {
         hidden_size: usize,
         groups_per_cta: usize,
     ) {
-        let _ = grouped_out.as_mut_ptr();
+        let _ = (grouped_out.as_mut_ptr(), hidden_size);
         let cta_id = thread::blockIdx_x() as usize;
         let tile_m128 = cta_id & 7;
         let group_start = (cta_id >> 3) * groups_per_cta;
@@ -1663,6 +1802,7 @@ mod kernels {
 
         unsafe {
             let b_pipeline = Act128Pipeline::from_shared_bytes(dyn_smem, 229376);
+            let w_pipeline = Weight128Pipeline::from_shared_bytes(dyn_smem, 229376 + 256);
             if tid == 0 {
                 w_down_tma.prefetch_descriptor();
                 b_down_tma.prefetch_descriptor();
@@ -1677,29 +1817,46 @@ mod kernels {
                 TmemAllocator::<512, 1>::allocate(slot_ptr);
                 TmemAllocator::<512, 1>::relinquish_alloc_permit();
             }
+            w_pipeline.init(0);
             b_pipeline.init(0);
 
             if warp_id == 5 && (tid & 31) == 0 {
-                let mut b_prod = PipelineState::<Producer, 4>::new();
-                let mut step = 0usize;
-                while step < total_steps {
-                    let slot = b_prod.index();
-                    let w_burst = step & 1;
-                    if step >= 2 {
-                        b_free_ring.wait((step - 2) as u32);
-                    }
-                    b_pipeline.producer_acquire(&b_prod);
-                    let b_bar = b_pipeline.producer_expect_tx(&b_prod);
+                let mut w_prod = PipelineState::<Producer, 2>::new();
+                let mut w_burst = 0usize;
+                while w_burst < 2 {
+                    let w_slot = w_prod.index();
+                    w_pipeline.producer_acquire(&w_prod);
+                    let w_bar = w_pipeline.producer_expect_tx(&w_prod);
                     let mut a_tile = SmemTile::<u8, WeightTileSmem>::from_stage_bytes(
                         dyn_smem,
                         SMEM_A_OFFSET,
-                        w_burst,
+                        w_slot,
                     );
                     let mut sfa_tile = SmemTile::<u16, ScaleTmaSmem>::from_stage_bytes(
                         dyn_smem,
                         SMEM_SFA_OFFSET,
-                        w_burst,
+                        w_slot,
                     );
+                    copy_tma_2d(w_down_tma, (w_outer, w_burst), &mut a_tile, w_bar);
+                    copy_tma_2d(
+                        sfa_down_tma,
+                        (w_outer * 2 + w_burst, 0),
+                        &mut sfa_tile,
+                        w_bar,
+                    );
+                    w_prod.advance();
+                    w_burst += 1;
+                }
+
+                let mut b_prod = PipelineState::<Producer, 4>::new();
+                let mut step = 0usize;
+                while step < total_steps {
+                    let slot = b_prod.index();
+                    if step >= 4 {
+                        b_free_ring.wait((step - 4) as u32);
+                    }
+                    b_pipeline.producer_acquire(&b_prod);
+                    let b_bar = b_pipeline.producer_expect_tx(&b_prod);
                     let mut b_tile = SmemTile::<u8, ActTile128Smem>::from_stage_bytes(
                         dyn_smem,
                         SMEM_B_OFFSET,
@@ -1709,13 +1866,6 @@ mod kernels {
                         dyn_smem,
                         SMEM_SFB_OFFSET,
                         slot,
-                    );
-                    copy_tma_2d(w_down_tma, (w_outer, w_burst), &mut a_tile, b_bar);
-                    copy_tma_2d(
-                        sfa_down_tma,
-                        (w_outer * 2 + w_burst, 0),
-                        &mut sfa_tile,
-                        b_bar,
                     );
                     copy_tma_2d(b_down_tma, (group_start * 2 + step, 0), &mut b_tile, b_bar);
                     copy_tma_2d(
@@ -1727,12 +1877,32 @@ mod kernels {
                     b_prod.advance();
                     step += 1;
                 }
+                w_pipeline.producer_tail(w_prod);
                 b_pipeline.producer_tail(b_prod);
             } else if warp_id == 4 {
                 let tmem_addr = TmemAllocator::<512, 1>::retrieve_ptr(slot_ptr);
                 let sfa_tmem_base = tmem_addr + 256;
                 let sfb_tmem_base = tmem_addr + 320;
                 let tiled_mma = TiledMma128::new_with_lbo(128, 2048);
+
+                if (tid & 31) == 0 {
+                    let mut w_cons = PipelineState::<Consumer, 2>::new();
+                    let mut w_burst = 0usize;
+                    while w_burst < 2 {
+                        let w_slot = w_cons.index();
+                        w_pipeline.consumer_wait(&w_cons);
+                        let s_sfa = SharedWeightScales::from_stage_bytes(
+                            dyn_smem,
+                            SMEM_SFA_OFFSET,
+                            4096,
+                            w_slot,
+                        );
+                        copy_a_scales_burst_128(sfa_tmem_base + (w_burst as u32) * 32, &s_sfa);
+                        w_pipeline.consumer_release(&w_cons);
+                        w_cons.advance();
+                        w_burst += 1;
+                    }
+                }
 
                 let mut b_cons = PipelineState::<Consumer, 4>::new();
                 let mut g_idx = 0usize;
@@ -1747,18 +1917,6 @@ mod kernels {
                         let step = g_idx * 2 + burst;
                         if (tid & 31) == 0 {
                             b_pipeline.consumer_wait(&b_cons);
-                            if g_idx == 0 {
-                                let s_sfa = SharedWeightScales::from_stage_bytes(
-                                    dyn_smem,
-                                    SMEM_SFA_OFFSET,
-                                    4096,
-                                    burst,
-                                );
-                                copy_a_scales_burst_128(
-                                    sfa_tmem_base + (burst as u32) * 32,
-                                    &s_sfa,
-                                );
-                            }
                             let slot = b_cons.index();
                             let s_a = Sm100SharedTile::<WeightTileSmem, OperandB>::from_stage_bytes(
                                 dyn_smem,
@@ -1786,7 +1944,7 @@ mod kernels {
                             b_pipeline.consumer_release(&b_cons);
                             b_cons.advance();
                         }
-                        if step + 2 < total_steps {
+                        if step + 4 < total_steps {
                             b_free_ring.commit_mma(step as u32);
                         }
                         if burst == 1 {
@@ -1799,7 +1957,21 @@ mod kernels {
             } else if warp_id < 4 {
                 let tmem_addr = TmemAllocator::<512, 1>::retrieve_ptr(slot_ptr);
                 let g_scale = w_down_global_t.get_unchecked(expert);
-                let h_tiles8 = hidden_size / 8;
+                let mut smem_epi0 =
+                    StridedTensorMut::<u128>::from_shared_bytes(dyn_smem, SMEM_SFA_OFFSET, 512);
+                let mut smem_epi1 =
+                    StridedTensorMut::<u128>::from_shared_bytes(dyn_smem, 221184, 512);
+                let src0 = SmemTile::<u16, GroupedOutTileSmem>::from_stage_bytes(
+                    dyn_smem,
+                    SMEM_SFA_OFFSET,
+                    0,
+                );
+                let src1 =
+                    SmemTile::<u16, GroupedOutTileSmem>::from_stage_bytes(dyn_smem, 221184, 0);
+                let idx0 = GroupedOutTileSmem::crd2idx(tid as u32, 0) / 8;
+                let idx1 = GroupedOutTileSmem::crd2idx(tid as u32, 8) / 8;
+                let idx2 = GroupedOutTileSmem::crd2idx(tid as u32, 16) / 8;
+                let idx3 = GroupedOutTileSmem::crd2idx(tid as u32, 24) / 8;
 
                 let mut g_idx = 0usize;
                 while g_idx < groups_per_cta {
@@ -1823,32 +1995,81 @@ mod kernels {
                                 tmem_free_ring.commit_threads(g_idx as u32);
                             }
                         }
-                        let mut sub = 0usize;
-                        while sub < 8 {
-                            let base_c = sub * 8;
-                            let tile8 = cute_rs::RegisterTile::from_array([
-                                BFloat16::from_f32(frag.values[base_c] * g_scale),
-                                BFloat16::from_f32(frag.values[base_c + 1] * g_scale),
-                                BFloat16::from_f32(frag.values[base_c + 2] * g_scale),
-                                BFloat16::from_f32(frag.values[base_c + 3] * g_scale),
-                                BFloat16::from_f32(frag.values[base_c + 4] * g_scale),
-                                BFloat16::from_f32(frag.values[base_c + 5] * g_scale),
-                                BFloat16::from_f32(frag.values[base_c + 6] * g_scale),
-                                BFloat16::from_f32(frag.values[base_c + 7] * g_scale),
-                            ]);
-                            let dst_idx =
-                                (group * 128 + tid) * h_tiles8 + tile_m128 * 16 + half_m * 8 + sub;
-                            cute_rs::TensorMut::from_disjoint_slice(&mut grouped_out)
-                                .zipped_divide::<8>()
-                                .slice(dst_idx)
-                                .store(tile8);
-                            sub += 1;
+                        macro_rules! pack8 {
+                            ($base:expr) => {{
+                                let b0 = BFloat16::from_f32(frag.values[$base] * g_scale).to_bits()
+                                    as u128;
+                                let b1 = BFloat16::from_f32(frag.values[$base + 1] * g_scale)
+                                    .to_bits() as u128;
+                                let b2 = BFloat16::from_f32(frag.values[$base + 2] * g_scale)
+                                    .to_bits() as u128;
+                                let b3 = BFloat16::from_f32(frag.values[$base + 3] * g_scale)
+                                    .to_bits() as u128;
+                                let b4 = BFloat16::from_f32(frag.values[$base + 4] * g_scale)
+                                    .to_bits() as u128;
+                                let b5 = BFloat16::from_f32(frag.values[$base + 5] * g_scale)
+                                    .to_bits() as u128;
+                                let b6 = BFloat16::from_f32(frag.values[$base + 6] * g_scale)
+                                    .to_bits() as u128;
+                                let b7 = BFloat16::from_f32(frag.values[$base + 7] * g_scale)
+                                    .to_bits() as u128;
+                                b0 | (b1 << 16)
+                                    | (b2 << 32)
+                                    | (b3 << 48)
+                                    | (b4 << 64)
+                                    | (b5 << 80)
+                                    | (b6 << 96)
+                                    | (b7 << 112)
+                            }};
+                        }
+                        if tid == 0 {
+                            cute_rs::arch::cp_async_bulk_wait_group_read::<1>();
+                        }
+                        NamedBarrier::<1, 128>::sync();
+                        smem_epi0.store_at(idx0, pack8!(0));
+                        smem_epi0.store_at(idx1, pack8!(8));
+                        smem_epi0.store_at(idx2, pack8!(16));
+                        smem_epi0.store_at(idx3, pack8!(24));
+                        fence_view_async_shared();
+                        NamedBarrier::<1, 128>::sync();
+                        if tid == 0 {
+                            cute_rs::nvgpu::tcgen05::Sm100TmemEpilogue::<GroupedOutTileSmem>::store_async(
+                                grouped_out_tma,
+                                src0.base,
+                                (group * 128) as u32,
+                                (tile_m128 * 128 + half_m * 64) as u32,
+                            );
+                            cute_rs::arch::cp_async_bulk_commit_group();
+                        }
+
+                        if tid == 0 {
+                            cute_rs::arch::cp_async_bulk_wait_group_read::<1>();
+                        }
+                        NamedBarrier::<1, 128>::sync();
+                        smem_epi1.store_at(idx0, pack8!(32));
+                        smem_epi1.store_at(idx1, pack8!(40));
+                        smem_epi1.store_at(idx2, pack8!(48));
+                        smem_epi1.store_at(idx3, pack8!(56));
+                        fence_view_async_shared();
+                        NamedBarrier::<1, 128>::sync();
+                        if tid == 0 {
+                            cute_rs::nvgpu::tcgen05::Sm100TmemEpilogue::<GroupedOutTileSmem>::store_async(
+                                grouped_out_tma,
+                                src1.base,
+                                (group * 128) as u32,
+                                (tile_m128 * 128 + half_m * 64 + 32) as u32,
+                            );
+                            cute_rs::arch::cp_async_bulk_commit_group();
                         }
                         half_m += 1;
                     }
                     g_idx += 1;
                 }
 
+                if tid == 0 {
+                    cute_rs::arch::cp_async_bulk_wait_group_read::<0>();
+                }
+                NamedBarrier::<1, 128>::sync();
                 if warp_id == 0 {
                     TmemAllocator::<512, 1>::free(slot_ptr);
                 }

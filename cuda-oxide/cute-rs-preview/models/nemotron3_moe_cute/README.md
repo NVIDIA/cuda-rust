@@ -55,7 +55,7 @@ All shared-memory tile shapes, swizzled TMA descriptors, producer/consumer warp 
 │     type SharedWeightScales = Sm100ScaleTile<Mkl>;                                     │
 │     type SharedActScales    = Sm100ScaleTile<Nkl>;                                     │
 │     type TiledMma128        = Sm100BlockScaledTiledMma<WeightTileSmem, ActTile128Smem>;│
-│     type StagedEpilogue     = Sm100TmemStagedEpilogue<EpilogueSmem, 128>;              │
+│     type OutEpilogue        = Sm100TmemEpilogue<GroupedOutTileSmem>;                   │
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -98,10 +98,11 @@ cargo oxide run nemotron3_moe --arch sm_100a
 
 ## 5. Source Layout
 
-* [`src/main.rs`](src/main.rs) — Typed CuTe layouts, TMA descriptors, kernels (`quantize_activations_nvfp4`, `moe_fc1_relu2_cute`, `moe_fc1_relu2_tcgen05_cute`, `moe_fc1_relu2_tcgen05_128_cute`, `moe_fc2_cute`, `moe_fc2_tcgen05_cute`, `moe_fc2_tcgen05_128_cute`, `moe_finalize_cute`), CPU oracle, and CUDA Graph benchmark harness.
+* [`src/main.rs`](src/main.rs) — Standard 8-expert (`H = 1024, I = 1024, E = 8, top_k = 4, B = 1 .. 16,384`) typed CuTe layouts, TMA descriptors, kernels, CPU oracle, and CUDA Graph benchmark harness.
+* [`src/moe_192e.rs`](src/moe_192e.rs) — Wide 192-expert (`H = 6144, I = 1536, E = 192, top_k = 4, B = 1 .. 256`) single/dual/triple-M `tcgen05` kernels, dynamic route bucketizer, and non-uniform / post-capture route-change validation.
 * [`reference/`](reference/) — Standalone FlashInfer CuTeDSL (`flashinfer.fused_moe.cute_dsl_fused_moe`, `w4a4` + `Relu2`) reproduction script ([`reference/benchmark_flashinfer.py`](reference/benchmark_flashinfer.py)) and instructions ([`reference/README.md`](reference/README.md)).
-* [`../../cute-rs/src/sm100/mma.rs`](../../cute-rs/src/sm100/mma.rs) — `Sm100BlockScaledTiledMma` (`copy_a_scales_burst`, `copy_b_scales_and_gemm_burst`, `copy_b_scales_and_gemm_128_burst`, `load_stationary_weights_2d`).
-* [`../../cute-rs/src/sm100/tmem.rs`](../../cute-rs/src/sm100/tmem.rs) — `Sm100TmemStagedEpilogue` (`unload_relu2_to_shared`, `unload_and_atomic_add_bf16x2`, `unload_relu2_and_quantize_128`, `unload_and_tma_store_bf16_128`).
+* [`../../cute-rs/src/nvgpu/tcgen05/mma.rs`](../../cute-rs/src/nvgpu/tcgen05/mma.rs) — `Sm100BlockScaledTiledMma::{new_with_lbo, copy, gemm}` (`Cp4x32x128bOp` + `MmaMXF4NVF4Op`, lowered via `dialect-cute`).
+* [`../../cute-rs/src/nvgpu/tcgen05/copy.rs`](../../cute-rs/src/nvgpu/tcgen05/copy.rs) & [`../../cute-rs/src/utils/tmem_allocator.rs`](../../cute-rs/src/utils/tmem_allocator.rs) — `TmemFragment`, `Sm100TmemEpilogue`, and `TmemAllocator`.
 
 ---
 
@@ -125,4 +126,22 @@ Batch size | FlashInfer CuTeDSL (us) |  Native SIMT [ref] (us) |    cute-rs [liv
       4096 |                  51.250 |                  49.144 |                 51.194 |       1.00x SOTA
       8192 |                  92.610 |                  88.325 |                 90.341 |       1.03x SOTA
      16384 |                 179.350 |                 174.825 |                173.897 |       1.03x SOTA
+```
+
+---
+
+## 7. Wide 192-Expert Workload (`H = 6144, I = 1536, E = 192, top_k = 4`, `B = 1 .. 256`)
+
+```text
+Batch | TRTLLM-Gen (us) | FlashInfer CuTeDSL (us) | cuTile NVFP4 (us) | Native SIMT [ref] (us) | cute-rs [live] (us) | vs. TRTLLM-Gen
+------+-----------------+-------------------------+-------------------+------------------------+---------------------+---------------
+    1 |          24.570 |                  24.591 |            22.547 |                 22.505 |              22.519 |      1.09x
+    2 |          24.570 |                  24.685 |            22.541 |                 22.518 |              22.539 |      1.09x
+    4 |          24.583 |                  24.991 |            22.541 |                 22.517 |              22.530 |      1.09x
+    8 |          24.569 |                  26.636 |            24.590 |                 22.530 |              22.541 |      1.09x
+   16 |          24.704 |                  28.660 |            26.614 |                 23.540 |              24.564 |      1.01x
+   32 |          28.689 |                  28.661 |            31.077 |                 26.611 |              28.667 |      1.00x
+   64 |          31.209 |                  28.761 |            30.502 |                 30.456 |              32.752 |      0.95x
+  128 |          38.436 |                  30.710 |            33.321 |                 36.846 |              40.611 |      0.95x
+  256 |          51.196 |                  34.800 |            49.252 |                 45.062 |              49.138 |      1.04x
 ```

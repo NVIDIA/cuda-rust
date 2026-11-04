@@ -107,7 +107,11 @@ pub fn idx2crd(idx: i64, shape: &IntTuple) -> IntTuple {
 #[must_use]
 #[inline(always)]
 pub const fn idx2crd_col_major_2d(idx: u32, rows: u32) -> (u32, u32) {
-    (idx % rows, idx / rows)
+    if rows == 0 {
+        (0, 0)
+    } else {
+        (idx % rows, idx / rows)
+    }
 }
 
 /// Allocation-free 2D row-major `idx2crd` (`(rows, cols) : (cols, 1)`).
@@ -117,7 +121,11 @@ pub const fn idx2crd_col_major_2d(idx: u32, rows: u32) -> (u32, u32) {
 #[must_use]
 #[inline(always)]
 pub const fn idx2crd_row_major_2d(idx: u32, cols: u32) -> (u32, u32) {
-    (idx / cols, idx % cols)
+    if cols == 0 {
+        (0, 0)
+    } else {
+        (idx / cols, idx % cols)
+    }
 }
 
 /// Allocation-free grouped-M 2D tile coordinate mapping (`logical_divide` on M by `GROUP_M`
@@ -193,15 +201,16 @@ pub const fn sm100_smem_crd2idx_with_extents(
 ) -> usize {
     let contiguous = if mn_major { rows } else { cols };
     let outer_extent = if mn_major { cols } else { rows };
-    assert!(contiguous >= 32 && contiguous.is_multiple_of(32));
-    assert!(outer_extent > 0 && outer_extent.is_multiple_of(8));
-    assert!(contiguous == 32 || contiguous.is_multiple_of(64));
     let span = if contiguous == 32 { 32 } else { 64 };
-    let swizzle_bits = if span == 32 { 2 } else { 3 };
+    let y_mask = if span == 32 { 3usize << 6 } else { 7usize << 6 };
     let (inner, outer) = if mn_major { (row, col) } else { (col, row) };
-    let (inner_in_span, span_idx) = idx2crd_col_major_2d(inner, span);
-    let plain = (span_idx * (span * outer_extent) + outer * span + inner_in_span) as i64;
-    crate::Swizzle::new(swizzle_bits, 3, 3).apply(plain) as usize
+    let (inner_in_span, span_idx) = if span == 32 {
+        (inner & 31, inner >> 5)
+    } else {
+        (inner & 63, inner >> 6)
+    };
+    let plain = (span_idx * (span * outer_extent) + outer * span + inner_in_span) as usize;
+    plain ^ ((plain & y_mask) >> 3)
 }
 
 /// Allocation-free `crd2idx` for a canonical SM100 tiled FP16 shared-memory layout
@@ -215,7 +224,25 @@ pub const fn sm100_smem_crd2idx<const ROWS: u32, const COLS: u32, const MN_MAJOR
     row: u32,
     col: u32,
 ) -> usize {
-    sm100_smem_crd2idx_with_extents(row, col, ROWS, COLS, MN_MAJOR)
+    let (span, outer_extent, y_mask) = const {
+        let contiguous = if MN_MAJOR { ROWS } else { COLS };
+        let outer_extent = if MN_MAJOR { COLS } else { ROWS };
+        assert!(contiguous >= 32 && contiguous.is_multiple_of(32));
+        assert!(outer_extent > 0 && outer_extent.is_multiple_of(8));
+        assert!(contiguous == 32 || contiguous.is_multiple_of(64));
+        let span = if contiguous == 32 { 32u32 } else { 64u32 };
+        let swizzle_bits = if span == 32 { 2u32 } else { 3u32 };
+        let y_mask = crate::Swizzle::new(swizzle_bits, 3, 3).y_mask() as usize;
+        (span, outer_extent, y_mask)
+    };
+    let (inner, outer) = if MN_MAJOR { (row, col) } else { (col, row) };
+    let (inner_in_span, span_idx) = if span == 32 {
+        (inner & 31, inner >> 5)
+    } else {
+        (inner & 63, inner >> 6)
+    };
+    let plain = (span_idx * (span * outer_extent) + outer * span + inner_in_span) as usize;
+    plain ^ ((plain & y_mask) >> 3)
 }
 
 /// Allocation-free `u32` word offset within one 128-row × 4-group Blackwell scale atom
@@ -375,8 +402,19 @@ impl<const B: u32, const R: i64, const C: i64>
     #[must_use]
     #[inline(always)]
     pub const fn crd2idx(row: u32, col: u32) -> usize {
-        let () = <Self as SmemLayout>::VALID;
-        sm100_smem_crd2idx_with_extents(row, col, R as u32, C as u32, false)
+        let (span, outer_extent, y_mask) = const {
+            let () = <Self as SmemLayout>::VALID;
+            let span = <Self as SmemLayout>::SPAN;
+            let y_mask = crate::Swizzle::new(B, 3, 3).y_mask() as usize;
+            (span, R as u32, y_mask)
+        };
+        let (inner_in_span, span_idx) = if span == 32 {
+            (col & 31, col >> 5)
+        } else {
+            (col & 63, col >> 6)
+        };
+        let plain = (span_idx * (span * outer_extent) + row * span + inner_in_span) as usize;
+        plain ^ ((plain & y_mask) >> 3)
     }
 }
 
@@ -440,8 +478,19 @@ impl<const B: u32, const R: i64, const C: i64>
     #[must_use]
     #[inline(always)]
     pub const fn crd2idx(row: u32, col: u32) -> usize {
-        let () = <Self as SmemLayout>::VALID;
-        sm100_smem_crd2idx_with_extents(row, col, R as u32, C as u32, true)
+        let (span, outer_extent, y_mask) = const {
+            let () = <Self as SmemLayout>::VALID;
+            let span = <Self as SmemLayout>::SPAN;
+            let y_mask = crate::Swizzle::new(B, 3, 3).y_mask() as usize;
+            (span, C as u32, y_mask)
+        };
+        let (inner_in_span, span_idx) = if span == 32 {
+            (row & 31, row >> 5)
+        } else {
+            (row & 63, row >> 6)
+        };
+        let plain = (span_idx * (span * outer_extent) + col * span + inner_in_span) as usize;
+        plain ^ ((plain & y_mask) >> 3)
     }
 }
 

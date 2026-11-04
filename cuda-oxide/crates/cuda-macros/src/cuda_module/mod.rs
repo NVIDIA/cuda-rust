@@ -115,15 +115,8 @@ pub(crate) fn expand_cuda_module_inner(
         }
     });
 
-    let function_initializers = non_generic_kernels.map(|kernel| {
-        let cfg_attrs = &kernel.cfg_attrs;
-        let field = cuda_module_function_field(&kernel.fn_name);
-        let marker = cuda_kernel_marker_name(&kernel.fn_name);
-        quote! {
-            #(#cfg_attrs)*
-            #field: module.load_function(<#marker as ::cuda_host::CudaKernel>::PTX_NAME)?,
-        }
-    });
+    let (function_loading, function_initializers) =
+        cuda_module_function_loading(non_generic_kernels);
 
     let artifact_anchor_statements = cuda_module_artifact_anchor_statements(&transformed.kernels)?;
     let has_generic = transformed.kernels.iter().any(|k| k.is_generic);
@@ -346,6 +339,7 @@ pub(crate) fn expand_cuda_module_inner(
             pub unsafe fn from_module(
                 module: ::std::sync::Arc<::cuda_core::CudaModule>,
             ) -> ::core::result::Result<LoadedModule, ::cuda_core::DriverError> {
+                #function_loading
                 Ok(LoadedModule {
                     __module: module.clone(),
                     __generic_functions: ::std::sync::Arc::new(
@@ -361,6 +355,7 @@ pub(crate) fn expand_cuda_module_inner(
             pub fn from_module(
                 module: ::std::sync::Arc<::cuda_core::CudaModule>,
             ) -> ::core::result::Result<LoadedModule, ::cuda_core::DriverError> {
+                #function_loading
                 Ok(LoadedModule {
                     __module: module.clone(),
                     __generic_functions: ::std::sync::Arc::new(
@@ -679,6 +674,105 @@ fn cuda_module_kernel(
     }))
 }
 
+/// Statements that load every non-generic kernel, and the field initializers
+/// that take them back out in declaration order.
+///
+/// As field initializers each `?` sat inside a half-built `LoadedModule`, so
+/// the i-th early return dropped the i live `Arc`-owning fields before it:
+/// O(n^2) cleanup from O(n) source, and 98s to build 200 kernels (#1501).
+///
+/// Unconditional kernels take a fixed-size array, which one irrefutable
+/// pattern binds with no cleanup edges at all. A `cfg`'d kernel leaves the
+/// count unknown until the compiler evaluates it, and a pattern cannot carry
+/// `#[cfg]` per element, so those fall back to an iterator whose `expect`s
+/// can still unwind quadratically -- 23.5s against 5.4s at 800 kernels.
+fn cuda_module_function_loading<'a, I>(non_generic_kernels: I) -> (TokenStream2, Vec<TokenStream2>)
+where
+    I: Iterator<Item = &'a CudaModuleKernel> + Clone,
+{
+    let count = non_generic_kernels.clone().count();
+
+    let loads = non_generic_kernels.clone().map(|kernel| {
+        let cfg_attrs = &kernel.cfg_attrs;
+        let marker = cuda_kernel_marker_name(&kernel.fn_name);
+        quote! {
+            #(#cfg_attrs)*
+            __cuda_oxide_functions
+                .push(module.load_function(<#marker as ::cuda_host::CudaKernel>::PTX_NAME)?);
+        }
+    });
+
+    // Inherited `cfg`s count too: either way the length is not known here.
+    let kernels_are_unconditional = count > 0
+        && non_generic_kernels
+            .clone()
+            .all(|kernel| kernel.cfg_attrs.is_empty() && kernel.effective_cfg_attrs.is_empty());
+
+    if kernels_are_unconditional {
+        let locals: Vec<Ident> = non_generic_kernels
+            .clone()
+            .map(|kernel| {
+                internal_ident(&format!(
+                    "__cuda_oxide_loaded{}",
+                    cuda_module_function_field(&kernel.fn_name)
+                ))
+            })
+            .collect();
+
+        let initializers = non_generic_kernels
+            .zip(locals.iter())
+            .map(|(kernel, local)| {
+                let field = cuda_module_function_field(&kernel.fn_name);
+                quote! { #field: #local, }
+            })
+            .collect();
+
+        let statements = quote! {
+            let mut __cuda_oxide_functions: ::std::vec::Vec<::cuda_core::CudaFunction> =
+                ::std::vec::Vec::with_capacity(#count);
+
+            #(#loads)*
+
+            // Unreachable: the pushes and this length share one iterator.
+            let __cuda_oxide_loaded: [::cuda_core::CudaFunction; #count] =
+                __cuda_oxide_functions
+                    .try_into()
+                    .expect("every declared kernel was loaded above");
+
+            let [#(#locals),*] = __cuda_oxide_loaded;
+        };
+
+        return (statements, initializers);
+    }
+
+    let initializers = non_generic_kernels
+        .map(|kernel| {
+            let cfg_attrs = &kernel.cfg_attrs;
+            let field = cuda_module_function_field(&kernel.fn_name);
+            quote! {
+                #(#cfg_attrs)*
+                #field: __cuda_oxide_functions
+                    .next()
+                    .expect("a kernel loaded above is missing from the loaded functions"),
+            }
+        })
+        .collect();
+
+    // All-generic and fully `cfg`'d-out modules emit no push and no take.
+    let statements = quote! {
+        #[allow(unused_mut, unused_variables)]
+        let mut __cuda_oxide_functions: ::std::vec::Vec<::cuda_core::CudaFunction> =
+            ::std::vec::Vec::with_capacity(#count);
+
+        #(#loads)*
+
+        #[allow(unused_mut, unused_variables)]
+        let mut __cuda_oxide_functions = __cuda_oxide_functions.into_iter();
+    };
+
+    (statements, initializers)
+}
+
 fn generate_nested_cuda_module_support(
     kernels: &[CudaModuleKernel],
     emit_host: bool,
@@ -701,15 +795,8 @@ fn generate_nested_cuda_module_support(
             #field: ::cuda_core::CudaFunction,
         }
     });
-    let function_initializers = non_generic_kernels.map(|kernel| {
-        let cfg_attrs = &kernel.cfg_attrs;
-        let field = cuda_module_function_field(&kernel.fn_name);
-        let marker = cuda_kernel_marker_name(&kernel.fn_name);
-        quote! {
-            #(#cfg_attrs)*
-            #field: module.load_function(<#marker as ::cuda_host::CudaKernel>::PTX_NAME)?,
-        }
-    });
+    let (function_loading, function_initializers) =
+        cuda_module_function_loading(non_generic_kernels);
     let launch_methods = kernels.iter().map(generate_cuda_module_launch_method);
     let async_launch_methods = if cfg!(feature = "async") {
         let borrowed = kernels.iter().map(generate_cuda_module_async_launch_method);
@@ -752,6 +839,7 @@ fn generate_nested_cuda_module_support(
                 parent: &super::LoadedModule,
             ) -> ::core::result::Result<Self, ::cuda_core::DriverError> {
                 let module = parent.as_cuda_module().clone();
+                #function_loading
                 Ok(Self {
                     __module: module.clone(),
                     __generic_functions: parent.__generic_functions.clone(),

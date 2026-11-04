@@ -79,7 +79,7 @@ pub fn safe_sqrt(x: f32) -> f32 {
 //
 // #[device] now supports generics, mirroring how #[kernel] handles them:
 //   - No #[no_mangle] (generics use mangled symbol names)
-//   - #[inline(never)] on the prefixed function (so monomorphizations appear in CGUs)
+//   - #[inline(never)] on the prefixed function by default (so monomorphizations appear in CGUs)
 //   - Wrapper forwards type params via turbofish
 //
 // Monomorphization is triggered by concrete call sites (other #[device] fns

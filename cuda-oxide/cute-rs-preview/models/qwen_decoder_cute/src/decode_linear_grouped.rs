@@ -6,6 +6,8 @@
 
 use super::{Runner, launch_config};
 use crate::{
+    decoder::AttentionWeights,
+    ffn::{FfnWeights, ProjectionRole, ProjectionWeights, RowMajorShape},
     ffn_kernel::kernels,
     model::Batch,
     operator::Result,
@@ -13,11 +15,7 @@ use crate::{
     reference_linear_kernel::kernels as reference,
 };
 use cuda_core::{CudaStream, DeviceBuffer, LaunchConfig1D, PreparedLaunch};
-use cute_rs::{
-    BFloat16,
-    decoder::AttentionWeights,
-    ffn::{FfnWeights, ProjectionRole, ProjectionWeights, RowMajorShape},
-};
+use cute_rs::BFloat16;
 use std::sync::Arc;
 
 /// Prepared unbiased projection in the shape's reference reduction order.
@@ -312,7 +310,7 @@ fn fixture<const H: usize, const QW: usize, const KW: usize, const I: usize>(
     rows: usize,
     stride: usize,
 ) -> Result<usize> {
-    use cute_rs::decoder::NormWeights;
+    use crate::decoder::NormWeights;
     let mut seed = 0x1f29_81a7;
     let input_values: Vec<_> = (0..rows * H)
         .map(|_| super::varied_bf16(&mut seed))

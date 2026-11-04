@@ -31,12 +31,12 @@ use cute_rs::arch::{
     mul_packed_f32x2, pack_f32x2, reciprocal_ftz_f32, setmaxregister_decrease,
     setmaxregister_increase, sync_warp, unpack_f32x2_hi, unpack_f32x2_lo, vote_all_sync,
 };
-use cute_rs::attention::sm100::pipeline::{
+use cute_rs::nvgpu::cpasync::TmaCopy;
+use cute_rs::nvgpu::tcgen05::{MmaSs, MmaTs, SharedTile, TmemFragment, tmem_row_address};
+use cute_rs::pipeline::sm100::{
     PipelineAsync, PipelineAsyncUmma, PipelineTmaUmma, PipelineUmmaAsync,
 };
-use cute_rs::attention::sm100::{
-    MmaSs, MmaTs, SharedTile, TmaCopy, TmemAllocator, TmemFragment, tmem_row_address,
-};
+use cute_rs::utils::tmem_allocator::TmemAllocator;
 use cute_rs::{
     ColMajor, ComposedLayout, OperandA, OperandB, RowMajor, Swizzle, TensorMap, size_in_bytes,
 };

@@ -12,7 +12,7 @@ use cute_rs::BFloat16;
 pub mod kernels {
     use super::*;
 
-    use cute_rs::mma::bf16::{Bf16Mma16x8x16, FragmentC};
+    use cute_rs::nvgpu::warp::bf16::{Bf16Mma16x8x16, FragmentC};
     use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
 
     /// Read one virtual im2col element, zero-filling outside the input extent.

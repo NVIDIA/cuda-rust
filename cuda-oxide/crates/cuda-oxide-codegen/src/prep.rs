@@ -32,9 +32,12 @@ use dialect_cute::smem_mma_ops::{
     CuteMmaPartitionBOp, CuteSmemTensorOverlayOp, CuteTiledGemmOp, CuteTiledMmaSliceOp,
 };
 use dialect_cute::tensor_ops::{
-    CuteTensorBaseOp, CuteTensorIsFullOp, CuteTensorLoadIntoOp, CuteTensorMakeOp,
-    CuteTensorSliceOp, CuteTensorStoreElementAbsOp, CuteTensorStoreFromOp,
-    CuteTensorZippedDivideOp,
+    CuteConvertE4m3ToF32Op, CuteConvertF32ToBf16Op, CuteConvertF32ToE4m3Op,
+    CuteConvertF32x8ToE2m1x8Op, CuteTensorBaseOp, CuteTensorIsFullOp, CuteTensorLoadIntoOp,
+    CuteTensorMakeOp, CuteTensorSliceOp, CuteTensorStoreElementAbsOp, CuteTensorStoreFromOp,
+    CuteTensorZippedDivideOp, CuteVectorBinaryOp, CuteVectorBitcastOp, CuteVectorBroadcastOp,
+    CuteVectorCastOp, CuteVectorConcatOp, CuteVectorReduceOp, CuteVectorScalarOp,
+    CuteVectorSliceOp, CuteVectorUnaryOp,
 };
 use dialect_mir::attributes::MirCastKindAttr;
 use dialect_mir::ops::{MirAllocaOp, MirCastOp};
@@ -178,6 +181,17 @@ pub fn prepare_mir_module(
         message: error.disp(ctx).to_string(),
         operation: None,
     })?;
+    mir_transforms::forward_compiler_result_bundles::forward_constant_projected_aggregates(
+        module,
+        ctx,
+        &mut analyses,
+        preparation.verbose,
+    )
+    .map_err(|error| PipelineError::Verification {
+        name: "post-mem2reg constant-projected aggregate forwarding".to_string(),
+        message: error.disp(ctx).to_string(),
+        operation: None,
+    })?;
     verify_operation(
         ctx,
         module,
@@ -236,6 +250,18 @@ pub fn prepare_mir_module(
             operation: None,
         })?;
     verify_operation(ctx, module, "module post-unroll")?;
+    mir_transforms::forward_compiler_result_bundles::forward_constant_projected_aggregates(
+        module,
+        ctx,
+        &mut analyses,
+        preparation.verbose,
+    )
+    .map_err(|error| PipelineError::Verification {
+        name: "post-unroll constant-projected aggregate forwarding".to_string(),
+        message: error.disp(ctx).to_string(),
+        operation: None,
+    })?;
+    verify_operation(ctx, module, "module post-unroll-aggregate-forwarding")?;
 
     run_optional_mir_passes(
         ctx,
@@ -287,6 +313,21 @@ fn has_high_level_cute_operations(ctx: &Context, root: Ptr<Operation>) -> bool {
                 operation, ctx,
             )
             || Operation::is_op::<CuteTensorStoreElementAbsOp>(operation, ctx)
+            || Operation::is_op::<CuteConvertF32ToBf16Op>(operation, ctx)
+            || Operation::is_op::<CuteConvertF32ToE4m3Op>(operation, ctx)
+            || Operation::is_op::<CuteConvertE4m3ToF32Op>(operation, ctx)
+            || Operation::is_op::<CuteConvertF32x8ToE2m1x8Op>(operation, ctx)
+            || Operation::is_op::<CuteVectorBroadcastOp>(operation, ctx)
+            || Operation::is_op::<CuteVectorBinaryOp>(operation, ctx)
+            || Operation::is_op::<CuteVectorScalarOp>(operation, ctx)
+            || Operation::is_op::<CuteVectorUnaryOp>(operation, ctx)
+            || Operation::is_op::<CuteVectorReduceOp>(operation, ctx)
+            || Operation::is_op::<CuteVectorCastOp>(operation, ctx)
+            || Operation::is_op::<CuteVectorBitcastOp>(operation, ctx)
+            || Operation::is_op::<CuteVectorSliceOp>(operation, ctx)
+            || Operation::is_op::<CuteVectorConcatOp>(operation, ctx)
+            || Operation::is_op::<CuteSm100BlockScaledCopyOp>(operation, ctx)
+            || Operation::is_op::<CuteSm100BlockScaledGemmOp>(operation, ctx)
             || Operation::is_op::<CuteTensorMake2DOp>(operation, ctx)
             || Operation::is_op::<CuteScaledViewMakeOp>(operation, ctx)
             || Operation::is_op::<CuteScaledViewRowOp>(operation, ctx)

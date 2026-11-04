@@ -236,7 +236,6 @@ version = "0.3.0"
 name = "cute-rs"
 version = "0.3.0"
 dependencies = [
- "ctm-rs",
  "cuda-core",
  "cuda-device",
  "cute-layout",

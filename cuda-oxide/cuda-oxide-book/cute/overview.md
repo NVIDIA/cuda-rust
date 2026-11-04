@@ -22,8 +22,8 @@ Every CuTe kernel in cuda-oxide is built on two complementary device crates plus
 
 | Crate | Layer | What it owns |
 | :---- | :---- | :----------- |
-| **cute-rs** | Semantic CuTe layer | `Tensor` / `TensorMut`, `zipped_divide`, `slice`, `local_tile`, cooperative/tiled/TMA copies, producer/consumer pipelines, reductions, and tiled MMA (`mma::bf16`, `mma::block_scaled`, `sm100`, `attention::sm100`). |
-| **ctm-rs** | Instruction & ABI layer | `#[cuda_module]`, `#[kernel]`, launch contracts, thread/warp/cluster coordinates, `mbarrier` state machines, `tcgen05::tmem::TmemGuard`, and packed register math over cuda-device. |
+| **cute-rs** | 1-to-1 CuTeDSL layer | `layout`, `tensor` (`Tensor`, `RegisterTile`), `atom` (`TiledCopy`), `numeric`, `arch`, `nvgpu::{cpasync, warp, tcgen05}`, `pipeline`, and `utils::{tmem_allocator, scheduler, blockscaled}` — lowered directly through `dialect-cute` and `cuda-device` (`0` `ctm-rs` dependencies). |
+| **ctm-rs** | Entry ABI & PTX layer | `#[cuda_module]`, `#[kernel]`, `#[launch_bounds]`, `#[launch_contract]`, `DisjointSlice`, `DynamicSharedArray`, and standalone PTX instruction wrappers for `*_ctm` kernels. |
 | **cute-layout** | Shared layout algebra | `IntTuple`, `Layout`, `ComposedLayout`, `Swizzle`, and static compile-time proofs for cooperative copies, `ldmatrix`, and TMA swizzle phase alignment. |
 
 ```{figure} images/three-tiers-comparison.svg

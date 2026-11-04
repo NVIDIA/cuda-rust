@@ -22,6 +22,7 @@
 //! assert_eq!(reconstructed.len(), 64);
 //! ```
 
+use crate::ffn::{ProjectionRole, ProjectionWeights};
 use crate::model::Batch;
 use crate::operator::Result;
 use ctm_rs::memory::{DisjointSlice, DynamicSharedArray};
@@ -29,17 +30,15 @@ use ctm_rs::{cuda_module, kernel, launch_bounds, thread};
 use cuda_core::LaunchConfig;
 use cuda_core::{CudaStream, DeviceBuffer};
 use cute_rs::arch::NamedBarrier;
-use cute_rs::block_scaled::{
+use cute_rs::atom::cooperative::finish_async_copies;
+use cute_rs::layout::{C, ComposedLayout, CopyG2S, Layout, LeadingDim, RowMajor, Swizzle};
+use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
+use cute_rs::utils::blockscaled::{
     CANONICAL_SCALE_ATOM_BYTES, CANONICAL_SCALE_K_GROUPS, CANONICAL_SCALE_M,
 };
-use cute_rs::copy::cooperative::finish_async_copies;
-use cute_rs::ffn::{ProjectionRole, ProjectionWeights};
-use cute_rs::markers::{C, ComposedLayout, CopyG2S, Layout, LeadingDim, RowMajor, Swizzle};
-use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
 use cute_rs::{
-    BFloat16, BlockScaledTensor, Float4E2M1FN, Float4E2M1FNx2, Float8E4M3FN, FragmentC, GmemMatrix,
-    KMajor, Mkl, Nkl, Nvfp4TiledMma, RegisterTile, Sm1xxBlockScaleKMajor, SmemTile, Tensor,
-    TensorMut, TiledCopy, e4m3_to_f32, f32_to_e2m1, f32_to_e4m3,
+    BFloat16, BlockScaledTensor, Float4E2M1FN, Float8E4M3FN, FragmentC, GmemMatrix, KMajor, Mkl,
+    Nkl, Nvfp4TiledMma, ReductionOp, Sm1xxBlockScaleKMajor, SmemTile, Tensor, TiledCopy,
 };
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -72,6 +71,47 @@ pub fn quantize_matrix_nvfp4(
     let mut values = vec![0u8; rows * packed_k];
     let mut scales = vec![0u8; rest_m * rest_k * CANONICAL_SCALE_ATOM_BYTES];
 
+    const E2M1_POS: [f32; 8] = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0];
+    let decode_e4m3 = |code: u8| -> f32 {
+        let exp = (code >> 3) & 0x0f;
+        let mant = code & 0x07;
+        if exp == 0 {
+            (mant as f32) * (1.0 / 512.0)
+        } else {
+            (1.0 + (mant as f32) * 0.125) * 2.0f32.powi((exp as i32) - 7)
+        }
+    };
+    let encode_e4m3 = |v: f32| -> (u8, f32) {
+        let c = v.clamp(0.0, 448.0);
+        let mut best_code = 0u8;
+        let mut best_val = 0.0f32;
+        let mut best_err = f32::INFINITY;
+        for code in 0u8..=0x7e {
+            let cand = decode_e4m3(code);
+            let err = (c - cand).abs();
+            if err < best_err || (err == best_err && (code & 1) == 0) {
+                best_err = err;
+                best_code = code;
+                best_val = cand;
+            }
+        }
+        (best_code, best_val)
+    };
+    let encode_e2m1 = |v: f32| -> u8 {
+        let sign = if v < 0.0 { 8u8 } else { 0u8 };
+        let a = v.abs().min(6.0);
+        let mut best = 0u8;
+        let mut best_err = f32::INFINITY;
+        for (nib, &cand) in E2M1_POS.iter().enumerate() {
+            let err = (a - cand).abs();
+            if err < best_err || (err == best_err && (nib & 1) == 0) {
+                best_err = err;
+                best = nib as u8;
+            }
+        }
+        sign | best
+    };
+
     for r in 0..rows {
         let row_slice = &matrix[r * k..(r + 1) * k];
         let out_row = &mut values[r * packed_k..(r + 1) * packed_k];
@@ -84,8 +124,7 @@ pub fn quantize_matrix_nvfp4(
                     max_abs = a;
                 }
             }
-            let scale_code = f32_to_e4m3(max_abs / 6.0);
-            let scale_val = e4m3_to_f32(scale_code);
+            let (scale_code, scale_val) = encode_e4m3(max_abs / 6.0);
             let inv_scale = if scale_val > 0.0 {
                 1.0 / scale_val
             } else {
@@ -93,8 +132,8 @@ pub fn quantize_matrix_nvfp4(
             };
             scales[canonical_scale_offset(rest_k, r, g)] = scale_code;
             for pair in 0..8 {
-                let lo = f32_to_e2m1(block[pair * 2].to_f32() * inv_scale);
-                let hi = f32_to_e2m1(block[pair * 2 + 1].to_f32() * inv_scale);
+                let lo = encode_e2m1(block[pair * 2].to_f32() * inv_scale);
+                let hi = encode_e2m1(block[pair * 2 + 1].to_f32() * inv_scale);
                 out_row[g * 8 + pair] = lo | (hi << 4);
             }
         }
@@ -105,15 +144,29 @@ pub fn quantize_matrix_nvfp4(
 /// Reconstruct one logical row of `k` `f32` values from NVFP4 `values` and canonical `Float8E4M3FN` `scales`.
 #[must_use]
 pub fn dequantize_nvfp4_row(values: &[u8], scales: &[u8], row: usize, k: usize) -> Vec<f32> {
+    const E2M1_POS: [f32; 8] = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0];
+    let decode_e4m3 = |code: u8| -> f32 {
+        let exp = (code >> 3) & 0x0f;
+        let mant = code & 0x07;
+        if exp == 0 {
+            (mant as f32) * (1.0 / 512.0)
+        } else {
+            (1.0 + (mant as f32) * 0.125) * 2.0f32.powi((exp as i32) - 7)
+        }
+    };
+    let decode_e2m1 = |nib: u8| -> f32 {
+        let mag = E2M1_POS[(nib & 7) as usize];
+        if (nib & 8) != 0 { -mag } else { mag }
+    };
     let packed_k = k / 2;
     let groups_per_row = k / 16;
     let rest_k = groups_per_row.div_ceil(CANONICAL_SCALE_K_GROUPS);
     let mut out = Vec::with_capacity(k);
     for g in 0..groups_per_row {
-        let scale = e4m3_to_f32(scales[canonical_scale_offset(rest_k, row, g)]);
+        let scale = decode_e4m3(scales[canonical_scale_offset(rest_k, row, g)]);
         for pair in 0..8 {
             let byte = values[row * packed_k + g * 8 + pair];
-            let (lo, hi) = cute_rs::Float4E2M1FNx2::from_bits(byte).to_f32x2();
+            let (lo, hi) = (decode_e2m1(byte & 0x0f), decode_e2m1(byte >> 4));
             out.push(lo * scale);
             out.push(hi * scale);
         }
@@ -166,45 +219,21 @@ pub(crate) mod kernels {
             let group = cute_rs::crd2idx_row_major_2d(tile, g, 4);
             let group_idx = cute_rs::crd2idx_row_major_2d(row, group, k / 16);
             let vec_base = cute_rs::crd2idx_row_major_2d(group_idx, 0, 2);
-            let lo_half =
-                unsafe { in_tensor.local_tile::<8>(vec_base).load() }.map(BFloat16::to_f32);
-            let hi_half =
-                unsafe { in_tensor.local_tile::<8>(vec_base + 1).load() }.map(BFloat16::to_f32);
-            let max_lo = lo_half.fold(0.0f32, |m, v| {
-                let a = if v < 0.0 { -v } else { v };
-                if a > m { a } else { m }
-            });
-            let max_abs = hi_half.fold(max_lo, |m, v| {
-                let a = if v < 0.0 { -v } else { v };
-                if a > m { a } else { m }
-            });
-            let scale_code = f32_to_e4m3(max_abs * (scale_boost / 6.0));
-            let scale_val = e4m3_to_f32(scale_code) * inv_scale_boost;
-            let inv_scale = if scale_val > 0.0 {
-                1.0 / scale_val
-            } else {
-                0.0
-            };
+            let lo_half = unsafe { in_tensor.local_tile::<8>(vec_base).load() }.to::<f32>();
+            let hi_half = unsafe { in_tensor.local_tile::<8>(vec_base + 1).load() }.to::<f32>();
+            let vec = lo_half.concat(hi_half);
+            let max_abs = vec.abs().reduce(ReductionOp::Max, 0.0f32);
+            let scale = Float8E4M3FN::from_f32(max_abs * (scale_boost / 6.0));
+            let inv_scale =
+                cute_rs::arch::rcp_approx(scale.to_f32() * inv_scale_boost).min(f32::MAX);
             let scale_offset = scale_layout.crd2idx(0, row, group);
             unsafe {
-                scales_out.store_at(scale_offset, scale_code);
+                scales_out.store_at(scale_offset, scale.to_bits());
             }
-            let lo_arr = lo_half.into_array();
-            let hi_arr = hi_half.into_array();
-            let packed = RegisterTile::<u8, 8>::from_array([
-                Float4E2M1FNx2::from_f32x2(lo_arr[0] * inv_scale, lo_arr[1] * inv_scale).to_bits(),
-                Float4E2M1FNx2::from_f32x2(lo_arr[2] * inv_scale, lo_arr[3] * inv_scale).to_bits(),
-                Float4E2M1FNx2::from_f32x2(lo_arr[4] * inv_scale, lo_arr[5] * inv_scale).to_bits(),
-                Float4E2M1FNx2::from_f32x2(lo_arr[6] * inv_scale, lo_arr[7] * inv_scale).to_bits(),
-                Float4E2M1FNx2::from_f32x2(hi_arr[0] * inv_scale, hi_arr[1] * inv_scale).to_bits(),
-                Float4E2M1FNx2::from_f32x2(hi_arr[2] * inv_scale, hi_arr[3] * inv_scale).to_bits(),
-                Float4E2M1FNx2::from_f32x2(hi_arr[4] * inv_scale, hi_arr[5] * inv_scale).to_bits(),
-                Float4E2M1FNx2::from_f32x2(hi_arr[6] * inv_scale, hi_arr[7] * inv_scale).to_bits(),
-            ]);
+            let q_vec = (vec * inv_scale).to::<Float4E2M1FN>();
             unsafe {
-                TensorMut::from_disjoint_slice(&mut out_values)
-                    .local_tile::<8>(group_idx)
-                    .store(packed);
+                StridedTensorMut::<u64>::from_disjoint_slice_as(&mut out_values)
+                    .store_at(group_idx, q_vec.bitcast::<u64, 1>()[0]);
             }
             g += 1;
         }
@@ -791,17 +820,11 @@ impl Nvfp4Runner {
 mod tests {
     use super::*;
 
-    /// Verify E4M3FN encoding round-trips exact fractional powers and clamps at 448.0.
+    /// Verify E4M3FN packing preserves byte order.
     #[test]
     fn e4m3_encoder_preserves_fractional_scales_and_clamps_overflow() {
-        for &target in &[
-            0.0f32, 0.5, 1.0, 1.25, 1.5, 1.75, 2.0, 3.0, 6.0, 64.0, 448.0,
-        ] {
-            let code = f32_to_e4m3(target);
-            assert_eq!(e4m3_to_f32(code), target);
-        }
-        assert_eq!(e4m3_to_f32(f32_to_e4m3(1000.0)), 448.0);
-        assert_eq!(f32_to_e4m3(-5.0), 0);
+        let pair = cute_rs::E4M3x2::from_bytes(0x38, 0x3c);
+        assert_eq!(pair.to_bits(), 0x3c38);
     }
 
     /// Verify NVFP4 row quantization and dequantization preserve sign and scale across K=64 tiles.

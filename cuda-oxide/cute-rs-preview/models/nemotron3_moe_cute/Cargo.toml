@@ -12,7 +12,7 @@ description = "Nemotron-3 NVFP4 ReLU² Mixture-of-Experts (MoE) in cute-rs."
 [workspace]
 
 [dependencies]
-cuda-core = { path = "../../../../cuda-core" }
+cuda-core = { path = "../../../../cuda-core", features = ["f16"] }
 cuda-device = { path = "../../../crates/cuda-device" }
 cuda-host = { path = "../../../crates/cuda-host" }
 cuda-macros = { path = "../../../crates/cuda-macros" }

@@ -91,7 +91,7 @@ and lowering:
 
 ![The cute-rs stack from Rust types through verification to a CUDA cubin](../../../../cuda-oxide-book/cute/images/cute-rs-preview-stack-and-flow.svg)
 
-- [SM100 APIs](../../../cute-rs/src/sm100/mod.rs): `Sm100SharedTile`,
+- [SM100 APIs](../../../cute-rs/src/nvgpu/tcgen05/mod.rs): `Sm100SharedTile`,
   `Sm100ClusterTmaCopy`, `Sm100TiledMma`, `Sm100TmemEpilogue`, and pipelines.
 - [Host setup](../src/main.rs): typed TMA descriptors, cluster launch, and validation.
 - [Dialect operations](../../../dialect-cute/src/ops/sm100/mod.rs): layout,

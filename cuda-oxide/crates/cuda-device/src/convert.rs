@@ -34,14 +34,14 @@ pub fn f32_to_bf16(value: f32) -> u16 {
 #[inline(always)]
 pub fn f32_to_bf16_rne(value: f32) -> u16 {
     let bits = value.to_bits();
-    let exponent = bits & 0x7F80_0000;
-    let mantissa = bits & 0x007F_FFFF;
-    if exponent == 0x7F80_0000 && mantissa != 0 {
-        return ((bits >> 16) as u16) | 0x0040;
-    }
-
     let retained_lsb = (bits >> 16) & 1;
-    (bits.wrapping_add(0x7FFF + retained_lsb) >> 16) as u16
+    let rne = (bits.wrapping_add(0x7FFF + retained_lsb) >> 16) as u16;
+    let nan = ((bits >> 16) as u16) | 0x0040;
+    if (bits & 0x7FFF_FFFF) > 0x7F80_0000 {
+        nan
+    } else {
+        rne
+    }
 }
 
 /// Widens raw `bf16` bits to `f32` by placing them in the high 16 bits.

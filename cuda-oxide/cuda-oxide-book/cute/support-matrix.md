@@ -45,11 +45,11 @@ The figure at the top of the page is the feature table, with the cute-rs column 
 - TMA copies: blockscale_gemm_cute, fp16_gemm_256x352_cute, sm100_fmha_prefill_cute
 - cp.async, bulk, DSMEM copies: fmha_prefill_sm120a_cute
 - ldmatrix, stmatrix, atomics: blockscale_gemm_cute, ffn_cute, sm100_mla_decode_fp16_cute
-- tcgen05 MMA kinds: fp16_gemm_256x352_cute, sm100_fmha_prefill_cute, sm100_mla_decode_fp16_cute
+- tcgen05 MMA kinds: fp16_gemm_256x352_cute, sm100_fmha_prefill_cute, sm100_mla_decode_fp16_cute, sm100_qkv_epilogue_cute, nemotron3_moe_cute
 - Warp MMA kinds (mma.sync): blockscale_gemm_cute, ffn_cute, fmha_prefill_sm120a_cute, qwen3_8b_cute
-- NVFP4 tensor cores (E4M3 scales): qwen3_8b_cute (SM120 m16n8k64 E2M1 + E4M3 SF_VEC=16 prefill)
+- NVFP4 tensor cores (E4M3 scales): nemotron3_moe_cute (SM100 tcgen05 mxf4nvf4 block-scaled MMA) and qwen3_8b_cute (SM120 m16n8k64 E2M1 + E4M3 SF_VEC=16 prefill)
 - wgmma (Hopper): none
-- TMEM: fp16_gemm_256x352_cute, sm100_fmha_prefill_cute
+- TMEM: fp16_gemm_256x352_cute, sm100_fmha_prefill_cute, sm100_mla_decode_fp16_cute, sm100_qkv_epilogue_cute, nemotron3_moe_cute
 - Pipelines and barriers: blockscale_gemm_cute, fp16_gemm_256x352_cute, sm100_mla_decode_fp16_cute
 - Schedulers, persistence, PDL: blockscale_gemm_cute, sm100_fmha_prefill_cute
 - Clusters and multicast: fp16_gemm_256x352_cute, sm100_mla_decode_fp16_cute
@@ -75,9 +75,9 @@ The figure at the top of the page is the feature table, with the cute-rs column 
 | TMA copies | yes | partial | 2D tile load and store, two-CTA load; no im2col, reduce-store, multicast |
 | cp.async, bulk, DSMEM copies | yes | partial | cooperative cp.async with a coverage proof; no bulk or DSMEM data copies |
 | ldmatrix, stmatrix, atomics | yes | partial | ldmatrix x4 and x2.trans (f16 and BFloat16), stmatrix x2, no-allocate stores; no atomics |
-| tcgen05 MMA kinds | yes | partial, sm_100a/sm_103a | 1 of 11 kinds: F16 in, F32 accumulate, one or two CTAs |
+| tcgen05 MMA kinds | yes | partial, sm_100a/sm_103a | 2 of 11 kinds: F16 (`Sm100TiledMma`, `MmaSs`, `MmaTs`) and block-scaled NVFP4 (`Sm100BlockScaledTiledMma` / `MmaMXF4NVF4Op` + `Cp4x32x128bOp`), F32 accumulate |
 | Warp MMA kinds (mma.sync) | yes | partial | 4 of 7 kinds: MXF4 with UE8M0 scales, NVFP4 with E4M3 scales (sm_120a), F16, BF16 |
-| NVFP4 tensor cores (E4M3 scales) | yes | partial, sm_120a only | SM120 m16n8k64 E2M1 with E4M3 scales (SF_VEC=16) in Nvfp4TiledMma and qwen3_8b_cute |
+| NVFP4 tensor cores (E4M3 scales) | yes | partial, sm_100a + sm_120a | SM100 `Sm100BlockScaledTiledMma` (`mxf4nvf4`, `SF_VEC=16`) in `nemotron3_moe_cute` and SM120 `Nvfp4TiledMma` (`m16n8k64`) in `qwen3_8b_cute` |
 | wgmma (Hopper) | yes | n/a | no sm_90a target |
 | TMEM | yes | partial, sm_100a/sm_103a | `Sm100Tmem`, `TmemAllocator`, 32x32b load and store (`TmemFragment`), FP32 to FP16 epilogues; no 16xNb, LdRed or S2T |
 | Pipelines and barriers | yes | partial | typed 1-CTA (`PipelineTmaAsync`, `PipelineTmaStore`, `PipelineTmaUmma`, `PipelineUmmaAsync`, `PipelineAsyncUmma`, `PipelineAsync`) and 2-CTA (`TwoCtaRing`) pipelines; no CLC |
@@ -120,7 +120,7 @@ What a CuTeDSL user relies on beyond the per-architecture atoms, and what the pr
 | IKET profiling | In-kernel event markers collected into timelines. | None. Use Nsight on the embedded cubin. | no |
 | CUDA graphs, PDL, cooperative launch | Graph capture, programmatic dependent launch, cooperative launch, launch events. | Graphs, the PDL launch attribute and cooperative launch from the Rust host. No device-side PDL helpers in kernels. | partial |
 | Typed shared memory | SmemAllocator bump allocator, cute.struct, auto-deduced smem size. | Typed static and dynamic shared arrays and layout-typed tiles; carve dynamic shared memory by hand. | partial |
-| TensorSSA register vectors | Immutable register vectors with arithmetic, where, conversions and reductions. | RegisterTile with elementwise `+`, `-`, `*`, `/` and unary `-`, map, zip_map, fold and gather; conversions as closures. | partial |
+| TensorSSA register vectors | Immutable register vectors with arithmetic, where, conversions and reductions. | `RegisterTile<T, N>` (`TensorSSA<T, N>`) lowered through `dialect-cute` to MLIR `vector<NxT>` ops (`+`, `-`, `*`, `/`, `-`, `abs`, `fmax`, `reduce(ReductionOp, init)`, `to::<Dst>()`, `bitcast::<Dst, M>()`, `slice::<OFFSET, M>()`, `concat`, `splat`). | partial |
 | block_copy | One call issues TMA (multicast hidden) or shared-to-TMEM copies. | A typed two-CTA TMA copy. No shared-to-TMEM copy. | partial |
 | Grouped GEMM, MoE, ptr-array | Grouped and MoE persistent schedulers, device-only problem shapes. | None. One launch per group. | no |
 | Mixed-input GEMM | Narrow int4 and int8 weights with bf16 or fp8 activations, dequant in the mainloop. | None. Operands share one type. | no |
@@ -138,7 +138,7 @@ What a CuTeDSL user relies on beyond the per-architecture atoms, and what the pr
 - Ahead-of-time compilation with no Python runtime: one Rust binary carries the cubin.
 - Layouts, swizzles, operand roles and pipeline states are Rust types, decoded by the compiler and checked at compile time.
 - A whole-module verifier runs before any MLIR is built: tensor provenance, pipeline lifecycle, operand roles, TMA encodability and swizzle alignment.
-- Two end-to-end models, Qwen3-TTS 1.7B and Qwen3-8B on sm_120a, with reference comparisons. CuTeDSL 4.7 ships component kernels only.
+- Three end-to-end models: Nemotron-3 NVFP4 ReLU² MoE (8-expert and 192-expert on `sm_100a`), Qwen3-TTS 1.7B, and Qwen3-8B on `sm_120a`, with reference comparisons. CuTeDSL 4.7 ships component kernels only.
 
 ## What the compiler does not prove
 

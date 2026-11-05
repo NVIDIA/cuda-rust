@@ -58,16 +58,25 @@ fn composed_builder_compile_terminal_warms_the_dispatched_specialization() {
 
         // Warm via meta placeholders through the SAME call expression the
         // real dispatch uses. No launch, no device allocation.
+        let warmup = || {
+            let zm = api::meta::<f32>(&[64, 64])
+                .sync()
+                .expect("meta tensor")
+                .partition([16, 16])
+                .map([4, 1], 4);
+            let xm = api::meta::<f32>(&[64, 64]).sync().expect("meta tensor");
+            composed_warm_module::mapped_madd(zm, std::sync::Arc::new(xm))
+                .generics(generics())
+                .compile_options(opts.clone())
+        };
+        let key = warmup().l1_cache_key().expect("warmup specialization key");
+        // Another cache test may have retained this same specialization.
+        // Establish the cold-cache precondition independently of test order.
+        // SAFETY: cache_test_lock serializes these tests, and no launch of
+        // this specialization is in flight.
+        unsafe { cutile::tile_kernel::evict_kernel(&key) };
         let before = jit_compile_count();
-        let zm = api::meta::<f32>(&[64, 64])
-            .sync()
-            .expect("meta tensor")
-            .partition([16, 16])
-            .map([4, 1], 4);
-        let xm = api::meta::<f32>(&[64, 64]).sync().expect("meta tensor");
-        composed_warm_module::mapped_madd(zm, std::sync::Arc::new(xm))
-            .generics(generics())
-            .compile_options(opts.clone())
+        warmup()
             .compile()
             .expect("compile-only terminal on the composed builder");
         assert_eq!(

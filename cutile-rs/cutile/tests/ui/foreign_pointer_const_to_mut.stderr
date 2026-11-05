@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/ui/foreign_pointer_const_to_mut.rs:15:23
+   |
+15 |         unsafe { fill(x.as_ptr()) };
+   |                  ---- ^^^^^^^^^^ types differ in mutability
+   |                  |
+   |                  arguments to this function are incorrect
+   |
+   = note: expected raw pointer `*mut f32`
+              found raw pointer `*const f32`
+note: function defined here
+  --> tests/ui/foreign_pointer_const_to_mut.rs:11:19
+   |
+11 |     pub unsafe fn fill(dst: *mut f32);
+   |                   ^^^^ -------------

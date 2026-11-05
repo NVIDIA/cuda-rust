@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Foreign functions take global-memory pointer operands: a `*const E` or
+  `*mut E` parameter is a rank-0 `tile<ptr<E>>` operand. `block_tile_ptr` on a
+  mutable tensor gives the address of the current tile block's tile, as
+  `load` and `store` see it.
+
 ## [0.5.0] - 2026-11-04
 
 CUDA 13.5 tile-library calls and GPU communication, a shared Tile/SIMT host

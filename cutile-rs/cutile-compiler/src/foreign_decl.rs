@@ -31,6 +31,10 @@
 //!   `const_args = "Function, FillMode, Batch, M, T"` gives another order.
 //! - Every other parameter is an operand the caller passes: read-only by
 //!   default, read-write with `#[inout]`. Scalars are rank-0 tiles.
+//! - A raw pointer parameter (`*const E`, `*mut E`) is a rank-0
+//!   `tile<ptr<E>>` operand: a global-memory address the callee may read or
+//!   write through. It is always an `in` operand; `*mut` only states that
+//!   the callee writes through it.
 //! - The results start with the updated `#[inout]` operands. Every further
 //!   result is an output-only operand the caller does not pass: the call
 //!   appends a zero-filled operand of each, as a Tile C++
@@ -174,7 +178,13 @@ impl ForeignFnDecl {
             },
         };
         for ty in &results {
-            check_operand_type(ty, "result")?;
+            if check_operand_type(ty, "result")? == OperandKind::Pointer {
+                return Err(syn::Error::new(
+                    ty.span(),
+                    "a foreign function cannot return a pointer; pass the memory as a \
+                     pointer parameter instead",
+                ));
+            }
         }
         let decl = Self {
             ident,
@@ -490,7 +500,17 @@ fn foreign_param(input: &FnArg, arg_index: usize) -> syn::Result<Param> {
         }
         return Ok(Param::Str(name));
     }
-    check_operand_type(&pat_type.ty, "parameter")?;
+    if check_operand_type(&pat_type.ty, "parameter")? == OperandKind::Pointer
+        && access == Access::InOut
+    {
+        return Err(syn::Error::new(
+            pat_type.span(),
+            format!(
+                "pointer parameter `{name}` cannot be `#[inout]`: the callee reads and writes \
+                 the memory it points to, and the pointer itself is never returned"
+            ),
+        ));
+    }
     Ok(Param::Operand(ForeignParam {
         name,
         ty: pat_type.ty.as_ref().clone(),
@@ -499,31 +519,55 @@ fn foreign_param(input: &FnArg, arg_index: usize) -> syn::Result<Param> {
     }))
 }
 
+/// What an operand or result type is, by its syntax.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OperandKind {
+    /// `Tile<E, S>` or a scalar element type name.
+    Value,
+    /// `*const E` or `*mut E`: a rank-0 `tile<ptr<E>>`.
+    Pointer,
+}
+
 /// Operands and results are tiles (`Tile<E, S>`) or scalars (an element type
-/// name). Views, tensors, references and pointers are not supported.
-fn check_operand_type(ty: &Type, what: &str) -> syn::Result<()> {
-    let ok = match ty {
-        Type::Path(p) if p.qself.is_none() => match p.path.segments.last() {
-            Some(last) if last.ident == "Tile" => true,
-            Some(last) => {
-                p.path.segments.len() == 1 && matches!(last.arguments, syn::PathArguments::None)
-            }
-            None => false,
-        },
-        Type::Paren(inner) => return check_operand_type(&inner.elem, what),
-        _ => false,
+/// name); parameters can also be raw pointers to an element type
+/// (`*const E`, `*mut E`). Views, tensors and references are not supported.
+fn check_operand_type(ty: &Type, what: &str) -> syn::Result<OperandKind> {
+    let is_element_name = |ty: &Type| {
+        matches!(ty, Type::Path(p) if p.qself.is_none()
+            && p.path.segments.len() == 1
+            && matches!(p.path.segments[0].arguments, syn::PathArguments::None))
     };
-    if ok {
-        Ok(())
-    } else {
-        Err(syn::Error::new(
+    let kind = match ty {
+        Type::Path(p) if p.qself.is_none() => match p.path.segments.last() {
+            Some(last) if last.ident == "Tile" => Some(OperandKind::Value),
+            Some(_) if is_element_name(ty) => Some(OperandKind::Value),
+            _ => None,
+        },
+        Type::Ptr(ptr) => {
+            if !is_element_name(&ptr.elem) {
+                return Err(syn::Error::new(
+                    ptr.elem.span(),
+                    format!(
+                        "a pointer {what} of a foreign function must point to an element \
+                         type (`*const E` or `*mut E`)"
+                    ),
+                ));
+            }
+            Some(OperandKind::Pointer)
+        }
+        Type::Paren(inner) => return check_operand_type(&inner.elem, what),
+        _ => None,
+    };
+    kind.ok_or_else(|| {
+        syn::Error::new(
             ty.span(),
             format!(
-                "a foreign function {what} must be a tile (`Tile<E, S>`) or a scalar; \
-                 views, tensors, references and pointers are not supported"
+                "a foreign function {what} must be a tile (`Tile<E, S>`), a scalar or a \
+                 pointer (`*const E`, `*mut E`); views, tensors and references are not \
+                 supported"
             ),
-        ))
-    }
+        )
+    })
 }
 
 #[cfg(test)]
@@ -632,6 +676,26 @@ mod tests {
     }
 
     #[test]
+    fn pointer_parameters_are_in_operands() {
+        let decl = parse(quote! {
+            #[cutile::foreign]
+            unsafe fn fill<const N: i32, T: ElementType>(
+                mode: &str,
+                data: *const T,
+                scratch: *mut u8,
+                #[inout] size: i64,
+            ) -> (i64, Tile<u8, { [N] }>);
+        })
+        .unwrap()
+        .unwrap();
+        let names: Vec<_> = decl.params.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["data", "scratch", "size"]);
+        assert_eq!(decl.params[0].access, Access::In);
+        assert_eq!(decl.params[1].access, Access::In);
+        assert_eq!(decl.implicit_out_results().len(), 1);
+    }
+
+    #[test]
     fn non_foreign_verbatim_items_are_ignored() {
         assert!(parse(quote! { fn plain(x: i32); }).unwrap().is_none());
         assert!(parse(quote! { struct S; }).unwrap().is_none());
@@ -654,7 +718,7 @@ mod tests {
             ),
             (
                 quote! { #[cutile::foreign] unsafe fn f(x: &Tile<f32, {[4]}>); },
-                "tile (`Tile<E, S>`) or a scalar",
+                "a tile (`Tile<E, S>`), a scalar or a pointer",
             ),
             (
                 quote! { #[cutile::foreign] unsafe fn f(#[restrict] x: f32); },
@@ -678,7 +742,27 @@ mod tests {
             ),
             (
                 quote! { #[cutile::foreign] unsafe fn f(s: &mut str, x: f32); },
-                "tile (`Tile<E, S>`) or a scalar",
+                "a tile (`Tile<E, S>`), a scalar or a pointer",
+            ),
+            (
+                quote! { #[cutile::foreign] unsafe fn f(#[inout] p: *mut f32) -> *mut f32; },
+                "cannot be `#[inout]`",
+            ),
+            (
+                quote! { #[cutile::foreign] unsafe fn f(x: f32) -> *mut f32; },
+                "cannot return a pointer",
+            ),
+            (
+                quote! { #[cutile::foreign] unsafe fn f(p: *mut *mut f32); },
+                "must point to an element type",
+            ),
+            (
+                quote! { #[cutile::foreign] unsafe fn f(p: *const Tile<f32, {[4]}>); },
+                "must point to an element type",
+            ),
+            (
+                quote! { #[cutile::foreign] unsafe fn f(p: &mut f32); },
+                "a tile (`Tile<E, S>`), a scalar or a pointer",
             ),
             (
                 quote! { #[cutile::foreign(const_args = "N, s")] unsafe fn f<const N: i32>(s: &str, t: &str, x: f32); },

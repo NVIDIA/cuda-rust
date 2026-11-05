@@ -224,6 +224,55 @@ mod kernels {
     fn lane_ids_kernel(ids: &mut Tensor<i32, { [32] }>) {
         ids.store(unsafe { lane_ids() });
     }
+
+    /// The library writes twice each element of `x` to global memory
+    /// through `dst`.
+    #[cutile::foreign]
+    pub unsafe fn store_to(x: Tile<f32, { [32] }>, dst: *mut f32);
+
+    /// The library reads 32 elements through `src` and returns each plus one.
+    #[cutile::foreign]
+    pub unsafe fn load_from(src: *const f32) -> Tile<f32, { [32] }>;
+
+    /// Each block hands the library its own tile of `y`, then loads the tile
+    /// back into `x`: the load is ordered after the call. `block_tile_ptr` is
+    /// relative to the block, like `load` and `store`.
+    #[cutile::entry()]
+    fn store_through_pointer_kernel(x: &mut Tensor<f32, { [32] }>, y: &mut Tensor<f32, { [32] }>) {
+        unsafe { store_to(x.load(), y.block_tile_ptr()) };
+        x.store(y.load());
+    }
+
+    /// A `[1, 32]` tile of a row-major tensor is 32 contiguous elements:
+    /// block `(i, j)` writes row `i`, columns `[32 j, 32 j + 32)`, through its
+    /// pointer, so both block ids reach the address.
+    #[cutile::entry()]
+    fn store_through_rank_2_pointer_kernel(
+        x: &mut Tensor<f32, { [1, 32] }>,
+        y: &mut Tensor<f32, { [1, 32] }>,
+    ) {
+        let t: Tile<f32, { [32] }> = x.load().reshape(shape![32]);
+        unsafe { store_to(t, y.block_tile_ptr()) };
+    }
+
+    /// The rank-3 form: block `(i, j, k)` writes its `[1, 1, 32]` tile.
+    #[cutile::entry()]
+    fn store_through_rank_3_pointer_kernel(
+        x: &mut Tensor<f32, { [1, 1, 32] }>,
+        y: &mut Tensor<f32, { [1, 1, 32] }>,
+    ) {
+        let t: Tile<f32, { [32] }> = x.load().reshape(shape![32]);
+        unsafe { store_to(t, y.block_tile_ptr()) };
+    }
+
+    /// Each block hands the library its own slot of `x` to read.
+    #[cutile::entry()]
+    fn load_through_pointer_kernel(z: &mut Tensor<f32, { [32] }>, x: &Tensor<f32, { [-1] }>) {
+        let pid: (i32, i32, i32) = get_tile_block_id();
+        let base: PointerTile<*const f32, { [] }> = pointer_to_tile(x.as_ptr());
+        let slot: PointerTile<*const f32, { [] }> = base.offset(pid.0 * 32i32);
+        z.store(unsafe { load_from(tile_to_pointer(slot)) });
+    }
 }
 
 /// Runs a toolkit tool and panics with its output when it fails.
@@ -448,6 +497,98 @@ fn a_function_without_operands_returns_its_output_only_result() -> Result<(), Er
         .sync()?;
     let expected: Vec<i32> = (0..32).collect();
     assert_eq!(ids.unpartition().to_host_vec().sync()?, expected);
+    Ok(())
+}
+
+/// Two blocks each pass the library a pointer to their slot of `y`; the
+/// library writes `2 x` there, and each block's load after the call reads
+/// it back.
+#[test]
+fn the_library_writes_through_a_pointer_operand() -> Result<(), Error> {
+    if !test_tilelib_available() {
+        return Ok(());
+    }
+    let input: Vec<f32> = (0..64).map(|i| i as f32).collect();
+    let x = api::copy_host_vec_to_device(&Arc::new(input.clone()))
+        .sync()?
+        .partition([32]);
+    let y = api::full::<f32>(-1.0, &[64]).sync()?.partition([32]);
+    let (x, y) = kernels::store_through_pointer_kernel(x, y)
+        .compile_options(with_tilelib())
+        .sync()?;
+    let doubled: Vec<f32> = input.iter().map(|v| 2.0 * v).collect();
+    assert_eq!(y.unpartition().to_host_vec().sync()?, doubled);
+    assert_eq!(x.unpartition().to_host_vec().sync()?, doubled);
+    Ok(())
+}
+
+/// Runs `kernel` on a `shape` tensor split into tiles of `tile` (32
+/// contiguous elements each) and checks that every block's pointer reached
+/// its own tile: the library writes `2 x` to each.
+fn check_block_tile_pointers<const R: usize>(
+    shape: [usize; R],
+    tile: [usize; R],
+    kernel: impl FnOnce(
+        Partition<Tensor<f32>>,
+        Partition<Tensor<f32>>,
+    ) -> Result<(Partition<Tensor<f32>>, Partition<Tensor<f32>>), DeviceError>,
+) -> Result<(), Error> {
+    let len: usize = shape.iter().product();
+    let input: Vec<f32> = (0..len).map(|i| i as f32).collect();
+    let x = api::copy_host_vec_to_device(&Arc::new(input.clone()))
+        .reshape(&shape)
+        .sync()?
+        .partition(tile);
+    let y = api::full::<f32>(-1.0, &shape).sync()?.partition(tile);
+    let (_, y) = kernel(x, y)?;
+    let doubled: Vec<f32> = input.iter().map(|v| 2.0 * v).collect();
+    assert_eq!(y.unpartition().to_host_vec().sync()?, doubled);
+    Ok(())
+}
+
+/// `block_tile_ptr` of a rank-2 block tile offsets both axes by the block
+/// id: a `[3, 64]` tensor in `[1, 32]` tiles runs a 3 x 2 grid.
+#[test]
+fn a_rank_2_block_tile_pointer_reaches_the_library() -> Result<(), Error> {
+    if !test_tilelib_available() {
+        return Ok(());
+    }
+    check_block_tile_pointers([3, 64], [1, 32], |x, y| {
+        kernels::store_through_rank_2_pointer_kernel(x, y)
+            .compile_options(with_tilelib())
+            .sync()
+    })
+}
+
+/// `block_tile_ptr` of a rank-3 block tile offsets all three axes by the
+/// block id: a `[2, 3, 64]` tensor in `[1, 1, 32]` tiles runs a 2 x 3 x 2
+/// grid.
+#[test]
+fn a_rank_3_block_tile_pointer_reaches_the_library() -> Result<(), Error> {
+    if !test_tilelib_available() {
+        return Ok(());
+    }
+    check_block_tile_pointers([2, 3, 64], [1, 1, 32], |x, y| {
+        kernels::store_through_rank_3_pointer_kernel(x, y)
+            .compile_options(with_tilelib())
+            .sync()
+    })
+}
+
+/// Two blocks each pass the library a pointer to their slot of `x`.
+#[test]
+fn the_library_reads_through_a_pointer_operand() -> Result<(), Error> {
+    if !test_tilelib_available() {
+        return Ok(());
+    }
+    let input: Vec<f32> = (0..64).map(|i| i as f32).collect();
+    let x = api::copy_host_vec_to_device(&Arc::new(input.clone())).sync()?;
+    let z = api::full::<f32>(-1.0, &[64]).sync()?.partition([32]);
+    let (z, _) = kernels::load_through_pointer_kernel(z, x)
+        .compile_options(with_tilelib())
+        .sync()?;
+    let expected: Vec<f32> = input.iter().map(|v| v + 1.0).collect();
+    assert_eq!(z.unpartition().to_host_vec().sync()?, expected);
     Ok(())
 }
 

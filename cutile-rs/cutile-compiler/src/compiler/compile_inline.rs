@@ -205,12 +205,22 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             }
             // Remap generic parameters.
             let expr_generic_args = get_call_expression_generics(call_expr);
+            // A `_` in the turbofish is inferred from the arguments.
+            let turbofish_has_infer = expr_generic_args.as_ref().is_some_and(|args| {
+                args.args
+                    .iter()
+                    .any(|arg| matches!(arg, syn::GenericArgument::Type(Type::Infer(_))))
+            });
             let mut call_generic_vars = if GenericVars::is_empty(&fn_item.sig.generics) {
                 // If there are no generics, we're done.
                 GenericVars::empty(&fn_item.sig.generics)?
-            } else if expr_generic_args.is_some() {
+            } else if expr_generic_args.is_some() && !turbofish_has_infer {
                 // If the caller specifies generics args, use them.
-                generic_vars.from_expr_generic_args(&fn_item.sig.generics, &expr_generic_args)?
+                generic_vars.from_expr_generic_args(
+                    &fn_item.sig.generics,
+                    &expr_generic_args,
+                    &|ty| self.string_tag_text(ty),
+                )?
             } else {
                 // If nothing is specified, try to infer an instance of GenericVars.
                 let mut generic_arg_inference =
@@ -221,8 +231,17 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     .collect::<Vec<_>>();
                 generic_arg_inference.map_args_to_params(&call_arg_rust_tys, None, generic_vars)?;
                 // println!("inline_function_call {:#?}: generic_vars={generic_vars:#?} \nexpr_generic_args={expr_generic_args:#?} \ngeneric_arg_inference={generic_arg_inference:#?}", fn_item.sig.ident.to_string());
-                generic_arg_inference
-                    .get_generic_vars_instance(generic_vars, self.modules.primitives())
+                let inferred = generic_arg_inference
+                    .get_generic_vars_instance(generic_vars, self.modules.primitives());
+                if turbofish_has_infer {
+                    inferred.merge(generic_vars.from_expr_generic_args(
+                        &fn_item.sig.generics,
+                        &expr_generic_args,
+                        &|ty| self.string_tag_text(ty),
+                    )?)?
+                } else {
+                    inferred
+                }
             };
             // The callee's body compiles in its own module's scope: its
             // `const`s, and the consts named in its types, are its module's.
@@ -479,6 +498,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                         self_ty,
                         generic_vars,
                         self.modules.primitives(),
+                        &|ty| self.string_tag_text(ty),
                     )?
                 }
             };

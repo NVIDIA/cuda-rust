@@ -1302,3 +1302,400 @@ fn foreign_functions_of_same_named_modules_stay_distinct() {
         );
     });
 }
+
+/// A plain Rust module, not a `#[cutile::module]`: the JIT cannot read it.
+pub mod host_consts {
+    pub const FILL: &str = "upper";
+    pub const SCALE: f32 = 7.5;
+}
+
+/// A module the JIT loads, with consts named like those of `host_consts`.
+#[cutile::module]
+mod loaded_consts {
+    use cutile::core::*;
+
+    pub const FILL: &str = "lower";
+    pub const SCALE: f32 = 3.25;
+    pub const OFFSET: f32 = 0.5;
+
+    /// A nested `mod`, whose items the JIT flattens into this module.
+    pub mod inner {
+        pub const NESTED_N: i32 = 16;
+        pub const NESTED_V: f32 = 2.5;
+    }
+
+    /// This module's consts, though its caller imports another `SCALE`
+    /// and defines another `OFFSET`.
+    pub fn scale_tile() -> Tile<f32, { [32] }> {
+        constant(SCALE, const_shape![32]) + constant(OFFSET, const_shape![32])
+    }
+}
+
+#[cutile::module]
+mod plain_imports {
+    use super::lib_decls::*;
+    use super::loaded_consts::{scale_tile, FILL as LOADED_FILL, SCALE as LOADED_SCALE};
+    use crate::host_consts::{FILL, SCALE};
+    use cutile::core::*;
+
+    const OFFSET: f32 = 9.0;
+
+    #[cutile::entry()]
+    fn scalar(out: &mut Tensor<f32, { [32] }>) {
+        let t: Tile<f32, { [32] }> = broadcast_scalar(SCALE, out.shape());
+        out.store(t);
+    }
+
+    #[cutile::entry()]
+    fn string_local(a: &mut Tensor<f64, { [1, 16, 16] }>) {
+        let fill = FILL;
+        let (factor, _) = unsafe { cholesky::<1, 16, f64>("potrf", fill, a.load()) };
+        a.store(factor);
+    }
+
+    #[cutile::entry()]
+    fn string_argument(a: &mut Tensor<f64, { [1, 16, 16] }>) {
+        let (factor, _) = unsafe { cholesky::<1, 16, f64>("potrf", FILL, a.load()) };
+        a.store(factor);
+    }
+
+    #[cutile::entry()]
+    fn loaded(out: &mut Tensor<f32, { [32] }>, a: &mut Tensor<f64, { [1, 16, 16] }>) {
+        let t: Tile<f32, { [32] }> = broadcast_scalar(LOADED_SCALE, out.shape());
+        let offset: Tile<f32, { [32] }> = broadcast_scalar(OFFSET, out.shape());
+        out.store(t + offset + scale_tile());
+        let fill = LOADED_FILL;
+        let (f1, _) = unsafe { cholesky::<1, 16, f64>("potrf", fill, a.load()) };
+        let (f2, _) = unsafe { cholesky::<1, 16, f64>("potrf", LOADED_FILL, f1) };
+        a.store(f2);
+    }
+}
+
+fn compile_plain_imports(entry: &str) -> Result<String, String> {
+    KernelCompiler::new(plain_imports::__module_ast_self, "plain_imports", entry)
+        .strides(&[("out", &[1]), ("a", &[256, 16, 1])])
+        .target("sm_80")
+        .bytecode_version(BytecodeVersion::V13_5)
+        .compile()
+        .map(|artifacts| artifacts.ir_text())
+        .map_err(|e| e.to_string())
+}
+
+/// A const imported from a module the JIT has not loaded is an error that
+/// names the import, never the same-named const of a loaded module (which
+/// silently turned `7.5` into `3.25` and "upper" into "lower"). A const
+/// imported from a loaded module still resolves, and a helper's dense
+/// constants use its own module's consts, not the kernel's `OFFSET`.
+#[test]
+fn consts_imported_from_unloaded_modules_are_errors() {
+    common::with_test_stack(|| {
+        for (entry, name) in [
+            ("scalar", "SCALE"),
+            ("string_local", "FILL"),
+            ("string_argument", "FILL"),
+        ] {
+            let message = compile_plain_imports(entry).expect_err(entry);
+            assert!(
+                message.contains(&format!("`host_consts::{name}`"))
+                    && message.contains("consts of loaded `#[cutile::module]` modules"),
+                "{entry}: {message}"
+            );
+        }
+        let ir = compile_plain_imports("loaded").expect("compiles");
+        for constant in [
+            "<f32: 3.25> : tile<f32>",
+            "<f32: 9.0> : tile<f32>",
+            "<f32: 3.25> : tile<32xf32>",
+            "<f32: 0.5> : tile<32xf32>",
+        ] {
+            assert!(ir.contains(&format!("constant {constant}")), "{ir}");
+        }
+        let calls = call_lines(&ir, "cholesky");
+        assert_eq!(calls.len(), 2, "{ir}");
+        assert!(
+            calls
+                .iter()
+                .all(|l| l.contains(r#"<["potrf", "lower", 1, 16, f64]>"#)),
+            "{ir}"
+        );
+    });
+}
+
+/// The crate root's `SCALE`, which `use super::SCALE` names from a module
+/// at the crate root.
+pub const SCALE: f32 = 7.5;
+
+#[cutile::module]
+mod parent_import {
+    #[allow(unused_imports)]
+    use super::loaded_consts::*;
+    use super::SCALE;
+    use cutile::core::*;
+
+    #[cutile::entry()]
+    fn scalar(out: &mut Tensor<f32, { [32] }>) {
+        let t: Tile<f32, { [32] }> = broadcast_scalar(SCALE, out.shape());
+        out.store(t);
+    }
+}
+
+#[cutile::module]
+mod path_imports {
+    use super::loaded_consts::scale_tile;
+    use cutile::core::*;
+
+    #[cutile::entry()]
+    fn by_crate(out: &mut Tensor<f32, { [32] }>) {
+        let t: Tile<f32, { [32] }> = broadcast_scalar(crate::host_consts::SCALE, out.shape());
+        out.store(t + scale_tile());
+    }
+
+    #[cutile::entry()]
+    fn by_super(out: &mut Tensor<f32, { [32] }>) {
+        let t: Tile<f32, { [32] }> = broadcast_scalar(super::host_consts::SCALE, out.shape());
+        out.store(t + scale_tile());
+    }
+}
+
+#[cutile::module]
+mod nested_named_imports {
+    use super::loaded_consts::inner::{NESTED_N, NESTED_V};
+    use cutile::core::*;
+
+    #[cutile::entry()]
+    fn nested(out: &mut Tensor<f32, { [NESTED_N] }>) {
+        let t: Tile<f32, { [NESTED_N] }> = broadcast_scalar(NESTED_V, out.shape());
+        out.store(t);
+    }
+}
+
+#[cutile::module]
+mod nested_glob_imports {
+    use super::loaded_consts::inner::*;
+    use cutile::core::*;
+
+    #[cutile::entry()]
+    fn nested(out: &mut Tensor<f32, { [NESTED_N] }>) {
+        let t: Tile<f32, { [NESTED_N] }> = broadcast_scalar(NESTED_V, out.shape());
+        out.store(t);
+    }
+}
+
+#[cutile::module]
+mod sized_lib {
+    use cutile::core::*;
+
+    pub const LN: i32 = 8;
+    pub const LV: f32 = 1.5;
+
+    pub fn make() -> Tile<f32, { [LN] }> {
+        constant(LV, const_shape![LN])
+    }
+
+    pub struct Maker {}
+
+    impl Maker {
+        pub fn make(&self) -> Tile<f32, { [LN] }> {
+            constant(LV, const_shape![LN])
+        }
+
+        /// The generic `LN` shadows the module's.
+        pub fn make_sized<const LN: i32>(&self) -> Tile<f32, { [LN] }> {
+            constant(LV, const_shape![LN])
+        }
+    }
+}
+
+/// A glob of the crate root, which the JIT has not loaded, and a const
+/// named like the helper's.
+#[cutile::module]
+mod sized_caller {
+    use super::sized_lib;
+    #[allow(unused_imports)]
+    use super::*;
+    use cutile::core::*;
+
+    #[allow(dead_code)]
+    const LN: i32 = 16;
+
+    #[cutile::entry()]
+    fn call(out: &mut Tensor<f32, { [8] }>) {
+        let t = sized_lib::make();
+        out.store(t);
+    }
+
+    #[cutile::entry()]
+    fn method(out: &mut Tensor<f32, { [8] }>) {
+        let maker = sized_lib::Maker {};
+        let t = maker.make();
+        out.store(t);
+    }
+
+    #[cutile::entry()]
+    fn generic_method(out: &mut Tensor<f32, { [4] }>) {
+        let maker = sized_lib::Maker {};
+        let t = maker.make_sized::<4>();
+        out.store(t);
+    }
+}
+
+/// Aliases of a loaded module, and the kernel's own nested `mod`.
+#[cutile::module]
+mod alias_paths {
+    use super::loaded_consts as lc;
+    use cutile::core::*;
+
+    mod local {
+        pub const LOCAL_V: f32 = 4.25;
+    }
+
+    #[cutile::entry()]
+    fn by_alias(out: &mut Tensor<f32, { [32] }>) {
+        let t: Tile<f32, { [32] }> = broadcast_scalar(lc::SCALE, out.shape());
+        out.store(t);
+    }
+
+    #[cutile::entry()]
+    fn by_alias_nested(out: &mut Tensor<f32, { [32] }>) {
+        let t: Tile<f32, { [32] }> = broadcast_scalar(lc::inner::NESTED_V, out.shape());
+        out.store(t);
+    }
+
+    #[cutile::entry()]
+    fn by_own_nested(out: &mut Tensor<f32, { [32] }>) {
+        let t: Tile<f32, { [32] }> = broadcast_scalar(local::LOCAL_V, out.shape());
+        out.store(t);
+    }
+}
+
+/// A plain module named like the loaded `loaded_consts`, which
+/// `same_named_plain` also loads.
+pub mod host_outer {
+    pub mod loaded_consts {
+        pub const SCALE: f32 = 7.5;
+    }
+}
+
+#[cutile::module]
+mod same_named_plain {
+    use super::loaded_consts::scale_tile;
+    use crate::host_outer::loaded_consts::SCALE;
+    use cutile::core::*;
+
+    #[cutile::entry()]
+    fn by_use(out: &mut Tensor<f32, { [32] }>) {
+        let t: Tile<f32, { [32] }> = broadcast_scalar(SCALE, out.shape());
+        out.store(t + scale_tile());
+    }
+
+    #[cutile::entry()]
+    fn by_path(out: &mut Tensor<f32, { [32] }>) {
+        let t: Tile<f32, { [32] }> =
+            broadcast_scalar(crate::host_outer::loaded_consts::SCALE, out.shape());
+        out.store(t + scale_tile());
+    }
+}
+
+fn compile_module<F: Fn() -> cutile::cutile_compiler::ast::Module>(
+    ast: F,
+    module: &str,
+    entry: &str,
+) -> Result<String, String> {
+    KernelCompiler::new(ast, module, entry)
+        .strides(&[("out", &[1])])
+        .target("sm_80")
+        .bytecode_version(BytecodeVersion::V13_5)
+        .compile()
+        .map(|artifacts| artifacts.ir_text())
+        .map_err(|e| e.to_string())
+}
+
+/// A `use super::X` outside a nested `mod` names the parent's `X`, not a
+/// loaded module's glob; a path through a plain module (`crate::host::X`)
+/// names that module's `X`: both are errors that name the module, never a
+/// loaded module's same-named const. A const of a `mod` nested in a loaded
+/// module resolves, by name or glob, and so does a path through an alias of
+/// a loaded module or through the kernel's own nested `mod`. A plain module
+/// whose name a loaded module shares is still a plain module. A helper's or
+/// a method's signature reads its own consts even when the caller globs an
+/// unloaded module and defines a const of the same name, except where a
+/// generic parameter shadows one.
+#[test]
+fn consts_named_through_unloaded_modules_are_errors() {
+    common::with_test_stack(|| {
+        let message = compile_module(parent_import::__module_ast_self, "parent_import", "scalar")
+            .expect_err("use super::SCALE");
+        assert!(
+            message.contains("`super::SCALE`")
+                && message.contains("consts of loaded `#[cutile::module]` modules"),
+            "{message}"
+        );
+        for entry in ["by_crate", "by_super"] {
+            let message = compile_module(path_imports::__module_ast_self, "path_imports", entry)
+                .expect_err(entry);
+            assert!(
+                message.contains("through `host_consts`, which is not a `#[cutile::module]`"),
+                "{entry}: {message}"
+            );
+        }
+        for ir in [
+            compile_module(
+                nested_named_imports::__module_ast_self,
+                "nested_named_imports",
+                "nested",
+            ),
+            compile_module(
+                nested_glob_imports::__module_ast_self,
+                "nested_glob_imports",
+                "nested",
+            ),
+        ] {
+            let ir = ir.expect("compiles");
+            assert!(ir.contains("constant <f32: 2.5> : tile<f32>"), "{ir}");
+            assert!(ir.contains("tile<16xf32>"), "{ir}");
+        }
+        for entry in ["call", "method"] {
+            let ir = compile_module(sized_caller::__module_ast_self, "sized_caller", entry)
+                .expect(entry);
+            assert!(
+                ir.contains("constant <f32: 1.5> : tile<8xf32>"),
+                "{entry}: {ir}"
+            );
+            assert!(!ir.contains("16xf32"), "{entry}: {ir}");
+        }
+        let ir = compile_module(
+            sized_caller::__module_ast_self,
+            "sized_caller",
+            "generic_method",
+        )
+        .expect("generic_method");
+        assert!(ir.contains("constant <f32: 1.5> : tile<4xf32>"), "{ir}");
+        for (entry, constant) in [
+            ("by_alias", "<f32: 3.25>"),
+            ("by_alias_nested", "<f32: 2.5>"),
+            ("by_own_nested", "<f32: 4.25>"),
+        ] {
+            let ir =
+                compile_module(alias_paths::__module_ast_self, "alias_paths", entry).expect(entry);
+            assert!(
+                ir.contains(&format!("constant {constant} : tile<f32>")),
+                "{entry}: {ir}"
+            );
+        }
+        for (entry, expected) in [
+            ("by_use", "`loaded_consts::SCALE`"),
+            (
+                "by_path",
+                "through `loaded_consts`, which is not a `#[cutile::module]`",
+            ),
+        ] {
+            let message = compile_module(
+                same_named_plain::__module_ast_self,
+                "same_named_plain",
+                entry,
+            )
+            .expect_err(entry);
+            assert!(message.contains(expected), "{entry}: {message}");
+        }
+    });
+}

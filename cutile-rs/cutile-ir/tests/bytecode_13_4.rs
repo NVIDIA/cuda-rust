@@ -188,8 +188,7 @@ fn rejects_invalid_shapes_allocations_and_power_exponents_before_assembly() {
         .contains("exponent"));
 }
 
-#[test]
-fn worker_hint_range_tracks_the_selected_dialect() {
+fn kernel_with_worker_warps(n: i64) -> Module {
     let mut module = kernel(&[], |_, _, _| {});
     let entry = module.functions[0];
     module.op_mut(entry).attributes.push((
@@ -197,10 +196,16 @@ fn worker_hint_range_tracks_the_selected_dialect() {
         Attribute::OptimizationHints(OptimizationHints {
             entries: vec![(
                 "sm_120".into(),
-                vec![("num_worker_warps_per_cta".into(), Attribute::i32(16))],
+                vec![("num_worker_warps_per_cta".into(), Attribute::i32(n))],
             )],
         }),
     ));
+    module
+}
+
+#[test]
+fn worker_hint_range_tracks_the_selected_dialect() {
+    let module = kernel_with_worker_warps(16);
     TargetCapabilities::new(BytecodeVersion::V13_3, "sm_120")
         .validate_module(&module)
         .unwrap();
@@ -209,7 +214,13 @@ fn worker_hint_range_tracks_the_selected_dialect() {
         .unwrap_err()
         .to_string()
         .contains("num_worker_warps_per_cta"));
-    TargetCapabilities::new(BytecodeVersion::V13_5, "sm_120")
-        .validate_module(&module)
-        .unwrap();
+    // 13.5 accepts every power of two in [1, 32] again.
+    for n in [1, 2, 4, 8, 16, 32] {
+        TargetCapabilities::new(BytecodeVersion::V13_5, "sm_120")
+            .validate_module(&kernel_with_worker_warps(n))
+            .unwrap();
+    }
+    assert!(TargetCapabilities::new(BytecodeVersion::V13_5, "sm_120")
+        .validate_module(&kernel_with_worker_warps(3))
+        .is_err());
 }

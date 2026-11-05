@@ -10,8 +10,8 @@ use crate::ast::SourceLocation;
 use crate::error::{JITError, SpannedJITError};
 use crate::syn_utils::{
     get_call_expression_generics, get_ident_from_path_expr, get_ident_generic_args, get_sig_types,
-    get_supported_generic_params, get_type_ident, maybe_generic_args, strip_generic_args_lifetimes,
-    CGAParameter, VarCGAParameter,
+    get_supported_generic_params, get_type_ident, get_type_str, maybe_generic_args,
+    strip_generic_args_lifetimes, CGAParameter, VarCGAParameter,
 };
 use crate::types::{
     get_ptr_type, get_ptr_type_instance, is_element_type, is_element_type_ptr,
@@ -296,10 +296,14 @@ impl GenericVars {
         })
     }
     /// Constructs a `GenericVars` by matching explicit generic arguments to parameter declarations.
+    ///
+    /// `marker_type` is as for
+    /// [`GenericArgInference::apply_provided_generics_fn_call`].
     pub fn from_expr_generic_args(
         &self,
         generics: &Generics,
         expr_generic_args: &Option<AngleBracketedGenericArguments>,
+        marker_type: &dyn Fn(&Type) -> Option<String>,
     ) -> Result<Self, JITError> {
         // This is used to initialize generics for inlined functions and methods.
         // self are the generics from the caller scope.
@@ -336,6 +340,12 @@ impl GenericVars {
             let generic_arg = &expr_generic_args.args[i];
             let generic_param = &generics.params[i];
             match (generic_arg, generic_param) {
+                (
+                    GenericArgument::Type(syn::Type::Infer(_)),
+                    GenericParam::Type(_) | GenericParam::Const(_),
+                ) => {
+                    // `_`: the caller infers this parameter from the arguments.
+                }
                 (GenericArgument::Const(const_arg), GenericParam::Const(const_param)) => {
                     // Instantiate a const generic param from a const arg expr.
                     match (&const_arg, &const_param.ty) {
@@ -533,21 +543,22 @@ impl GenericVars {
                     }
                 }
                 (GenericArgument::Type(ty_arg), GenericParam::Type(ty_param)) => {
-                    // Instantiate a type parameter from a type arg.
+                    // Instantiate a type parameter from a type arg: one of the
+                    // caller's type parameters, or a concrete type.
                     let Some(arg_ident_str) = get_type_ident(ty_arg) else {
                         return SourceLocation::unknown().jit_error_result(
                             "unable to extract type identifier from type argument",
                         );
                     };
                     let name = ty_param.ident.to_string();
-                    let Some(inst) = self.inst_types.get(arg_ident_str.to_string().as_str()) else {
-                        return SourceLocation::unknown().jit_error_result(&format!(
-                            "type `{}` is not a known generic type parameter",
-                            arg_ident_str
-                        ));
+                    let inst = match self.inst_types.get(arg_ident_str.to_string().as_str()) {
+                        Some(inst) => inst.clone(),
+                        None => marker_type(ty_arg)
+                            .or_else(|| get_type_str(ty_arg))
+                            .unwrap_or_else(|| arg_ident_str.to_string()),
                     };
                     ordered_param_vars.push(name.clone());
-                    inst_types.insert(name.clone(), inst.clone());
+                    inst_types.insert(name.clone(), inst);
                 }
                 (_, _) => {
                     return SourceLocation::unknown().jit_error_result(&format!(
@@ -1112,10 +1123,10 @@ impl Instantiable for TypeInstanceStructuredType {
                                             },
                                             Expr::Path(path) => {
                                                 let ident = get_ident_from_path_expr(path);
-                                                match generic_vars.inst_i32.get(ident.to_string().as_str()) {
-                                                    Some(val) => _shape.push(*val),
-                                                    None => panic!("Undefined generic parameter {ident}")
-                                                }
+                                                // A dimension named by a const the callee does
+                                                // not define: give up gracefully, as above, so
+                                                // the caller reports an error.
+                                                _shape.push(*generic_vars.inst_i32.get(ident.to_string().as_str())?);
                                             },
                                             Expr::Index(_) => {
                                                 _shape.push(parse_expr_as_i32(elem, generic_vars));
@@ -1163,10 +1174,8 @@ impl Instantiable for TypeInstanceStructuredType {
                                         },
                                         Expr::Path(path) => {
                                             let ident = get_ident_from_path_expr(path);
-                                            match generic_vars.inst_i32.get(ident.to_string().as_str()) {
-                                                Some(val) => *val,
-                                                None => panic!("Undefined generic parameter {ident}")
-                                            }
+                                            // An undefined const: give up gracefully, as above.
+                                            *generic_vars.inst_i32.get(ident.to_string().as_str())?
                                         },
                                         _ => unimplemented!("Unexpected unary expression {repeat_expr_expr:#?} in {repeat_expr:#?}"),
                                     };

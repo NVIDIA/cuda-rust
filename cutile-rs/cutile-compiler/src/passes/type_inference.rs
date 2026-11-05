@@ -1671,7 +1671,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
         match (lhs, rhs) {
             (InferredTy::Unknown, term) | (term, InferredTy::Unknown) => Ok(term),
             (InferredTy::Known(lhs), InferredTy::Known(rhs)) => {
-                if lhs.rust_ty == rhs.rust_ty {
+                if lhs.is_same_type(&rhs) {
                     Ok(InferredTy::Known(lhs))
                 } else {
                     Ok(InferredTy::Unknown)
@@ -1699,7 +1699,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
         let lhs_value = self.inference.vars[lhs_root.0].value.clone();
         let rhs_value = self.inference.vars[rhs_root.0].value.clone();
         let root_value = match (&lhs_value, &rhs_value) {
-            (Some(lhs), Some(rhs)) if lhs.rust_ty == rhs.rust_ty => Some(lhs.clone()),
+            (Some(lhs), Some(rhs)) if lhs.is_same_type(rhs) => Some(lhs.clone()),
             (Some(lhs), None) if self.var_accepts_type(rhs_root, &lhs.rust_ty) => Some(lhs.clone()),
             (None, Some(rhs)) if self.var_accepts_type(lhs_root, &rhs.rust_ty) => Some(rhs.clone()),
             (None, None) => None,
@@ -2182,7 +2182,10 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
         let Expr::Path(path_expr) = expr else {
             return None;
         };
-        Some(self.compiler.zst_marker_type(&path_expr.path))
+        Some(
+            self.compiler
+                .zst_marker_type(&path_expr.path, self.generic_vars),
+        )
     }
 
     fn infer_tuple(
@@ -2695,7 +2698,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
             .compiler
             .modules
             .name_resolver
-            .resolve_path(&path.path, &self.compiler.module_name);
+            .resolve_path(&path.path, &self.compiler.current_module());
         let Res::Def(DefKind::Static, def_id) = res else {
             return Ok(None);
         };
@@ -2817,7 +2820,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
             .compiler
             .modules
             .name_resolver
-            .resolve_path(&path.path, &self.compiler.module_name);
+            .resolve_path(&path.path, &self.compiler.current_module());
         let Res::Def(DefKind::Const, def_id) = res else {
             return Ok(None);
         };
@@ -2836,7 +2839,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
             .compiler
             .modules
             .name_resolver
-            .resolve_path(&path.path, &self.compiler.module_name);
+            .resolve_path(&path.path, &self.compiler.current_module());
         let Res::Def(DefKind::Static, def_id) = res else {
             return Ok(None);
         };
@@ -3104,6 +3107,7 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
             self_ty,
             self.generic_vars,
             self.compiler.modules.primitives(),
+            &|ty| self.compiler.string_tag_text(ty),
         )?;
         let return_type = self.infer_method_return_type(
             &module_name,
@@ -3121,6 +3125,33 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
             generic_vars: call_generic_vars,
             return_type,
         }))
+    }
+
+    /// `ty`, a callee's signature type, with the consts it names read in
+    /// the callee's module `callee_module`, not the caller's, except where
+    /// one of `generics` (the callee's, and its impl's) shadows a const.
+    fn with_callee_consts<'g>(
+        &self,
+        callee_module: &str,
+        ty: Type,
+        generics: impl Iterator<Item = &'g syn::GenericParam>,
+    ) -> Type {
+        let generic_params: HashSet<String> = generics
+            .filter_map(|param| match param {
+                syn::GenericParam::Const(c) => Some(c.ident.to_string()),
+                syn::GenericParam::Type(t) => Some(t.ident.to_string()),
+                syn::GenericParam::Lifetime(_) => None,
+            })
+            .collect();
+        let consts: HashMap<String, syn::ItemConst> = self
+            .compiler
+            .modules
+            .consts_visible_from(callee_module)
+            .iter()
+            .filter(|(name, _)| !generic_params.contains(*name))
+            .map(|(name, item)| (name.clone(), item.clone()))
+            .collect();
+        crate::type_aliases::normalize_const_paths_in_type(&ty, &consts).unwrap_or(ty)
     }
 
     fn infer_method_return_type(
@@ -3161,6 +3192,15 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
         if !generic_arg_inf.verify() {
             return Ok(None);
         }
+        let return_type = self.with_callee_consts(
+            callee_module,
+            return_type,
+            impl_item
+                .generics
+                .params
+                .iter()
+                .chain(impl_method.sig.generics.params.iter()),
+        );
         let call_output_type = generic_arg_inf.infer_type(&return_type, self.generic_vars);
         if !type_is_resolvable(self.compiler, &call_output_type, self.generic_vars) {
             self.results.insert_resolved_expr_type(
@@ -3228,6 +3268,11 @@ impl<'a, 'm> TypeInferenceCx<'a, 'm> {
         if !generic_arg_inf.verify() {
             return Ok(expected);
         }
+        let return_type = self.with_callee_consts(
+            callee_module,
+            return_type,
+            fn_item.sig.generics.params.iter(),
+        );
         let call_output_type = generic_arg_inf.infer_type(&return_type, self.generic_vars);
         if !type_is_resolvable(self.compiler, &call_output_type, self.generic_vars) {
             return Ok(expected);
@@ -4320,7 +4365,7 @@ fn type_is_resolvable(
 ) -> bool {
     let normalized_ty = compiler
         .modules
-        .normalize_type_aliases_in(ty, Some(&compiler.current_module()))
+        .normalize_type_aliases_in_scope(ty, Some(&compiler.current_module()), Some(generic_vars))
         .unwrap_or_else(|_| ty.clone());
     let ty = &normalized_ty;
     match ty {
@@ -4378,7 +4423,7 @@ fn type_is_fully_known(
 ) -> bool {
     let normalized_ty = compiler
         .modules
-        .normalize_type_aliases_in(ty, Some(&compiler.current_module()))
+        .normalize_type_aliases_in_scope(ty, Some(&compiler.current_module()), Some(generic_vars))
         .unwrap_or_else(|_| ty.clone());
     let ty = &normalized_ty;
     match ty {
@@ -4573,6 +4618,7 @@ pub fn infer_method_generics(
     self_ty: &Type,
     caller_generic_vars: &GenericVars,
     primitives: &HashMap<(String, String), ItemImpl>,
+    marker_type: &dyn Fn(&Type) -> Option<String>,
 ) -> Result<GenericVars, JITError> {
     let generic_arg_inference = GenericArgInference::new_method(impl_item, impl_method);
     if generic_arg_inference.param2arg.is_empty() {
@@ -4588,8 +4634,11 @@ pub fn infer_method_generics(
     let inferred = generic_arg_inference.get_generic_vars_instance(caller_generic_vars, primitives);
 
     if method_call.turbofish.is_some() {
-        let passed = caller_generic_vars
-            .from_expr_generic_args(&impl_method.sig.generics, &method_call.turbofish)?;
+        let passed = caller_generic_vars.from_expr_generic_args(
+            &impl_method.sig.generics,
+            &method_call.turbofish,
+            marker_type,
+        )?;
         inferred.merge(passed)
     } else {
         Ok(inferred)

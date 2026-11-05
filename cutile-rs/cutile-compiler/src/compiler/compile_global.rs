@@ -488,7 +488,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         let res = self
             .modules
             .name_resolver
-            .resolve_path(&path.path, &self.module_name);
+            .resolve_path(&path.path, &self.current_module());
         let Res::Def(DefKind::Static, def_id) = res else {
             return Ok(None);
         };

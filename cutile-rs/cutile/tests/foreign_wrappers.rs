@@ -144,11 +144,47 @@ mod wrappers {
     pub fn fft<X: Fft<A>, A>(data: X, transform_axis: A) -> X {
         data.fft_impl(transform_axis)
     }
+
+    /// A tag whose const generic sets only the size of a result.
+    pub struct Pivots<const R: i32>;
+
+    pub trait Factor<P> {
+        type Out;
+        fn factor_impl(self, pivots: P) -> Self::Out;
+    }
+
+    impl<T: ElementType, const M: i32, const N: i32, const R: i32> Factor<Pivots<R>>
+        for Tile<T, { [M, N] }>
+    {
+        type Out = (Tile<T, { [M, N] }>, Tile<i32, { [R] }>);
+        fn factor_impl(self, _pivots: Pivots<R>) -> (Tile<T, { [M, N] }>, Tile<i32, { [R] }>) {
+            (self, constant(0i32, const_shape![R]))
+        }
+    }
+
+    pub fn factor<A: Factor<P>, P>(a: A, pivots: P) -> A::Out {
+        a.factor_impl(pivots)
+    }
+
+    /// A method called on the tag value itself.
+    pub trait Forward {
+        fn forward<X>(self, x: X) -> X;
+    }
+
+    impl<const R: i32> Forward for Pivots<R> {
+        fn forward<X>(self, x: X) -> X {
+            x
+        }
+    }
+
+    pub fn forward<P: Forward>(x: Tile<f32, { [16] }>, tag: P) -> Tile<f32, { [16] }> {
+        tag.forward(x)
+    }
 }
 
 #[cutile::module]
 mod wrap_kernels {
-    use super::wrappers::{cholesky_factor, fft, Axis, Lower, Upper};
+    use super::wrappers::{cholesky_factor, factor, fft, forward, Axis, Lower, Pivots, Upper};
     use cutile::core::*;
 
     #[cutile::entry()]
@@ -169,6 +205,50 @@ mod wrap_kernels {
         let (factor, status) = cholesky_factor(a.load(), Upper);
         a.store(factor);
         info.store(status);
+    }
+
+    #[cutile::entry()]
+    fn factor_with_pivots<T: ElementType, const M: i32, const N: i32, const R: i32>(
+        a: &mut Tensor<T, { [M, N] }>,
+        pivots: &mut Tensor<i32, { [R] }>,
+    ) {
+        let (f, p) = factor(a.load(), Pivots::<R>);
+        a.store(f);
+        pivots.store(p);
+    }
+
+    /// The impl's `M` and `N` name this entry's `N` and `M`, and its `R` this
+    /// entry's `M`.
+    #[cutile::entry()]
+    fn factor_with_swapped_names<const N: i32, const M: i32>(
+        a: &mut Tensor<f32, { [N, M] }>,
+        pivots: &mut Tensor<i32, { [M] }>,
+    ) {
+        let (f, p) = factor(a.load(), Pivots::<M>);
+        a.store(f);
+        pivots.store(p);
+    }
+
+    #[cutile::entry()]
+    fn factor_with_literal_pivots(
+        a: &mut Tensor<f32, { [8, 4] }>,
+        pivots: &mut Tensor<i32, { [2] }>,
+    ) {
+        let (f, p) = factor(a.load(), Pivots::<2>);
+        a.store(f);
+        pivots.store(p);
+    }
+
+    #[cutile::entry()]
+    fn forward_literal_tag(x: &mut Tensor<f32, { [16] }>) {
+        let t = x.load();
+        x.store(forward(t, Pivots::<2>));
+    }
+
+    #[cutile::entry()]
+    fn forward_caller_tag<const R: i32>(x: &mut Tensor<f32, { [16] }>) {
+        let t = x.load();
+        x.store(forward(t, Pivots::<R>));
     }
 
     #[cutile::entry()]
@@ -290,5 +370,57 @@ fn signals_of_lower_rank_are_promoted_and_the_axis_shifted() {
             let call = call_line(&artifacts.ir_text(), "fft");
             assert!(call.contains(expected), "{entry}: {call}");
         }
+    });
+}
+
+/// Regression: a tag's const generic that appears only in the wrapper's
+/// result type, `factor(a, Pivots::<R>)` returning `Tile<i32, {[R]}>`,
+/// panicked the JIT with "Unexpected arg type Type".
+#[test]
+fn a_tag_const_generic_sizes_the_result() {
+    common::with_test_stack(|| {
+        let artifacts = compile(
+            "factor_with_pivots",
+            vec!["f32".into(), "8".into(), "4".into(), "2".into()],
+            &[("a", &[4, 1]), ("pivots", &[1])],
+        );
+        let ir = artifacts.ir_text();
+        assert!(ir.contains("tile<2xi32>"), "{ir}");
+    });
+}
+
+/// The tag's const generic is matched by value, not by its spelling: a
+/// literal, or a caller const whose name means something else in the impl.
+#[test]
+fn a_tag_const_generic_is_matched_by_value() {
+    common::with_test_stack(|| {
+        let ir = compile(
+            "factor_with_swapped_names",
+            vec!["8".into(), "2".into()],
+            &[("a", &[2, 1]), ("pivots", &[1])],
+        )
+        .ir_text();
+        assert!(
+            ir.contains("tile<8x2xf32>") && ir.contains("tile<2xi32>"),
+            "{ir}"
+        );
+        assert!(!ir.contains("tile<8xi32>"), "{ir}");
+        let ir = compile(
+            "factor_with_literal_pivots",
+            vec![],
+            &[("a", &[4, 1]), ("pivots", &[1])],
+        )
+        .ir_text();
+        assert!(ir.contains("tile<2xi32>"), "{ir}");
+    });
+}
+
+/// A trait method called on a const-generic tag value, `tag.forward(x)` with
+/// `tag = Pivots::<2>`, failed: "unable to resolve generic type `Pivots :: < 2 >`".
+#[test]
+fn a_method_is_called_on_a_const_generic_tag() {
+    common::with_test_stack(|| {
+        compile("forward_literal_tag", vec![], &[("x", &[1])]);
+        compile("forward_caller_tag", vec!["2".into()], &[("x", &[1])]);
     });
 }

@@ -89,24 +89,35 @@ struct TypedDispatchLowering<'a> {
 
 impl VisitMut for TypedDispatchLowering<'_> {
     fn visit_expr_mut(&mut self, expr: &mut Expr) {
+        // Lower this call before its operands. The recorded method call is a
+        // copy of the call's operands as type inference saw them, so it still
+        // holds the operands' original, unlowered calls. Visiting the
+        // operands after the replacement lowers those copies. In
+        // `twice(twice(x))` this gives `x.twice_impl().twice_impl()`, the
+        // same code as the two-statement form `let z = twice(x); twice(z)`.
+        //
+        // Without this, the operands were lowered first and then thrown away
+        // with the replaced call, so the inner `twice(x)` was inlined as an
+        // ordinary generic function. That path binds `X` to the caller's type
+        // text, here `Tile<f32, {[N]}>`, which names the caller's `N` that the
+        // callee does not define: the JIT failed with "unable to resolve
+        // generic type" or panicked with "Undefined generic parameter N".
+        if let Expr::Call(call) = &*expr {
+            if let (Some(call_id), Some(method_call)) = (
+                node_ids::expr_id(expr),
+                self.typeck_results.lowered_method_call(call).cloned(),
+            ) {
+                // The marker attribute leads the lowered expression's tokens,
+                // so it must carry the user's call span: the inline compiler
+                // attributes the whole inlined dispatch body to
+                // `method_call.span()`.
+                let call_span = call.span();
+                let mut lowered = Expr::MethodCall(method_call);
+                node_ids::set_expr_id_spanned(&mut lowered, call_id, call_span);
+                *expr = lowered;
+            }
+        }
         visit_mut::visit_expr_mut(self, expr);
-
-        let Some(call_id) = node_ids::expr_id(expr) else {
-            return;
-        };
-        let Expr::Call(call) = expr else {
-            return;
-        };
-        let Some(method_call) = self.typeck_results.lowered_method_call(call).cloned() else {
-            return;
-        };
-        // The marker attribute leads the lowered expression's tokens, so it
-        // must carry the user's call span: the inline compiler attributes the
-        // whole inlined dispatch body to `method_call.span()`.
-        let call_span = call.span();
-        let mut lowered = Expr::MethodCall(method_call);
-        node_ids::set_expr_id_spanned(&mut lowered, call_id, call_span);
-        *expr = lowered;
     }
 }
 

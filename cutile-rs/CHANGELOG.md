@@ -61,8 +61,19 @@ The cuTile Rust crates move to 0.5.0 for these public API changes:
   13.5 format defines them. A flags varint added for likelihood hints made
   `tileiras` 13.5 reject every kernel with a runtime `if` or a `select`;
   likelihood hints on them are no longer serialized.
+- A call whose operand is another call to a trait-dispatch wrapper, such as
+  `twice(twice(x))`, compiles; it failed to resolve `& X` or panicked the JIT.
+- A generic parameter shadows a module-level const of the same name in the
+  callee's types, as in Rust; the const used to replace it.
 - Calls resolve in the calling module's scope, so a module path names that
   module's function and modules can define functions with the same name.
+- A const imported from, or named through, a module the JIT has not loaded is
+  a compile error; it used to take a same-named const of another module.
+- A const-generic tag such as `Pivots::<R>` selects a generic impl by its
+  value and can size the result; it panicked the JIT or found no impl.
+- A trait method can be called on a const-generic tag value such as `Pivots::<2>`.
+- A device function's turbofish accepts concrete types, tag structs and `_`.
+- In a generic kernel, a binary operator accepts a helper's result and a `{[N]}` tile.
 
 ### Changed
 

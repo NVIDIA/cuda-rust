@@ -176,6 +176,10 @@ struct Import {
     /// The name in `source`; it differs from the local name for
     /// `use a::f as g`.
     original: String,
+    /// Whether `source` is a loaded module. When the prefix names none,
+    /// `source` is only its last segment, which can spell a loaded
+    /// module's short name without being that module.
+    loaded: bool,
     /// The loaded module, and the `mod` path in it, that the whole path
     /// names, when it names one: `use a::m;` imports module `m`.
     module: Option<(String, Vec<String>)>,
@@ -194,8 +198,9 @@ struct ModuleImports {
     top_level_own: HashSet<String>,
     /// Glob imports (`use a::m::*`): the source module, as
     /// [`Import::source`], the path of the `mod` nested in it that the glob
-    /// names (empty for the module itself), and whether the glob is `pub`.
-    globs: Vec<(String, Vec<String>, bool)>,
+    /// names (empty for the module itself), whether the glob is `pub`, and
+    /// whether the source is a loaded module, as [`Import::loaded`].
+    globs: Vec<(String, Vec<String>, bool, bool)>,
     /// Local names that two `use`s, in different nested `mod`s, import from
     /// different places. Nested `mod`s share one scope, so they are errors.
     conflicts: HashSet<String>,
@@ -330,6 +335,17 @@ fn find(mi: &ModuleItems, kind: Option<DefKind>, name: &str) -> Option<(DefKind,
         })
     })
     .find_map(|(found, vis)| Some((found, is_pub(vis?))))
+}
+
+/// The error for `name`, which `use source::item` (`item` is `*` for a
+/// glob) brings in from a module the JIT has no source for.
+fn unloaded_import(name: &str, source: &str, item: &str) -> String {
+    format!(
+        "`{name}` is imported through `{source}::{item}`, but `{source}` is not a \
+         `#[cutile::module]` the cuTile JIT loaded: the JIT can read only the consts of loaded \
+         `#[cutile::module]` modules and of the kernel's own module; define `{name}` in one of \
+         them and import it from there"
+    )
 }
 
 /// Finds a path that starts with `super`, except in `use` items and
@@ -748,23 +764,59 @@ impl NameResolver {
         }
     }
 
+    /// The error for `path`, a path through a module the JIT has not loaded
+    /// (`crate::host::N`) to a name that a loaded module defines as a const:
+    /// Rust binds it to the unloaded module's item, which the JIT cannot
+    /// read. `None` for a path that resolves, whose qualifier reaches a
+    /// loaded module (an alias `lc::inner::N` of one included, see
+    /// [`Self::module_for_path`]), or that names no such const.
+    pub fn unloaded_path_error(&self, path: &syn::Path, calling_module: &str) -> Option<String> {
+        let segments: Vec<String> = path.segments.iter().map(|s| s.ident.to_string()).collect();
+        let (name, qualifier) = segments.split_last()?;
+        if qualifier.is_empty()
+            || (qualifier[0] == "super" && self.super_in_nested_mod(calling_module))
+            || !matches!(self.resolve_path(path, calling_module), Res::Err)
+            || self.module_for_path(qualifier, calling_module).is_some()
+            || self.modules_defining(name, Some(DefKind::Const)).is_empty()
+        {
+            return None;
+        }
+        let source = qualifier
+            .iter()
+            .rev()
+            .find(|s| !matches!(s.as_str(), "crate" | "super" | "self"))
+            .unwrap_or(&qualifier[qualifier.len() - 1]);
+        Some(format!(
+            "`{}` names `{name}` through `{source}`, which is not a `#[cutile::module]` the \
+             cuTile JIT loaded: the JIT can read only the consts of loaded \
+             `#[cutile::module]` modules and of the kernel's own module; define `{name}` in one \
+             of them and name it from there",
+            segments.join("::")
+        ))
+    }
+
     /// Resolve an unqualified name through the scope chain:
     /// local module → imports → core → global fallback. The name is
     /// `Res::Err` when a nested `mod`'s item makes it ambiguous (see
     /// [`Self::nested_item_conflict`]).
     fn resolve_unqualified(&self, name: &str, calling_module: &str) -> Res {
         // 1-2. Local definition, then an import (renames and re-exports
-        // followed).
-        if let Ok(Some(def)) = self.resolve_in_scope(name, calling_module, None) {
-            if self
-                .nested_item_conflict(name, calling_module, None, &def)
-                .is_some()
-            {
-                return Res::Err;
+        // followed). A name the scope cannot resolve, such as one imported
+        // from a module the JIT has not loaded, is no other module's item.
+        match self.resolve_in_scope(name, calling_module, None) {
+            Ok(Some(def)) => {
+                if self
+                    .nested_item_conflict(name, calling_module, None, &def)
+                    .is_some()
+                {
+                    return Res::Err;
+                }
+                if let Some(res) = self.resolve_in_module(&def.name, &def.module) {
+                    return res;
+                }
             }
-            if let Some(res) = self.resolve_in_module(&def.name, &def.module) {
-                return res;
-            }
+            Ok(None) => {}
+            Err(_) => return Res::Err,
         }
 
         // 3. Implicit core import.
@@ -857,31 +909,42 @@ impl NameResolver {
     /// module's `N` replaced the kernel's own `N` in its tile shapes). So is
     /// a name that a nested `mod`'s const and an import or core share (see
     /// `nested_item_conflict`).
-    pub fn resolve_const(&self, name: &str, calling_module: &str) -> Option<&ItemConst> {
+    ///
+    /// A name that the calling module imports, by name or through a glob,
+    /// from a module the JIT has not loaded is an error, not another
+    /// module's const: Rust binds it to an item the JIT cannot read. So is
+    /// an ambiguous import.
+    pub fn resolve_const(
+        &self,
+        name: &str,
+        calling_module: &str,
+    ) -> Result<Option<&ItemConst>, String> {
         let in_module = |module: &str| self.items.get(module).and_then(|mi| mi.consts.get(name));
         let kind = Some(DefKind::Const);
-        if let Ok(Some(def)) = self.resolve_in_scope(name, calling_module, kind) {
+        if let Some(def) = self.resolve_in_scope(name, calling_module, kind)? {
             if self
                 .nested_item_conflict(name, calling_module, kind, &def)
                 .is_some()
             {
-                return None;
+                return Ok(None);
             }
-            return self.get_const(&def);
+            return Ok(self.get_const(&def));
         }
         if let Some(item) = self.core_module.as_deref().and_then(in_module) {
-            return Some(item);
+            return Ok(Some(item));
         }
         let mut definitions = self
             .items
             .values()
             .filter_map(|mi| mi.consts.get(name))
             .peekable();
-        let first = definitions.next()?;
+        let Some(first) = definitions.next() else {
+            return Ok(None);
+        };
         let same_text = |item: &ItemConst| {
             item.to_token_stream().to_string() == first.to_token_stream().to_string()
         };
-        definitions.all(same_text).then_some(first)
+        Ok(definitions.all(same_text).then_some(first))
     }
 
     /// Every constant visible from `module`, by name (see
@@ -899,6 +962,8 @@ impl NameResolver {
             .into_iter()
             .filter_map(|name| {
                 self.resolve_const(name, module)
+                    .ok()
+                    .flatten()
                     .map(|item| (name.to_string(), item.clone()))
             })
             .collect();
@@ -1019,7 +1084,8 @@ impl NameResolver {
     /// imports, followed to the module it names under its original name
     /// (`use a::f as g`), then its glob imports. Only exported imports are
     /// followed when reached through another module's glob. Two globs that bring
-    /// in different items make the name ambiguous, an error.
+    /// in different items make the name ambiguous, an error. So is a function
+    /// or a const that only a `use` of a module the JIT has not loaded brings in.
     fn lookup_scoped(
         &self,
         name: &str,
@@ -1069,20 +1135,26 @@ impl NameResolver {
                  `{module}`, which share one scope in the cuTile JIT; rename one import"
             ));
         }
+        // A const (or, for `kind == None`, any item) that a `use` brings in
+        // from a module the JIT has no source for is that module's item,
+        // never another module's const of the same name: an error.
+        let may_be_const = kind.is_none_or(|kind| kind == DefKind::Const);
         if let Some(import) = module_imports.names.get(name) {
             if via_glob && !module_imports.public_names.contains(name) {
                 return Ok(None);
             }
             let source = import.source.as_str();
-            if let Some(def) = self.lookup_scoped(&import.original, source, kind, false, visited)? {
-                return Ok(Some(def));
-            }
-            // A function imported from a module the JIT has no source for
-            // is not another module's function of the same name.
-            if kind == Some(DefKind::Fn)
-                && !matches!(source, "super" | "crate")
-                && !self.items.contains_key(source)
-            {
+            if import.loaded {
+                if let Some(def) =
+                    self.lookup_scoped(&import.original, source, kind, false, visited)?
+                {
+                    return Ok(Some(def));
+                }
+            } else if may_be_const {
+                return Err(unloaded_import(name, source, &import.original));
+            } else if kind == Some(DefKind::Fn) && !matches!(source, "super" | "crate") {
+                // A function imported from a module the JIT has no source
+                // for is not another module's function of the same name.
                 return Err(format!(
                     "`{name}` is imported from `{source}`, which is not a `#[cutile::module]` \
                      the cuTile JIT loaded; import it from its cuTile module"
@@ -1090,8 +1162,15 @@ impl NameResolver {
             }
         }
         let mut found: Vec<DefId> = Vec::new();
-        for (source, nested, public) in &module_imports.globs {
+        let mut unloaded = None;
+        for (source, nested, public, loaded) in &module_imports.globs {
             if via_glob && !public {
+                continue;
+            }
+            if !loaded {
+                if may_be_const {
+                    unloaded.get_or_insert_with(|| unloaded_import(name, source, "*"));
+                }
                 continue;
             }
             let def = if nested.is_empty() {
@@ -1115,7 +1194,10 @@ impl NameResolver {
                 modules.join(", ")
             ));
         }
-        Ok(found.pop())
+        match (found.pop(), unloaded) {
+            (None, Some(error)) => Err(error),
+            (def, _) => Ok(def),
+        }
     }
 
     /// The `pub` item `name` that the `mod` at `nested` in `module` declares
@@ -1403,7 +1485,10 @@ impl NameResolver {
     /// that is a module name, with the rest a `mod` path in it: only a
     /// module whose short name no other loaded module has is known by it
     /// (see `CUDATileModules::new`), so this never picks one of two modules
-    /// that share a name.
+    /// that share a name. A `crate::`, `self::` or `super::` path from a
+    /// module whose absolute path is known never names a module whose
+    /// absolute path is known by its short name: `crate::host::lib` is not
+    /// the loaded `crate::lib`.
     fn module_named_in_use(
         &self,
         module: &str,
@@ -1411,7 +1496,9 @@ impl NameResolver {
         path: &[String],
     ) -> Option<(String, Vec<String>)> {
         let first = path.first()?;
-        let found = if matches!(first.as_str(), "crate" | "self" | "super") {
+        let relative = matches!(first.as_str(), "crate" | "self" | "super");
+        let resolved = relative && self.module_paths.contains_key(module);
+        let found = if relative {
             let scope: Vec<&str> = std::iter::once(self.module_path(module))
                 .chain(nested.iter().map(String::as_str))
                 .collect();
@@ -1431,6 +1518,7 @@ impl NameResolver {
             path.iter().enumerate().rev().find_map(|(at, segment)| {
                 let nested = &path[at + 1..];
                 (self.items.contains_key(segment)
+                    && !(resolved && self.module_paths.contains_key(segment))
                     && (nested.is_empty() || self.has_nested_mod_path(segment, nested)))
                 .then(|| (segment.clone(), nested.to_vec()))
             })
@@ -1539,14 +1627,14 @@ impl NameResolver {
             UseTree::Glob(_) => {
                 // A glob of the module's own scope (`use super::*` in a
                 // nested `mod`) brings in nothing new.
-                let (source, in_source) = self
-                    .module_named_in_use(module, nested, path_prefix)
-                    .unwrap_or_else(|| {
-                        let last = path_prefix.last().cloned();
-                        (last.unwrap_or_else(|| "crate".into()), Vec::new())
-                    });
-                if !path_prefix.is_empty() && source != module {
-                    imports.globs.push((source, in_source, public));
+                let named = self.module_named_in_use(module, nested, path_prefix);
+                let loaded = named.is_some();
+                let (source, in_source) = named.unwrap_or_else(|| {
+                    let last = path_prefix.last().cloned();
+                    (last.unwrap_or_else(|| "crate".into()), Vec::new())
+                });
+                if !path_prefix.is_empty() && !(loaded && source == module) {
+                    imports.globs.push((source, in_source, public, loaded));
                 }
             }
             UseTree::Group(group) => {
@@ -1571,8 +1659,10 @@ impl NameResolver {
         };
         let mut path = prefix.to_vec();
         path.push(name.to_string());
+        let (source, loaded) = self.use_source(module, nested, prefix);
         Import {
-            source: self.use_source(module, nested, prefix),
+            source,
+            loaded,
             original: name.to_string(),
             module: self.module_named_in_use(module, nested, &path),
         }
@@ -1580,11 +1670,14 @@ impl NameResolver {
 
     /// The loaded module a `use` prefix names (see
     /// [`Self::module_named_in_use`]), or else its last segment (`crate`
-    /// for an empty prefix).
-    fn use_source(&self, module: &str, nested: &[String], prefix: &[String]) -> String {
+    /// for an empty prefix), and whether it is a loaded module.
+    fn use_source(&self, module: &str, nested: &[String], prefix: &[String]) -> (String, bool) {
         match self.module_named_in_use(module, nested, prefix) {
-            Some((source, _)) => source,
-            None => prefix.last().cloned().unwrap_or_else(|| "crate".into()),
+            Some((source, _)) => (source, true),
+            None => (
+                prefix.last().cloned().unwrap_or_else(|| "crate".into()),
+                false,
+            ),
         }
     }
 }
@@ -1783,6 +1876,153 @@ mod tests {
                 ("kernel_mod", original)
             );
         }
+    }
+
+    /// So is a const, whether a `use` names it, renames it, or brings it in
+    /// through a glob, `super` (even over a loaded module's glob) or a
+    /// loaded module's re-export, and so is a path through such a
+    /// module: the loaded `lib::N` never stands in for it. A nested `mod`'s
+    /// `use super::N` still names what the module's globs bring in, a
+    /// const of a `mod` nested in a loaded module resolves, and so does a
+    /// path through an alias of a loaded module (`lc::inner::K`).
+    #[test]
+    fn consts_imported_from_unloaded_modules_are_errors() {
+        let resolver = NameResolver::build(&[
+            make_module(
+                "lib",
+                vec![
+                    parse_quote! { pub const N: i32 = 1; },
+                    parse_quote! { pub use super::plain::M; },
+                    parse_quote! { pub mod inner { pub const K: i32 = 2; } },
+                ],
+            ),
+            make_module("by_name", vec![parse_quote! { use super::plain::N; }]),
+            make_module("renamed", vec![parse_quote! { use super::plain::M as N; }]),
+            make_module("by_glob", vec![parse_quote! { use super::plain::*; }]),
+            make_module("by_super", vec![parse_quote! { use super::N; }]),
+            make_module(
+                "by_super_over_glob",
+                vec![
+                    parse_quote! { use super::lib::*; },
+                    parse_quote! { use super::N; },
+                ],
+            ),
+            make_module(
+                "from_nested_by_name",
+                vec![parse_quote! { use super::lib::inner::K as N; }],
+            ),
+            make_module(
+                "from_nested_by_glob",
+                vec![parse_quote! { use super::lib::inner::*; }],
+            ),
+            make_module("reexported", vec![parse_quote! { use super::lib::M as N; }]),
+            make_module(
+                "nested",
+                vec![
+                    parse_quote! { use super::lib::*; },
+                    parse_quote! { mod inner { use super::N; } },
+                ],
+            ),
+            make_module("alias", vec![parse_quote! { use super::lib as lc; }]),
+        ])
+        .unwrap();
+        for (module, import) in [
+            ("by_name", "plain::N"),
+            ("renamed", "plain::M"),
+            ("by_glob", "plain::*"),
+            ("by_super", "super::N"),
+            ("by_super_over_glob", "super::N"),
+            ("reexported", "plain::M"),
+        ] {
+            let err = resolver.resolve_const("N", module).unwrap_err();
+            assert!(err.contains(&format!("`{import}`")), "{module}: {err}");
+            let res = resolver.resolve_path(&parse_path("N"), module);
+            assert!(matches!(res, Res::Err), "{module}: {res:?}");
+        }
+        let def = resolver.resolve_const("N", "nested").unwrap().unwrap();
+        assert_eq!(crate::type_aliases::const_item_i32_value(def), Some(1));
+        // A `mod` nested in a loaded module is that module's scope.
+        for (module, name) in [("from_nested_by_name", "N"), ("from_nested_by_glob", "K")] {
+            let def = resolver.resolve_const(name, module).unwrap().unwrap();
+            assert_eq!(crate::type_aliases::const_item_i32_value(def), Some(2));
+        }
+        // A path through a module the JIT has not loaded names no loaded item.
+        for path in ["crate::plain::N", "super::plain::N"] {
+            let res = resolver.resolve_path(&parse_path(path), "by_name");
+            assert!(matches!(res, Res::Err), "{path}: {res:?}");
+            let err = resolver
+                .unloaded_path_error(&parse_path(path), "by_name")
+                .unwrap();
+            assert!(err.contains("through `plain`"), "{path}: {err}");
+        }
+        // A path through an alias of a loaded module, or one of its nested
+        // `mod`s, is that module's const.
+        for (path, name) in [("lc::N", "N"), ("lc::inner::K", "K")] {
+            let res = resolver.resolve_path(&parse_path(path), "alias");
+            let Res::Def(DefKind::Const, def) = &res else {
+                panic!("{path}: {res:?}");
+            };
+            assert_eq!((def.module.as_str(), def.name.as_str()), ("lib", name));
+            assert!(resolver
+                .unloaded_path_error(&parse_path(path), "alias")
+                .is_none());
+        }
+    }
+
+    /// With modules at known absolute paths, a `use` of a plain module
+    /// whose last segment spells a loaded module's name
+    /// (`crate::host::lib::N`, not the loaded `app::lib`) is the plain
+    /// module's: an error, never the loaded `lib::N`. So is `crate::N`
+    /// when the crate root is not loaded.
+    #[test]
+    fn plain_modules_named_like_loaded_ones_are_not_them() {
+        let module = |path: &str, items: Vec<Item>| {
+            let (_, ast) = make_module(path.rsplit("::").next().unwrap(), items);
+            (path.rsplit("::").next().unwrap().to_string(), ast)
+        };
+        let asts = [
+            module("app::lib", vec![parse_quote! { pub const N: i32 = 1; }]),
+            module(
+                "app::by_name",
+                vec![parse_quote! { use crate::host::lib::N; }],
+            ),
+            module(
+                "app::by_glob",
+                vec![parse_quote! { use crate::host::lib::*; }],
+            ),
+            module("app::loaded", vec![parse_quote! { use crate::lib::N; }]),
+            module("app::by_crate", vec![parse_quote! { use crate::N; }]),
+        ];
+        let paths = [
+            "app::lib",
+            "app::by_name",
+            "app::by_glob",
+            "app::loaded",
+            "app::by_crate",
+        ]
+        .iter()
+        .map(|path| {
+            (
+                path.rsplit("::").next().unwrap().to_string(),
+                path.to_string(),
+            )
+        })
+        .collect();
+        let resolver = NameResolver::build_with_paths(&asts, paths).unwrap();
+        for (module, import) in [
+            ("by_name", "lib::N"),
+            ("by_glob", "lib::*"),
+            ("by_crate", "crate::N"),
+        ] {
+            let err = resolver.resolve_const("N", module).unwrap_err();
+            assert!(err.contains(&format!("`{import}`")), "{module}: {err}");
+        }
+        let def = resolver.resolve_const("N", "loaded").unwrap().unwrap();
+        assert_eq!(crate::type_aliases::const_item_i32_value(def), Some(1));
+        let path = parse_path("crate::host::lib::N");
+        assert!(matches!(resolver.resolve_path(&path, "by_name"), Res::Err));
+        let err = resolver.unloaded_path_error(&path, "by_name").unwrap();
+        assert!(err.contains("through `lib`"), "{err}");
     }
 
     /// Nested `mod`s share one scope: a name two of them import from
@@ -2004,25 +2244,34 @@ mod tests {
         let value = |item: &ItemConst| crate::type_aliases::const_item_i32_value(item).unwrap();
 
         assert_eq!(
-            value(resolver.resolve_const("N", "kernel_mod").unwrap()),
+            value(resolver.resolve_const("N", "kernel_mod").unwrap().unwrap()),
             128
         );
         assert_eq!(
-            value(resolver.resolve_const("N", "helper_mod").unwrap()),
+            value(resolver.resolve_const("N", "helper_mod").unwrap().unwrap()),
             64
         );
         assert_eq!(
-            value(resolver.resolve_const("N", "importer_mod").unwrap()),
+            value(
+                resolver
+                    .resolve_const("N", "importer_mod")
+                    .unwrap()
+                    .unwrap()
+            ),
             64
         );
         // Neither defined nor imported, and defined differently elsewhere:
         // ambiguous, so unresolved — never "whichever was indexed last".
-        assert!(resolver.resolve_const("N", "bystander_mod").is_none());
+        assert!(resolver
+            .resolve_const("N", "bystander_mod")
+            .unwrap()
+            .is_none());
         // A unique global definition still resolves from anywhere.
         assert_eq!(
             value(
                 resolver
                     .resolve_const("ONLY_HERE", "bystander_mod")
+                    .unwrap()
                     .unwrap()
             ),
             7

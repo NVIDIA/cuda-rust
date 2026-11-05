@@ -143,6 +143,32 @@ impl CUDATileModules {
         ty: &Type,
         module: Option<&str>,
     ) -> Result<Type, JITError> {
+        self.normalize_type_aliases_in_scope(ty, module, None)
+    }
+
+    /// [`Self::normalize_type_aliases_in`] for a type spelled inside a
+    /// function, whose generic parameters are bound in `generic_vars`.
+    ///
+    /// A generic parameter shadows a module const of the same name, as in
+    /// Rust: in `fn f<const N: i32>(x: Tile<f32, { [N] }>)` the `N` is
+    /// `f`'s parameter even when the module, or the kernel's module, has a
+    /// `const N: i32 = 4`. `consts_visible_from` knows nothing of generic
+    /// parameters (and gives every module a const that only one module
+    /// defines), so a const of that name is left out here: the type keeps
+    /// the name, and `generic_vars` resolves it. Without this the const's
+    /// value replaces the parameter in the callee's types, and the call
+    /// fails with a misleading shape error ("parameter `A` expects
+    /// tile<1x16x16xf64>" for an 8x8 argument, or an incompatible reshape).
+    ///
+    /// `generic_vars` also holds the module consts themselves (see
+    /// `add_module_const_vars`); a name it binds to the const's own value is
+    /// not shadowed, and is still replaced as before.
+    pub fn normalize_type_aliases_in_scope(
+        &self,
+        ty: &Type,
+        module: Option<&str>,
+        generic_vars: Option<&GenericVars>,
+    ) -> Result<Type, JITError> {
         let normalize_error = |msg: String| {
             SourceLocation::unknown().jit_error(&format!(
                 "failed to normalize type `{}`: {msg}",
@@ -158,6 +184,22 @@ impl CUDATileModules {
                 &scoped
             }
             None => self.consts(),
+        };
+        let unshadowed;
+        let consts = match generic_vars {
+            Some(generic_vars)
+                if consts
+                    .iter()
+                    .any(|(name, item)| generic_shadows_const(generic_vars, name, item)) =>
+            {
+                unshadowed = consts
+                    .iter()
+                    .filter(|(name, item)| !generic_shadows_const(generic_vars, name, item))
+                    .map(|(name, item)| (name.clone(), item.clone()))
+                    .collect::<HashMap<_, _>>();
+                &unshadowed
+            }
+            _ => consts,
         };
         crate::type_aliases::normalize_const_paths_in_type(&normalized, consts)
             .map_err(normalize_error)
@@ -176,6 +218,23 @@ impl CUDATileModules {
     pub fn unresolved_name_hint(&self, name: &str) -> Option<String> {
         crate::use_classifier::unresolved_name_hint(name, &self.use_catalog)
     }
+}
+
+/// Whether `generic_vars` binds `name` to something other than the module
+/// const `item`: a generic parameter that shadows the const.
+fn generic_shadows_const(generic_vars: &GenericVars, name: &str, item: &ItemConst) -> bool {
+    if generic_vars.var_type(name).is_none() {
+        return false;
+    }
+    let same_i32 = generic_vars
+        .inst_i32
+        .get(name)
+        .is_some_and(|value| Some(*value) == crate::type_aliases::const_item_i32_value(item));
+    let same_bool = generic_vars
+        .inst_bool
+        .get(name)
+        .is_some_and(|value| Some(*value) == crate::type_aliases::const_item_bool_value(item));
+    !(same_i32 || same_bool)
 }
 
 // ---------------------------------------------------------------------------
@@ -699,6 +758,19 @@ fn unify_trait_generic_arg(
     actual_arg: &GenericArgument,
     ctx: &mut TraitMatchCtx,
 ) -> bool {
+    // A const scalar parameter in a type argument, such as `R` in `K<R>`,
+    // parses as a type: bind it to the value (`K::<2>`; a caller's `K::<S>`
+    // reaches here as its value too), not compare its spelling.
+    if let (GenericArgument::Type(Type::Path(pattern_path)), GenericArgument::Const(actual)) =
+        (pattern_arg, actual_arg)
+    {
+        if let (Some(name), Some(actual)) = (pattern_path.path.get_ident(), expr_i32(actual)) {
+            let name = name.to_string();
+            if ctx.const_scalar_params.contains(&name) {
+                return *ctx.const_bindings.entry(name).or_insert(actual) == actual;
+            }
+        }
+    }
     match (pattern_arg, actual_arg) {
         (GenericArgument::Type(pattern_ty), GenericArgument::Type(actual_ty)) => {
             if let Some(param_name) = const_array_param_type_name(pattern_ty, ctx) {
@@ -1302,9 +1374,11 @@ impl CUDATileModules {
         }
 
         let mut trait_candidates = Vec::new();
+        // A receiver that is not a tile-IR type, such as the tag `K::<2>`,
+        // does not instantiate; only a scalar takes `BroadcastScalar`.
         if matches!(
-            generic_vars.instantiate_type(receiver_rust_ty, self.primitives())?,
-            TypeInstance::ElementType(_)
+            generic_vars.instantiate_type(receiver_rust_ty, self.primitives()),
+            Ok(TypeInstance::ElementType(_))
         ) {
             if let Some(impls) = self
                 .name_resolver

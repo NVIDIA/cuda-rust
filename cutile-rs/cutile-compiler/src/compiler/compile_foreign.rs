@@ -220,6 +220,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     .modules
                     .name_resolver
                     .resolve_const(&name, &self.current_module())
+                    .map_err(|message| self.jit_error(&expr.span(), &message))?
                     .ok_or_else(not_constant)?;
                 const_value(item)
             }

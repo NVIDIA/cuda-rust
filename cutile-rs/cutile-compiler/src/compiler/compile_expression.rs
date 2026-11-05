@@ -76,20 +76,47 @@ impl<'m> CUDATileFunctionCompiler<'m> {
     /// Used for static_params like `ftz::Enabled`, `rounding::NearestEven`.
     /// These carry no tile-ir value — they're compile-time constants
     /// consumed by `resolve_static_params` during op compilation.
-    fn make_zst_marker(&self, path_expr: &syn::ExprPath) -> TileRustValue {
-        let ty = self.zst_marker_type(&path_expr.path);
+    fn make_zst_marker(
+        &self,
+        path_expr: &syn::ExprPath,
+        generic_vars: &GenericVars,
+    ) -> TileRustValue {
+        let ty = self.zst_marker_type(&path_expr.path, generic_vars);
         TileRustValue::new_string(Expr::Path(path_expr.clone()), ty)
     }
 
     /// The type of the ZST marker value `path`: the path as written, except
     /// that a string tag is resolved in the current
     /// module and spelled from its defining module (see
-    /// [`crate::compiler::_module::string_tag_path`]).
-    pub(crate) fn zst_marker_type(&self, path: &syn::Path) -> TileRustType {
-        let path = match self.modules.string_tag(path, &self.current_module()) {
+    /// [`crate::compiler::_module::string_tag_path`]), and that an `i32`
+    /// const of the caller, such as `R` in `K::<R>`, is replaced by its
+    /// value: the type leaves the caller's scope, where `R` means something else.
+    pub(crate) fn zst_marker_type(
+        &self,
+        path: &syn::Path,
+        generic_vars: &GenericVars,
+    ) -> TileRustType {
+        let mut path = match self.modules.string_tag(path, &self.current_module()) {
             Some(def) => crate::compiler::_module::string_tag_path(&def),
             None => crate::syn_utils::path_without_node_ids(path),
         };
+        for segment in path.segments.iter_mut() {
+            let syn::PathArguments::AngleBracketed(args) = &mut segment.arguments else {
+                continue;
+            };
+            for arg in args.args.iter_mut() {
+                let syn::GenericArgument::Type(syn::Type::Path(arg_path)) = arg else {
+                    continue;
+                };
+                let Some(name) = arg_path.path.get_ident().map(|i| i.to_string()) else {
+                    continue;
+                };
+                let Some(value) = generic_vars.inst_i32.get(&name) else {
+                    continue;
+                };
+                *arg = syn::GenericArgument::Const(syn::parse_str(&value.to_string()).unwrap());
+            }
+        }
         let path_ty = syn::Type::Path(syn::TypePath { qself: None, path });
         TileRustType::new_string(TypeInstance::UserType(TypeInstanceUserType {
             maybe_generic_ty: path_ty,
@@ -186,7 +213,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 let res = self
                     .modules
                     .name_resolver
-                    .resolve_path(&path.path, &self.module_name);
+                    .resolve_path(&path.path, &self.current_module());
                 if let Res::Def(DefKind::Const, def_id) = res {
                     if self
                         .modules
@@ -3596,7 +3623,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     match res {
                         Res::Def(DefKind::Struct, _) => {
                             // Known DSL struct — return as ZST marker placeholder.
-                            return Ok(Some(self.make_zst_marker(path_expr)));
+                            return Ok(Some(self.make_zst_marker(path_expr, generic_vars)));
                         }
                         Res::Def(DefKind::Const, def_id) => {
                             let Some(const_item) = self.modules.name_resolver.get_const(&def_id)
@@ -3651,10 +3678,25 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                                 "associated const values are not supported in expression position; use a literal or pass supported element constants such as `T::ZERO` directly to a DSL operation that accepts them",
                             );
                         }
-                        return Ok(Some(self.make_zst_marker(path_expr)));
+                        if let Some(message) = self
+                            .modules
+                            .name_resolver
+                            .unloaded_path_error(&path_expr.path, &self.current_module())
+                        {
+                            return self.jit_error_result(&path_expr.span(), &message);
+                        }
+                        return Ok(Some(self.make_zst_marker(path_expr, generic_vars)));
                     }
 
-                    // 4. Single-segment, not a local, not in resolver — error.
+                    // 4. Single-segment, not a local, not in resolver — error,
+                    //    naming the import the JIT cannot follow if there is one.
+                    if let Err(message) = self
+                        .modules
+                        .name_resolver
+                        .resolve_const(&var_name, &self.current_module())
+                    {
+                        return self.jit_error_result(&path_expr.span(), &message);
+                    }
                     let suggestion = self.modules.name_resolver.modules_defining(&var_name, None);
                     if suggestion.is_empty() {
                         self.jit_error_result(

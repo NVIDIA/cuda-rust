@@ -422,6 +422,100 @@ mod basics_and_inlining_module {
         let _neg_suffixed: Tile<f32, S> = constant(-2.5f32, shape);
     }
 
+    // A generic wrapper whose body is one trait-method call. Calling it on
+    // the result of another call, `twice(twice(x))`, needs the inner call's
+    // result type before the outer call's generic `X` can be resolved.
+    pub trait Twice: Sized {
+        fn twice_impl(self) -> Self;
+    }
+
+    impl<const N: i32> Twice for Tile<f32, { [N] }> {
+        fn twice_impl(self) -> Tile<f32, { [N] }> {
+            self + self
+        }
+    }
+
+    pub fn twice<X: Twice>(x: X) -> X {
+        x.twice_impl()
+    }
+
+    pub fn twice_plain<const N: i32>(x: Tile<f32, { [N] }>) -> Tile<f32, { [N] }> {
+        x + x
+    }
+
+    #[cutile::entry]
+    fn nested_generic_call_kernel<const N: i32>(y: &mut Tensor<f32, { [N] }>) {
+        let x = y.load();
+        y.store(twice(twice(x)));
+    }
+
+    #[cutile::entry]
+    fn nested_generic_call_mixed_kernel<const N: i32>(y: &mut Tensor<f32, { [N] }>) {
+        let x = y.load();
+        y.store(twice_plain(twice(twice_plain(x))));
+    }
+
+    // A device function's turbofish may name a concrete element type, a
+    // tag struct, or `_`, not only the caller's own type parameters.
+    pub fn turbofish_ident<const N: i32, T: ElementType>(x: Tile<T, { [N] }>) -> Tile<T, { [N] }> {
+        x
+    }
+
+    // A string tag: the turbofish and the argument must name it alike.
+    pub trait TurbofishTag {
+        const NAME: &'static str;
+    }
+    pub struct TurbofishLower;
+    impl TurbofishTag for TurbofishLower {
+        const NAME: &'static str = "lower";
+    }
+
+    pub fn turbofish_tagged<T: ElementType, J: TurbofishTag>(
+        x: Tile<T, { [16] }>,
+        _j: J,
+    ) -> Tile<T, { [16] }> {
+        x
+    }
+
+    pub struct TurbofishSel;
+    impl TurbofishSel {
+        pub fn sel<J: TurbofishTag>(self, x: Tile<f32, { [16] }>, _j: J) -> Tile<f32, { [16] }> {
+            x
+        }
+    }
+
+    #[cutile::entry]
+    fn device_fn_turbofish_kernel(y: &mut Tensor<f32, { [16] }>) {
+        let t = y.load();
+        let a = turbofish_ident::<16, f32>(t);
+        let b = turbofish_ident::<16, _>(a);
+        let b = turbofish_ident::<_, f32>(b);
+        let c = turbofish_tagged::<f32, TurbofishLower>(b, TurbofishLower);
+        let c = turbofish_tagged::<_, TurbofishLower>(c, TurbofishLower);
+        let c = TurbofishSel.sel::<TurbofishLower>(c, TurbofishLower);
+        y.store(c + c);
+    }
+
+    #[cutile::entry]
+    fn device_fn_turbofish_generic_kernel<const N: i32>(y: &mut Tensor<f32, { [N] }>) {
+        let t = y.load();
+        let a = turbofish_ident::<N, f32>(t);
+        y.store(a + a);
+    }
+
+    // In a generic kernel a helper's result is spelled with the kernel's
+    // values (`{[16]}`) and a declared or loaded tile with its symbols
+    // (`{[N]}`): the two spellings are one type for a binary operator.
+    #[cutile::entry]
+    fn generic_extent_binop_kernel<const N: i32>(y: &mut Tensor<f32, { [N] }>, s: f32) {
+        let a: Tile<f32, { [N] }> = twice_plain(y.load());
+        let b: Tile<f32, { [N] }> = broadcast_scalar(s, const_shape![N]);
+        let c = twice_plain(y.load());
+        let d = y.load();
+        y.store(a * b);
+        y.store(d - c);
+    }
+
     // Distilled from grout's fmha_prefill_causal_mapped: `mma` unifies its
     // shared shape params against a mix of annotation-typed values (symbolic
     // `D`) and op-computed values (substituted `128`). Inline inference must
@@ -587,6 +681,69 @@ fn compile_inlining() {
             &[("y", &[1024, 1, 1])],
         );
         println!("{module_op_str}");
+    });
+}
+
+/// Regression: a generic wrapper call whose argument is another call,
+/// `twice(twice(x))`, failed with "unable to resolve generic type" (or a
+/// JIT panic) while the same calls as two `let` statements compiled.
+#[test]
+fn compile_nested_generic_call() {
+    common::with_test_stack(|| {
+        for kernel in [
+            "nested_generic_call_kernel",
+            "nested_generic_call_mixed_kernel",
+        ] {
+            let module_op_str = compile_ir(kernel, &[16.to_string()], &[("y", &[1])]);
+            assert!(
+                module_op_str.contains("addf"),
+                "Expected the inlined wrappers to emit addf.\n{module_op_str}"
+            );
+        }
+    });
+}
+
+/// Regression: a device function's turbofish with a concrete type
+/// (`ident::<16, f32>`), a tag struct (`tagged::<Lower>`) or `_` failed
+/// with "type `f32` is not a known generic type parameter" (or "unable to
+/// extract type identifier from type argument" for `_`). A string tag
+/// in the turbofish of a call that also infers it (`tagged::<_, Lower>`,
+/// `sel.sel::<Lower>`) must not panic on a differently spelled tag.
+#[test]
+fn compile_device_fn_turbofish_types() {
+    common::with_test_stack(|| {
+        for (kernel, generics) in [
+            ("device_fn_turbofish_kernel", vec![]),
+            ("device_fn_turbofish_generic_kernel", vec![16.to_string()]),
+        ] {
+            let module_op_str = compile_ir(kernel, &generics, &[("y", &[1])]);
+            assert!(
+                module_op_str.contains("addf"),
+                "Expected `{kernel}` to emit addf.\n{module_op_str}"
+            );
+        }
+    });
+}
+
+/// Regression: in a generic kernel, `a * b` with `a` a helper's result
+/// and `b` a declared `Tile<f32, {[N]}>` failed with "binary `Mul`
+/// requires operands of the same type, but got `Tile < f32 , { [16] } >`
+/// and `Tile < f32 , { [N] } >`"; storing `d - c` without annotations
+/// failed with "Failed to determine typeck return type".
+#[test]
+fn compile_generic_extent_binop() {
+    common::with_test_stack(|| {
+        let module_op_str = compile_ir(
+            "generic_extent_binop_kernel",
+            &[16.to_string()],
+            &[("y", &[1])],
+        );
+        for op in ["mulf", "subf"] {
+            assert!(
+                module_op_str.contains(op),
+                "Expected the kernel to emit {op}.\n{module_op_str}"
+            );
+        }
     });
 }
 

@@ -882,7 +882,11 @@ pub mod core {
             get_tensor_shape_meta(self)
         }
 
-        /// The base device address of this tensor view.
+        /// The base device address of this tensor view: its element at index
+        /// zero. For a mutable kernel tensor, whose `load` and `store` reach
+        /// the current tile block's tile, this is still the base of the
+        /// whole view; [`BlockTilePtr::block_tile_ptr`] is the
+        /// address of the block's tile.
         ///
         /// Safe, mirroring `<[T]>::as_ptr`: obtaining the address never
         /// touches memory. Dereferencing it — a gather load, or building a
@@ -2252,6 +2256,24 @@ pub mod core {
     pub fn get_tensor_shape_meta<'s, E: ElementType, const S: [i32; N]>(
         tensor: &Tensor<E, S>,
     ) -> Shape<'s, S> {
+        unreachable!()
+    }
+
+    /// The static extent of `axis` of a shape type, e.g. the tile shape `S`
+    /// a mutable tensor's `load` and `store` reach.
+    #[cuda_tile::variadic_op(N = 6)]
+    #[cuda_tile::compiler_op(name = "tensor_layout")]
+    pub fn get_static_extent<const S: [i32; N]>(shape: Shape<S>, axis: i32) -> i32 {
+        unreachable!()
+    }
+
+    /// The stride of `axis` of a tensor view, in elements.
+    #[cuda_tile::variadic_op(N = 6)]
+    #[cuda_tile::compiler_op(name = "tensor_layout")]
+    pub fn get_tensor_stride<E: ElementType, const S: [i32; N]>(
+        tensor: &Tensor<E, S>,
+        axis: i32,
+    ) -> i32 {
         unreachable!()
     }
 
@@ -4073,6 +4095,89 @@ pub mod core {
         // function just made through `y`'s own view.
         unsafe { set_tensor_access_token(y, new_token) };
         new_token
+    }
+
+    /// The address of the first element of the current tile block's tile of
+    /// `y`: the element `y.load()` returns first. Each axis adds
+    /// `block id × tile extent × stride` to the tensor's base.
+    fn block_tile_ptr_1d<E: ElementType, const S: [i32; 1]>(y: &mut Tensor<E, S>) -> *mut E {
+        let pid: (i32, i32, i32) = get_tile_block_id();
+        let tile_shape: Shape<S> = Shape::<S> { dims: &[] };
+        let offset: i32 = pid.0 * get_static_extent(tile_shape, 0) * get_tensor_stride(y, 0);
+        let base: PointerTile<*mut E, { [] }> = get_tensor_base(y);
+        let tile: PointerTile<*mut E, { [] }> = base.offset(offset);
+        let ptr: *mut E = tile_to_pointer(tile);
+        ptr
+    }
+
+    fn block_tile_ptr_2d<E: ElementType, const S: [i32; 2]>(y: &mut Tensor<E, S>) -> *mut E {
+        let pid: (i32, i32, i32) = get_tile_block_id();
+        let tile_shape: Shape<S> = Shape::<S> { dims: &[] };
+        let offset: i32 = pid.0 * get_static_extent(tile_shape, 0) * get_tensor_stride(y, 0)
+            + pid.1 * get_static_extent(tile_shape, 1) * get_tensor_stride(y, 1);
+        let base: PointerTile<*mut E, { [] }> = get_tensor_base(y);
+        let tile: PointerTile<*mut E, { [] }> = base.offset(offset);
+        let ptr: *mut E = tile_to_pointer(tile);
+        ptr
+    }
+
+    fn block_tile_ptr_3d<E: ElementType, const S: [i32; 3]>(y: &mut Tensor<E, S>) -> *mut E {
+        let pid: (i32, i32, i32) = get_tile_block_id();
+        let tile_shape: Shape<S> = Shape::<S> { dims: &[] };
+        let offset: i32 = pid.0 * get_static_extent(tile_shape, 0) * get_tensor_stride(y, 0)
+            + pid.1 * get_static_extent(tile_shape, 1) * get_tensor_stride(y, 1)
+            + pid.2 * get_static_extent(tile_shape, 2) * get_tensor_stride(y, 2);
+        let base: PointerTile<*mut E, { [] }> = get_tensor_base(y);
+        let tile: PointerTile<*mut E, { [] }> = base.offset(offset);
+        let ptr: *mut E = tile_to_pointer(tile);
+        ptr
+    }
+
+    /// The writable address of a mutable tensor's tile at the current tile
+    /// block, for ranks 1 to 3.
+    pub trait BlockTilePtr {
+        /// `*mut E` for a tensor of `E`.
+        type Ptr;
+
+        /// The address of the first element of this tile block's tile: the
+        /// element [`load`](LoadTileMutAtCurrentBlock::load) returns first,
+        /// and the one [`store`](StoreTileAtCurrentBlock::store) writes
+        /// first. Like `load` and `store`, it is relative to the current tile
+        /// block; [`Tensor::as_ptr`] is the base of the whole view.
+        ///
+        /// Safe, mirroring `<[T]>::as_mut_ptr`: obtaining the address never
+        /// touches memory. Taking `&mut self` keeps the tensor exclusively
+        /// borrowed while the address is derived, as for slices. Writing
+        /// through it — a scatter store, or a foreign call that writes
+        /// through a pointer operand — is `unsafe` and carries the safety
+        /// conditions at those sites. The tile is contiguous only when the
+        /// tensor's innermost stride is 1 and each outer stride spans the
+        /// inner extents.
+        fn block_tile_ptr(&mut self) -> Self::Ptr;
+    }
+
+    impl<E: ElementType, const S: [i32; 1]> BlockTilePtr for Tensor<E, S> {
+        type Ptr = *mut E;
+
+        fn block_tile_ptr(&mut self) -> *mut E {
+            block_tile_ptr_1d(self)
+        }
+    }
+
+    impl<E: ElementType, const S: [i32; 2]> BlockTilePtr for Tensor<E, S> {
+        type Ptr = *mut E;
+
+        fn block_tile_ptr(&mut self) -> *mut E {
+            block_tile_ptr_2d(self)
+        }
+    }
+
+    impl<E: ElementType, const S: [i32; 3]> BlockTilePtr for Tensor<E, S> {
+        type Ptr = *mut E;
+
+        fn block_tile_ptr(&mut self) -> *mut E {
+            block_tile_ptr_3d(self)
+        }
     }
 
     /// Type-level dispatch for `load_tile_mut`.

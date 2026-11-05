@@ -45,4 +45,20 @@ cuda_tile.module @cutile_test_lib {
         {cuda_tile.preview$access = #cuda_tile<preview$access<out>>}
     ) -> ()
     synchronization = #cuda_tile<preview$synchronization<none>>
+  // A pointer operand is a rank-0 local fragment broadcast to every
+  // thread, which the SIMT function receives by value.
+  preview$extern_impl @cutile_test_store_to implements @store_to(
+      %x: preview$fragment<1xf32, local, mem_layout = <(1):(1)>, fragmap = <(1, 32, 1):(0, 1, 0)>>
+        {cuda_tile.preview$access = #cuda_tile<preview$access<in>>},
+      %dst: preview$fragment<ptr<f32>, local, mem_layout = <():()>, fragmap = <(1, 32, ()):(0, 0, ())>>
+        {cuda_tile.preview$access = #cuda_tile<preview$access<in>>}
+    ) -> ()
+    synchronization = #cuda_tile<preview$synchronization<none>>
+  preview$extern_impl @cutile_test_load_from implements @load_from(
+      %src: preview$fragment<ptr<f32>, local, mem_layout = <():()>, fragmap = <(1, 32, ()):(0, 0, ())>>
+        {cuda_tile.preview$access = #cuda_tile<preview$access<in>>},
+      %out: preview$fragment<1xf32, local, mem_layout = <(1):(1)>, fragmap = <(1, 32, 1):(0, 1, 0)>>
+        {cuda_tile.preview$access = #cuda_tile<preview$access<out>>}
+    ) -> ()
+    synchronization = #cuda_tile<preview$synchronization<none>>
 }

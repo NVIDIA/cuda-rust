@@ -58,6 +58,12 @@ mod ordering_kernels {
     #[cutile::foreign]
     pub unsafe fn bump_row(#[inout] x: Tile<f32, { [1, 32] }>) -> Tile<f32, { [1, 32] }>;
 
+    /// # Safety
+    ///
+    /// Matches the library's `fill_through`, which writes 32 `f32` to `dst`.
+    #[cutile::foreign]
+    pub unsafe fn fill_through(dst: *mut f32);
+
     /// A wrapper that takes and returns only tiles: no view or tensor, so no
     /// token, reaches it through its parameters.
     pub fn twice(x: Tile<f32, { [32] }>) -> Tile<f32, { [32] }> {
@@ -180,6 +186,18 @@ mod ordering_kernels {
             u = u + w;
         }
         y.store(u);
+    }
+
+    /// The library writes `y` through a pointer operand: the load that
+    /// follows reads what it wrote, so it is ordered after the call, and the
+    /// call after the store that precedes it.
+    #[cutile::entry()]
+    fn access_around_pointer_call(y: &mut Tensor<f32, { [32] }>) {
+        let t = y.load();
+        y.store(t + t);
+        unsafe { fill_through(y.block_tile_ptr()) };
+        let u = y.load();
+        y.store(u + t);
     }
 
     #[cutile::entry()]
@@ -818,6 +836,11 @@ fn a_store_after_a_call_is_ordered_before_the_next_iterations_call() {
 #[test]
 fn a_load_after_a_call_is_ordered_before_the_next_iterations_call() {
     common::with_test_stack(|| check(&compile("load_after_call"), 3, 1));
+}
+
+#[test]
+fn accesses_around_a_pointer_operand_call_are_ordered_with_it() {
+    common::with_test_stack(|| check(&compile("access_around_pointer_call"), 4, 1));
 }
 
 #[test]

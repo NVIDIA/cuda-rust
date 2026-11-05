@@ -61,6 +61,9 @@ for test_target in \
     element_type_zero_jit \
     error_quality \
     flash_attention_compile \
+    foreign_calls \
+    foreign_ordering \
+    foreign_wrappers \
     global_memory \
     generated_source_locations \
     integer_ops \
@@ -77,6 +80,9 @@ for test_target in \
     span_source_location \
     trait_dispatch_probe \
     tile_ir_capabilities \
+    tile_ir_13_5 \
+    tile_ir_13_5_multicast \
+    tile_ir_13_5_comms \
     token_threading \
     two_cga_trait_impl \
     type_inference_sanity \

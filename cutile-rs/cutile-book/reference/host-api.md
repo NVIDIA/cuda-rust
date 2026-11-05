@@ -258,14 +258,14 @@ let opts = CompileOptions::default()
     .occupancy(4)
     .num_cta_in_cga(2)
     .max_divisibility(16)
-    .num_worker_warps_per_cta(4); // Bytecode 13.3+; use 4 or 8.
+    .num_worker_warps_per_cta(4); // Bytecode 13.3+; 4 or 8 at 13.4.
 
 let result = my_kernel(args).compile_options(opts).grid(grid).await?;
 ```
 
 Tile IR 13.4 restricts `num_worker_warps_per_cta` to 4 or 8. Tile IR 13.3
-accepts powers of two in `[1, 32]` (the assembler clamps to its supported
-worker counts). The JIT checks the selected version's range.
+and 13.5 accept powers of two in `[1, 32]` (the assembler clamps to its
+supported worker counts). The JIT checks the selected version's range.
 
 Different `CompileOptions` values trigger separate JIT compilations and are part of the kernel cache key.
 

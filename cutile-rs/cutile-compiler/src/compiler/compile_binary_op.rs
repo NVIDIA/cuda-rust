@@ -335,7 +335,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         return_type: Option<TileRustType>,
         span: &proc_macro2::Span,
     ) -> Result<TileRustValue, JITError> {
-        if lhs.ty.rust_ty != rhs.ty.rust_ty {
+        if !lhs.ty.is_same_type(&rhs.ty) {
             return self.jit_error_result(
                 span,
                 &format!(

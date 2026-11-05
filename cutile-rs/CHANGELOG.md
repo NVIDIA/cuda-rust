@@ -138,6 +138,11 @@ paths have lower overhead.
 
 ### Added
 
+- Refresh `cutile-kernels` from Grout with split-K prefill/merge, persistent
+  RMSNorm, and the remaining baseline and single-token variants. NVFP4 MoE
+  routing, quantization, FC1/FC2, and finalization kernels now live in the
+  reusable corpus and are shared by the example. Peak performance requires
+  the CUDA Toolkit 13.5 Tile IR assembler (#1746).
 - Raw Tile IR 13.4 operations: `insert`, `fpowi`, `fpowf` (the existing
   `pow` spelling remains), GDC launch/wait tokens, and alias fencing (#298).
 - `f8e5m3fnu`, explicit pointer classification, view `inbounds`, saturating

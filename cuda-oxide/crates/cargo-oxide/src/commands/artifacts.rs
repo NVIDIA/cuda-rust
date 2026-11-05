@@ -111,6 +111,7 @@ pub(super) const GENERATED_ARTIFACT_SUFFIXES: &[&str] = &[
     "ptx.identity",
     "target",
     "options",
+    "kernels",
     "cubin.target",
     // `#[tile_export]` descriptions the backend writes next to the `.ll`
     // (`oxide_tile_export::DESCRIPTIONS_SUFFIX`).

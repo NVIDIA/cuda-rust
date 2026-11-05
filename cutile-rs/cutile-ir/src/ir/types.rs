@@ -111,12 +111,33 @@ pub struct PointerType {
     pub pointee: ScalarType,
 }
 
-/// Public Tile IR 13.4 pointer classifications. Absence is represented by an
+/// Tile IR pointer classifications. Absence is represented by an
 /// unqualified type; explicit `None` remains distinct from absence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum PointerAttribute {
     None = 0,
+    /// Peer-to-peer access through NVLink (Tile IR 13.5).
+    Unicast = 1,
+    /// Multicast access through an NVLink SHARP-capable NVSwitch (Tile IR 13.5).
+    Multicast = 2,
+}
+
+impl PointerAttribute {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Unicast => "unicast",
+            Self::Multicast => "multicast",
+        }
+    }
+
+    pub const fn feature(self) -> crate::requirements::Feature {
+        match self {
+            Self::None => crate::requirements::Feature::PointerAttribute,
+            Self::Unicast | Self::Multicast => crate::requirements::Feature::FabricPointer,
+        }
+    }
 }
 
 /// A statically-shaped tile of elements.
@@ -288,9 +309,16 @@ impl Type {
     /// Returns `None` if the string doesn't match any known type.
     pub fn parse(s: &str) -> Option<Type> {
         let s = s.trim();
-        if s.contains(", #cuda_tile.ptr_attr<none>") {
-            return Self::parse(&s.replace(", #cuda_tile.ptr_attr<none>", ""))
-                .map(|ty| ty.with_pointer_attribute(PointerAttribute::None));
+        for attribute in [
+            PointerAttribute::None,
+            PointerAttribute::Unicast,
+            PointerAttribute::Multicast,
+        ] {
+            let suffix = format!(", #cuda_tile.ptr_attr<{}>", attribute.name());
+            if s.contains(&suffix) {
+                return Self::parse(&s.replace(&suffix, ""))
+                    .map(|ty| ty.with_pointer_attribute(attribute));
+            }
         }
         // Accept both `!cuda_tile.token` and shorthand `token`.
         if s == "!cuda_tile.token" || s == "token" {

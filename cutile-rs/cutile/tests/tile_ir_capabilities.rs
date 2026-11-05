@@ -42,8 +42,12 @@ fn raw_op_metadata_matches_the_requirements_registry() {
                 .find(|op| canonical_name == op.name())
                 .unwrap_or_else(|| panic!("{name} has no registry entry"));
             let requirement = opcode_requirement(*opcode);
-            let since = if metadata.parse_string("pointer_attribute").is_some() {
-                Feature::PointerAttribute.since()
+            let since = if let Some(attribute) = metadata.parse_string("pointer_attribute") {
+                if attribute == "none" {
+                    Feature::PointerAttribute.since()
+                } else {
+                    Feature::FabricPointer.since()
+                }
             } else {
                 requirement.since
             };
@@ -67,6 +71,8 @@ fn raw_op_metadata_matches_the_requirements_registry() {
 
 #[cutile::module]
 mod kernels {
+    use cutile::core::exp_with_rounding as renamed_exp;
+    use cutile::core::lt_tile as less;
     use cutile::core::*;
     use cutile::tileir::*;
 
@@ -99,6 +105,23 @@ mod kernels {
         let value: Tile<f32, { [4] }> = constant(0.0, shape![4]);
         let result = unsafe { exp_with_rounding(value, rounding::NearestAway) };
         output.store(result);
+    }
+
+    /// The same op through a renamed import.
+    #[cutile::entry()]
+    fn invalid_renamed_exp_rounding(output: &mut Tensor<f32, { [4] }>) {
+        let value: Tile<f32, { [4] }> = constant(0.0, shape![4]);
+        let result = unsafe { renamed_exp(value, rounding::NearestAway) };
+        output.store(result);
+    }
+
+    /// A compiler op through a renamed import.
+    #[cutile::entry()]
+    fn renamed_compiler_op(output: &mut Tensor<f32, { [4] }>) {
+        let a: Tile<f32, { [4] }> = constant(1.0, shape![4]);
+        let b: Tile<f32, { [4] }> = constant(2.0, shape![4]);
+        let mask: Tile<bool, { [4] }> = less(a, b);
+        output.store(select(mask, a, b));
     }
 
     #[cutile::entry()]
@@ -459,24 +482,39 @@ fn loop_return_is_versioned_and_does_not_escape_inline_helpers() {
 }
 
 #[test]
+fn compiler_ops_are_recognized_through_renamed_imports() {
+    common::with_test_stack(|| {
+        let artifacts =
+            KernelCompiler::new(kernels::__module_ast_self, "kernels", "renamed_compiler_op")
+                .strides(&[("output", &[1])])
+                .target("sm_120")
+                .bytecode_version(BytecodeVersion::V13_4)
+                .compile()
+                .expect("a renamed `lt_tile` compiles");
+        let ir = artifacts.ir_text();
+        assert!(ir.contains("less_than"), "{ir}");
+    });
+}
+
+#[test]
 fn explicit_math_rounding_does_not_silently_use_the_default() {
     common::with_test_stack(|| {
-        let error = KernelCompiler::new(
-            kernels::__module_ast_self,
-            "kernels",
-            "invalid_exp_rounding",
-        )
-        .strides(&[("output", &[1])])
-        .target("sm_120")
-        .bytecode_version(BytecodeVersion::V13_4)
-        .compile()
-        .err()
-        .expect("invalid explicit rounding must be rejected");
-        assert!(
-            error
-                .to_string()
-                .contains("explicit exp/tanh rounding must be rounding::Approx or rounding::Full"),
-            "{error}"
-        );
+        // The op is recognized by its own name, also when a renamed import
+        // calls it.
+        for entry in ["invalid_exp_rounding", "invalid_renamed_exp_rounding"] {
+            let error = KernelCompiler::new(kernels::__module_ast_self, "kernels", entry)
+                .strides(&[("output", &[1])])
+                .target("sm_120")
+                .bytecode_version(BytecodeVersion::V13_4)
+                .compile()
+                .err()
+                .unwrap_or_else(|| panic!("{entry}: invalid explicit rounding must be rejected"));
+            assert!(
+                error.to_string().contains(
+                    "explicit exp/tanh rounding must be rounding::Approx or rounding::Full"
+                ),
+                "{entry}: {error}"
+            );
+        }
     });
 }

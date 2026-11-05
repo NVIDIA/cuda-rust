@@ -857,7 +857,7 @@ fn check_cross_file_constant_locations(level: DebugInfoLevel, nested: bool) {
             helpers,
             "pub fn generated<const VALUES: [i32; 2], const FLAG: bool>(x: i32) -> i32 {",
         );
-        let indexing = source_line(helpers, "x + VALUES[0] + VALUES[1]");
+        let indexing = source_line(helpers, "(x / VALUES[0]) + VALUES[1]");
         let root = format!("debug_info.rs:{kernel}");
         let fallback = format!("{name}[{kernel}]@debug_info.rs:{kernel} <- {root}");
         let call_site = format!("{name}[{kernel}]@debug_info.rs:{call_line} <- {root}");

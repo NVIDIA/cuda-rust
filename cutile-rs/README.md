@@ -114,10 +114,16 @@ JIT error before assembly.
 | FP4 packing | Tile IR 13.3 and `sm_100+` |
 | Block-scaled MMA | Tile IR 13.3 and `sm_100+`; valid operand/scale configuration |
 | `insert`, `fpowi`, GDC tokens, alias fence | Tile IR 13.4 |
-| Saturating float-to-int, explicit pointer classification, view `inbounds` | Tile IR 13.4 |
+| Saturating float-to-int, `ptr_attr<none>`, load/store view `inbounds` | Tile IR 13.4 |
+| Unicast/multicast pointers and multicast view operations | Tile IR 13.5 and `sm_100` / `sm_103` / `sm_107`; NVLink SHARP-capable fabric |
+| Atomic view `inbounds` | Tile IR 13.5 |
+| TMA data-validity checks | Tile IR 13.5 and `sm_107` only |
+| Condition likelihood hints | Tile IR 13.5 |
+| Minimum CTAs per SM | Tile IR 13.5 |
 | `f8e5m3fnu` | Tile IR 13.4 and `sm_107+` |
 | Scaled MMA with `f8e5m3fnu` scales | Tile IR 13.4 and `sm_107` only |
 | Programmatic dependent launch (unsafe, per launch) | Tile IR 13.4 and `sm_90+`; driver `cuLaunchKernelEx` support |
+| Foreign tile-library calls (`#[cutile::foreign]`, preview) | Tile IR 13.5; a `tileiras` that lists it, run with `--preview=simt` |
 <!-- END TILE IR REQUIREMENTS -->
 
 See the [version/feature matrix](https://nvidia.github.io/cuda-rust/cutile/latest/reference/compatibility.html),
@@ -143,8 +149,8 @@ https://developer.nvidia.com/cuda-downloads
 
 Set `CUDA_TOOLKIT_PATH` (or `CUDA_HOME`, consulted second) to your CUDA 13.3
 install directory for a reproducible setup. If neither is set, cuTile
-searches standard CUDA 13.4/13.3/13.2 install locations such as
-`/usr/local/cuda-13.4`, `/usr/local/cuda-13.3`, `/usr/local/cuda-13.2`, `/usr/local/cuda-13`,
+searches standard CUDA 13.5/13.4/13.3/13.2 install locations such as
+`/usr/local/cuda-13.5`, `/usr/local/cuda-13.4`, `/usr/local/cuda-13.3`, `/usr/local/cuda-13.2`, `/usr/local/cuda-13`,
 `/usr/local/cuda`, and `/opt/cuda`.
 
 `CUTILE_TILEIRAS_PATH` is optional. If set, it overrides the `tileiras` binary

@@ -80,7 +80,7 @@ Unicast/multicast target `sm_100`, `sm_103`, and `sm_107`: unicast needs NVLink;
 multicast additionally needs NVLink SHARP-capable NVSwitch. Callers establish
 mappings and synchronization. TMA `valid_check=true` is `sm_107` only. See the
 [compatibility matrix](https://github.com/NVIDIA/cuda-rust/blob/9dc26c50a8c90026bcd0dfa7dc4b36f189126946/cutile-rs/cutile-book/reference/compatibility.md).
-Validation used Rust 1.98.0; manifests declare Rust 1.89.
+Rust 1.89+ is required; the library builds on 1.89, and runtime validation used 1.98.0.
 
 Source lives in [NVIDIA/cuda-rust](https://github.com/NVIDIA/cuda-rust) under
 `cutile-rs/`; the [book](https://nvidia.github.io/cuda-rust/cutile/) and release tags

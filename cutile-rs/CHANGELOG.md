@@ -43,6 +43,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Add a reusable fused QKV projection, Q/K RMSNorm, FP8 conversion and paged
   KV-scatter kernel, with a correctness example and opt-in CUDA graph benchmark
   sweep. The initial schedule is not B200-tuned (#1746).
+- Foreign functions take global-memory pointer operands: a `*const E` or
+  `*mut E` parameter is a rank-0 `tile<ptr<E>>` operand. `block_tile_ptr` on a
+  mutable tensor gives the address of the current tile block's tile, as
+  `load` and `store` see it (#1749).
 
 ### Documentation
 

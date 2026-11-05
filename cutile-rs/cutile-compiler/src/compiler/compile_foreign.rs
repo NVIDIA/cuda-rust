@@ -151,11 +151,22 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     let ir_ty = ir_ty.clone();
                     Ok((rust_ty, ir_ty))
                 }
+                // `*const E` / `*mut E`: a rank-0 `tile<ptr<E>>`.
+                Some(
+                    ir_ty @ TileIrType::Tile(TileType {
+                        element_type: TileElementType::Pointer(_),
+                        shape,
+                    }),
+                ) if shape.is_empty() => {
+                    let ir_ty = ir_ty.clone();
+                    Ok((rust_ty, ir_ty))
+                }
                 _ => self.jit_error_result(
                     &call.span(),
                     &format!(
-                        "{what} of type `{}` is not a tile or scalar; foreign tile functions \
-                         take and return tiles and scalars only",
+                        "{what} of type `{}` is not a tile, scalar or pointer; foreign tile \
+                         functions take tiles, scalars and pointers, and return tiles and \
+                         scalars",
                         ty.to_token_stream()
                     ),
                 ),
@@ -447,7 +458,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 return self.jit_error_result(
                     &arg_expr.span(),
                     &format!(
-                        "argument `{}` of a foreign call must be a tile or scalar value",
+                        "argument `{}` of a foreign call must be a tile, scalar or pointer value",
                         crate::syn_utils::user_expr_tokens(arg_expr)
                     ),
                 );

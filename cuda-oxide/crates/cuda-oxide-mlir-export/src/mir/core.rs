@@ -1048,11 +1048,9 @@ impl OperationTranslation for CastTranslation {
                 Scalar::Integer { signed: false, .. } => "arith.uitofp",
                 _ => return Err("IntToFloat cast does not have an integer source".into()),
             },
-            MirCastKindAttr::FloatToInt => match source_result_scalar(ctx, source, 0)? {
-                Scalar::Integer { signed: true, .. } => "arith.fptosi",
-                Scalar::Integer { signed: false, .. } => "arith.fptoui",
-                _ => return Err("FloatToInt cast does not have an integer result".into()),
-            },
+            MirCastKindAttr::FloatToInt => {
+                return Ok(vec![saturating_float_to_int(ctx, source, input)?]);
+            }
             MirCastKindAttr::FloatToFloat => {
                 let source_scalar = source_operand_scalar(ctx, source, 0)?;
                 let destination_scalar = source_result_scalar(ctx, source, 0)?;
@@ -1137,6 +1135,44 @@ impl OperationTranslation for CastTranslation {
         };
         Ok(vec![renamed(name, input)?])
     }
+}
+
+/// Translate Rust's `as` float-to-integer cast, which saturates.
+///
+/// Out-of-range values clamp to the integer's MIN/MAX and NaN becomes 0.
+/// `arith.fptosi`/`arith.fptoui` give poison for those inputs, so this calls
+/// the LLVM `fptosi.sat`/`fptoui.sat` intrinsics, matching mir-lower.
+fn saturating_float_to_int(
+    ctx: &Context,
+    source: Ptr<Operation>,
+    input: OperationInput,
+) -> Result<MlirOperation, String> {
+    let Scalar::Float { width: float_width } = source_operand_scalar(ctx, source, 0)? else {
+        return Err("FloatToInt cast does not have a floating-point source".into());
+    };
+    let Scalar::Integer { width, signed } = source_result_scalar(ctx, source, 0)? else {
+        return Err("FloatToInt cast does not have an integer result".into());
+    };
+    if width > 64 {
+        return Err(format!(
+            "FloatToInt: integer destinations wider than 64 bits are not supported on the device, got i{width}"
+        ));
+    }
+    let sign = if signed { "s" } else { "u" };
+    let intrinsic = format!("llvm.fpto{sign}i.sat.i{width}.f{float_width}");
+    let mut target = renamed("llvm.call_intrinsic", input)?;
+    target
+        .properties
+        .insert("intrin".into(), MlirAttribute::String(intrinsic));
+    target.properties.insert(
+        "op_bundle_sizes".into(),
+        MlirAttribute::DenseI32Array(vec![]),
+    );
+    target.properties.insert(
+        "operandSegmentSizes".into(),
+        MlirAttribute::DenseI32Array(vec![1, 0]),
+    );
+    Ok(target)
 }
 
 /// Recover a source MIR pointer's numeric address space before opaque-pointer translation.
@@ -1326,7 +1362,7 @@ mod tests {
                 OperandSegmentInterface, SingleBlockRegionInterface, SymbolOpInterface,
             },
             ops::ModuleOp,
-            types::{FP32Type, FP64Type, FunctionType, IntegerType, Signedness},
+            types::{FP16Type, FP32Type, FP64Type, FunctionType, IntegerType, Signedness},
         },
         context::{Context, Ptr},
         identifier::Identifier,
@@ -1607,6 +1643,70 @@ mod tests {
             text.contains(r#""arith.bitcast"(%v0) : (i32) -> (f32)"#),
             "{text}"
         );
+    }
+
+    /// Build `fn cast(x: from) -> to { x as to }` as a single FloatToInt cast.
+    fn float_to_int_module(ctx: &mut Context, from: TypeHandle, to: TypeHandle) -> ModuleOp {
+        let module = ModuleOp::new(ctx, Identifier::try_from("float_to_int").unwrap());
+        let (_, region) = append_function(ctx, &module, "cast", vec![from], vec![to]);
+        let entry = BasicBlock::new(ctx, None, vec![from]);
+        entry.insert_at_back(region, ctx);
+        let input = entry.deref(ctx).arguments().next().unwrap();
+        let cast = operation::<MirCastOp>(ctx, entry, vec![to], vec![input]);
+        MirCastOp::new(cast).set_attr_cast_kind(ctx, MirCastKindAttr::FloatToInt);
+        let cast_result = cast.deref(ctx).get_result(0);
+        operation::<MirReturnOp>(ctx, entry, vec![], vec![cast_result]);
+        module
+    }
+
+    /// Rust `as` saturates (300.0 as u8 == 255, NaN as i32 == 0), so FloatToInt
+    /// must use the `.sat` intrinsics; plain fptosi/fptoui are poison out of range.
+    #[test]
+    fn float_to_int_casts_saturate_like_rust() {
+        for (float, mir_fp16, int, signedness, expected) in [
+            (32, false, 32, Signedness::Signed, "llvm.fptosi.sat.i32.f32"),
+            (32, false, 8, Signedness::Unsigned, "llvm.fptoui.sat.i8.f32"),
+            (64, false, 64, Signedness::Signed, "llvm.fptosi.sat.i64.f64"),
+            (
+                16,
+                false,
+                16,
+                Signedness::Unsigned,
+                "llvm.fptoui.sat.i16.f16",
+            ),
+            (16, true, 16, Signedness::Signed, "llvm.fptosi.sat.i16.f16"),
+        ] {
+            let mut ctx = context();
+            let from: TypeHandle = match (float, mir_fp16) {
+                (16, true) => dialect_mir::types::MirFP16Type::get(&ctx).into(),
+                (16, false) => FP16Type::get(&ctx).into(),
+                (32, _) => FP32Type::get(&ctx).into(),
+                _ => FP64Type::get(&ctx).into(),
+            };
+            let to = integer(&mut ctx, int, signedness).into();
+            let module = float_to_int_module(&mut ctx, from, to);
+            let text = translate(&mut ctx, &module);
+            assert!(text.contains(r#""llvm.call_intrinsic"(%v0)"#), "{text}");
+            assert!(text.contains(expected), "{expected} missing:\n{text}");
+            assert!(
+                !text.contains("arith.fptosi") && !text.contains("arith.fptoui"),
+                "non-saturating conversion emitted:\n{text}"
+            );
+        }
+    }
+
+    /// Integer destinations wider than 64 bits have no device lowering, as in mir-lower.
+    #[test]
+    fn float_to_int_rejects_destinations_wider_than_64_bits() {
+        for signedness in [Signedness::Signed, Signedness::Unsigned] {
+            let mut ctx = context();
+            let from = FP64Type::get(&ctx).into();
+            let to = integer(&mut ctx, 128, signedness).into();
+            let module = float_to_int_module(&mut ctx, from, to);
+            let profile = CutlassFullCuteMlir22::new("sm_120a").unwrap();
+            let error = format!("{:?}", profile.translate_module(&ctx, &module).unwrap_err());
+            assert!(error.contains("wider than 64 bits"), "{error}");
+        }
     }
 
     /// Check FP16 bit extraction and reconstruction use exact bit-preserving scalar operations.

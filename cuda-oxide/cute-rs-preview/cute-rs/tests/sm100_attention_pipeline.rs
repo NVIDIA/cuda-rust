@@ -6,9 +6,7 @@
 #![doc = "Checks two-CTA barrier-ring addressing, persistent cursors and policy rejection."]
 use core::mem::MaybeUninit;
 use cuda_device::barrier::Barrier;
-use cute_rs::attention::sm100::pipeline::{
-    AsyncCompletion, Consumer, Producer, RingCursor, TwoCtaRing,
-};
+use cute_rs::pipeline::sm100::{AsyncCompletion, Consumer, Producer, RingCursor, TwoCtaRing};
 
 /// Full and empty arrays must be disjoint, and ticket indices must wrap within each array.
 #[test]

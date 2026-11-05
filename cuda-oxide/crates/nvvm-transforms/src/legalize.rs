@@ -55,7 +55,8 @@ const NNEG_ATTR: &str = "llvm_nneg_flag";
 /// and compare-exchange operations with stronger failure ordering are rewritten
 /// to inline PTX instead of weakening scope or ordering. Other atomic and fence
 /// operations return an error instead of being emitted with unverified
-/// semantics.
+/// semantics. Integer `redux.sync`, which LLVM 7 has no intrinsic for, becomes
+/// convergent inline PTX.
 pub(crate) fn legalize_for_legacy_nvvm(
     ctx: &mut Context,
     module: Ptr<Operation>,
@@ -136,6 +137,9 @@ pub(crate) fn legalize_for_legacy_nvvm(
             obsolete_declarations.push(name);
         } else if vote_mode(&name).is_some() {
             rewrite_vote(ctx, op, &name)?;
+            obsolete_declarations.push(name);
+        } else if integer_redux_ptx(&name).is_some() {
+            rewrite_integer_redux(ctx, op, &name)?;
             obsolete_declarations.push(name);
         } else if let Some(legacy_name) = legacy_memory_intrinsic_name(&name) {
             rewrite_renamed_call(ctx, op, &legacy_name)?;
@@ -1203,6 +1207,8 @@ fn validate_rewrite_candidate(ctx: &Context, op: Ptr<Operation>) -> Result<()> {
         validate_shuffle_call(ctx, op, &name)?;
     } else if vote_mode(&name).is_some() {
         validate_vote_call(ctx, op, &name)?;
+    } else if integer_redux_ptx(&name).is_some() {
+        validate_integer_redux_call(ctx, op, &name)?;
     }
     Ok(())
 }
@@ -2011,6 +2017,57 @@ fn rewrite_vote(ctx: &mut Context, op: Ptr<Operation>, name: &str) -> Result<()>
     replace_one_result(ctx, op, result)
 }
 
+/// The PTX instruction for an integer `llvm.nvvm.redux.sync.*` call.
+fn integer_redux_ptx(name: &str) -> Option<&'static str> {
+    match name {
+        "llvm_nvvm_redux_sync_add" => Some("redux.sync.add.s32"),
+        "llvm_nvvm_redux_sync_min" => Some("redux.sync.min.s32"),
+        "llvm_nvvm_redux_sync_max" => Some("redux.sync.max.s32"),
+        "llvm_nvvm_redux_sync_umin" => Some("redux.sync.min.u32"),
+        "llvm_nvvm_redux_sync_umax" => Some("redux.sync.max.u32"),
+        "llvm_nvvm_redux_sync_and" => Some("redux.sync.and.b32"),
+        "llvm_nvvm_redux_sync_or" => Some("redux.sync.or.b32"),
+        "llvm_nvvm_redux_sync_xor" => Some("redux.sync.xor.b32"),
+        _ => None,
+    }
+}
+
+fn validate_integer_redux_call(ctx: &Context, op: Ptr<Operation>, name: &str) -> Result<()> {
+    let operands: Vec<_> = op.deref(ctx).operands().collect();
+    let i32_ty: TypeHandle = IntegerType::get(ctx, 32, Signedness::Signless).into();
+    if operands.len() != 2
+        || op.deref(ctx).get_num_results() != 1
+        || operands
+            .iter()
+            .any(|operand| operand.get_type(ctx) != i32_ty)
+        || op.deref(ctx).get_result(0).get_type(ctx) != i32_ty
+    {
+        return pliron::input_err!(
+            op.deref(ctx).loc(),
+            "{name} must take (i32 value, i32 member mask) and return i32"
+        );
+    }
+    Ok(())
+}
+
+/// Replace an integer `redux.sync` call with the same PTX instruction. The
+/// call's operands are already in PTX order: value, then member mask.
+fn rewrite_integer_redux(ctx: &mut Context, op: Ptr<Operation>, name: &str) -> Result<()> {
+    let opcode = integer_redux_ptx(name).expect("validated redux name");
+    let operands: Vec<_> = op.deref(ctx).operands().collect();
+    let i32_ty: TypeHandle = IntegerType::get(ctx, 32, Signedness::Signless).into();
+    let asm = llvm::InlineAsmOp::build(
+        ctx,
+        i32_ty,
+        operands,
+        &format!("{opcode} $0, $1, $2;"),
+        "=r,r,r",
+        AsmKind::Convergent,
+    );
+    let result = insert_before(ctx, op, asm.get_operation());
+    replace_one_result(ctx, op, result)
+}
+
 fn legacy_memory_intrinsic_name(name: &str) -> Option<String> {
     for stem in ["memcpy", "memmove"] {
         if let Some(rest) = name.strip_prefix(&format!("llvm_{stem}_p")) {
@@ -2148,6 +2205,7 @@ fn verify_legacy_subset(ctx: &Context, module: Ptr<Operation>, capability: u32) 
             || legacy_bit_rewrite(&name).is_some()
             || shuffle_mode(&name).is_some()
             || vote_mode(&name).is_some()
+            || integer_redux_ptx(&name).is_some()
             || legacy_memory_intrinsic_name(&name).is_some()
         {
             return pliron::input_err!(
@@ -2828,6 +2886,67 @@ mod tests {
             2
         );
         module.get_operation().deref(&ctx).verify(&ctx).unwrap();
+    }
+
+    /// LLVM 7 has no `llvm.nvvm.redux.sync.*`, so legacy libNVVM would leave
+    /// these calls as undefined external functions that ptxas rejects. Each
+    /// becomes its PTX instruction, convergent, with the operands in the
+    /// intrinsic's order: value, then member mask.
+    #[test]
+    fn integer_redux_calls_become_convergent_inline_ptx() {
+        for (name, opcode) in [
+            ("llvm_nvvm_redux_sync_add", "redux.sync.add.s32"),
+            ("llvm_nvvm_redux_sync_min", "redux.sync.min.s32"),
+            ("llvm_nvvm_redux_sync_max", "redux.sync.max.s32"),
+            ("llvm_nvvm_redux_sync_umin", "redux.sync.min.u32"),
+            ("llvm_nvvm_redux_sync_umax", "redux.sync.max.u32"),
+            ("llvm_nvvm_redux_sync_and", "redux.sync.and.b32"),
+            ("llvm_nvvm_redux_sync_or", "redux.sync.or.b32"),
+            ("llvm_nvvm_redux_sync_xor", "redux.sync.xor.b32"),
+        ] {
+            let mut ctx = Context::new();
+            let module = ModuleOp::new(&mut ctx, name.try_into().unwrap());
+            let i32_ty: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Signless).into();
+            direct_intrinsic_call(&mut ctx, &module, name, i32_ty, vec![i32_ty, i32_ty]);
+
+            legalize_for_legacy_nvvm(&mut ctx, module.get_operation(), 80).unwrap();
+
+            module.get_operation().deref(&ctx).verify(&ctx).unwrap();
+            let ir = export_module_to_string_with_config(
+                &ctx,
+                &module,
+                &NvvmExportConfig::new(NvvmIrDialect::LegacyLlvm7),
+            )
+            .expect("legalized redux exports as LLVM 7 NVVM IR");
+            let asm = format!(
+                r#"call i32 asm sideeffect "{opcode} $0, $1, $2;", "=r,r,r"(i32 %v0, i32 %v1) #0"#
+            );
+            assert_eq!(ir.matches(&asm).count(), 1, "missing `{asm}`:\n{ir}");
+            assert!(ir.contains("attributes #0 = { convergent }"), "{ir}");
+            assert!(!ir.contains("llvm.nvvm.redux"), "{ir}");
+        }
+    }
+
+    /// The float forms need sm_100, which uses the modern dialect, so only
+    /// the eight integer calls are rewritten; a malformed one is an error.
+    #[test]
+    fn integer_redux_call_with_a_wrong_signature_is_rejected() {
+        let mut ctx = Context::new();
+        let module = ModuleOp::new(&mut ctx, "redux_i64".try_into().unwrap());
+        let i64_ty: TypeHandle = IntegerType::get(&ctx, 64, Signedness::Signless).into();
+        let i32_ty: TypeHandle = IntegerType::get(&ctx, 32, Signedness::Signless).into();
+        direct_intrinsic_call(
+            &mut ctx,
+            &module,
+            "llvm_nvvm_redux_sync_add",
+            i64_ty,
+            vec![i64_ty, i32_ty],
+        );
+
+        let error = legalize_for_legacy_nvvm(&mut ctx, module.get_operation(), 80).unwrap_err();
+        let text = error.disp(&ctx).to_string();
+        assert!(text.contains("llvm_nvvm_redux_sync_add"), "{text}");
+        assert!(text.contains("return i32"), "{text}");
     }
 
     #[test]

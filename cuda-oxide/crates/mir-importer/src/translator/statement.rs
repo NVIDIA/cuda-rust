@@ -160,8 +160,20 @@ pub fn translate_statement(
                     last_inserted.or(prev_op)
                 };
 
+                if matches!(
+                    rvalue,
+                    mir::Rvalue::Use(mir::Operand::Move(src) | mir::Operand::Copy(src), _)
+                        if src.projection.is_empty()
+                            && value_map.get_direct_value(src.local).is_some()
+                ) {
+                    value_map.set_direct_value(local, result_value);
+                    return Ok(current_prev);
+                }
                 let store_op =
                     value_map.store_local(ctx, local, result_value, block_ptr, current_prev);
+                if let Some(store_op) = store_op {
+                    store_op.deref_mut(ctx).set_loc(loc);
+                }
                 Ok(store_op.or(current_prev))
             } else if place.projection.len() == 1 {
                 match &place.projection[0] {

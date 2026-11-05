@@ -19,12 +19,12 @@ use pliron::{
 
 use super::{
     Result,
-    cfg::{block_reaches, operation_reaches},
+    cfg::{block_reaches, operation_reaches, scope_has_any},
     ghosts::scheduler_semantic_ids,
     invalid,
     provenance::{
-        OrdinaryFacts, poison_missing_forwarding_sources, propagate_ordinary_plumbing,
-        seed_unknown_integer_carriers,
+        CarrierFact, LocalCells, OrdinaryFacts, poison_missing_forwarding_sources,
+        propagate_ordinary_plumbing, seed_unknown_integer_carriers,
     },
 };
 use crate::{
@@ -74,6 +74,12 @@ pub(super) enum SchedulerFact {
     Unknown(#[doc = "Original SSA value lacking semantic provenance."] Value),
 }
 
+impl CarrierFact for SchedulerFact {
+    fn is_opaque(&self) -> bool {
+        matches!(self, Self::Unknown(_))
+    }
+}
+
 /// Require exactly one current-index or stride origin of the requested kind.
 pub(super) fn scheduler_root(
     facts: &OrdinaryFacts<SchedulerFact>,
@@ -105,6 +111,7 @@ pub(super) fn build_scheduler_facts(
     ctx: &Context,
     operations: &[Ptr<Operation>],
 ) -> OrdinaryFacts<SchedulerFact> {
+    let cells = LocalCells::new(ctx, operations);
     let mut facts = OrdinaryFacts::default();
     for operation in operations {
         if Operation::get_opid(*operation, ctx) == CuteSchedulerNew1dOp::get_opid_static() {
@@ -115,7 +122,7 @@ pub(super) fn build_scheduler_facts(
     }
 
     loop {
-        let mut changed = propagate_ordinary_plumbing(ctx, operations, &mut facts);
+        let mut changed = propagate_ordinary_plumbing(ctx, operations, &cells, &mut facts);
         for operation in operations {
             if Operation::get_opid(*operation, ctx) != CuteSchedulerAdvanceOp::get_opid_static() {
                 continue;
@@ -146,9 +153,14 @@ pub(super) fn build_scheduler_facts(
     // itself first, while still poisoning a merge with an arbitrary edge.
     seed_unknown_integer_carriers(ctx, operations, &mut facts, 64, SchedulerFact::Unknown);
     loop {
-        let poisoned =
-            poison_missing_forwarding_sources(ctx, operations, &mut facts, SchedulerFact::Unknown);
-        let propagated = propagate_ordinary_plumbing(ctx, operations, &mut facts);
+        let poisoned = poison_missing_forwarding_sources(
+            ctx,
+            operations,
+            &cells,
+            &mut facts,
+            SchedulerFact::Unknown,
+        );
+        let propagated = propagate_ordinary_plumbing(ctx, operations, &cells, &mut facts);
         if !poisoned && !propagated {
             break;
         }
@@ -198,6 +210,10 @@ fn scheduler_guard(
 /// Check one scheduler's state origins, loop advance, work guard, and coordinate consumers.
 pub(super) fn verify_scheduler_story(ctx: &Context, all_ops: &[Ptr<Operation>]) -> Result {
     let ids = scheduler_semantic_ids();
+    // Facts start only at this family's operations; a scope without one has nothing to check.
+    if !scope_has_any(ctx, all_ops, &ids) {
+        return Ok(());
+    }
     let facts = build_scheduler_facts(ctx, all_ops);
     let mut roots = HashSet::new();
     let mut has_work_roots = HashSet::new();

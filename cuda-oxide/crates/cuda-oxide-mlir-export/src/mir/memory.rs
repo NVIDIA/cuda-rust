@@ -19,8 +19,8 @@ use dialect_mir::{
     ops::{
         MirAllocaOp, MirArrayElementAddrOp, MirAssertOp, MirCallOp, MirCastOp, MirConstructArrayOp,
         MirConstructSliceOp, MirConstructStructOp, MirConstructTupleOp, MirExtractArrayElementOp,
-        MirExtractFieldOp, MirFieldAddrOp, MirLoadOp, MirPtrOffsetOp, MirRefOp, MirStorageDeadOp,
-        MirStorageLiveOp, MirStoreOp,
+        MirExtractFieldOp, MirFieldAddrOp, MirLoadOp, MirNoUnrollHintOp, MirPtrOffsetOp, MirRefOp,
+        MirStorageDeadOp, MirStorageLiveOp, MirStoreOp,
     },
     types::{
         MirArrayType, MirDisjointSliceType, MirEnumType, MirFP16Type, MirPtrType, MirSliceType,
@@ -72,6 +72,7 @@ pub(crate) fn register_mir_memory_pack(
     registry.register_operation::<MirAssertOp>(AssertTranslation)?;
     registry.register_operation::<MirStorageLiveOp>(DropOperation)?;
     registry.register_operation::<MirStorageDeadOp>(DropOperation)?;
+    registry.register_operation::<MirNoUnrollHintOp>(DropOperation)?;
     Ok(())
 }
 
@@ -972,14 +973,30 @@ impl OperationTranslation for CallTranslation {
         // Intrinsic placeholders are compiler operations, never external symbols.
         // Preserve source type checking before dropping the internal callee name.
         use dialect_mir::rust_intrinsics::{
-            CALLEE_MAXNUM_NSZ_F32, CALLEE_SATURATING_ADD, CALLEE_SATURATING_SUB,
-            CALLEE_SELECT_UNPREDICTABLE, PLACEHOLDER_PREFIX,
+            CALLEE_FABS, CALLEE_MAXNUM_NSZ_F32, CALLEE_MINNUM_NSZ_F32, CALLEE_SATURATING_ADD,
+            CALLEE_SATURATING_SUB, CALLEE_SELECT_UNPREDICTABLE, PLACEHOLDER_PREFIX,
         };
         if callee.starts_with(PLACEHOLDER_PREFIX) {
             MirCallOp::new(source)
                 .verify(ctx)
                 .map_err(|e| e.to_string())?;
-            if callee == CALLEE_MAXNUM_NSZ_F32 {
+            if callee == CALLEE_FABS {
+                if input.operands.len() != 1
+                    || input.results.len() != 1
+                    || !matches!(input.operands[0].ty, MlirType::Float(_))
+                    || input.results[0].ty != input.operands[0].ty
+                    || !input.attributes.is_empty()
+                {
+                    return Err(
+                        "fabs requires one float operand and one matching float result".into(),
+                    );
+                }
+                return Ok(vec![renamed("math.absf", input)?]);
+            }
+            if matches!(
+                callee.as_str(),
+                CALLEE_MAXNUM_NSZ_F32 | CALLEE_MINNUM_NSZ_F32
+            ) {
                 let scalar = MlirType::Float(MlirFloatType::F32);
                 if input.operands.len() != 2
                     || input.results.len() != 1
@@ -987,13 +1004,18 @@ impl OperationTranslation for CallTranslation {
                     || input.results[0].ty != scalar
                     || !input.attributes.is_empty()
                 {
-                    return Err("maximum_number_nsz_f32 requires exactly two FP32 operands and one FP32 result".into());
+                    return Err("minnum/maxnum_nsz_f32 requires exactly two FP32 operands and one FP32 result".into());
                 }
-                // Native PTX max.f32 ignores either quiet or signaling NaNs
-                // when the other operand is numeric, preserving Rust's max
+                // Native PTX max.f32 / min.f32 ignores either quiet or signaling NaNs
+                // when the other operand is numeric, preserving Rust's max/min
                 // contract. Do not use llvm.maxnum (different sNaN semantics)
                 // or enable NVVM's NaN-propagation/FTZ/absolute-value modifiers.
-                return Ok(vec![renamed("nvvm.fmax", input)?]);
+                let op_name = if callee == CALLEE_MAXNUM_NSZ_F32 {
+                    "nvvm.fmax"
+                } else {
+                    "nvvm.fmin"
+                };
+                return Ok(vec![renamed(op_name, input)?]);
             }
             if callee == CALLEE_SELECT_UNPREDICTABLE {
                 let supported = match &input.results[0].ty {

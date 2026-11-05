@@ -3,10 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 //! Full-sequence D64 causal sliding attention for the waveform decoder.
-use crate::{model::Batch, operator::Result, rotary::HostTables};
+use crate::{
+    attention_metadata::AttentionShape, model::Batch, operator::Result, rotary::HostTables,
+};
 use ctm_rs::{cuda_module, kernel, launch_contract, memory::DisjointSlice, thread};
-use cuda_core::{CudaStream, simt::LaunchConfig};
-use cute_rs::{BFloat16, attention::AttentionShape};
+use cuda_core::{CudaStream, LaunchConfig};
+use cute_rs::BFloat16;
 use std::sync::Arc;
 
 /// Return the first included key for a causal window ending at `query`.

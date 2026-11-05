@@ -4,7 +4,7 @@
  */
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use cuda_async::device_operation::{value, DeviceOp};
-use cuda_core::Device;
+use cuda_core::Context;
 use cutile::api;
 use cutile::core::f16;
 use cutile::tile_kernel::{PartitionOp, TileKernel};
@@ -91,7 +91,7 @@ fn ocean_gemm(c: &mut Criterion) {
             .measurement_time(Duration::from_millis(2000));
     }
 
-    let device = Device::new(0).expect("Failed to get device.");
+    let device = Context::new(0).expect("Failed to get device.");
     let stream = device.new_stream().expect("Failed to get stream.");
 
     // This is what the ocean benchmark uses.
@@ -135,7 +135,7 @@ fn ocean_gemm(c: &mut Criterion) {
                     .partition([bm, bn])
                     .sync_on(&stream)
                     .expect("Failed.");
-                unsafe { stream.synchronize() }.expect("Failed to synchronize.");
+                stream.synchronize().expect("Failed to synchronize.");
                 let start = Instant::now();
                 for _i in 0..iters {
                     unsafe {
@@ -146,7 +146,7 @@ fn ocean_gemm(c: &mut Criterion) {
                         z = local_z;
                     }
                 }
-                unsafe { stream.synchronize() }.expect("Failed to synchronize.");
+                stream.synchronize().expect("Failed to synchronize.");
                 start.elapsed()
             });
         });

@@ -15,7 +15,7 @@
 
 use std::fmt::Write;
 
-use super::attr::Attribute;
+use super::attr::{Attribute, PreviewConstArg};
 use super::module::{Global, Module};
 use super::types::*;
 use super::value::{BlockId, OpId, RegionId, Value};
@@ -717,6 +717,38 @@ impl<'a> ModulePrinter<'a> {
                 writeln!(out).unwrap();
             }
 
+            // ---- PreviewCall: `@callee<[const_args]>($operands) attr-dict : functional-type` ----
+            Opcode::PreviewCall => {
+                let op = self.module.op(op_id);
+                let callee = find_str_attr(&op.attributes, "callee").unwrap_or("");
+                write!(out, " @{callee}").unwrap();
+                if let Some(Attribute::Array(args)) = find_attr(&op.attributes, "const_args") {
+                    if !args.is_empty() {
+                        let args: Vec<_> = args.iter().map(format_attr).collect();
+                        write!(out, "<[{}]>", args.join(", ")).unwrap();
+                    }
+                }
+                let operands: Vec<_> = op
+                    .operands
+                    .iter()
+                    .map(|v| format!("%{}", v.index()))
+                    .collect();
+                write!(out, "({})", operands.join(", ")).unwrap();
+                self.print_attr_dict(op_id, &["callee", "const_args"], out);
+                let operand_types: Vec<_> = op
+                    .operands
+                    .iter()
+                    .map(|&v| format_type(self.module.value_type(v)))
+                    .collect();
+                let result_types: Vec<_> = op.result_types.iter().map(format_type).collect();
+                write!(out, " : ({}) -> ", operand_types.join(", ")).unwrap();
+                if result_types.len() == 1 {
+                    writeln!(out, "{}", result_types[0]).unwrap();
+                } else {
+                    writeln!(out, "({})", result_types.join(", ")).unwrap();
+                }
+            }
+
             // ---- Assert: `$condition, $message attr-dict : type($condition)` ----
             Opcode::Assert => {
                 let op = self.module.op(op_id);
@@ -1069,6 +1101,36 @@ impl<'a> ModulePrinter<'a> {
                 self.print_reduce_or_scan(op_id, out);
             }
 
+            Opcode::MultimemLoadReduceViewTko
+            | Opcode::MultimemReduceViewTko
+            | Opcode::MultimemStoreViewTko => {
+                for (i, operand) in op.operands.iter().enumerate() {
+                    write!(
+                        out,
+                        "{}%{}",
+                        if i == 0 { " " } else { ", " },
+                        operand.index()
+                    )
+                    .unwrap();
+                }
+                self.print_attr_dict(op_id, &["operandSegmentSizes"], out);
+                write!(out, " : (").unwrap();
+                for (i, operand) in op.operands.iter().enumerate() {
+                    if i != 0 {
+                        write!(out, ", ").unwrap();
+                    }
+                    write!(out, "{}", format_type(self.module.value_type(*operand))).unwrap();
+                }
+                write!(out, ") -> (").unwrap();
+                for (i, ty) in op.result_types.iter().enumerate() {
+                    if i != 0 {
+                        write!(out, ", ").unwrap();
+                    }
+                    write!(out, "{}", format_type(ty)).unwrap();
+                }
+                writeln!(out, ")").unwrap();
+            }
+
             // ---- Global / Module / Entry handled elsewhere ----
             Opcode::Alloca
             | Opcode::AtomicRedViewTko
@@ -1379,7 +1441,7 @@ impl<'a> ModulePrinter<'a> {
         // Operands: [base, dynamic_shape..., dynamic_strides...]
         // The result type tells us the static shape/strides.
         let result_ty = op.result_types.first();
-        let tv = match result_ty {
+        let tv = match result_ty.map(Type::without_pointer_attribute) {
             Some(Type::TensorView(tv)) => Some(tv),
             _ => None,
         };
@@ -2016,11 +2078,14 @@ fn opcode_name(opcode: Opcode) -> &'static str {
 /// Format a tile-ir `Type` as an MLIR type string (shorthand, no `!cuda_tile.` prefix).
 pub fn format_type(ty: &Type) -> String {
     match ty {
-        Type::WithPointerAttribute(base, _) => {
+        Type::WithPointerAttribute(base, attribute) => {
             let mut text = format_type(base);
             if let Some(start) = text.find("ptr<").or_else(|| text.find("tensor_view<")) {
                 if let Some(end) = text[start..].find('>') {
-                    text.insert_str(start + end, ", #cuda_tile.ptr_attr<none>");
+                    text.insert_str(
+                        start + end,
+                        &format!(", #cuda_tile.ptr_attr<{}>", attribute.name()),
+                    );
                 }
             }
             text
@@ -2265,6 +2330,11 @@ fn format_attr(attr: &Attribute) -> String {
             let ub = b.ub.map(|v| v.to_string()).unwrap_or_else(|| "?".into());
             format!("#cuda_tile.bounded<{lb}, {ub}>")
         }
+        Attribute::PreviewConstArg(arg) => match arg {
+            PreviewConstArg::Int(v) => v.to_string(),
+            PreviewConstArg::Str(s) => format!("{s:?}"),
+            PreviewConstArg::Datatype(ty) => format_type(ty),
+        },
     }
 }
 

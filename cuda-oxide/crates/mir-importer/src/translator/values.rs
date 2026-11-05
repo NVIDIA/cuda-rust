@@ -81,7 +81,8 @@ pub struct ValueMap {
     /// [`super::body::translate_body`] from the `__unchecked_indexing_config`
     /// marker and the `CUDA_OXIDE_UNCHECKED_INDEXING` environment switch.
     /// When set, `translate_assert` elides `AssertMessage::BoundsCheck`
-    /// terminators (out-of-bounds indexing becomes UB, like `get_unchecked`).
+    /// terminators and `emit_shared_array_index` skips `SharedArray` bounds
+    /// checks (out-of-bounds indexing becomes UB, like `get_unchecked`).
     unchecked_indexing: bool,
 }
 

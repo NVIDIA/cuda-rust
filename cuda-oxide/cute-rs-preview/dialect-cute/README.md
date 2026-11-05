@@ -19,7 +19,7 @@ alias to the same module, preserving its existing types and functions.
 | Preferred path | Compatibility alias | Contents |
 | --- | --- | --- |
 | `ops::copy` | `copy_ops` | Direct and cooperative copies, raw TMA transport, cache-aware global stores. |
-| `ops::tensor` | `tensor_ops` | Tensor construction, partitioning, selection, and transfers. |
+| `ops::tensor` | `tensor_ops` | Tensor construction, partitioning, selection, transfers, reduced-precision conversions (`BFloat16`, `Float8E4M3FN`, `Float4E2M1FN`), and `RegisterTile` (`TensorSSA`) vector operations (`cute.vector_*`). |
 | `ops::gemv` | `gemv_ops` | Scaled tensor views and block-scaled dot products. |
 | `ops::gemm_tma` | `gemm_tma_ops` | Typed global/shared transport views and GEMM TMA copies. |
 | `ops::mma` | `smem_mma_ops` | Shared tensor overlays, fragments, matrix loads, and tiled GEMM. |
@@ -27,7 +27,7 @@ alias to the same module, preserving its existing types and functions.
 | `ops::pipeline` | `pipeline_ops` | Load-pipeline construction, scalar state, and lifecycle. |
 | `ops::scheduler` | `scheduler_ops` | Persistent work grids, coordinates, and cursor advancement. |
 | `ops::sm100` | `sm100_ops` | Two-CTA tensor-memory MMA, cluster TMA, and pipelines. |
-| `ops::sm100_attention` | `sm100_attention_ops` | Independent SM100 attention MMA and TMA contracts. |
+| `ops::sm100::attention` | `ops::sm100_attention`, `sm100_attention_ops` | Independent SM100 attention MMA and TMA contracts. |
 
 The existing `ops::CuteCopyOp`, `ops::CuteCopyG2SOp`, `ops::CuteAssumeDivOp`,
 `ops::CuteLdmatrixOp`, `ops::CuteTmaLoad2dOp`, and `ops::CuteTmaStore2dOp` imports

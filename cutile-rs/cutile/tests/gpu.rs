@@ -11,6 +11,9 @@ mod common;
 #[path = "gpu/tile_ir_13_4.rs"]
 mod tile_ir_13_4;
 
+#[path = "gpu/static_tilelib.rs"]
+mod static_tilelib;
+
 #[path = "gpu/tensor.rs"]
 mod tensor;
 
@@ -82,6 +85,9 @@ mod borrow_raw_parts;
 
 #[path = "gpu/device_debug.rs"]
 mod device_debug;
+
+#[path = "gpu/jit_env_overrides.rs"]
+mod jit_env_overrides;
 
 // ---------------------------------------------------------------------------
 // Soundness guards: shape/storage invariants, launcher-side validation, and

@@ -17,36 +17,40 @@ use rustc_public::ty::{FloatTy, GenericArgs, RigidTy, Ty, TyKind, UintTy};
 use super::static_config::decode_smem_layout;
 use super::tensor::{canonical_adt_path, exact_schema, type_arg};
 
-/// Exact defining path of `cute_rs::copy::tiled::SharedTensor`; public reexports do not change it.
-const SHARED_TENSOR: &str = "cute_rs::copy::tiled::SharedTensor";
+/// Exact defining path of `cute_rs::atom::tiled::SharedTensor`; public reexports do not change it.
+const SHARED_TENSOR: &str = "cute_rs::atom::tiled::SharedTensor";
 /// Exact defining path of `cute_rs::numeric::Mxf4E2M1`; public reexports do not change it.
 const MXF4_E2M1: &str = "cute_rs::numeric::Mxf4E2M1";
 /// Exact defining path of `cute_rs::numeric::UE8M0x4`; public reexports do not change it.
 const UE8M0_X4: &str = "cute_rs::numeric::UE8M0x4";
-/// Exact defining path of `cute_rs::block_scaled::layouts::Sm120ScaleAtom`; public reexports do not change it.
-const SM120_SCALE_ATOM: &str = "cute_rs::block_scaled::layouts::Sm120ScaleAtom";
-/// Exact defining path of `cute_rs::block_scaled::Mkl`; public reexports do not change it.
-const MKL: &str = "cute_rs::block_scaled::Mkl";
-/// Exact defining path of `cute_rs::block_scaled::Nkl`; public reexports do not change it.
-const NKL: &str = "cute_rs::block_scaled::Nkl";
-/// Exact defining path of `cute_rs::mma::block_scaled::tiled::Mxf4TiledMma`; public reexports do not change it.
-const TILED_MMA: &str = "cute_rs::mma::block_scaled::tiled::Mxf4TiledMma";
-/// Exact defining path of `cute_rs::mma::block_scaled::fragments::Mxf4AccumulatorTile2x8`; public reexports do not change it.
-const ACCUMULATOR: &str = "cute_rs::mma::block_scaled::fragments::Mxf4AccumulatorTile2x8";
-/// Exact defining path of `cute_rs::mma::block_scaled::fragments::Mxf4ScaleTile128`; public reexports do not change it.
-const SCALE_STAGE: &str = "cute_rs::mma::block_scaled::fragments::Mxf4ScaleTile128";
-/// Exact defining path of `cute_rs::mma::block_scaled::fragments::Mxf4ScalePairs128`; public reexports do not change it.
-const SCALE_K64: &str = "cute_rs::mma::block_scaled::fragments::Mxf4ScalePairs128";
-/// Exact defining path of `cute_rs::mma::block_scaled::fragments::Mxf4BTileK64`; public reexports do not change it.
-const B_TILE_K64: &str = "cute_rs::mma::block_scaled::fragments::Mxf4BTileK64";
+/// Exact defining path of `cute_rs::numeric::E4M3x4`; public reexports do not change it.
+const E4M3_X4: &str = "cute_rs::numeric::E4M3x4";
+/// Exact defining path of `cute_rs::utils::blockscaled::layouts::Sm120ScaleAtom`; public reexports do not change it.
+const SM120_SCALE_ATOM: &str = "cute_rs::utils::blockscaled::layouts::Sm120ScaleAtom";
+/// Exact defining path of `cute_rs::utils::blockscaled::Mkl`; public reexports do not change it.
+const MKL: &str = "cute_rs::utils::blockscaled::Mkl";
+/// Exact defining path of `cute_rs::utils::blockscaled::Nkl`; public reexports do not change it.
+const NKL: &str = "cute_rs::utils::blockscaled::Nkl";
+/// Exact defining path of `cute_rs::nvgpu::warp::block_scaled::tiled::Mxf4TiledMma`; public reexports do not change it.
+const TILED_MMA: &str = "cute_rs::nvgpu::warp::block_scaled::tiled::Mxf4TiledMma";
+/// Exact defining path of `cute_rs::nvgpu::warp::block_scaled::fragments::Mxf4AccumulatorTile2x8`; public reexports do not change it.
+const ACCUMULATOR: &str = "cute_rs::nvgpu::warp::block_scaled::fragments::Mxf4AccumulatorTile2x8";
+/// Exact defining path of `cute_rs::nvgpu::warp::block_scaled::fragments::Mxf4ScaleTile128`; public reexports do not change it.
+const SCALE_STAGE: &str = "cute_rs::nvgpu::warp::block_scaled::fragments::Mxf4ScaleTile128";
+/// Exact defining path of `cute_rs::nvgpu::warp::block_scaled::fragments::Mxf4ScalePairs128`; public reexports do not change it.
+const SCALE_K64: &str = "cute_rs::nvgpu::warp::block_scaled::fragments::Mxf4ScalePairs128";
+/// Exact defining path of `cute_rs::nvgpu::warp::block_scaled::fragments::Mxf4BTileK64`; public reexports do not change it.
+const B_TILE_K64: &str = "cute_rs::nvgpu::warp::block_scaled::fragments::Mxf4BTileK64";
 
 /// Whether shared storage holds packed matrix data or scale words.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SharedTensorKind {
     /// Packed FP4 matrix values carried in shared FP16 storage.
     Data,
-    /// Packed UE8M0 scale words in the canonical shared atom.
+    /// Packed UE8M0 scale words in the canonical shared atom (`SF_VEC = 32`).
     Scale,
+    /// Packed E4M3 scale words in the canonical shared atom (`SF_VEC = 16`).
+    ScaleE4m3,
 }
 
 /// Static kind, role and physical placement decoded from a shared tensor type.
@@ -156,7 +160,17 @@ pub(crate) fn decode_shared_tensor(ty: &Ty) -> Result<Option<SharedTensorRust>, 
             placement: scale_placement(),
         }));
     }
-    Err("shared MMA tensor must be packed E2M1/f16 data or UE8M0x4/u32 scales".to_string())
+    if exact_marker(&element, E4M3_X4)?
+        && is_u32(&storage)
+        && exact_marker(&layout, SM120_SCALE_ATOM)?
+    {
+        return Ok(Some(SharedTensorRust {
+            kind: SharedTensorKind::ScaleE4m3,
+            role,
+            placement: scale_placement(),
+        }));
+    }
+    Err("shared MMA tensor must be packed E2M1/f16 data or UE8M0x4/E4M3x4/u32 scales".to_string())
 }
 
 /// Decode a value directly or through one reference or raw-pointer layer.

@@ -157,6 +157,12 @@ pub(super) struct ModuleExportState<'a> {
     /// used for NVVM annotations/version nodes; debug-info nodes will use the
     /// same counter so the exporter never has to guess which IDs are free.
     next_metadata_id: usize,
+    /// `distinct` `!llvm.loop` node of each loop whose latch branch asked to
+    /// stay rolled, in emission order.
+    pub(super) unroll_disabled_loops: Vec<usize>,
+    /// The `!{!"llvm.loop.unroll.disable"}` property node shared by every
+    /// entry of `unroll_disabled_loops`, allocated on first use.
+    pub(super) loop_unroll_disable_property: Option<usize>,
     /// Which debug metadata tier this export should emit.
     pub(super) debug_kind: DebugKind,
     /// Where function-local statics are retained (per the consuming LLVM).
@@ -216,10 +222,6 @@ pub(super) struct ModuleExportState<'a> {
     pub(super) debug_declare_used: bool,
     /// Whether any function emitted `llvm.dbg.value`.
     pub(super) debug_value_used: bool,
-    /// Shared `!{!"llvm.loop.unroll.disable"}` metadata id, allocated on first use.
-    pub(super) loop_unroll_disable_attr_id: Option<usize>,
-    /// Per-backedge `distinct !{!id, !attr_id}` loop metadata ids, in allocation order.
-    pub(super) loop_unroll_disable_loop_ids: Vec<usize>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -262,6 +264,8 @@ impl<'a> ModuleExportState<'a> {
             global_symbols: FxHashMap::default(),
             global_sources: FxHashMap::default(),
             next_metadata_id: 0,
+            unroll_disabled_loops: Vec::new(),
+            loop_unroll_disable_property: None,
             debug_kind,
             debug_function_local_static_placement,
             nvvm_ir_dialect,
@@ -288,8 +292,6 @@ impl<'a> ModuleExportState<'a> {
             debug_nodes: Vec::new(),
             debug_declare_used: false,
             debug_value_used: false,
-            loop_unroll_disable_attr_id: None,
-            loop_unroll_disable_loop_ids: Vec::new(),
         }
     }
 
@@ -313,15 +315,6 @@ impl<'a> ModuleExportState<'a> {
         let id = self.next_metadata_id;
         self.next_metadata_id += 1;
         id
-    }
-
-    pub(super) fn alloc_loop_unroll_disable_id(&mut self) -> usize {
-        if self.loop_unroll_disable_attr_id.is_none() {
-            self.loop_unroll_disable_attr_id = Some(self.alloc_metadata_id());
-        }
-        let loop_id = self.alloc_metadata_id();
-        self.loop_unroll_disable_loop_ids.push(loop_id);
-        loop_id
     }
 
     #[cfg(test)]

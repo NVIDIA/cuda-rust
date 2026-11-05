@@ -19,8 +19,10 @@ A/B global → TMA → shared [5 stages] → paired MMA → TMEM
 C global   ← TMA ← shared [2 stages] ← FP16 + optional row bias
 ```
 
-`cute-rs` describes layouts, tensor operations and pipelines; `ctm-rs` supplies
-explicit instruction primitives. The [CTM version](../fp16_gemm_256x352_ctm/README.md)
+`cute-rs` describes layouts, tensor operations, cluster TMA, paired `tcgen05`
+MMA, collective `TMEM` allocation and pipelines (`nvgpu`, `pipeline`, `utils`,
+`arch`), while `ctm-rs` supplies the kernel entry macros (`#[cuda_module]`,
+`#[kernel]`, `DynamicSharedArray`). The [CTM version](../fp16_gemm_256x352_ctm/README.md)
 expresses the same schedule directly through instruction types and physical formats.
 
 ## Run it

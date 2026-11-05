@@ -283,21 +283,23 @@ fn is_cute_recognition_stub_identity(
         CuteImplOwner::Tensor | CuteImplOwner::TensorMut | CuteImplOwner::TensorMutTile1D => {
             "tensor"
         }
-        CuteImplOwner::BlockScaledTensor => "block_scaled::tensor",
+        CuteImplOwner::BlockScaledTensor => "utils::blockscaled::tensor",
         CuteImplOwner::BlockScaledThreadRow
         | CuteImplOwner::BlockScaledTile64
-        | CuteImplOwner::LoadedBlockScaledTile64 => "block_scaled::gemv",
-        CuteImplOwner::StaticPersistentTileScheduler | CuteImplOwner::WorkTileInfo => "scheduler",
+        | CuteImplOwner::LoadedBlockScaledTile64 => "utils::blockscaled::gemv",
+        CuteImplOwner::StaticPersistentTileScheduler | CuteImplOwner::WorkTileInfo => {
+            "utils::scheduler"
+        }
         CuteImplOwner::PipelineTmaAsync
         | CuteImplOwner::PipelineState
         | CuteImplOwner::PipelineTmaStore => "pipeline",
-        CuteImplOwner::SharedTensor => "copy::tiled",
-        CuteImplOwner::Mxf4TiledMma => "mma::block_scaled::tiled",
+        CuteImplOwner::SharedTensor => "atom::tiled",
+        CuteImplOwner::Mxf4TiledMma => "nvgpu::warp::block_scaled::tiled",
         CuteImplOwner::Mxf4AccumulatorTile2x8 | CuteImplOwner::Mxf4ScaleTile128 => {
-            "mma::block_scaled::fragments"
+            "nvgpu::warp::block_scaled::fragments"
         }
         CuteImplOwner::Sm120Epilogue128x128 | CuteImplOwner::Sm120EpilogueWarp128x128 => {
-            "epilogue::sm120"
+            "nvgpu::warp::epilogue"
         }
     };
     let Some(rest) = definition_path
@@ -727,7 +729,7 @@ fn truncate_path_for_box(fn_path: &str, width: usize) -> String {
 /// We never actually run `std` here: mir-importer rewrites each of these
 /// names to the matching NVIDIA libdevice function (`__nv_tan`, `__nv_sinh`,
 /// ...). This list just tells the guard "these are fine, we handle them."
-/// Keep it in sync with the `std::sys::cmath` matches in float_math.rs.
+/// The same generated shard owns importer dispatch and this exact allow-list.
 ///
 /// A few functions (`sin`, `cos`, `exp`, ...) take a different, allowed route
 /// on this toolchain: the compiler lowers them to a builtin in `core`, so
@@ -736,47 +738,7 @@ fn truncate_path_for_box(fn_path: &str, width: usize) -> String {
 /// case a build ever takes the `std` route too. Only `std::`-prefixed names
 /// belong here; `core`-based shims are already allowed.
 fn is_intrinsic_lowered_cmath_shim(fn_path: &str) -> bool {
-    matches!(
-        fn_path,
-        "std::sys::cmath::sinf"
-            | "std::sys::cmath::sin"
-            | "std::sys::cmath::cosf"
-            | "std::sys::cmath::cos"
-            | "std::sys::cmath::tanf"
-            | "std::sys::cmath::tan"
-            | "std::sys::cmath::asinf"
-            | "std::sys::cmath::asin"
-            | "std::sys::cmath::acosf"
-            | "std::sys::cmath::acos"
-            | "std::sys::cmath::atan2f"
-            | "std::sys::cmath::atan2"
-            | "std::sys::cmath::atanf"
-            | "std::sys::cmath::atan"
-            | "std::sys::cmath::cbrtf"
-            | "std::sys::cmath::cbrt"
-            | "std::sys::cmath::sinhf"
-            | "std::sys::cmath::sinh"
-            | "std::sys::cmath::coshf"
-            | "std::sys::cmath::cosh"
-            | "std::sys::cmath::tanhf"
-            | "std::sys::cmath::tanh"
-            // Inverse hyperbolics: on this nightly (rustc e457a7b0d) only
-            // asinh/acosh are `std::sys::cmath` shims; atanh is still the
-            // pure-Rust `ln_1p` formula and cmath declares no atanh, so its
-            // entries are defensive, for when std makes the same move.
-            | "std::sys::cmath::asinhf"
-            | "std::sys::cmath::asinh"
-            | "std::sys::cmath::acoshf"
-            | "std::sys::cmath::acosh"
-            | "std::sys::cmath::atanhf"
-            | "std::sys::cmath::atanh"
-            | "std::sys::cmath::expm1f"
-            | "std::sys::cmath::expm1"
-            | "std::sys::cmath::log1pf"
-            | "std::sys::cmath::log1p"
-            | "std::sys::cmath::hypotf"
-            | "std::sys::cmath::hypot"
-    )
+    dialect_mir::rust_intrinsics::is_intrinsic_lowered_cmath_shim(fn_path)
 }
 
 /// `std`'s inherent float methods: `std::f32::<impl f32>::atan` and friends.
@@ -795,9 +757,9 @@ fn is_intrinsic_lowered_cmath_shim(fn_path: &str) -> bool {
 ///
 /// Nothing in these wrappers touches the OS or the heap, so collect them like
 /// any other reachable pure function. Every stable method's shim is in
-/// `is_intrinsic_lowered_cmath_shim`; the unstable `gamma`/`erf` family and
-/// `f128` still stop one level deeper, at their shim, with the guard naming
-/// that shim.
+/// `is_intrinsic_lowered_cmath_shim`; `gamma` is also intercepted for f32/f64.
+/// Unsupported methods such as `erf`, and f128 shims, still stop one level
+/// deeper with the guard naming that shim.
 fn is_std_float_inherent_method(fn_path: &str) -> bool {
     ["f16", "f32", "f64", "f128"]
         .iter()
@@ -859,17 +821,25 @@ fn is_ptx_asm_marker_path(fn_path: &str) -> bool {
         || has_arity_suffix(fn_path, "cuda_device::ptx::__ptx_asm_void_")
 }
 
-/// Returns true for the hidden `__unroll_config::<FACTOR>` marker function.
+/// Returns true for the hidden `__unroll_config::<FACTOR>` and
+/// `__nounroll_config` marker functions.
 ///
-/// `#[unroll]` / `#[unroll(N)]` on a loop makes the `#[kernel]` or `#[device]`
-/// macro plant a call to this marker at the top of the loop body. The MIR
-/// importer rewrites that call to a `mir.unroll_hint` op (consumed by the
-/// loop-unroll pass) and never emits a real call. So the marker's empty body must
-/// not be collected, or it would show up as a dead `.func` in the generated PTX.
-/// Matches both the re-exported path (`cuda_device::__unroll_config`) and the
-/// full path.
+/// `#[unroll]` / `#[unroll(N)]` / `#[nounroll]` on a loop makes the `#[kernel]`
+/// or `#[device]` macro plant a call to one of these markers at the top of the
+/// loop body. The MIR importer rewrites that call to a `mir.unroll_hint` or
+/// `mir.nounroll_hint` op and never emits a real call. So the marker's empty
+/// body must not be collected, or it would show up as a dead `.func` in the
+/// generated PTX. Matches both the re-exported path
+/// (`cuda_device::__unroll_config`) and the full path, with or without generic
+/// arguments, and nothing else: a user function whose name merely starts with
+/// a marker's name must still be collected.
 fn is_unroll_marker_path(fn_path: &str) -> bool {
-    fn_path.contains("::__unroll_config")
+    let Some(path) = fn_path.strip_prefix("cuda_device::") else {
+        return false;
+    };
+    let name = path.strip_prefix("thread::").unwrap_or(path);
+    let name = name.split_once("::<").map_or(name, |(name, _)| name);
+    matches!(name, "__unroll_config" | "__nounroll_config")
 }
 
 /// Returns true for zero-cost compile-time configuration markers planted by
@@ -2421,7 +2391,7 @@ impl<'tcx> DeviceCollector<'tcx> {
         // implementations (e.g. `libm::math::generic::sqrt::sqrt_round`) would
         // both be wasted work and trip importer gaps. Skip the whole crate; any
         // libm function we don't yet intercept will surface as a missing symbol,
-        // signalling that `from_libm_path` needs another entry.
+        // signalling that the libdevice math shard needs another row.
         if name_str == "libm" {
             return CollectDecision::SkipIntentional;
         }
@@ -3204,13 +3174,34 @@ mod tests {
     use super::{
         CuteImplOwner, device_runtime_checks_target, is_cute_recognition_stub_identity,
         is_host_cpu_arch_def_path, is_kernel_entry_def_path, is_spin_loop_expansion,
-        is_std_float_inherent_method, truncate_path_for_box, unsupported_codegen_protocol_root,
+        is_std_float_inherent_method, is_unroll_marker_path, truncate_path_for_box,
+        unsupported_codegen_protocol_root,
     };
     use reserved_oxide_symbols::{
         DEVICE_PREFIX, KERNEL_PREFIX, LEGACY_DEVICE_PREFIX, LEGACY_KERNEL_PREFIX,
         PTX_MERGE_REQUIRED_PREFIX, is_ptx_merge_required_marker, ptx_merge_required_marker,
     };
     use rustc_middle::mir::BasicBlock;
+
+    #[test]
+    fn special_math_cmath_shims_are_an_exact_allowlist() {
+        for path in ["std::sys::cmath::tgammaf", "std::sys::cmath::tgamma"] {
+            assert!(super::is_intrinsic_lowered_cmath_shim(path), "{path}");
+        }
+        for path in [
+            "user::std::sys::cmath::tgamma",
+            "std::sys::cmath::tgammaf128",
+            "std::sys::cmath::lgamma_r",
+            "std::sys::cmath::frexp",
+            "std::sys::cmath::erf",
+            "std::io::stdio::_print",
+        ] {
+            assert!(!super::is_intrinsic_lowered_cmath_shim(path), "{path}");
+        }
+        assert!(super::is_intrinsic_lowered_cmath_shim(
+            "std::sys::cmath::hypot"
+        ));
+    }
 
     #[test]
     fn std_float_wrappers_are_collected_not_forbidden() {
@@ -3273,6 +3264,27 @@ mod tests {
         assert!(is_spin_loop_expansion("::core_arch::x86::sse2::_mm_pause"));
         assert!(!is_spin_loop_expansion("::core_arch::x86::rdtsc::rdtsc"));
         assert!(!is_spin_loop_expansion("::hint::spin_loop"));
+    }
+
+    #[test]
+    fn unroll_markers_match_only_cuda_device_marker_names() {
+        for path in [
+            "cuda_device::__unroll_config::<4>",
+            "cuda_device::thread::__unroll_config::<0>",
+            "cuda_device::__nounroll_config",
+            "cuda_device::thread::__nounroll_config",
+        ] {
+            assert!(is_unroll_marker_path(path), "{path}");
+        }
+        for path in [
+            "cuda_device::thread::__nounroll_config_helper",
+            "cuda_device::__unroll_configure::<4>",
+            "my_kernels::__nounroll_config",
+            "my_kernels::cuda_device::__unroll_config::<4>",
+            "cuda_device::thread::inner::__nounroll_config",
+        ] {
+            assert!(!is_unroll_marker_path(path), "{path}");
+        }
     }
 
     #[test]
@@ -3373,37 +3385,37 @@ mod tests {
         ));
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
-            "::block_scaled::__compiler::block_scaled_load_k64",
+            "::utils::blockscaled::__compiler::block_scaled_load_k64",
             None,
         ));
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
-            "::block_scaled::tensor::{impl#17}::from_slices",
+            "::utils::blockscaled::tensor::{impl#17}::from_slices",
             Some(CuteImplOwner::BlockScaledTensor),
         ));
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
-            "::block_scaled::gemv::{impl#19}::k_tile",
+            "::utils::blockscaled::gemv::{impl#19}::k_tile",
             Some(CuteImplOwner::BlockScaledThreadRow),
         ));
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
-            "::block_scaled::gemv::{impl#21}::dot_accumulate",
+            "::utils::blockscaled::gemv::{impl#21}::dot_accumulate",
             Some(CuteImplOwner::LoadedBlockScaledTile64),
         ));
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
-            "::scheduler::__compiler::scheduler_current_tile",
+            "::utils::scheduler::__compiler::scheduler_current_tile",
             None,
         ));
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
-            "::scheduler::{impl#4}::has_work",
+            "::utils::scheduler::{impl#4}::has_work",
             Some(CuteImplOwner::StaticPersistentTileScheduler),
         ));
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
-            "::scheduler::{impl#2}::tile_idx",
+            "::utils::scheduler::{impl#2}::tile_idx",
             Some(CuteImplOwner::WorkTileInfo),
         ));
         assert!(is_cute_recognition_stub_identity(
@@ -3431,60 +3443,60 @@ mod tests {
         );
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
-            "::copy::tiled::__compiler::shared_tensor_overlay",
+            "::atom::tiled::__compiler::shared_tensor_overlay",
             None,
         ));
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
-            "::copy::tiled::{impl#3}::from_raw_parts",
+            "::atom::tiled::{impl#3}::from_raw_parts",
             Some(CuteImplOwner::SharedTensor),
         ));
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
-            "::mma::block_scaled::__compiler::tiled_gemm",
+            "::nvgpu::warp::block_scaled::__compiler::tiled_gemm",
             None,
         ));
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
-            "::mma::block_scaled::tiled::{impl#7}::load_a_128",
+            "::nvgpu::warp::block_scaled::tiled::{impl#7}::load_a_128",
             Some(CuteImplOwner::Mxf4TiledMma),
         ));
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
-            "::mma::block_scaled::fragments::{impl#4}::zero",
+            "::nvgpu::warp::block_scaled::fragments::{impl#4}::zero",
             Some(CuteImplOwner::Mxf4AccumulatorTile2x8),
         ));
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
-            "::mma::block_scaled::fragments::{impl#5}::pairs_at_unchecked",
+            "::nvgpu::warp::block_scaled::fragments::{impl#5}::pairs_at_unchecked",
             Some(CuteImplOwner::Mxf4ScaleTile128),
         ));
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
-            "::epilogue::sm120::__compiler::epilogue_sync_ready_for_tma",
+            "::nvgpu::warp::epilogue::__compiler::epilogue_sync_ready_for_tma",
             None,
         ));
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
-            "::epilogue::sm120::{impl#2}::tma_half",
+            "::nvgpu::warp::epilogue::{impl#2}::tma_half",
             Some(CuteImplOwner::Sm120Epilogue128x128),
         ));
         assert!(is_cute_recognition_stub_identity(
             "cute_rs",
-            "::epilogue::sm120::{impl#9}::store_tile",
+            "::nvgpu::warp::epilogue::{impl#9}::store_tile",
             Some(CuteImplOwner::Sm120EpilogueWarp128x128),
         ));
         // Free functions with host-panicking bodies are recognized through the
         // importer registry at their defining paths.
         for path in [
-            "::copy::vector::load_tile",
-            "::copy::vector::assume",
-            "::copy::cooperative::copy_g2s",
-            "::copy::tma::copy_tma_2d",
-            "::copy::tma::copy_tma_s2g_2d",
-            "::mma::load_matrix_a",
-            "::sm100::__compiler::sm100_tiled_mma",
-            "::attention::sm100::__compiler::tma_load",
+            "::atom::vector::load_tile",
+            "::atom::vector::assume",
+            "::atom::cooperative::copy_g2s",
+            "::nvgpu::cpasync::copy_tma_2d",
+            "::nvgpu::cpasync::copy_tma_s2g_2d",
+            "::nvgpu::warp::load_matrix_a",
+            "::nvgpu::tcgen05::__compiler::sm100_tiled_mma",
+            "::nvgpu::tcgen05::__compiler::tma_load",
         ] {
             assert!(
                 is_cute_recognition_stub_identity("cute_rs", path, None),
@@ -3518,12 +3530,9 @@ mod tests {
             "::pipeline::{impl#4}::producer_tail",
             Some(CuteImplOwner::PipelineTmaStore),
         ));
-        // The SM100 store pipeline shares the item name but lives in
-        // cute_rs::sm100::pipeline; its methods are ordinary Rust over the
-        // sm100 hooks, so the owner table must not claim them.
         assert!(!is_cute_recognition_stub_identity(
             "cute_rs",
-            "::sm100::pipeline::{impl#4}::producer_tail",
+            "::nvgpu::tcgen05::pipeline::{impl#4}::producer_tail",
             Some(CuteImplOwner::PipelineTmaStore),
         ));
 
@@ -3540,12 +3549,12 @@ mod tests {
         ));
         assert!(!is_cute_recognition_stub_identity(
             "cute_rs",
-            "::block_scaled::gemv::{impl#21}::value_pair",
+            "::utils::blockscaled::gemv::{impl#21}::value_pair",
             Some(CuteImplOwner::LoadedBlockScaledTile64),
         ));
         assert!(!is_cute_recognition_stub_identity(
             "cute_rs",
-            "::scheduler::{impl#4}::for_worker",
+            "::utils::scheduler::{impl#4}::for_worker",
             Some(CuteImplOwner::StaticPersistentTileScheduler),
         ));
         assert!(!is_cute_recognition_stub_identity(
@@ -3555,12 +3564,12 @@ mod tests {
         ));
         assert!(!is_cute_recognition_stub_identity(
             "cute_rs",
-            "::mma::block_scaled::tiled::{impl#7}::load_b_pair",
+            "::nvgpu::warp::block_scaled::tiled::{impl#7}::load_b_pair",
             Some(CuteImplOwner::Mxf4TiledMma),
         ));
         assert!(!is_cute_recognition_stub_identity(
             "cute_rs",
-            "::epilogue::sm120::{impl#3}::store_atom",
+            "::nvgpu::warp::epilogue::{impl#3}::store_atom",
             Some(CuteImplOwner::Sm120EpilogueWarp128x128),
         ));
         assert!(!is_cute_recognition_stub_identity(
@@ -3574,31 +3583,31 @@ mod tests {
     fn cute_nested_impl_owners_reject_old_and_near_miss_paths() {
         for (module, owner, method) in [
             (
-                "block_scaled::tensor",
+                "utils::blockscaled::tensor",
                 CuteImplOwner::BlockScaledTensor,
                 "from_slices",
             ),
             (
-                "block_scaled::gemv",
+                "utils::blockscaled::gemv",
                 CuteImplOwner::BlockScaledThreadRow,
                 "k_tile",
             ),
             (
-                "mma::block_scaled::tiled",
+                "nvgpu::warp::block_scaled::tiled",
                 CuteImplOwner::Mxf4TiledMma,
                 "load_a_128",
             ),
             (
-                "mma::block_scaled::fragments",
+                "nvgpu::warp::block_scaled::fragments",
                 CuteImplOwner::Mxf4AccumulatorTile2x8,
                 "zero",
             ),
             (
-                "epilogue::sm120",
+                "nvgpu::warp::epilogue",
                 CuteImplOwner::Sm120EpilogueWarp128x128,
                 "store_tile",
             ),
-            ("copy::tiled", CuteImplOwner::SharedTensor, "from_raw_parts"),
+            ("atom::tiled", CuteImplOwner::SharedTensor, "from_raw_parts"),
         ] {
             assert!(is_cute_recognition_stub_identity(
                 "cute_rs",

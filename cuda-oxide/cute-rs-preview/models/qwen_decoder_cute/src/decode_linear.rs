@@ -4,6 +4,8 @@
  */
 //! One/two-row BF16 projections in the reference's per-shape reduction order.
 use crate::{
+    decoder::BiasWeights,
+    ffn::{ProjectionRole, ProjectionWeights, RowMajorShape},
     ffn_kernel::kernels,
     model::Batch,
     operator::Result,
@@ -11,11 +13,7 @@ use crate::{
     reference_linear_kernel::kernels as reference,
 };
 use cuda_core::{CudaStream, DeviceBuffer, LaunchConfig1D, PreparedLaunch};
-use cute_rs::{
-    BFloat16,
-    decoder::BiasWeights,
-    ffn::{ProjectionRole, ProjectionWeights, RowMajorShape},
-};
+use cute_rs::BFloat16;
 use std::sync::Arc;
 
 /// Bounded per-kernel reuse of prepared launch configurations.
@@ -453,7 +451,7 @@ fn fixture<const IN: usize, const OUT: usize>(
     has_bias: bool,
     pattern: Pattern,
 ) -> Result<usize> {
-    use cute_rs::ffn::Query;
+    use crate::ffn::Query;
     let poison = BFloat16::from_bits(0x7fc1);
     let mut input = vec![poison; rows * input_stride + 7];
     let mut weight = vec![poison; OUT * weight_stride + 7];
@@ -537,7 +535,7 @@ fn fixture<const IN: usize, const OUT: usize>(
             // Run the original four-warp entry on the same buffers. The new
             // launch must be bitwise equal, not merely within the oracle's bound.
             let mut original = Batch::<OUT>::allocate(&runner.stream, rows)?;
-            let config = cuda_core::simt::LaunchConfig {
+            let config = cuda_core::LaunchConfig {
                 grid_dim: (OUT.div_ceil(8).div_ceil(4) as u32, 1, 1),
                 block_dim: (128, 1, 1),
                 shared_mem_bytes: 0,
@@ -718,8 +716,8 @@ fn split_k_single_slice_identity(runner: &Runner) -> Result<usize> {
 
 /// Independent FP64 oracle, poisoned padding, cancellation and bias-boundary checks.
 pub fn validate(stream: Arc<CudaStream>) -> Result<()> {
+    use crate::ffn::Query;
     use Pattern::{Cancellation, Regular, Varied};
-    use cute_rs::ffn::Query;
     stream.context().bind_to_thread()?;
     let runner = Runner::new(stream)?;
     let mut checked = 0;

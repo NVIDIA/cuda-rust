@@ -9,25 +9,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- Const-generic array bindings retain their function or method signature as
-  their source origin, and generated reduction bodies retain the reduction
-  call's location and inline chain.
-- Failed host launch checks report their original accesses and inline callers,
-  retaining distinct origins when equivalent predicates share one comparison.
 - A kernel that imports from `cutile` while `cutile::core` is missing from the
   module registry fails with an error that names the cause, instead of a later
   "unable to resolve generic type" error. On `x86_64-pc-windows-gnu`, GNU ld's
   `--gc-sections` drops the registry entries (#1605).
 
-### Changed
+## [0.5.0] - 2026-11-04
 
-- cuTile Rust now lives in the [NVIDIA/cuda-rust](https://github.com/NVIDIA/cuda-rust)
-  repository under `cutile-rs/`, next to cuda-oxide (SIMT) and the shared host
-  crates (`cuda-bindings`, `cuda-core`, `cuda-core-derive`, `cuda-async`) at the
-  repository root. The book moved to
-  [nvidia.github.io/cuda-rust/cutile](https://nvidia.github.io/cuda-rust/cutile/)
-  and release tags are namespaced `cutile-rs/vX.Y.Z`. Crate names and versions
-  are unchanged.
+CUDA 13.5 tile-library calls and GPU communication, a shared Tile/SIMT host
+runtime, and stronger memory-safety contracts.
+
+### Added
+
+- **Tile libraries (public preview, CUDA 13.5):** typed
+  `#[cutile::foreign] unsafe fn` declarations, JIT-resolved string arguments,
+  implicit output values, and host-configured linking. Memory ordering survives
+  branches, loops, and wrappers; cache keys include library contents and declared
+  provider dependencies/settings. See the [tile-library guide](https://github.com/NVIDIA/cuda-rust/blob/9dc26c50a8c90026bcd0dfa7dc4b36f189126946/cutile-rs/cutile-book/guide/tile-libraries.md).
+- **Unsafe communication:** unicast/multicast pointer classification, multicast
+  load-reduce/reduce/store, atomic-view inbounds promises, and TMA validity checks
+  in `cutile::tileir`. System-scope signaling and alias fences support explicit
+  synchronization. The [communication reference](https://github.com/NVIDIA/cuda-rust/blob/9dc26c50a8c90026bcd0dfa7dc4b36f189126946/cutile-rs/cutile-book/reference/unsafe-comms.md)
+  includes a runnable unicast/multicast example.
+- Minimum CTA residency controls and safe `condition.likely::<true/false>()`
+  methods for scalar booleans and boolean tiles. **Likelihood hints are discarded
+  in 13.5 bytecode and have no backend performance effect.**
+
+### Changed / migration from 0.4
+
+- Update Tile and shared host crates together to **0.5.0**. Replace
+  `cuda_core::simt` imports with crate-root imports and use the unified
+  `cuda_async` API. `Context` owns a context; `Device` identifies a GPU.
+  Foreign allocations must supply their actual context. Buffers and tensors
+  share storage through `Tensor::from_buffer`, `into_buffer`, and contiguous views.
+- Scalar kernel parameters require `DeviceCopy` alongside `DType`.
+  `KernelInputStored` / `KernelOutputStored` now require `unsafe impl` with
+  documented ABI, extent, lifetime, and access obligations; raw launch packets
+  require unsafe finalization. Safe buffer casts require `NoUninit` sources,
+  tensor reinterpretation requires `AnyBitPattern` targets, and atomic buffer
+  conversions use `DeviceRepr`. Arbitrary bytes cannot be reinterpreted as `bool`.
+- `CompileOptions::codegen` replaces the separate debug/optimization fields.
+  Replace `device_debug(true)` with `debug_info(DebugInfoLevel::Full)` and
+  `lineinfo(true)` with `debug_info(DebugInfoLevel::Line)`. The last setter wins;
+  full debugging uses optimization level zero. Runtime overrides are
+  `CUTILE_JIT_DEBUG`, `CUTILE_JIT_OPT_LEVEL`, and `CUTILE_JIT_SANITIZE`.
+- Compiler integrations use scoped `CUDATileModules::resolve_function` instead of
+  removed flat function lookups. `TileirasOptions` gains `tilelibs` and loses
+  `Copy`; `Opcode` and `Attribute` gain preview variants. Compiler structures and
+  call/cache interfaces also change, including `ModuleItems`, `SiteResolution`,
+  `TileKernel::jit_compile`, and `kernel_cache_slot`.
+
+### Fixed
+
+- Generic wrappers, nested trait calls, const-generic tags, inferred type
+  arguments, and module-scoped function/constant resolution. Unsupported module
+  references error instead of selecting unrelated same-named items.
+- Correct 13.5 `if`/`select` bytecode and preservation of peer-pointer attributes.
+  Added bytecode-reader, assembler, foreign-call ordering/preservation, and
+  two-GPU signaling/buffer-reuse regressions.
+- Allocation retention and access exclusion through asynchronous completion,
+  graph replay, and early drops; tensor uniqueness; aligned pinned buffers;
+  completed zero-initialization; sliced-view alignment; libclang 22 bindings;
+  and generated/inlined debug locations.
+- Optional CPU-reference dependencies updated to Candle 0.11.1 and patched ZIP,
+  with all-feature dependency checks.
+
+### Prerequisites and limits
+
+Baseline support starts at emitted Tile IR 13.2 on supported targets; individual
+operations and GPUs impose additional requirements. New 13.5 operations need a
+compatible assembler. Tile libraries need matching toolkit-built libraries and
+13.5 preview support; their declarations/calls are unsafe. Pointer operands and
+shape/tuple constant parameters are not yet supported. `#[inout]` returns an
+updated value while preserving the caller's original immutable tile.
+
+Unicast/multicast target `sm_100`, `sm_103`, and `sm_107`: unicast needs NVLink;
+multicast additionally needs NVLink SHARP-capable NVSwitch. Callers establish
+mappings and synchronization. TMA `valid_check=true` is `sm_107` only. See the
+[compatibility matrix](https://github.com/NVIDIA/cuda-rust/blob/9dc26c50a8c90026bcd0dfa7dc4b36f189126946/cutile-rs/cutile-book/reference/compatibility.md).
+Rust 1.89+ is required; the library builds on 1.89, and runtime validation used 1.98.0.
+
+Source lives in [NVIDIA/cuda-rust](https://github.com/NVIDIA/cuda-rust) under
+`cutile-rs/`; the [book](https://nvidia.github.io/cuda-rust/cutile/) and release tags
+(`cutile-rs/vX.Y.Z`) use the unified repository. Crate names are unchanged.
 
 ## [0.4.0] - 2026-09-25
 
@@ -75,7 +139,7 @@ paths have lower overhead.
   globals, and module producer metadata. Existing signatures are preserved
   (#298).
 - Unsafe per-launch `programmatic_dependent_launch()` on generated builders
-  and `AsyncKernelLaunch`, with runtime driver entry-point lookup
+  and `AsyncKernelLaunchBuilder`, with runtime driver entry-point lookup
   (Tile IR 13.4, `sm_90+`) (#298).
 - Tile IR 13.4 bytecode with assembler version negotiation. Version and
   architecture checks run before JIT assembly. The writer preserves
@@ -199,7 +263,7 @@ on 0.3.0.
   returns `Result<(), DeviceError>`.
 - Generated kernel launchers return a nameable `Launcher<…, KernelArgs<…>>`
   instead of `impl DeviceOp` and implement `GraphNode` only when every input
-  does; `AsyncKernelLaunch::args` is no longer public.
+  does; `AsyncKernelLaunchBuilder::args` is no longer public.
 - `TrialLog::open` takes a `LogProvenance` (`experimental-tune`).
 - `BytecodeVersion::V13_1` is removed; the bytecode floor is CUDA 13.2.
 - Kernel programs: a `return` below the function body and a `break` inside

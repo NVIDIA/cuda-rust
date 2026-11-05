@@ -6,7 +6,7 @@
 //! Warp-cooperative matrix loads with typed operand roles and shared placement.
 
 use cute_layout::ComposedLayout;
-use dialect_mir::types::{MirFP16Type, MirPtrType, address_space};
+use dialect_mir::types::{MirPtrType, address_space};
 use pliron::{
     builtin::{
         attributes::TypeAttr,
@@ -101,8 +101,11 @@ impl Verify for CuteLdmatrixOp {
         else {
             return verify_err!(op.loc(), "cute.ldmatrix must have an element type");
         };
-        if elem.deref(ctx).downcast_ref::<MirFP16Type>().is_none() {
-            return verify_err!(op.loc(), "cute.ldmatrix v0 supports f16 elements only");
+        if crate::ops::copy::cooperative_elem_bytes(ctx, elem) != Some(2) {
+            return verify_err!(
+                op.loc(),
+                "cute.ldmatrix supports 2-byte (f16/bf16/u16) elements only"
+            );
         }
         let _ = role;
         let modes = smem_layout.outer().modes();

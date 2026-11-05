@@ -14,7 +14,8 @@ use crate::{
     OperationTranslation, TranslationSession,
 };
 use dialect_cute::smem_mma_ops::{
-    CuteFragmentFillOp, CuteFragmentSliceKOp, CuteMmaLoadAOp, CuteMmaLoadScalesOp, CuteTiledGemmOp,
+    CuteFragmentFillOp, CuteFragmentSliceKOp, CuteMmaLoadAOp, CuteMmaLoadScalesOp,
+    CuteNvfp4MmaAtomOp, CuteTiledGemmOp,
 };
 use dialect_mir::types::{MirArrayType, MirStructType, MirTupleType};
 use pliron::{
@@ -956,6 +957,135 @@ impl OperationTranslation for TiledGemmTranslation {
             &mut operations,
             &result_layout,
             &accumulator,
+            input.results[0].clone(),
+            &input.location,
+        )?;
+        Ok(operations)
+    }
+}
+
+/// Emit one 16x8x64 NVFP4 (`Float4E2M1FN` + `Float8E4M3FN`, `SF_VEC = 16`) warp MMA atom.
+pub(in crate::cute) struct Nvfp4MmaAtomTranslation;
+
+impl OperationTranslation for Nvfp4MmaAtomTranslation {
+    fn translate(
+        &self,
+        ctx: &Context,
+        source: Ptr<Operation>,
+        mut input: OperationInput,
+        session: &mut TranslationSession<'_>,
+    ) -> Result<Vec<MlirOperation>, String> {
+        CuteNvfp4MmaAtomOp::wrap(source)
+            .verify(ctx)
+            .map_err(stringify)?;
+        input.attributes.remove("nvfp4_mma_atom");
+        expect_shape("cute.nvfp4_mma_atom", &input, 1, 5)?;
+        let operation_ref = source.deref(ctx);
+        let c_layout = CarrierLayout::from_source(
+            ctx,
+            operation_ref.get_operand(0).get_type(ctx),
+            session,
+            0,
+        )?;
+        let a_layout = CarrierLayout::from_source(
+            ctx,
+            operation_ref.get_operand(1).get_type(ctx),
+            session,
+            0,
+        )?;
+        let b_layout = CarrierLayout::from_source(
+            ctx,
+            operation_ref.get_operand(2).get_type(ctx),
+            session,
+            0,
+        )?;
+        let sfa_layout = CarrierLayout::from_source(
+            ctx,
+            operation_ref.get_operand(3).get_type(ctx),
+            session,
+            0,
+        )?;
+        let sfb_layout = CarrierLayout::from_source(
+            ctx,
+            operation_ref.get_operand(4).get_type(ctx),
+            session,
+            0,
+        )?;
+        let result_layout =
+            CarrierLayout::from_source(ctx, operation_ref.get_result(0).get_type(ctx), session, 0)?;
+        drop(operation_ref);
+
+        let mut operations = vec![];
+        let mut c = vec![];
+        let mut a = vec![];
+        let mut b = vec![];
+        let mut sfa = vec![];
+        let mut sfb = vec![];
+        extract_carrier(
+            session,
+            &mut operations,
+            input.operands[0].clone(),
+            &c_layout,
+            &mut c,
+            &input.location,
+        )?;
+        extract_carrier(
+            session,
+            &mut operations,
+            input.operands[1].clone(),
+            &a_layout,
+            &mut a,
+            &input.location,
+        )?;
+        extract_carrier(
+            session,
+            &mut operations,
+            input.operands[2].clone(),
+            &b_layout,
+            &mut b,
+            &input.location,
+        )?;
+        extract_carrier(
+            session,
+            &mut operations,
+            input.operands[3].clone(),
+            &sfa_layout,
+            &mut sfa,
+            &input.location,
+        )?;
+        extract_carrier(
+            session,
+            &mut operations,
+            input.operands[4].clone(),
+            &sfb_layout,
+            &mut sfb,
+            &input.location,
+        )?;
+        if c.len() != 4
+            || a.len() != 4
+            || b.len() != 2
+            || sfa.len() != 1
+            || sfb.len() != 1
+            || result_layout.leaf_count() != 4
+        {
+            return Err("cute.nvfp4_mma_atom carrier shape changed after verification".into());
+        }
+        let updated = emit_mxf4_mma(
+            session,
+            &mut operations,
+            &a,
+            &b,
+            &c,
+            sfa[0].clone(),
+            sfb[0].clone(),
+            true,
+            &input.location,
+        )?;
+        rebuild_carrier(
+            session,
+            &mut operations,
+            &result_layout,
+            &updated,
             input.results[0].clone(),
             &input.location,
         )?;

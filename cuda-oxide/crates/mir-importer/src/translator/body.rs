@@ -604,6 +604,81 @@ fn validate_monomorphized_successors(
     Ok(())
 }
 
+/// Narrow `SwitchInt` terminators controlled by `__target_has_integer_redux_sync`
+/// to the single arm selected by the resolved target floor (`sm_80+` vs below).
+pub fn narrow_target_predicate_switches(
+    body: &mir::Body,
+    mono_successors: &[Vec<usize>],
+    has_integer_redux_sync: bool,
+) -> Vec<Vec<usize>> {
+    use rustc_public::mir::{Operand, StatementKind, TerminatorKind};
+    use rustc_public::ty::{RigidTy, TyKind};
+
+    let mut narrowed = mono_successors.to_vec();
+    for block in &body.blocks {
+        let TerminatorKind::Call {
+            func,
+            destination,
+            target: Some(next_bb),
+            ..
+        } = &block.terminator.kind
+        else {
+            continue;
+        };
+        if !destination.projection.is_empty() || *next_bb >= body.blocks.len() {
+            continue;
+        }
+        let is_redux_predicate = func.ty(body.locals()).ok().is_some_and(|ty| {
+            matches!(
+                ty.kind(),
+                TyKind::RigidTy(RigidTy::FnDef(def, _))
+                    if def.name() == "cuda_device::warp::__target_has_integer_redux_sync"
+                        || def.name().ends_with("::__target_has_integer_redux_sync")
+            )
+        });
+        if !is_redux_predicate {
+            continue;
+        }
+        let next_block = &body.blocks[*next_bb];
+        let overwritten = next_block.statements.iter().any(|stmt| {
+            matches!(
+                &stmt.kind,
+                StatementKind::Assign(place, _) if place.local == destination.local
+            )
+        });
+        if overwritten {
+            continue;
+        }
+        let TerminatorKind::SwitchInt {
+            discr: Operand::Move(place) | Operand::Copy(place),
+            targets,
+        } = &next_block.terminator.kind
+        else {
+            continue;
+        };
+        if !place.projection.is_empty() || place.local != destination.local {
+            continue;
+        }
+        let chosen = if has_integer_redux_sync {
+            targets
+                .branches()
+                .find(|(val, _)| *val == 1)
+                .map_or_else(|| targets.otherwise(), |(_, target)| target)
+        } else {
+            targets
+                .branches()
+                .find(|(val, _)| *val == 0)
+                .map_or_else(|| targets.otherwise(), |(_, target)| target)
+        };
+        if let Some(edges) = narrowed.get_mut(*next_bb)
+            && edges.contains(&chosen)
+        {
+            *edges = vec![chosen];
+        }
+    }
+    narrowed
+}
+
 /// BFS from the entry block following rustc's exact per-block monomorphized
 /// successors, intersected with the importer's existing non-unwind policy.
 ///
@@ -1141,18 +1216,42 @@ fn debug_type_for_ty_at(ty: &Ty, depth: usize) -> Option<DebugLocalTypeKind> {
         TyKind::RigidTy(RigidTy::RawPtr(pointee, mutability)) => {
             debug_typed_pointer_type(ty, &pointee, DebugPointerKind::Raw(mutability), depth)
                 .or_else(|| {
+                    debug_slice_fat_pointer_type(
+                        ty,
+                        &pointee,
+                        DebugPointerKind::Raw(mutability),
+                        depth,
+                    )
+                })
+                .or_else(|| {
                     Some(DebugLocalTypeKind::Pointer {
                         name: raw_pointer_name(pointee, mutability),
-                        size_bits: 64,
+                        size_bits: if is_declared_shared_pointer_stand_in(&pointee) {
+                            32
+                        } else {
+                            64
+                        },
                     })
                 })
         }
         TyKind::RigidTy(RigidTy::Ref(_, pointee, mutability)) => {
             debug_typed_pointer_type(ty, &pointee, DebugPointerKind::Reference(mutability), depth)
                 .or_else(|| {
+                    debug_slice_fat_pointer_type(
+                        ty,
+                        &pointee,
+                        DebugPointerKind::Reference(mutability),
+                        depth,
+                    )
+                })
+                .or_else(|| {
                     Some(DebugLocalTypeKind::Pointer {
                         name: reference_name(pointee, mutability),
-                        size_bits: 64,
+                        size_bits: if is_declared_shared_pointer_stand_in(&pointee) {
+                            32
+                        } else {
+                            64
+                        },
                     })
                 })
         }
@@ -1200,7 +1299,7 @@ fn debug_type_for_ty_at(ty: &Ty, depth: usize) -> Option<DebugLocalTypeKind> {
         TyKind::RigidTy(RigidTy::Array(elem_ty, len_const)) if depth < MAX_DEBUG_TYPE_DEPTH => {
             let count = array_len_const(&len_const)?;
             let element = debug_type_for_ty_at(&elem_ty, depth + 1)?;
-            let size_bits = layout_size_bits(ty)?;
+            let size_bits = element.size_bits().checked_mul(count)?;
             Some(DebugLocalTypeKind::Array {
                 name: format!("[{}; {count}]", short_ty_name(&elem_ty)),
                 size_bits,
@@ -1209,6 +1308,60 @@ fn debug_type_for_ty_at(ty: &Ty, depth: usize) -> Option<DebugLocalTypeKind> {
             })
         }
         _ => None,
+    }
+}
+
+/// Whether `pointee` is a `cuda_device` stand-in (`SharedArray` or `Barrier`)
+/// whose references/raw pointers lower to 32-bit `addrspace(3)` pointers.
+fn is_declared_shared_pointer_stand_in(pointee: &Ty) -> bool {
+    matches!(
+        pointee.kind(),
+        TyKind::RigidTy(RigidTy::Adt(adt_def, _))
+            if types::is_cuda_device_adt(&adt_def, "SharedArray")
+                || types::is_cuda_device_adt(&adt_def, "Barrier")
+    )
+}
+
+/// Resolve a `SharedArray<T, N>` or `Barrier` pointee stand-in to the physical
+/// element debug type stored in shared memory.
+fn debug_declared_shared_pointee_type(pointee: &Ty, depth: usize) -> Option<DebugLocalTypeKind> {
+    let TyKind::RigidTy(RigidTy::Adt(adt_def, substs)) = pointee.kind() else {
+        return None;
+    };
+    if types::is_cuda_device_adt(&adt_def, "SharedArray") {
+        let elem_ty = substs.0.iter().find_map(|arg| match arg {
+            rustc_public::ty::GenericArgKind::Type(t) => Some(t),
+            _ => None,
+        })?;
+        return debug_pointer_pointee_type(elem_ty, depth);
+    }
+    if types::is_cuda_device_adt(&adt_def, "Barrier") {
+        return Some(DebugLocalTypeKind::Basic {
+            name: "u64".to_string(),
+            size_bits: 64,
+            encoding: "DW_ATE_unsigned",
+        });
+    }
+    None
+}
+
+/// Narrow a top-level pointer debug type from 64-bit generic width to 32-bit
+/// `addrspace(3)` width when [`SlotAddrSpaceMap`] proves the local slot holds
+/// only shared-memory pointers.
+fn narrow_debug_type_to_shared_addr_space(ty: &DebugLocalTypeKind) -> DebugLocalTypeKind {
+    match ty {
+        DebugLocalTypeKind::Pointer { name, .. } => DebugLocalTypeKind::Pointer {
+            name: name.clone(),
+            size_bits: 32,
+        },
+        DebugLocalTypeKind::TypedPointer { name, pointee, .. } => {
+            DebugLocalTypeKind::TypedPointer {
+                name: name.clone(),
+                size_bits: 32,
+                pointee: pointee.clone(),
+            }
+        }
+        other => other.clone(),
     }
 }
 
@@ -1245,15 +1398,103 @@ fn debug_typed_pointer_type(
         return None;
     }
 
+    let is_shared_stand_in = is_declared_shared_pointer_stand_in(pointee);
+    let physical_size_bits = if is_shared_stand_in { 32 } else { size_bits };
+
     // Build and validate the bounded pointee first. The source-facing pointer
     // name is then derived from that accepted tree, so rejected pathological
     // source types cannot recurse or grow a name before the depth gate fires.
-    let pointee = debug_pointer_pointee_type(pointee, depth + 1)?;
+    let pointee = if is_shared_stand_in {
+        debug_declared_shared_pointee_type(pointee, depth + 1)?
+    } else {
+        debug_pointer_pointee_type(pointee, depth + 1)?
+    };
     let name = debug_pointer_name(kind, &pointee);
     Some(DebugLocalTypeKind::TypedPointer {
         name,
-        size_bits,
+        size_bits: physical_size_bits,
         pointee: Box::new(pointee),
+    })
+}
+
+/// Describe a 16-byte slice or `str` fat pointer/reference as a two-field
+/// DWARF struct `{ data_ptr, length }`, matching `rustc`'s native slice debug
+/// layout consumed by `cuda-gdb` and Nsight VS Code.
+fn debug_slice_fat_pointer_type(
+    pointer: &Ty,
+    pointee: &Ty,
+    kind: DebugPointerKind,
+    depth: usize,
+) -> Option<DebugLocalTypeKind> {
+    if depth >= MAX_DEBUG_TYPE_DEPTH {
+        return None;
+    }
+
+    let size_bits = layout_size_bits(pointer)?;
+    let pointer_word_bits =
+        rustc_public::target::MachineInfo::target_pointer_width().bytes() as u64 * 8;
+    if size_bits != pointer_word_bits * 2 {
+        return None;
+    }
+
+    let (element_debug, is_str) = match pointee.kind() {
+        TyKind::RigidTy(RigidTy::Slice(elem_ty)) => {
+            (debug_pointer_pointee_type(&elem_ty, depth + 1)?, false)
+        }
+        TyKind::RigidTy(RigidTy::Str) => (
+            DebugLocalTypeKind::Basic {
+                name: "u8".to_string(),
+                size_bits: 8,
+                encoding: "DW_ATE_unsigned",
+            },
+            true,
+        ),
+        _ => return None,
+    };
+
+    let mutability = match kind {
+        DebugPointerKind::Raw(mutability) | DebugPointerKind::Reference(mutability) => mutability,
+    };
+    let elem_name = typed_pointer_pointee_display_name(&element_debug);
+    let data_ptr_name = match mutability {
+        mir::Mutability::Mut => format!("*mut {elem_name}"),
+        mir::Mutability::Not => format!("*const {elem_name}"),
+    };
+    let slice_target = if is_str {
+        "str".to_string()
+    } else {
+        format!("[{elem_name}]")
+    };
+    let slice_name = match kind {
+        DebugPointerKind::Raw(mir::Mutability::Mut) => format!("*mut {slice_target}"),
+        DebugPointerKind::Raw(mir::Mutability::Not) => format!("*const {slice_target}"),
+        DebugPointerKind::Reference(mir::Mutability::Mut) => format!("&mut {slice_target}"),
+        DebugPointerKind::Reference(mir::Mutability::Not) => format!("&{slice_target}"),
+    };
+
+    Some(DebugLocalTypeKind::Struct {
+        name: slice_name,
+        size_bits,
+        members: vec![
+            DebugTypeMember {
+                name: "data_ptr".to_string(),
+                offset_bits: 0,
+                ty: DebugLocalTypeKind::TypedPointer {
+                    name: data_ptr_name,
+                    size_bits: pointer_word_bits,
+                    pointee: Box::new(element_debug),
+                },
+            },
+            DebugTypeMember {
+                name: "length".to_string(),
+                offset_bits: pointer_word_bits,
+                ty: DebugLocalTypeKind::Basic {
+                    name: "usize".to_string(),
+                    size_bits: pointer_word_bits,
+                    encoding: "DW_ATE_unsigned",
+                },
+            },
+        ],
     })
 }
 
@@ -1351,9 +1592,10 @@ fn debug_struct_type(
         }
         _ => return None,
     };
-    let size_bits = shape.size.bytes() as u64 * 8;
+    let mut size_bits = shape.size.bytes() as u64 * 8;
 
     let mut members = Vec::new();
+    let mut has_shrunk_shared_pointer_member = false;
     for (idx, (field_name, field_ty)) in fields.enumerate() {
         let offset_bytes = *offsets.get(idx)?;
         let Some(member_ty) = debug_type_for_ty_at(&field_ty, depth + 1) else {
@@ -1361,6 +1603,9 @@ fn debug_struct_type(
         };
         if member_ty.size_bits() == 0 {
             continue;
+        }
+        if layout_size_bits(&field_ty).is_some_and(|host_bits| member_ty.size_bits() < host_bits) {
+            has_shrunk_shared_pointer_member = true;
         }
         members.push(DebugTypeMember {
             name: field_name,
@@ -1371,6 +1616,15 @@ fn debug_struct_type(
 
     if members.is_empty() {
         return None;
+    }
+
+    if has_shrunk_shared_pointer_member {
+        let mut cursor_bits = 0u64;
+        for member in &mut members {
+            member.offset_bits = cursor_bits;
+            cursor_bits = cursor_bits.checked_add(member.ty.size_bits())?;
+        }
+        size_bits = cursor_bits;
     }
 
     Some(DebugLocalTypeKind::Struct {
@@ -1817,7 +2071,11 @@ fn emit_entry_allocas(
         if let Some(infos) = debug_locals.whole.get(&local)
             && let Some(info) = infos.first()
         {
-            llvm_export::ops::set_debug_local_variable(ctx, op, info.variable.clone());
+            let mut variable = info.variable.clone();
+            if target == address_space::SHARED {
+                variable.ty = narrow_debug_type_to_shared_addr_space(&variable.ty);
+            }
+            llvm_export::ops::set_debug_local_variable(ctx, op, variable);
             if debug_source_scopes
                 .is_some_and(|map| map.scopes.iter().any(|scope| scope.id == info.source_scope))
             {
@@ -1826,10 +2084,16 @@ fn emit_entry_allocas(
             op.deref_mut(ctx).set_loc(info.loc.clone());
             let aliases: Vec<_> = infos[1..]
                 .iter()
-                .map(|alias| DebugWholeVariableInfo {
-                    variable: alias.variable.clone(),
-                    source_scope: Some(alias.source_scope),
-                    declaration: alias.declaration.clone(),
+                .map(|alias| {
+                    let mut variable = alias.variable.clone();
+                    if target == address_space::SHARED {
+                        variable.ty = narrow_debug_type_to_shared_addr_space(&variable.ty);
+                    }
+                    DebugWholeVariableInfo {
+                        variable,
+                        source_scope: Some(alias.source_scope),
+                        declaration: alias.declaration.clone(),
+                    }
                 })
                 .collect();
             if !aliases.is_empty() {
@@ -2376,7 +2640,7 @@ pub fn translate_body(
     }
 
     if let Some(scope_map) = debug_source_scopes
-        && debug_kind.variables_enabled()
+        && debug_kind.line_tables_enabled()
     {
         llvm_export::ops::set_debug_source_scope_map(ctx, op_ptr, scope_map);
     }
@@ -2455,8 +2719,36 @@ pub fn translate_body(
     // Unwind-only cleanup blocks are skipped here (see
     // [`non_unwind_successors`]) and patched with `mir.unreachable` below.
     let mut blocks_processed: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut rpo_visited = vec![false; body.blocks.len()];
+    let mut postorder = Vec::with_capacity(reachable.len());
+    fn dfs_postorder(
+        node: usize,
+        succs: &[Vec<usize>],
+        reachable: &std::collections::BTreeSet<usize>,
+        visited: &mut [bool],
+        postorder: &mut Vec<usize>,
+    ) {
+        if node >= visited.len() || visited[node] || !reachable.contains(&node) {
+            return;
+        }
+        visited[node] = true;
+        if let Some(children) = succs.get(node) {
+            for &succ in children {
+                dfs_postorder(succ, succs, reachable, visited, postorder);
+            }
+        }
+        postorder.push(node);
+    }
+    dfs_postorder(
+        0,
+        rustc_mono_successors,
+        &reachable,
+        &mut rpo_visited,
+        &mut postorder,
+    );
+    postorder.reverse();
 
-    for idx in reachable.iter().copied() {
+    for idx in postorder {
         let mir_block = &body.blocks[idx];
         let block_ptr = block_map[idx];
         let entry_prev_op = if idx == 0 { entry_last_op } else { None };
@@ -2495,6 +2787,31 @@ pub fn translate_body(
                 0,
             );
             unreachable_op.insert_at_front(block_ptr, ctx);
+        }
+    }
+
+    // Remove entry-block allocas that have zero uses after translating all
+    // reachable blocks (such as locals belonging exclusively to unreachable
+    // blocks or dropped panic-formatting blocks like `core::fmt::rt::Argument`).
+    // In normal builds `mem2reg` erases unused allocas; pruning them here keeps
+    // `--device-debug` (which skips `mem2reg`) from lowering dead panic types.
+    use pliron::linked_list::ContainsLinkedList;
+    let dead_allocas: Vec<Ptr<Operation>> = block_map[0]
+        .deref(ctx)
+        .iter(ctx)
+        .filter(|&op| {
+            Operation::get_op::<dialect_mir::ops::MirAllocaOp>(op, ctx).is_some()
+                && op.deref(ctx).get_result(0).uses(ctx).is_empty()
+        })
+        .collect();
+    if !dead_allocas.is_empty() {
+        use pliron::irbuild::{
+            listener::Recorder,
+            rewriter::{IRRewriter, Rewriter},
+        };
+        let mut rewriter = IRRewriter::<Recorder>::default();
+        for dead in dead_allocas {
+            rewriter.erase_operation(ctx, dead);
         }
     }
 
@@ -2741,6 +3058,138 @@ pub fn cuda_oxide_device_generated_kernel(mut wrapped: Wrapper<u16>) -> u32 {
                 "expected a Rust linkage symbol, got {mangled_name}"
             );
         }
+    }
+
+    /// Import a real MIR body with the source-scope sidecar supplied by the
+    /// codegen bridge, then verify its inline provenance survives MIR lowering.
+    /// Line tables need these scopes even when variable debug info is disabled.
+    #[test]
+    fn imported_inline_scopes_survive_lowering_in_line_table_and_full_modes() {
+        use llvm_export::ops::{DebugInlinedScope, DebugSourceScope};
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "cuda_oxide_inline_scopes_{}_{}",
+            std::process::id(),
+            unique
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let fixture = root.join("entry.rs");
+        std::fs::write(&fixture, "pub fn entry() {}\n").unwrap();
+        let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+        let sysroot = std::process::Command::new(rustc)
+            .args(["--print", "sysroot"])
+            .output()
+            .unwrap();
+        assert!(sysroot.status.success());
+        let args = vec![
+            "rustc".to_string(),
+            "--edition=2024".to_string(),
+            "--crate-type=rlib".to_string(),
+            "--emit=metadata".to_string(),
+            format!("--out-dir={}", root.display()),
+            format!(
+                "--sysroot={}",
+                String::from_utf8(sysroot.stdout).unwrap().trim()
+            ),
+            fixture.display().to_string(),
+        ];
+        let worker_root = root.clone();
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                rustc_public::run!(&args, || {
+                    let item = rustc_public::all_local_items()
+                        .into_iter()
+                        .find(|item| item.name().ends_with("::entry"))
+                        .unwrap();
+                    let instance = mono::Instance::try_from(item).unwrap();
+                    let body = instance.body().unwrap();
+                    let successors: Vec<_> = body
+                        .blocks
+                        .iter()
+                        .map(|block| block.terminator.successors())
+                        .collect();
+                    let caller = DebugSourcePosition {
+                        file: fixture,
+                        line: 1,
+                        column: 1,
+                    };
+                    let scopes = DebugSourceScopeMap {
+                        scopes: vec![
+                            DebugSourceScope {
+                                id: 0,
+                                parent: None,
+                                span: Some(caller.clone()),
+                                inlined: None,
+                            },
+                            DebugSourceScope {
+                                id: 1,
+                                parent: Some(0),
+                                span: Some(DebugSourcePosition {
+                                    file: worker_root.join("helper.rs"),
+                                    line: 279,
+                                    column: 5,
+                                }),
+                                inlined: Some(DebugInlinedScope {
+                                    callee_name: "helper::group_rank".to_string(),
+                                    callsite: Some(caller),
+                                }),
+                            },
+                        ],
+                        locations: vec![],
+                    };
+                    for kind in [DebugKind::Off, DebugKind::LineTables, DebugKind::Full] {
+                        let mut ctx = Context::new();
+                        crate::translator::register_dialects(&mut ctx);
+                        let module = ModuleOp::new(&mut ctx, "test".try_into().unwrap());
+                        let region = module.get_operation().deref(&ctx).get_region(0);
+                        let block = region.deref(&ctx).iter(&ctx).next().unwrap();
+                        let function = translate_body(
+                            &mut ctx,
+                            &body,
+                            &instance,
+                            body.blocks.len(),
+                            &successors,
+                            false,
+                            None,
+                            Some("entry"),
+                            &mut Legaliser::default(),
+                            kind,
+                            Some(&scopes),
+                            None,
+                        )
+                        .unwrap();
+                        function.insert_at_back(block, &ctx);
+                        mir_lower::register(&mut ctx);
+                        mir_lower::lower_mir_to_llvm(&mut ctx, module.get_operation()).unwrap();
+                        let lowered = block
+                            .deref(&ctx)
+                            .iter(&ctx)
+                            .find(|op| {
+                                Operation::get_op::<llvm_export::ops::FuncOp>(*op, &ctx).is_some()
+                            })
+                            .unwrap();
+                        let expected = match kind {
+                            DebugKind::Off => None,
+                            DebugKind::LineTables | DebugKind::Full => Some(scopes.clone()),
+                        };
+                        assert_eq!(
+                            llvm_export::ops::debug_source_scope_map(&ctx, lowered),
+                            expected
+                        );
+                    }
+                    std::ops::ControlFlow::<(), _>::Continue(())
+                })
+                .expect("fixture compilation succeeds");
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        std::fs::remove_dir_all(root).ok();
     }
 
     #[test]
@@ -3299,8 +3748,22 @@ pub fn pointer_debug_types(
 
         assert_opaque_pointer(&debug_types[4], "*const _");
         assert_opaque_pointer(&debug_types[5], "*const _");
-        assert_opaque_pointer(&debug_types[6], "*const _");
-        assert_opaque_pointer(&debug_types[7], "&_");
+        assert!(matches!(
+            &debug_types[6],
+            Some(DebugLocalTypeKind::Struct {
+                name,
+                size_bits: 128,
+                members,
+            }) if name == "*const [u8]" && members.len() == 2
+        ));
+        assert!(matches!(
+            &debug_types[7],
+            Some(DebugLocalTypeKind::Struct {
+                name,
+                size_bits: 128,
+                members,
+            }) if name == "&str" && members.len() == 2
+        ));
         assert_opaque_pointer(&debug_types[8], "*const _");
         assert_opaque_pointer(&debug_types[9], "*const _");
         assert_opaque_pointer(&debug_types[10], "*const _");

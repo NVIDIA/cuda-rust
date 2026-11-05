@@ -22,6 +22,7 @@ on:
   push:
     branches:
       - main
+      - "release/v0.5.x"
       - "pull-request/[0-9]+"
   workflow_dispatch:
 
@@ -47,7 +48,7 @@ jobs:
   # succeed. When copy-pr-bot yields no detectable file diff, both outputs are
   # false and the jobs run anyway so the mirror push is never silently skipped.
   changes:
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     outputs:
       tile: ${{ steps.changes.outputs.tile }}
       any_changed: ${{ steps.changes.outputs.any_changed }}
@@ -64,6 +65,7 @@ jobs:
               - 'cuda-bindings/**'
               - 'cuda-core/**'
               - 'cuda-core-derive/**'
+              - 'cuda-repr/**'
               - 'cuda-async/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
@@ -74,6 +76,23 @@ jobs:
             any_changed:
               - '*'
               - '**'
+
+  dependency-security:
+    needs: changes
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.tile == 'true' ||
+      needs.changes.outputs.any_changed != 'true'
+    runs-on: linux-amd64-cpu4
+    container:
+      image: rust:1.98.0-bookworm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --version 0.19.0 --locked
+      - name: Check Tile dependencies including optional reference examples
+        run: cargo deny --workspace --all-features --locked check
 
   # Exercise the oldest Tile IR assembler, including its lack of
   # --list-versions. The separate 13.0 lane only checks shared host crates.
@@ -159,7 +178,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Mark checkout as safe
-        run: git config --global --add safe.directory /__w/cuda-rust/cuda-rust
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       # Cheapest checks first so a formatting or lint slip fails in seconds.
       - name: Format check
@@ -211,7 +230,9 @@ jobs:
       - name: Bundle runtime test archives
         run: |
           cp "$(command -v cargo-nextest)" "$RUNNER_TEMP/cutile-gpu-tests/cargo-nextest"
-          git rev-parse HEAD > "$RUNNER_TEMP/cutile-gpu-tests/revision.txt"
+          # Container steps may use a different HOME than checkout's Git setup.
+          git -c safe.directory="$GITHUB_WORKSPACE" -C "$GITHUB_WORKSPACE" \
+            rev-parse HEAD > "$RUNNER_TEMP/cutile-gpu-tests/revision.txt"
           cargo nextest --version > "$RUNNER_TEMP/cutile-gpu-tests/nextest-version.txt"
           tar -cf "$RUNNER_TEMP/cutile-gpu-tests.tar" \
             -C "$RUNNER_TEMP/cutile-gpu-tests" .
@@ -356,7 +377,7 @@ jobs:
 
       - name: Native f16 DeviceCopy
         working-directory: ${{ github.workspace }}
-        run: cargo test -p cuda-core --features f16 --test simt_device_copy_impls
+        run: cargo test -p cuda-core --features f16 --test device_copy_impls
 
       - name: loom model check (interleavings + weak memory)
         working-directory: ${{ github.workspace }}

@@ -4,7 +4,11 @@
  */
 //! Stable first-index selection and sticky invalid-input reduction contracts.
 
-use cute_rs::reduction::ArgMax;
+#[allow(dead_code)]
+#[path = "../../examples/common/reduction.rs"]
+mod reduction;
+
+use reduction::ArgMax;
 
 #[test]
 fn first_index_ties_are_independent_of_partition_order() {

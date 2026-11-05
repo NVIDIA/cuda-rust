@@ -38,6 +38,7 @@ use dialect_mir::ops::{
 use dialect_mir::types::MirEnumType;
 use pliron::basic_block::BasicBlock;
 use pliron::builtin::op_interfaces::BranchOpInterface;
+use pliron::builtin::ops::ConstantOp;
 use pliron::builtin::types::{IntegerType, Signedness};
 use pliron::context::{Context, Ptr};
 use pliron::linked_list::ContainsLinkedList;
@@ -60,6 +61,41 @@ pub(crate) enum CanonicalizeOutcome {
     /// The CFG did not provide enough well-formed edge information to rewrite
     /// safely. The caller warns and skips the requested unroll.
     Unsupported(String),
+}
+
+/// Move constants defined in a loop header into its preheader. Returns whether
+/// any moved.
+///
+/// rustc's GVN computes a repeated expression once, at the use that dominates
+/// the others. For a bound written `N / 8` with a const generic `N`, that can
+/// be an outer loop's header, read again by the loops in its body. `sccp`
+/// folds the expression to a constant where it stands, so the header still
+/// defines a value its body reads, a shape the unroller rejects. A constant
+/// has no operands or side effects, and the preheader is the header's only
+/// entry from outside the loop, so it dominates every use of the constant.
+pub(crate) fn hoist_header_constants(
+    ctx: &mut Context,
+    info: &LoopInfo,
+    id: LoopId,
+    preheader: Ptr<BasicBlock>,
+) -> bool {
+    let header = info.loops()[id].header;
+    let Some(anchor) = preheader.deref(ctx).get_terminator(ctx) else {
+        return false;
+    };
+    let constants: Vec<Ptr<Operation>> = header
+        .deref(ctx)
+        .iter(ctx)
+        .filter(|&op| {
+            Operation::get_op::<MirConstantOp>(op, ctx).is_some()
+                || Operation::get_op::<ConstantOp>(op, ctx).is_some()
+        })
+        .collect();
+    for &op in &constants {
+        op.unlink(ctx);
+        op.insert_before(ctx, anchor);
+    }
+    !constants.is_empty()
 }
 
 /// Route direct outside uses of header-carried values through block arguments.
@@ -703,6 +739,7 @@ fn match_checked_step(
             || Operation::get_op::<MirStorageLiveOp>(op, ctx).is_some()
             || Operation::get_op::<MirStorageDeadOp>(op, ctx).is_some()
             || Operation::get_op::<MirConstantOp>(op, ctx).is_some()
+            || Operation::get_op::<ConstantOp>(op, ctx).is_some()
         {
             continue;
         }
@@ -926,6 +963,12 @@ fn evaluate_match_block(
         let width = integer_width(ctx, result)?;
         let value = if let Some(constant) = Operation::get_op::<MirConstantOp>(op, ctx) {
             constant.get_attr_value(ctx)?.value().to_u128()
+        } else if let Some(constant) = Operation::get_op::<ConstantOp>(op, ctx) {
+            let attr = constant.get_value(ctx);
+            (&*attr as &dyn pliron::attribute::Attribute)
+                .downcast_ref::<pliron::builtin::attributes::IntegerAttr>()?
+                .value()
+                .to_u128()
         } else if Operation::get_op::<MirGetDiscriminantOp>(op, ctx).is_some() {
             if op.deref(ctx).get_operand(0) != tested {
                 return None;

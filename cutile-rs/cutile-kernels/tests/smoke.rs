@@ -5,6 +5,7 @@
 
 use cutile::compile_api::KernelCompiler;
 use cutile_compiler::ast::Module;
+use cutile_ir::bytecode::BytecodeVersion;
 
 const TEST_STACK_SIZE: usize = 32_000_000;
 const TARGET: &str = "sm_120";
@@ -26,6 +27,14 @@ fn g(values: &[&str]) -> Vec<String> {
 }
 
 fn compile_cases(cases: Vec<SmokeCase>) {
+    compile_cases_for_target(cases, TARGET, None);
+}
+
+fn compile_cases_for_target(
+    cases: Vec<SmokeCase>,
+    target: &'static str,
+    version: Option<BytecodeVersion>,
+) {
     std::thread::Builder::new()
         .stack_size(TEST_STACK_SIZE)
         .spawn(move || {
@@ -38,9 +47,12 @@ fn compile_cases(cases: Vec<SmokeCase>) {
                     .collect();
                 let mut compiler =
                     KernelCompiler::new(case.module_ast, case.module_name, case.function_name)
-                        .target(TARGET)
+                        .target(target)
                         .generics(case.generics)
                         .strides(&stride_refs);
+                if let Some(version) = version {
+                    compiler = compiler.bytecode_version(version);
+                }
                 if let Some(grid) = case.grid {
                     compiler = compiler.grid(grid);
                 }
@@ -492,4 +504,245 @@ fn smoke_compile_experimental() {
             grid: Some((1, 1, 1)),
         },
     ]);
+}
+
+#[test]
+fn smoke_compile_grout_variants() {
+    compile_cases(vec![
+        SmokeCase {
+            name: "add_vec_f16",
+            module_ast: cutile_kernels::pointwise::add_vec_f16_module::__module_ast_self,
+            module_name: "add_vec_f16_module",
+            function_name: "add_vec_f16",
+            generics: g(&["32"]),
+            strides: vec![("out", vec![1]), ("lhs", vec![1]), ("rhs", vec![1])],
+            grid: Some((1, 1, 1)),
+        },
+        SmokeCase {
+            name: "silu_mul_vec_f16",
+            module_ast: cutile_kernels::pointwise::silu_mul_vec_f16_module::__module_ast_self,
+            module_name: "silu_mul_vec_f16_module",
+            function_name: "silu_mul_vec_f16",
+            generics: g(&["32"]),
+            strides: vec![("out", vec![1]), ("gate", vec![1]), ("up", vec![1])],
+            grid: Some((1, 1, 1)),
+        },
+        SmokeCase {
+            name: "embedding_f16",
+            module_ast: cutile_kernels::embeddings::embedding_f16_module::__module_ast_self,
+            module_name: "embedding_f16_module",
+            function_name: "embedding_f16",
+            generics: g(&["64", "32"]),
+            strides: vec![("token_ids", vec![1]), ("table", vec![64, 1]), ("out", vec![64, 1])],
+            grid: Some((1, 1, 1)),
+        },
+        SmokeCase {
+            name: "rope_f16",
+            module_ast: cutile_kernels::positional::rope_f16_module::__module_ast_self,
+            module_name: "rope_f16_module",
+            function_name: "rope_f16",
+            generics: g(&["64", "32"]),
+            strides: vec![("x", vec![64, 1]), ("inv_freq", vec![1])],
+            grid: Some((1, 1, 1)),
+        },
+        SmokeCase {
+            name: "kv_cache_update_f16",
+            module_ast: cutile_kernels::kv_cache::kv_cache_update_f16_module::__module_ast_self,
+            module_name: "kv_cache_update_f16_module",
+            function_name: "kv_cache_update_f16",
+            generics: g(&["64", "32", "128"]),
+            strides: vec![("new_k", vec![64, 1]), ("new_v", vec![64, 1]), ("k_cache", vec![8192, 64, 1]), ("v_cache", vec![8192, 64, 1])],
+            grid: Some((1, 1, 1)),
+        },
+        SmokeCase {
+            name: "flash_attn_f16",
+            module_ast: cutile_kernels::attention::flash_attn_f16_module::__module_ast_self,
+            module_name: "flash_attn_f16_module",
+            function_name: "flash_attn_f16",
+            generics: g(&["16", "32", "64"]),
+            strides: vec![("q", vec![8192, 64, 1]), ("k", vec![8192, 64, 1]), ("v", vec![8192, 64, 1]), ("out", vec![8192, 64, 1])],
+            grid: Some((1, 1, 1)),
+        },
+        SmokeCase {
+            name: "flash_attn_causal_f16",
+            module_ast: cutile_kernels::attention::flash_attn_causal_f16_module::__module_ast_self,
+            module_name: "flash_attn_causal_f16_module",
+            function_name: "flash_attn_causal_f16",
+            generics: g(&["16", "32", "64"]),
+            strides: vec![("q", vec![8192, 64, 1]), ("k", vec![8192, 64, 1]), ("v", vec![8192, 64, 1]), ("out", vec![8192, 64, 1])],
+            grid: Some((1, 1, 1)),
+        },
+        SmokeCase {
+            name: "gemm_f16",
+            module_ast: cutile_kernels::experimental::gemm::gemm_f16_module::__module_ast_self,
+            module_name: "gemm_f16_module",
+            function_name: "gemm_f16",
+            generics: g(&["16", "32", "32", "64"]),
+            strides: vec![("z", vec![32, 1]), ("x", vec![64, 1]), ("y", vec![32, 1])],
+            grid: Some((2, 1, 1)),
+        },
+        SmokeCase {
+            name: "rms_norm_persistent_f16",
+            module_ast: cutile_kernels::experimental::norms::rms_norm_persistent_f16_module::__module_ast_self,
+            module_name: "rms_norm_persistent_f16_module",
+            function_name: "rms_norm_persistent_f16",
+            generics: g(&["64", "32"]),
+            strides: vec![],
+            grid: Some((2, 1, 1)),
+        },
+    ]);
+}
+
+#[test]
+fn smoke_compile_split_prefill_schedules() {
+    // Exercise swizzled LPT, q-major LPT, head-major LPT, and forward swizzle.
+    for schedule in 0..=3 {
+        for even_k in 0..=1 {
+            compile_cases(vec![
+        SmokeCase {
+            name: "fmha_prefill_gqa_lpt_split",
+            module_ast: cutile_kernels::experimental::attention::fmha_prefill_gqa_lpt_split_module::__module_ast_self,
+            module_name: "fmha_prefill_gqa_lpt_split_module",
+            function_name: "fmha_prefill_gqa_lpt_split",
+            generics: g(&["16", "32", "64", "2", "32", &even_k.to_string(), "4", "128", "1", &schedule.to_string()]),
+            strides: vec![],
+            grid: Some((6, 4, 1)),
+        },
+        SmokeCase {
+            name: "prefill_splitk_reduce_merge",
+            module_ast: cutile_kernels::experimental::attention::prefill_splitk_reduce_merge_module::__module_ast_self,
+            module_name: "prefill_splitk_reduce_merge_module",
+            function_name: "prefill_splitk_reduce_merge",
+            generics: g(&["16", "2", "64", "32", "32", "4", "128", &schedule.to_string(), "1"]),
+            strides: vec![],
+            grid: Some((6, 2, 1)),
+        },
+            ]);
+        }
+    }
+}
+
+#[test]
+fn smoke_compile_nvfp4_moe() {
+    for target in ["sm_100", "sm_120"] {
+        for version in [BytecodeVersion::V13_3, BytecodeVersion::V13_4] {
+            compile_cases_for_target(
+                vec![
+                    SmokeCase {
+                        name: "routing_group_pairwise_kernel",
+                        module_ast:
+                            cutile_kernels::experimental::nvfp4_moe::kernels::__module_ast_self,
+                        module_name: "kernels",
+                        function_name: "routing_group_pairwise_kernel",
+                        generics: g(&[]),
+                        strides: vec![
+                            ("group_tokens", vec![16, 1]),
+                            ("group_experts", vec![1]),
+                            ("group_limits", vec![1]),
+                            ("expanded_to_permuted", vec![4, 1]),
+                            ("num_groups", vec![1]),
+                            ("expert_ids", vec![4, 1]),
+                        ],
+                        grid: Some((1, 1, 1)),
+                    },
+                    SmokeCase {
+                        name: "routing_group_histogram_kernel",
+                        module_ast:
+                            cutile_kernels::experimental::nvfp4_moe::kernels::__module_ast_self,
+                        module_name: "kernels",
+                        function_name: "routing_group_histogram_kernel",
+                        generics: g(&["1024", "8"]),
+                        strides: vec![
+                            ("group_tokens", vec![16, 1]),
+                            ("group_experts", vec![1]),
+                            ("group_limits", vec![1]),
+                            ("expanded_to_permuted", vec![4, 1]),
+                            ("num_groups", vec![1]),
+                            ("expert_ids", vec![4, 1]),
+                            ("expert_counts", vec![1]),
+                            ("expert_offsets", vec![1]),
+                        ],
+                        grid: Some((1, 1, 1)),
+                    },
+                    SmokeCase {
+                        name: "nvfp4_quantize_kernel",
+                        module_ast:
+                            cutile_kernels::experimental::nvfp4_moe::kernels::__module_ast_self,
+                        module_name: "kernels",
+                        function_name: "nvfp4_quantize_kernel",
+                        generics: g(&["1024", "512", "64", "64", "16", "64"]),
+                        strides: vec![
+                            ("packed_out", vec![512, 1]),
+                            ("scales_out", vec![64, 1]),
+                            ("input", vec![1024, 1]),
+                        ],
+                        grid: Some((1, 1, 1)),
+                    },
+                    SmokeCase {
+                        name: "grouped_fc1_kernel",
+                        module_ast:
+                            cutile_kernels::experimental::nvfp4_moe::kernels::__module_ast_self,
+                        module_name: "kernels",
+                        function_name: "grouped_fc1_kernel",
+                        generics: g(&[
+                            "128", "4", "16", "512", "8", "256", "32", "64", "8", "1", "1", "16",
+                            "8", "16", "8", "16",
+                        ]),
+                        strides: vec![
+                            ("inter_out", vec![8192, 512, 1]),
+                            ("inter_scales", vec![1024, 16, 1]),
+                            ("hidden", vec![512, 1]),
+                            ("hidden_scales", vec![64, 1]),
+                            ("group_tokens", vec![16, 1]),
+                            ("group_experts", vec![1]),
+                            ("group_limits", vec![1]),
+                            ("num_groups", vec![1]),
+                            ("w_up", vec![512, 1]),
+                            ("w_up_scales", vec![8192, 512, 256, 1]),
+                            ("w_up_global", vec![1]),
+                        ],
+                        grid: Some((8, 8, 1)),
+                    },
+                    SmokeCase {
+                        name: "grouped_fc2_kernel",
+                        module_ast:
+                            cutile_kernels::experimental::nvfp4_moe::kernels::__module_ast_self,
+                        module_name: "kernels",
+                        function_name: "grouped_fc2_kernel",
+                        generics: g(&[
+                            "128", "4", "16", "512", "8", "256", "32", "4096", "1", "1", "1",
+                        ]),
+                        strides: vec![
+                            ("grouped_out", vec![16384, 1024, 1]),
+                            ("inter", vec![8192, 512, 1]),
+                            ("inter_scales", vec![1024, 16, 1]),
+                            ("group_experts", vec![1]),
+                            ("num_groups", vec![1]),
+                            ("w_down", vec![512, 1]),
+                            ("w_down_scales", vec![8192, 1]),
+                            ("w_down_global", vec![1]),
+                        ],
+                        grid: Some((8, 8, 1)),
+                    },
+                    SmokeCase {
+                        name: "finalize_kernel",
+                        module_ast:
+                            cutile_kernels::experimental::nvfp4_moe::kernels::__module_ast_self,
+                        module_name: "kernels",
+                        function_name: "finalize_kernel",
+                        generics: g(&["256"]),
+                        strides: vec![
+                            ("out", vec![1024, 1]),
+                            ("grouped", vec![16384, 1024, 1]),
+                            ("expanded_to_permuted", vec![4, 1]),
+                            ("routing_weights", vec![4, 1]),
+                        ],
+                        grid: Some((1, 4, 1)),
+                    },
+                ],
+                target,
+                Some(version),
+            );
+        }
+    }
 }

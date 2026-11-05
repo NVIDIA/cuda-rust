@@ -36,6 +36,12 @@ The synthetic workload uses H=I=1024, eight allocated experts, four active
 experts, and top-k=4, with direct launches and graph replay checked against a
 deterministic reference. Performance will be optimized in a future version.
 
+The example uses the reusable kernels in
+[`cutile-kernels::experimental::nvfp4_moe`](../cutile-kernels/src/experimental/nvfp4_moe.rs).
+**Peak performance requires CUDA Toolkit 13.5 and its Tile IR assembler.** The
+minimum execution requirements above are unchanged; older assemblers can run
+the kernels without the latest compiler optimizations.
+
 To check compatibility, select the actual older assembler:
 
 ```sh

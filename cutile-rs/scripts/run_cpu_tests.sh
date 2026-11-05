@@ -18,6 +18,10 @@ run_step \
     cargo test -p cutile-examples --lib requirements::
 
 run_step \
+    "reusable kernel IR and bytecode smoke tests" \
+    cargo test -p cutile-kernels --test smoke
+
+run_step \
     "example runner accounting tests" \
     bash "$REPO_ROOT/scripts/test_example_runner.sh"
 

@@ -60,6 +60,19 @@ fn ensure_static_global_alloc(
         return Ok(*existing);
     }
 
+    // Checked here, where the static becomes a global, so each static is
+    // checked once and the first failure stops translation.
+    if let Some(shared_name) = nested_shared_type_name(static_def.ty()) {
+        return input_err!(
+            loc,
+            TranslationErr::unsupported(format!(
+                "device static `{}` contains a `{shared_name}` inside another type; \
+                 shared-memory types are only supported as the whole type of a static",
+                static_def.name()
+            ))
+        );
+    }
+
     let initializer = static_initializer_data(static_def, loc.clone())?;
     let allocation_size = initializer.bytes.len() as u64;
     let initializer_hex = bytes_to_hex(&initializer.bytes);
@@ -398,15 +411,55 @@ fn retype_static_pointer_result(
 
 /// Return the first union stored inline in `ty`.
 ///
-/// Pointer pointees are deliberately not followed: their bytes are not part of
-/// the containing allocation, and initializer relocations are collected through
-/// rustc provenance separately. Arrays, tuples, structs, and enum payloads are
-/// inline and must be searched recursively.
+/// See [`find_inline_adt`] for which parts of `ty` are searched.
 pub(super) fn stored_type_union_name(
     ty: rustc_public::ty::Ty,
     visited: &mut Vec<rustc_public::ty::Ty>,
 ) -> Option<String> {
-    use rustc_public::ty::{AdtKind, RigidTy, TyKind};
+    find_inline_adt(ty, visited, &|adt_def| {
+        matches!(adt_def.kind(), rustc_public::ty::AdtKind::Union)
+    })
+}
+
+/// `true` for the cuda-device types that get per-block shared storage when
+/// they are the whole type of a static (`SharedArray`, `Barrier`).
+fn is_shared_memory_adt(adt_def: &rustc_public::ty::AdtDef) -> bool {
+    types::is_cuda_device_adt(adt_def, "SharedArray")
+        || types::is_cuda_device_adt(adt_def, "Barrier")
+}
+
+/// Return the first `SharedArray` or `Barrier` stored inline *below* the top
+/// level of a static's type, such as the `Barrier` in `(Barrier, u32)`.
+///
+/// A static whose whole type is `SharedArray` or `Barrier` is placed in shared
+/// memory and is fine. Inside any other type it would land in global memory
+/// while pointers to it are typed as shared-memory pointers, so it must be
+/// refused. Pointers such as `*mut Barrier` are not followed and stay legal.
+fn nested_shared_type_name(static_ty: rustc_public::ty::Ty) -> Option<String> {
+    use rustc_public::ty::{RigidTy, TyKind};
+
+    if let TyKind::RigidTy(RigidTy::Adt(adt_def, _)) = static_ty.kind()
+        && is_shared_memory_adt(&adt_def)
+    {
+        return None;
+    }
+
+    find_inline_adt(static_ty, &mut Vec::new(), &is_shared_memory_adt)
+}
+
+/// Return the trimmed name of the first ADT stored inline in `ty` for which
+/// `matches` returns `true`, checking `ty` itself first.
+///
+/// Pointer pointees are deliberately not followed: their bytes are not part of
+/// the containing allocation, and initializer relocations are collected through
+/// rustc provenance separately. Arrays, tuples, structs, and enum payloads are
+/// inline and must be searched recursively. `visited` stops recursive types.
+fn find_inline_adt(
+    ty: rustc_public::ty::Ty,
+    visited: &mut Vec<rustc_public::ty::Ty>,
+    matches: &dyn Fn(&rustc_public::ty::AdtDef) -> bool,
+) -> Option<String> {
+    use rustc_public::ty::{RigidTy, TyKind};
 
     if visited.contains(&ty) {
         return None;
@@ -415,12 +468,13 @@ pub(super) fn stored_type_union_name(
 
     match ty.kind() {
         TyKind::RigidTy(RigidTy::Adt(adt_def, substs)) => {
-            if matches!(adt_def.kind(), AdtKind::Union) {
+            if matches(&adt_def) {
                 return Some(adt_def.trimmed_name());
             }
             for variant in adt_def.variants() {
                 for field in variant.fields() {
-                    if let Some(name) = stored_type_union_name(field.ty_with_args(&substs), visited)
+                    if let Some(name) =
+                        find_inline_adt(field.ty_with_args(&substs), visited, matches)
                     {
                         return Some(name);
                     }
@@ -429,11 +483,11 @@ pub(super) fn stored_type_union_name(
             None
         }
         TyKind::RigidTy(RigidTy::Array(element, _)) | TyKind::RigidTy(RigidTy::Slice(element)) => {
-            stored_type_union_name(element, visited)
+            find_inline_adt(element, visited, matches)
         }
         TyKind::RigidTy(RigidTy::Tuple(elements)) => {
             for element in elements.iter() {
-                if let Some(name) = stored_type_union_name(*element, visited) {
+                if let Some(name) = find_inline_adt(*element, visited, matches) {
                     return Some(name);
                 }
             }

@@ -94,9 +94,13 @@ jobs:
       - name: Check Tile dependencies including optional reference examples
         run: cargo deny --workspace --all-features --locked check
 
-  # Exercise the oldest Tile IR assembler, including its lack of
-  # --list-versions. The separate 13.0 lane only checks shared host crates.
-  tile-ir-cuda13-2:
+  # Tile IR assembler lanes. The base lane exercises the oldest assembler,
+  # including its lack of --list-versions; the newest lane needs an assembler
+  # that lists bytecode 13.5, which the Tile IR 13.5 gates in the compiler and
+  # encoder depend on. The separate 13.0 lane only checks shared host crates.
+  # The job names are tile-ir-cuda13-2 and tile-ir-cuda13-5.
+  tile-ir:
+    name: ${{ matrix.lane.name }}
     needs: changes
     if: >-
       github.event_name == 'workflow_dispatch' ||
@@ -104,52 +108,51 @@ jobs:
       needs.changes.outputs.any_changed != 'true'
     runs-on: linux-amd64-cpu16
     container:
-      image: nvidia/cuda:13.2.0-devel-ubuntu24.04
+      image: ${{ matrix.lane.image }}
       env:
         DEBIAN_FRONTEND: noninteractive
     env:
       CUDA_TOOLKIT_PATH: /usr/local/cuda
-      CUTILE_TILEIRAS_PATH: /usr/local/cuda/bin/tileiras
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        lane:
+          - name: tile-ir-cuda13-2
+            image: nvidia/cuda:13.2.0-devel-ubuntu24.04
+            newest: false
+          # Same image digest as Docker Hub's nvidia/cuda:13.5.0-devel-ubuntu24.04;
+          # nvcr.io has no anonymous pull limit.
+          - name: tile-ir-cuda13-5
+            image: nvcr.io/nvidia/cuda:13.5.0-devel-ubuntu24.04
+            newest: true
     steps:
       - uses: actions/checkout@v7
+      # The lanes share github.job, so the lane name keeps their caches apart.
       - uses: ./cutile-rs/.github/actions/setup
+        with:
+          cache-key: ${{ matrix.lane.name }}
+      # The tests test whether CUTILE_TILEIRAS_PATH is set, so only the base lane
+      # exports it, for the steps below.
       - name: Verify assembler
+        if: ${{ !matrix.lane.newest }}
         run: |
-          "$CUTILE_TILEIRAS_PATH" --version
-          "$CUTILE_TILEIRAS_PATH" --help | grep -q 'sm_120'
+          echo "CUTILE_TILEIRAS_PATH=/usr/local/cuda/bin/tileiras" >> "$GITHUB_ENV"
+          /usr/local/cuda/bin/tileiras --version
+          /usr/local/cuda/bin/tileiras --help | grep -q 'sm_120'
+      # The dev image may ship the toolkit without the assembler package;
+      # install it when missing.
+      - name: Verify assembler version
+        if: ${{ matrix.lane.newest }}
+        run: |
+          command -v tileiras || apt-get install -y -qq --no-install-recommends cuda-tileiras-13-5
+          tileiras --version
+          tileiras --list-versions | grep -qF '13.5'
       - name: CPU and assembler tests
         run: ./scripts/run_cpu_tests.sh
       - name: Standalone bytecode example
+        if: ${{ !matrix.lane.newest }}
         run: cargo run -p cutile-ir --example build_basic
-
-  # Newest Tile IR assembler: the 13.4 gates in the compiler and encoder must
-  # pass here and refuse correctly on the 13.2 lane above. The dev image may
-  # ship the toolkit without the assembler package; install it when missing.
-  tile-ir-cuda13-4:
-    needs: changes
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      needs.changes.outputs.tile == 'true' ||
-      needs.changes.outputs.any_changed != 'true'
-    runs-on: linux-amd64-cpu16
-    container:
-      image: nvidia/cuda:13.4.1-devel-ubuntu24.04
-      env:
-        DEBIAN_FRONTEND: noninteractive
-    env:
-      CUDA_TOOLKIT_PATH: /usr/local/cuda
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-      - uses: ./cutile-rs/.github/actions/setup
-      - name: Verify assembler version
-        run: |
-          command -v tileiras || apt-get install -y -qq --no-install-recommends cuda-tileiras-13-4
-          tileiras --version
-          tileiras --list-versions | grep -q '13.4'
-      - name: CPU and assembler tests
-        run: ./scripts/run_cpu_tests.sh
 
   build:
     needs: changes

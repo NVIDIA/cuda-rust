@@ -69,13 +69,13 @@ jobs:
   examples-compile:
     needs: changes
     if: ${{ !cancelled() && (github.event_name != 'push' || needs.changes.outputs.relevant == 'true' || needs.changes.outputs.any_changed != 'true') }}
-    name: compile all examples (device pipeline, GPU-less)
+    name: compile all examples (device pipeline, GPU-less)${{ matrix.cuda.suffix }}
     runs-on: linux-amd64-cpu4
-    # CUDA 13.3.1 devel image: nvcc, cudart, libcurand, and libnvJitLink.
-    # The materialization gate below needs nvJitLink, which the devel image
-    # ships. rustup is installed in the container.
+    # CUDA devel image (see the matrix): nvcc, cudart, libcurand, and
+    # libnvJitLink. The materialization gate below needs nvJitLink, which the
+    # devel image ships. rustup is installed in the container.
     container:
-      image: nvidia/cuda:13.3.1-devel-ubuntu24.04
+      image: ${{ matrix.cuda.image }}
       env:
         DEBIAN_FRONTEND: noninteractive
     env:
@@ -86,6 +86,17 @@ jobs:
     # Leave job-level headroom around the 50-minute full compile and the
     # focused 10-minute materialization gate, plus toolkit/LLVM setup.
     timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      # The baseline lane keeps its existing job name (empty suffix); the newer
+      # image is a separate lane. The nvcr.io image has the same digest as Docker
+      # Hub's nvidia/cuda:13.5.0-devel-ubuntu24.04 and no anonymous pull limit.
+      matrix:
+        cuda:
+          - image: nvidia/cuda:13.3.1-devel-ubuntu24.04
+            suffix: ""
+          - image: nvcr.io/nvidia/cuda:13.5.0-devel-ubuntu24.04
+            suffix: " (CUDA 13.5.0)"
     steps:
       # $/ installs git before checkout. The CUDA image has no git; without
       # it checkout stores a tarball. The same step installs python3 for
@@ -320,7 +331,9 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: smoketest-compile-logs
+          # Artifact names are unique per run; the baseline lane keeps its name
+          # (empty suffix) and the newer lane adds its suffix.
+          name: smoketest-compile-logs${{ matrix.cuda.suffix }}
           # One glob per log the artifact-modes step writes. `iket-trace-*`
           # matched neither of the other two, so the one assertion that
           # exercises the full libNVVM + nvJitLink path -- and the only one

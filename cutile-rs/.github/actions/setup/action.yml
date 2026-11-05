@@ -14,6 +14,12 @@ inputs:
   cache:
     description: Restore and save the Rust build cache for this job.
     default: "true"
+  cache-key:
+    description: >-
+      Extra cache key, appended to the job id. A matrix job passes a value that
+      tells its lanes apart (for example the lane name), because every lane has
+      the same job id.
+    default: ""
 
 runs:
   using: composite
@@ -71,8 +77,10 @@ runs:
       if: inputs.cache == 'true'
       uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
       with:
-        # One cache per job: the CUDA image differs per lane and bindgen output
-        # with it, so artifacts are not interchangeable across lanes.
+        # One cache per job and lane: the CUDA image differs per lane and
+        # bindgen output with it, so artifacts are not interchangeable across
+        # lanes. The lanes of a matrix job share github.job; they tell them apart
+        # with cache-key.
         workspaces: cutile-rs
-        key: ${{ github.job }}
+        key: ${{ github.job }}${{ inputs.cache-key != '' && format('-{0}', inputs.cache-key) || '' }}
         cache-on-failure: true

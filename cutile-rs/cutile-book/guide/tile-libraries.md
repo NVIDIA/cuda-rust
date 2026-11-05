@@ -1,6 +1,6 @@
 # Tile Libraries
 
-A **tile library** (`.tilelib`) provides precompiled tile functions that a
+A **tile library** (`.tilelib`) packages device functions that a
 kernel calls like any other function: an FFT of a tile, the Cholesky
 factorization of a tile, and so on. Tile C++ calls them through
 `__experimental_foreign_decl__` declarations and cuTile Python through
@@ -11,6 +11,44 @@ factorization of a tile, and so on. Tile C++ calls them through
 Tile libraries are a public preview of Tile IR 13.5. They need a CUDA 13.5
 `tileiras`, and a tile library built for that same toolkit.
 ```
+
+## Finding tile libraries
+
+Start with NVIDIA's [Tile IR supported-library list](https://docs.nvidia.com/cuda/tile-ir/latest/sections/prog_model.html#supported-libraries).
+It links to providers as their packages become available. Tile libraries are
+released separately from the CUDA Toolkit; installing CUDA 13.5 alone does not
+install every provider's `.tilelib` files.
+
+As of November 5, 2026, that list names:
+
+| Provider | Functions | Availability listed by Tile IR |
+| --- | --- | --- |
+| MathDx Tile | FFT, linear algebra, compression | Upcoming; follow the supported-library list for package links. |
+| [NVSHMEM](https://developer.nvidia.com/nvshmem) | GPU communication and synchronization | Starting with NVSHMEM 3.9; check the provider's downloads for release availability. |
+| CCCL Coop | Cooperative CUB primitives, including scan, sort, and top-k | Upcoming; follow the supported-library list for package links. |
+
+Use the provider's installation instructions to obtain a `.tilelib` and its
+dependencies for your toolkit. Its interface determines the function names,
+constant arguments, shapes, types, and architectures you can use. Then declare
+the functions as below and pass the installed paths to
+[`TileLibrarySpec`](#configuring-tile-libraries). The provider list describes
+Tile IR support; cuTile Rust's [current operand limitations](#limitations)
+also apply, including the lack of pointer operands in foreign calls.
+
+The `solver.tilelib`, `fft_path`, and provider-library paths in this chapter
+are illustrative configuration examples. They are not bundled downloads or
+guaranteed package filenames. Replace them with the paths and declarations
+from the provider's package.
+
+### Reusable Rust kernels
+
+For Rust implementations of attention, normalization, transformer utilities,
+and NVFP4 MoE, see the
+[`cutile-kernels` catalog](https://github.com/NVIDIA/cuda-rust/blob/main/cutile-rs/cutile-kernels/README.md)
+and the
+[`nvfp4_moe` example](https://github.com/NVIDIA/cuda-rust/blob/main/cutile-rs/cutile-examples/examples/nvfp4_moe.rs).
+These are Rust source kernels launched from the host. A `.tilelib` supplies
+device functions called from inside a kernel through `#[cutile::foreign]`.
 
 ## Declaring a foreign function
 
@@ -160,6 +198,9 @@ Two modules can each declare a foreign function with the same Rust name;
 each call reaches the one it names.
 
 ## Configuring tile libraries
+
+Obtain a compatible provider package through
+[Finding tile libraries](#finding-tile-libraries) before configuring these paths.
 
 The host chooses the tile libraries that kernels link, so the same kernel
 source can link a debug or a release build of a library, or one built for

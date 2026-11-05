@@ -2,6 +2,10 @@
 
 Reusable cuTile Rust kernels.
 
+This crate contains Rust source kernels launched from the host. To find
+`.tilelib` packages whose device functions can be called from inside a kernel,
+see [Finding tile libraries](../cutile-book/guide/tile-libraries.md#finding-tile-libraries).
+
 Kernel modules are grouped by function: attention, norms, positional encoding,
 KV-cache updates, argmax/sampling, embeddings, and pointwise transformer
 utilities.

@@ -40,6 +40,27 @@ are illustrative configuration examples. They are not bundled downloads or
 guaranteed package filenames. Replace them with the paths and declarations
 from the provider's package.
 
+### Rust SIMT functions from CUDA Oxide
+
+CUDA Oxide can also build tile libraries from Rust SIMT functions: mark them
+with `#[tile_export]`, then package them with `cargo oxide tilelib`. See the
+[`tilelib_relu` example](https://github.com/NVIDIA/cuda-rust/blob/main/cuda-oxide/crates/rustc-codegen-cuda/examples/tilelib_relu/README.md)
+for export definitions, build commands, and current export limitations.
+
+To call these exports from cuTile Rust, write matching
+[`#[cutile::foreign] unsafe fn` declarations](#declaring-a-foreign-function)
+and [configure the generated `.tilelib` on the host](#configuring-tile-libraries)
+with `TileLibrarySpec`. Match the exported function name, concrete tile shapes,
+element types, and input/output access modes. This is device-function interop:
+the SIMT function runs inside the Tile kernel.
+
+This uses the CUDA 13.5 preview and requires matching library, caller bytecode,
+and `tileiras` tooling; preview libraries are not portable across arbitrary
+toolkit versions. Oxide's current export restrictions apply in addition to
+the [cuTile Rust limitations](#limitations). The recorded Oxide execution
+validation used a Tile C++ caller; it does not establish an Oxide-to-cuTile Rust
+execution test.
+
 ### Reusable Rust kernels
 
 For Rust implementations of attention, normalization, transformer utilities,

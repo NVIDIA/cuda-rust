@@ -10,6 +10,10 @@ program here proves the ABI on any CUDA 13.4 machine, through a generated
 CUDA C++ caller that declares the implementations the way the Tile compiler
 would.
 
+cuTile Rust can consume these libraries too, through `#[cutile::foreign]`
+unsafe declarations and host-configured library paths. See
+[Calling from cuTile Rust](#calling-from-cutile-rust) below.
+
 ```text
 src/main.rs: #[tile_export] relu, scale_in_place, warp_sum
     |
@@ -97,6 +101,39 @@ SUCCESS: 3/3 tile exports verified through the native ABI
 ```
 
 Without nvcc it prints `skipping: nvcc not found` and exits 0.
+
+## Calling from cuTile Rust
+
+After `cargo oxide tilelib` packages the `#[tile_export]` functions, declare
+their interfaces with `#[cutile::foreign] unsafe fn` inside a
+`#[cutile::module]`. Match the library's names, concrete tile shapes, element
+types, and input/output access modes, then configure the generated `.tilelib`
+on the host with `TileLibrarySpec`. The
+[cuTile Rust tile-library guide](https://github.com/NVIDIA/cuda-rust/blob/main/cutile-rs/cutile-book/guide/tile-libraries.md)
+explains declarations, unsafe calls, and host configuration.
+
+Use matching CUDA 13.5 preview tooling for the library and caller; the
+library descriptors and caller bytecode must match the assembler's preview
+version. The execution validation recorded in
+[#1556](https://github.com/NVIDIA/cuda-rust/pull/1556) used the Tile C++ caller.
+This example does not yet include an Oxide-to-cuTile Rust execution test.
+
+## Current export limitations
+
+- Exports are non-generic free functions with concrete, one-dimensional tile
+  shapes. Static libraries are supported; on-demand linkage providers are not.
+- Supported element types are `f16`, `f32`, `f64`, and signed/unsigned 8-, 16-,
+  32-, and 64-bit integers; `bf16` is not accepted by `#[tile_export]`.
+- All operands of an export must have the same per-invocation element count
+  (footprint). Parameters use scalars, references, or references to fixed-size
+  arrays; returns are scalar or unit, with at least one output required.
+  Written operands (`out`/`inout`) must form one contiguous run.
+- Synchronization is `none` or `warp`; warp exports need whole groups of
+  `32 * footprint` elements. Callees cannot allocate shared memory; the export
+  description has no scratch-buffer support.
+
+References in the SIMT implementation access its tile fragments; they do not
+add support for arbitrary pointer operands to cuTile Rust foreign declarations.
 
 ## What PASS proves
 

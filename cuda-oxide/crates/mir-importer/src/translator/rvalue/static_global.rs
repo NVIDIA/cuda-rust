@@ -198,6 +198,26 @@ pub(super) fn translate_static_global_pointer(
     prev_op: Option<Ptr<Operation>>,
     loc: Location,
 ) -> TranslationResult<(Value, Option<Ptr<Operation>>)> {
+    // Every global static allocation is materialized here. A static whose own
+    // type is `SharedArray` or `Barrier` was intercepted as shared storage
+    // before this point, but a wrapper that merely holds one below the top
+    // level is not: it would be emitted as a global while a pointer to the
+    // field keeps the `addrspace(3)` type, and the address cast between the
+    // two spaces is undefined. One static cannot live in both spaces, so
+    // refuse it here instead of emitting that cast.
+    if let Some(shared_ty) = nested_shared_storage_name(static_def.ty()) {
+        return input_err!(
+            loc.clone(),
+            TranslationErr::unsupported(format!(
+                "device static {} holds a `{shared_ty}` below the top level. \
+                 Only a static whose entire type is `SharedArray` or `Barrier` \
+                 can live in shared memory: one static cannot be split between \
+                 shared and global memory",
+                static_def.name(),
+            ))
+        );
+    }
+
     let mut state = StaticGlobalMaterializationState {
         globals: std::collections::HashMap::new(),
         last_op: prev_op,
@@ -439,6 +459,88 @@ pub(super) fn stored_type_union_name(
             }
             None
         }
+        _ => None,
+    }
+}
+
+/// The name of `ty` itself when it is shared-memory storage.
+///
+/// These are the two cuda-device types that get a per-block shared allocation
+/// instead of a global one.
+fn shared_storage_name(ty: rustc_public::ty::Ty) -> Option<&'static str> {
+    use rustc_public::ty::{RigidTy, TyKind};
+
+    let TyKind::RigidTy(RigidTy::Adt(adt_def, _)) = ty.kind() else {
+        return None;
+    };
+
+    if types::is_cuda_device_adt(&adt_def, "SharedArray") {
+        return Some("SharedArray");
+    }
+
+    if types::is_cuda_device_adt(&adt_def, "Barrier") {
+        return Some("Barrier");
+    }
+
+    None
+}
+
+/// The name of a `SharedArray` or `Barrier` that a static holds *below* its top
+/// level, or `None` when it holds none.
+///
+/// A static whose own type is shared storage is intercepted as shared storage
+/// elsewhere and is not reported here. A wrapper such as `(Barrier, u32)` is
+/// different: it would need both a shared and a global address, so its
+/// translation is refused.
+fn nested_shared_storage_name(ty: rustc_public::ty::Ty) -> Option<&'static str> {
+    if shared_storage_name(ty).is_some() {
+        return None;
+    }
+
+    search_nested_shared_storage(ty, &mut Vec::new())
+}
+
+/// Depth-first walk behind [`nested_shared_storage_name`].
+///
+/// Only storage inside the containing allocation is searched: ADT fields of
+/// every variant, arrays, slices, and tuples. Pointer pointees are not
+/// followed, because their bytes live elsewhere. `visited` stops the walk from
+/// looping on a self-referential type.
+fn search_nested_shared_storage(
+    ty: rustc_public::ty::Ty,
+    visited: &mut Vec<rustc_public::ty::Ty>,
+) -> Option<&'static str> {
+    use rustc_public::CrateDefType;
+    use rustc_public::ty::{RigidTy, TyKind};
+
+    if visited.contains(&ty) {
+        return None;
+    }
+    visited.push(ty);
+
+    match ty.kind() {
+        TyKind::RigidTy(RigidTy::Adt(adt_def, substs)) => {
+            if let Some(name) = shared_storage_name(ty) {
+                return Some(name);
+            }
+
+            adt_def
+                .variants()
+                .into_iter()
+                .flat_map(|variant| variant.fields())
+                .find_map(|field| {
+                    search_nested_shared_storage(field.ty_with_args(&substs), visited)
+                })
+        }
+
+        TyKind::RigidTy(RigidTy::Array(element, _)) | TyKind::RigidTy(RigidTy::Slice(element)) => {
+            search_nested_shared_storage(element, visited)
+        }
+
+        TyKind::RigidTy(RigidTy::Tuple(elements)) => elements
+            .iter()
+            .find_map(|element| search_nested_shared_storage(*element, visited)),
+
         _ => None,
     }
 }

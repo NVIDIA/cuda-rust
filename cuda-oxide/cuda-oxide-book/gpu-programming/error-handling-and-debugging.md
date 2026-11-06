@@ -490,19 +490,20 @@ cargo oxide doctor
 
 Doctor checks:
 
-| Check           | What it verifies                                    |
-|:----------------|:----------------------------------------------------|
-| Rust toolchain  | Pinned compiler (`1.99.1`) with required components |
-| Codegen backend | `librustc_codegen_cuda.so` built                    |
-| CUDA headers    | `cuda.h` present under the toolkit root             |
-| CUDA toolkit    | `nvcc` found and version compatible                 |
-| libNVVM         | `libnvvm.so` loadable (libdevice math kernels)      |
-| nvJitLink       | `libnvJitLink.so` loadable (same)                   |
-| libdevice       | `libdevice.10.bc` discoverable (same)               |
-| LLVM            | `llc` (21+) available for PTX generation            |
-| Driver / GPU    | `nvidia-smi` reports a GPU and its compute cap      |
-| cuda-gdb        | Optional; only needed for `cargo oxide debug`       |
-| compute-sanitizer | Optional; only needed for `cargo oxide sanitize`  |
+| Check             | What it verifies                                     |
+|:------------------|:-----------------------------------------------------|
+| Rust toolchain    | Pinned compiler (`1.99.1`) with required components  |
+| Codegen backend   | `librustc_codegen_cuda.so` built                     |
+| CUDA headers      | `cuda.h` present under the toolkit root              |
+| CUDA toolkit      | `nvcc` found and version compatible                  |
+| libNVVM           | `libnvvm.so` loadable (libdevice math kernels)       |
+| nvJitLink         | `libnvJitLink.so` loadable (same)                    |
+| libdevice         | `libdevice.10.bc` discoverable (same)                |
+| LLVM              | `llc` (21+) available for PTX generation             |
+| Driver / GPU      | `nvidia-smi` reports a GPU and its compute cap       |
+| cuda-gdb          | Optional; only needed for `cargo oxide debug`        |
+| compute-sanitizer | Optional; only needed for `cargo oxide sanitize`     |
+| wild linker       | Optional; only needed for `CUDA_OXIDE_LINKER=wild`   |
 
 The libNVVM / nvJitLink / libdevice checks fire only when a kernel calls
 CUDA libdevice math (`sin`, `cos`, `exp`, `pow`, `sqrt`, ...). If your
@@ -567,12 +568,13 @@ This prints the full pipeline output:
 
 For more targeted inspection:
 
-| Variable                       | Effect                            |
-|:-------------------------------|:----------------------------------|
-| `CUDA_OXIDE_VERBOSE=1`         | Verbose compiler output           |
-| `CUDA_OXIDE_SHOW_RUSTC_MIR=1`  | Dump the rustc MIR before import  |
-| `CUDA_OXIDE_DEBUG=line-tables` | Emit source line-table metadata   |
-| `CUDA_OXIDE_DEBUG=full`        | Emit full metadata for basic locals and args |
+| Variable                       | Effect                                        |
+|:-------------------------------|:----------------------------------------------|
+| `CUDA_OXIDE_VERBOSE=1`         | Verbose compiler output                       |
+| `CUDA_OXIDE_SHOW_RUSTC_MIR=1`  | Dump the rustc MIR before import              |
+| `CUDA_OXIDE_DEBUG=line-tables` | Emit source line-table metadata               |
+| `CUDA_OXIDE_DEBUG=full`        | Emit full metadata for basic locals and args  |
+| `CUDA_OXIDE_LINKER=wild`       | Link host crates with the `wild` ELF linker   |
 
 ## Profiling with Nsight Compute
 

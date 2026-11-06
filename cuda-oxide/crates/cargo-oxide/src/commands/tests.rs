@@ -6696,3 +6696,129 @@ fn the_smoketest_greps_the_summary_markers_this_command_prints() {
     assert!(!DESCRIPTIONS_WRITTEN_MARKER.contains(LIBRARY_SKIPPED_MARKER));
     assert!(!LIBRARY_WRITTEN_MARKER.contains(LIBRARY_SKIPPED_MARKER));
 }
+
+/// Unset, empty, or `default` values leave rustc's default host linker untouched.
+#[test]
+fn test_host_linker_unset_or_default_keeps_rustc_linker() {
+    for value in [None, Some(""), Some("default"), Some("  default  ")] {
+        let flags = host_linker_rustflags_for(value.map(OsStr::new), || {
+            panic!("wild lookup must not run for {value:?}")
+        });
+        assert_eq!(flags, Ok(Vec::new()), "value {value:?}");
+    }
+}
+
+/// `CUDA_OXIDE_LINKER=wild` emits `-Clinker=clang` and `-Clink-arg=--ld-path=<wild>`.
+#[test]
+fn test_host_linker_wild_uses_clang_ld_path() {
+    let flags = host_linker_rustflags_for(Some(OsStr::new(" wild ")), || {
+        Some(PathBuf::from("/opt/bin/wild"))
+    });
+    assert_eq!(
+        flags,
+        Ok(vec![
+            "-Clinker=clang".to_string(),
+            "-Clink-arg=--ld-path=/opt/bin/wild".to_string(),
+        ])
+    );
+}
+
+/// Requesting `wild` when `wild` is absent from `PATH` returns an actionable install error.
+#[test]
+fn test_host_linker_wild_missing_is_an_error() {
+    let err = host_linker_rustflags_for(Some(OsStr::new("wild")), || None).unwrap_err();
+    assert!(err.contains("`wild` was not found on PATH"), "{err}");
+    assert!(err.contains("cargo install wild-linker"), "{err}");
+}
+
+/// Unsupported `CUDA_OXIDE_LINKER` values fail before probing `PATH` for `wild`.
+#[test]
+fn test_host_linker_rejects_unsupported_value() {
+    let err = host_linker_rustflags_for(Some(OsStr::new("mold")), || {
+        panic!("wild lookup must not run for an unsupported value")
+    })
+    .unwrap_err();
+    assert!(err.contains("unsupported CUDA_OXIDE_LINKER value"), "{err}");
+}
+
+/// Explicit host-linker flags follow user `RUSTFLAGS` so `CUDA_OXIDE_LINKER=wild` wins.
+#[test]
+fn test_host_linker_flags_follow_user_rustflags() {
+    let linker = host_linker_rustflags_for(Some(OsStr::new("wild")), || {
+        Some(PathBuf::from("/opt/bin/wild"))
+    })
+    .unwrap();
+    let rustflags = build_encoded_rustflags_with_existing(
+        Path::new("/tmp/librustc_codegen_cuda.so"),
+        CargoPassthroughSubcommand::Test.codegen_profile(false),
+        &[],
+        &linker,
+        None,
+        Some("-Clinker=gcc"),
+    );
+    let flags = decoded_rustflags(&rustflags);
+    let user = flags
+        .iter()
+        .position(|flag| *flag == "-Clinker=gcc")
+        .unwrap();
+    let ours = flags
+        .iter()
+        .position(|flag| *flag == "-Clinker=clang")
+        .unwrap();
+    assert!(user < ours, "{flags:?}");
+}
+
+/// Host-only Cargo invocations leave `CARGO_ENCODED_RUSTFLAGS` untouched when `wild` is not active,
+/// and append the `wild` flags after project and user rustflags when active.
+#[test]
+fn test_apply_host_linker_rustflags_with_existing_preserves_precedence() {
+    let mut default_cmd = Command::new("cargo");
+    apply_host_linker_rustflags_with_existing(
+        &mut default_cmd,
+        &["-Ctarget-cpu=native".to_string()],
+        &[],
+        None,
+        Some("-Clinker=gcc"),
+    );
+    assert!(
+        command_env(&default_cmd, "CARGO_ENCODED_RUSTFLAGS").is_none(),
+        "default linker must not override host cargo rustflags"
+    );
+
+    let linker = host_linker_rustflags_for(Some(OsStr::new("wild")), || {
+        Some(PathBuf::from("/opt/bin/wild"))
+    })
+    .unwrap();
+    let mut wild_cmd = Command::new("cargo");
+    apply_host_linker_rustflags_with_existing(
+        &mut wild_cmd,
+        &["-Ctarget-cpu=native".to_string()],
+        &linker,
+        None,
+        Some("-Clinker=gcc"),
+    );
+    let encoded = command_env(&wild_cmd, "CARGO_ENCODED_RUSTFLAGS")
+        .expect("wild linker must set CARGO_ENCODED_RUSTFLAGS on host cargo");
+    let flags = decoded_rustflags(&encoded);
+    assert_eq!(
+        flags,
+        vec![
+            "-Ctarget-cpu=native",
+            "-Clinker=gcc",
+            "-Clinker=clang",
+            "-Clink-arg=--ld-path=/opt/bin/wild",
+        ]
+    );
+}
+
+/// Invalid `CUDA_OXIDE_LINKER` in `.cargo/cuda-oxide.toml` `[env]` returns `Err` instead of
+/// aborting the process.
+#[test]
+fn test_host_linker_reads_project_config_env_and_returns_err() {
+    let ctx = test_context(OxideConfig {
+        env: vec![("CUDA_OXIDE_LINKER".to_string(), "mold".to_string())],
+        ..Default::default()
+    });
+    let err = host_linker_rustflags(&ctx).unwrap_err();
+    assert!(err.contains("unsupported CUDA_OXIDE_LINKER value"), "{err}");
+}

@@ -38,6 +38,7 @@ pub(super) fn run_host_cargo(
 
     apply_config_env(&mut cmd, ctx);
     apply_ld_library_path(&mut cmd, ctx);
+    apply_host_linker_rustflags_or_exit(&mut cmd, ctx);
 
     if cargo_subcommand == "run" {
         if let Some(bin) = bin {
@@ -152,6 +153,7 @@ pub(super) fn build_host_cargo(
 
     apply_config_env(&mut cmd, ctx);
     apply_ld_library_path(&mut cmd, ctx);
+    apply_host_linker_rustflags_or_exit(&mut cmd, ctx);
 
     if let Some(bin) = bin {
         println!("Building host crate {} (bin: {})...", example, bin);

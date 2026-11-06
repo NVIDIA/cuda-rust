@@ -19,14 +19,6 @@ It links to providers as their packages become available. Tile libraries are
 released separately from the CUDA Toolkit; installing CUDA 13.5 alone does not
 install every provider's `.tilelib` files.
 
-As of November 5, 2026, that list names:
-
-| Provider | Functions | Availability listed by Tile IR |
-| --- | --- | --- |
-| MathDx Tile | FFT, linear algebra, compression | Upcoming; follow the supported-library list for package links. |
-| [NVSHMEM](https://developer.nvidia.com/nvshmem) | GPU communication and synchronization | Starting with NVSHMEM 3.9; check the provider's downloads for release availability. |
-| CCCL Coop | Cooperative CUB primitives, including scan, sort, and top-k | Upcoming; follow the supported-library list for package links. |
-
 Use the provider's installation instructions to obtain a `.tilelib` and its
 dependencies for your toolkit. Its interface determines the function names,
 constant arguments, shapes, types, and architectures you can use. Then declare

@@ -1,0 +1,14 @@
+[package]
+name = "generic_mono_in_lib"
+version = "0.1.0"
+edition = "2024"
+authors = ["Dundy Pasupuleti <dundysm@gmail.com>"]
+license = "Apache-2.0"
+
+# Standalone workspace so the nested library can be a workspace member.
+[workspace]
+members = ["generic-mono-lib"]
+
+[dependencies]
+generic-mono-lib = { path = "generic-mono-lib" }
+cuda-host = { path = "../../../cuda-host" }

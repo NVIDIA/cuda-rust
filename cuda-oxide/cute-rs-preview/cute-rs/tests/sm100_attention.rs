@@ -7,14 +7,14 @@
 use cute_rs::nvgpu::tcgen05::{MmaSs, MmaTs, SharedLayout, SharedTileArray, SmemLayout};
 use cute_rs::{OperandA, OperandB};
 
-/// Ensure `cute-rs` does not depend on or invoke `ctm-rs`.
+/// Ensure `cute-rs` does not depend on or invoke `cutlass-primitives`.
 #[test]
-fn cute_rs_is_free_of_ctm_rs() {
+fn cute_rs_is_free_of_cutlass_primitives() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let cargo_toml = std::fs::read_to_string(manifest_dir.join("Cargo.toml")).unwrap();
     assert!(
-        !cargo_toml.contains("ctm-rs"),
-        "cute-rs/Cargo.toml must not depend on ctm-rs"
+        !cargo_toml.contains("cutlass-primitives") && !cargo_toml.contains("ctm-rs"),
+        "cute-rs/Cargo.toml must not depend on cutlass-primitives"
     );
     let paths = [
         "src/arch.rs",
@@ -27,8 +27,8 @@ fn cute_rs_is_free_of_ctm_rs() {
     for path in paths {
         let source = std::fs::read_to_string(manifest_dir.join(path)).unwrap();
         assert!(
-            !source.contains("ctm_rs"),
-            "{path} must not reference ctm_rs"
+            !source.contains("cutlass_primitives") && !source.contains("ctm_rs"),
+            "{path} must not reference cutlass_primitives"
         );
         if path.starts_with("src/nvgpu/") {
             assert!(

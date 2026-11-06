@@ -306,7 +306,7 @@ cargo oxide run gemm_sol_final
 | `cuda-device`       | Device intrinsics (`thread::*`, `warp::*`, barriers)                      |
 | `cute-layout`       | CuTe-style layout algebra and coordinate mapping |
 | `cute-rs`           | Typed CuTe tensors, tiles, copies, pipelines, and MMA operations |
-| `ctm-rs`            | Typed instruction-level CUDA primitives |
+| `cutlass-primitives`            | Typed instruction-level CUDA primitives |
 | `cuda-intrinsics`   | Generated low-level CUDA intrinsic declarations                           |
 | `cuda-host`         | Typed module loading, launch helpers, LTOIR loader                        |
 | `cuda-macros`       | Proc macros (`#[cuda_module]`, `#[kernel]`, `gpu_printf!`)                |

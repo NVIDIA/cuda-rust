@@ -23,9 +23,6 @@
 
 #![allow(unsafe_op_in_unsafe_fn)]
 
-use ctm_rs::mbarrier::Barrier;
-use ctm_rs::memory::{DisjointSlice, DynamicSharedArray};
-use ctm_rs::{cluster_launch, cuda_module, kernel, launch_bounds, launch_contract, thread};
 use cute_rs::arch::{
     NamedBarrier, add_packed_f32x2, block_idx_in_cluster, cluster_arrive, cluster_arrive_relaxed,
     cluster_wait, cvt_f16x2_f32, elect_one_sync, exp2_ftz_f32, fence_view_async_tmem_load,
@@ -46,6 +43,10 @@ use cute_rs::{
     ColMajor, ComposedLayout, GlobalStoreTile, OperandA, OperandB, RegisterTile, RowMajor, Swizzle,
     TensorMap, size_in_bytes,
 };
+use cutlass_primitives as prims;
+use prims::mbarrier::Barrier;
+use prims::memory::{DisjointSlice, DynamicSharedArray};
+use prims::{cluster_launch, cuda_module, kernel, launch_bounds, launch_contract, thread};
 
 /// Per-CTA 64-by-64 FP16 query tile, stored K-major for QK MMA.
 pub type QLayout = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<64, 64>>;

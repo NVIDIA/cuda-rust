@@ -82,12 +82,21 @@ def verify_attention_ir(lines):
     def constant_value(arg):
         if arg in constants:
             return constants[arg]
-        # Carrier constructors retain arrays in the exported, unoptimized IR.
-        # Follow each extract back to the constant stored at that array index.
+        # Carrier constructors either promote to an `llvm.insertvalue` SSA chain
+        # or retain an alloca load/store in the exported IR.
         extract = definitions[arg]
         require('"llvm.extractvalue"' in extract, "expected a constant or carrier register")
         index = int(re.search(r"position = array<i64: (\d+)>", extract).group(1))
         load = definitions[operands(extract)[0]]
+        if '"llvm.insertvalue"' in load:
+            cursor = load
+            while '"llvm.insertvalue"' in cursor:
+                pos = int(re.search(r"position = array<i64: (\d+)>", cursor).group(1))
+                base, val = operands(cursor)
+                if pos == index:
+                    return constants[val]
+                cursor = definitions.get(base, "")
+            raise RuntimeError(f"carrier register {index} missing from insertvalue chain")
         require('"llvm.load"' in load, "expected carrier array load")
         pointer = operands(load)[0]
         initializers = []
@@ -157,7 +166,10 @@ def verify_attention_ir(lines):
         result = extract.strip().split(" = ", 1)[0]
         inserts = [line for line in lines if '"llvm.insertvalue"' in line
                    and operands(line)[-1] == result]
-        require(len(inserts) == 1 and f"position = array<i64: {index}>" in inserts[0],
+        stores = [line for line in lines if '"llvm.store"' in line
+                  and operands(line)[0] == result]
+        require((len(inserts) == 1 and f"position = array<i64: {index}>" in inserts[0])
+                or len(stores) == 1,
                 "FP16 MMA result adapter reordered the accumulator carrier")
     instructions = re.findall(r'"((?:nvvm|llvm\.nvvm)\.[^"]+)"', text)
     require(instructions == ["nvvm.cp.async.commit.group", "nvvm.cp.async.wait.group",
@@ -189,7 +201,7 @@ def verify_ir(text, log, evidence):
     extracts = [line for line in mma if '"vector.extract"' in line]
     require([int(re.search(r"static_position = array<i64: (\d+)>", line).group(1)) for line in extracts] == list(range(32)), "TMEM register result order changed")
     wait = next(i for i, line in enumerate(mma) if '"nvvm.tcgen05.wait"' in line)
-    decode_name = "ctm_rs__tcgen05__mma__TmemRaw32__decode_f32"
+    decode_name = "cutlass_primitives__tcgen05__mma__TmemRaw32__decode_f32"
     decode_calls = [i for i, line in enumerate(mma) if f"callee = @{decode_name}" in line]
     require(len(decode_calls) == 1 and decode_calls[0] > wait, "TMEM decode must follow the explicit wait")
     decode = functions[decode_name]

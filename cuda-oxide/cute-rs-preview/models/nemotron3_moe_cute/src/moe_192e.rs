@@ -12,8 +12,6 @@
 use std::mem::MaybeUninit;
 use std::sync::Arc;
 
-use ctm_rs::memory::{DisjointSlice, DynamicSharedArray};
-use ctm_rs::{cuda_module, kernel, launch_bounds, launch_contract, thread};
 use cuda_core::{
     CudaContext, CudaStream, DeviceBuffer, IntoResult, LaunchConfig, LaunchConfig1D, sys,
 };
@@ -34,6 +32,9 @@ use cute_rs::{
     idx2crd_2d, idx2crd_col_major_2d, idx2crd_row_major_2d, size_in_bytes,
     sm1xx_block_scale_crd2idx, sm100_noswizzle_burst_u64_crd2idx,
 };
+use cutlass_primitives as prims;
+use prims::memory::{DisjointSlice, DynamicSharedArray};
+use prims::{cuda_module, kernel, launch_bounds, launch_contract, thread};
 
 /// Hidden dimension `H = 6,144` (`384` groups of `16` = `12` bursts of `K = 512`).
 /// Matches the wide 192-expert benchmark configuration.

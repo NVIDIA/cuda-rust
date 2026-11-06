@@ -133,13 +133,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ctm-rs"
-version = "0.3.0"
-dependencies = [
- "cuda-device",
-]
-
-[[package]]
 name = "cuda-artifact-finalizer"
 version = "0.3.0"
 dependencies = [
@@ -227,6 +220,13 @@ version = "0.5.0"
 [[package]]
 name = "cuda-target-spec"
 version = "0.3.0"
+
+[[package]]
+name = "cutlass-primitives"
+version = "0.3.0"
+dependencies = [
+ "cuda-device",
+]
 
 [[package]]
 name = "digest"
@@ -429,10 +429,10 @@ dependencies = [
 name = "primitives_api_compile"
 version = "0.0.0"
 dependencies = [
- "ctm-rs",
  "cuda-core",
  "cuda-device",
  "cuda-host",
+ "cutlass-primitives",
 ]
 
 [[package]]

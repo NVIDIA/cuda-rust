@@ -139,7 +139,7 @@ cuda-oxide is split into focused crates. Here is every one and its role:
 | `cargo-oxide`        | CLI tool: `cargo oxide build`, `cargo oxide run`, `cargo oxide pipeline`               |
 | `cuda-device`        | Device-side API: intrinsics, `DisjointSlice`, barriers, shared memory, warp ops        |
 | `cute-layout`       | CuTe-style layout algebra and coordinate mapping                                       |
-| `ctm-rs`            | Typed instruction-level CUDA primitives |
+| `cutlass-primitives`            | Typed instruction-level CUDA primitives |
 | `cute-rs`           | Typed CuTe tensors, tiles, copies, pipelines, and MMA operations                        |
 | `cuda-macros`        | Proc macros: `#[kernel]`, `#[device]`                                                  |
 | `cuda-host`          | Host-side typed module loading and launch helpers                                      |

@@ -58,7 +58,7 @@ The figure at the top of the page is the feature table, with the cute-rs column 
 - Control flow, printf, debugging: every example
 - Host: JIT, torch, JAX, AOT export: every example; fp16_gemm_256x352_cute for CUDA graphs
 - Autotuning, Task Scheduling, IKET: none
-- Verification before codegen: dialect-cute verify tests, 48 cute-rs and 30 ctm-rs compile-fail cases
+- Verification before codegen: dialect-cute verify tests, 48 cute-rs and 30 cutlass-primitives compile-fail cases
 - Grouped, MoE, mixed-input, FP8: nemotron3_moe_cute (NVFP4 ReLU² grouped MoE), sm100_qkv_epilogue_cute (fused QKV + RMSNorm + FP8 quant + paged KV scatter)
 - Shipped kernel examples: the 15 crates under cute-rs-preview/examples
 - End-to-end models: qwen_decoder_cute, qwen3_8b_cute, nemotron3_moe_cute
@@ -115,7 +115,7 @@ What a CuTeDSL user relies on beyond the per-architecture atoms, and what the pr
 | TVM FFI, PyTorch, JAX, DLPack | Framework tensors flow in through DLPack; TVM FFI modules for C++, PyTorch and JAX. | None. Buffers live in cuda-core DeviceBuffer; Python appears only in reference harnesses. | no |
 | Autotuning | autotune_jit and benchmark helpers search a configuration space and cache the winner. | None. Tile shapes are const generics; tune by instantiating variants in a host harness. | no |
 | Task Scheduling | Static analysis of warp-specialized schedules; compilation stops on known concurrency issues (4.7, Primitives-only kernels). | None. The whole-module verifier checks pipeline and epilogue protocol order, not schedules or races. | no |
-| Inline PTX and cute.ffi | llvm.inline_asm in kernels; external LLVM bitcode functions. | None on the CuTe path; hardware access goes through the ctm-rs and cuda-device intrinsics. | no |
+| Inline PTX and cute.ffi | llvm.inline_asm in kernels; external LLVM bitcode functions. | None on the CuTe path; hardware access goes through the cutlass-primitives and cuda-device intrinsics. | no |
 | printf, print_tensor, IR dumps | Device printf and tensor printing, LaTeX layouts, IR, PTX and SASS dumps. | MLIR, MIR and LLVM dumps and host-side layout Display. No device printf in CuTe kernels. | partial |
 | IKET profiling | In-kernel event markers collected into timelines. | None. Use Nsight on the embedded cubin. | no |
 | CUDA graphs, PDL, cooperative launch | Graph capture, programmatic dependent launch, cooperative launch, launch events. | Graphs, the PDL launch attribute and cooperative launch from the Rust host. No device-side PDL helpers in kernels. | partial |
@@ -129,7 +129,7 @@ What a CuTeDSL user relies on beyond the per-architecture atoms, and what the pr
 | FMHA backward | dQ, dK, dV in one SM100 kernel. | Forward only. | no |
 | Convolution | TMA im2col copy atom; the 4.7 example tree ships no convolution kernel. | Implicit im2col on the BF16 mma.sync register path in the Qwen codec kernels; no TMA im2col. | partial |
 | Sub-byte types | Int4, FP4, two FP6 formats, packed carriers, MXF8F6F4 mixes. | FP4 and scale carriers for block-scaled GEMM and GEMV. No Int4, no FP6. | partial |
-| Primitives API (4.7, experimental) | A thin NVVM wrapper beneath CuTe for Tensor Core programming through SIMT. | ctm-rs: typed tcgen05, TMEM, TMA, mbarrier, named barrier, fence, cluster, cp.async and warp primitives for the shipped kernels. No atomics, reductions, wgmma or libdevice. | partial |
+| Primitives API (4.7, experimental) | A thin NVVM wrapper beneath CuTe for Tensor Core programming through SIMT. | cutlass-primitives: typed tcgen05, TMEM, TMA, mbarrier, named barrier, fence, cluster, cp.async and warp primitives for the shipped kernels. No atomics, reductions, wgmma or libdevice. | partial |
 
 :::
 

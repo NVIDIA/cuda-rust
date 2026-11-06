@@ -133,13 +133,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ctm-rs"
-version = "0.3.0"
-dependencies = [
- "cuda-device",
-]
-
-[[package]]
 name = "cuda-artifact-finalizer"
 version = "0.3.0"
 dependencies = [
@@ -241,6 +234,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "cutlass-primitives"
+version = "0.3.0"
+dependencies = [
+ "cuda-device",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -260,11 +260,11 @@ checksum = "91622ff5e7162018101f2fea40d6ebf4a78bbe5a49736a2020649edf9693679e"
 name = "elementwise_cute"
 version = "0.1.0"
 dependencies = [
- "ctm-rs",
  "cuda-core",
  "cuda-device",
  "cuda-host",
  "cute-rs",
+ "cutlass-primitives",
 ]
 
 [[package]]

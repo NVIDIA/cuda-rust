@@ -22,11 +22,12 @@ use crate::ffn::{
 };
 use crate::nvfp4::Nvfp4Projection;
 use crate::operator::Result;
-use ctm_rs::memory::DisjointSlice;
-use ctm_rs::{cuda_module, kernel, thread};
 use cuda_core::LaunchConfig;
 use cuda_core::{CudaStream, DeviceBuffer};
 use cute_rs::BFloat16;
+use cutlass_primitives as prims;
+use prims::memory::DisjointSlice;
+use prims::{cuda_module, kernel, thread};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::Path;

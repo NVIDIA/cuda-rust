@@ -139,13 +139,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ctm-rs"
-version = "0.3.0"
-dependencies = [
- "cuda-device",
-]
-
-[[package]]
 name = "cuda-artifact-finalizer"
 version = "0.3.0"
 dependencies = [
@@ -245,6 +238,13 @@ dependencies = [
  "cuda-core",
  "cuda-device",
  "cute-layout",
+]
+
+[[package]]
+name = "cutlass-primitives"
+version = "0.3.0"
+dependencies = [
+ "cuda-device",
 ]
 
 [[package]]
@@ -489,11 +489,11 @@ dependencies = [
 name = "qwen_decoder_cute"
 version = "0.1.0"
 dependencies = [
- "ctm-rs",
  "cuda-core",
  "cuda-device",
  "cuda-host",
  "cute-rs",
+ "cutlass-primitives",
  "safetensors",
  "serde_json",
  "sha2",

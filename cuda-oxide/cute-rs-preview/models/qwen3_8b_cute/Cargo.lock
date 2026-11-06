@@ -139,7 +139,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ctm-rs"
+name = "cutlass-primitives"
 version = "0.3.0"
 dependencies = [
  "cuda-device",
@@ -489,7 +489,7 @@ dependencies = [
 name = "qwen3_8b_cute"
 version = "0.1.0"
 dependencies = [
- "ctm-rs",
+ "cutlass-primitives",
  "cuda-core",
  "cuda-device",
  "cuda-host",

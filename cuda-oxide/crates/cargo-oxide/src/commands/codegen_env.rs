@@ -242,20 +242,15 @@ pub(super) const HOST_LINKER_ENV: &str = "CUDA_OXIDE_LINKER";
 
 /// rustc flags for the host linker requested via [`HOST_LINKER_ENV`].
 ///
-/// Reads the environment and exits with a clear message on an invalid
-/// value or a missing `wild`; the decision itself lives in
-/// [`host_linker_rustflags_for`] so it can be tested without either.
-fn host_linker_rustflags() -> Vec<String> {
-    let value = std::env::var_os(HOST_LINKER_ENV);
-    match host_linker_rustflags_for(value.as_deref(), || {
+/// Reads the process environment and `.cargo/cuda-oxide.toml` `[env]` and
+/// returns an error on an invalid value or a missing `wild`; the decision
+/// itself lives in [`host_linker_rustflags_for`] so it can be tested without
+/// either.
+pub(super) fn host_linker_rustflags(ctx: &Context) -> Result<Vec<String>, String> {
+    let value = inherited_or_configured_env(ctx, HOST_LINKER_ENV);
+    host_linker_rustflags_for(value.as_deref().map(std::ffi::OsStr::new), || {
         super::toolkit::find_executable("wild", &[])
-    }) {
-        Ok(flags) => flags,
-        Err(message) => {
-            eprintln!("Error: {message}");
-            std::process::exit(1);
-        }
-    }
+    })
 }
 
 /// [`host_linker_rustflags`] with the environment value and the `wild`
@@ -292,6 +287,64 @@ pub(super) fn host_linker_rustflags_for(
     }
 }
 
+/// Apply [`HOST_LINKER_ENV`] flags to a host-only Cargo invocation.
+///
+/// When no alternative host linker is requested (`None`, empty, or `default`),
+/// the command's rustflags are left untouched so Cargo still reads any
+/// `.cargo/config.toml` `build.rustflags`. When `wild` is requested, project
+/// `extra-rustflags` and existing `CARGO_ENCODED_RUSTFLAGS` or `RUSTFLAGS` are
+/// preserved ahead of the `wild` flags in `CARGO_ENCODED_RUSTFLAGS`.
+pub(super) fn apply_host_linker_rustflags(cmd: &mut Command, ctx: &Context) -> Result<(), String> {
+    let existing_encoded = std::env::var("CARGO_ENCODED_RUSTFLAGS").ok();
+    let existing = std::env::var("RUSTFLAGS").ok();
+    apply_host_linker_rustflags_with_existing(
+        cmd,
+        &ctx.config.extra_rustflags,
+        &host_linker_rustflags(ctx)?,
+        existing_encoded.as_deref(),
+        existing.as_deref(),
+    );
+    Ok(())
+}
+
+/// [`apply_host_linker_rustflags`] with resolved linker and inherited flags injected.
+pub(super) fn apply_host_linker_rustflags_with_existing(
+    cmd: &mut Command,
+    configured_rustflags: &[String],
+    linker_rustflags: &[String],
+    existing_encoded_rustflags: Option<&str>,
+    existing_rustflags: Option<&str>,
+) {
+    if linker_rustflags.is_empty() {
+        return;
+    }
+    let mut flags = configured_rustflags.to_vec();
+    if let Some(existing) = existing_encoded_rustflags {
+        flags.extend(
+            existing
+                .split(ENCODED_RUSTFLAGS_SEPARATOR)
+                .filter(|flag| !flag.is_empty())
+                .map(str::to_string),
+        );
+    } else if let Some(existing) = existing_rustflags {
+        flags.extend(existing.split_whitespace().map(str::to_string));
+    }
+    flags.extend(linker_rustflags.iter().cloned());
+    cmd.env(
+        "CARGO_ENCODED_RUSTFLAGS",
+        flags.join(&ENCODED_RUSTFLAGS_SEPARATOR.to_string()),
+    )
+    .env_remove("RUSTFLAGS");
+}
+
+/// Apply [`HOST_LINKER_ENV`] flags to a host-only Cargo invocation, exiting on error.
+pub(super) fn apply_host_linker_rustflags_or_exit(cmd: &mut Command, ctx: &Context) {
+    apply_host_linker_rustflags(cmd, ctx).unwrap_or_else(|error| {
+        eprintln!("Error: {error}");
+        std::process::exit(1);
+    });
+}
+
 /// Construct boundary-preserving rustc flags for Cargo.
 ///
 /// `RUSTFLAGS` is whitespace-split by Cargo, which corrupts a single flag
@@ -301,7 +354,7 @@ fn build_encoded_rustflags(
     ctx: &Context,
     profile: CodegenProfilePolicy,
     device_cfgs: &[String],
-) -> String {
+) -> Result<String, String> {
     let existing_encoded = std::env::var("CARGO_ENCODED_RUSTFLAGS").ok();
     let existing = std::env::var("RUSTFLAGS").ok();
     let mut explicit_rustflags = Vec::new();
@@ -309,17 +362,18 @@ fn build_encoded_rustflags(
         explicit_rustflags.push("--cfg".to_string());
         explicit_rustflags.push(cfg.clone());
     }
-    explicit_rustflags.extend(host_linker_rustflags());
-    build_encoded_rustflags_with_existing(
+    explicit_rustflags.extend(host_linker_rustflags(ctx)?);
+    Ok(build_encoded_rustflags_with_existing(
         &ctx.backend_so,
         profile,
         &ctx.config.extra_rustflags,
         &explicit_rustflags,
         existing_encoded.as_deref(),
         existing.as_deref(),
-    )
+    ))
 }
 
+/// [`build_encoded_rustflags`] with inherited and explicit rustc flags injected.
 pub(super) fn build_encoded_rustflags_with_existing(
     backend_so: &Path,
     profile: CodegenProfilePolicy,
@@ -515,13 +569,14 @@ pub(super) fn append_full_debug_rustflags(
     }
 }
 
+/// Set `CARGO_ENCODED_RUSTFLAGS`, `RUSTC_BOOTSTRAP`, and profile pins on `cmd`.
 fn apply_codegen_rustflags(
     cmd: &mut Command,
     ctx: &Context,
     profile: CodegenProfilePolicy,
     device_cfgs: &[String],
-) {
-    let mut encoded = build_encoded_rustflags(ctx, profile, device_cfgs);
+) -> Result<(), String> {
+    let mut encoded = build_encoded_rustflags(ctx, profile, device_cfgs)?;
     let inherited_debug = std::env::var("CUDA_OXIDE_DEBUG").ok();
     append_full_debug_rustflags(&mut encoded, cmd, inherited_debug.as_deref());
 
@@ -529,6 +584,7 @@ fn apply_codegen_rustflags(
         .env("RUSTC_BOOTSTRAP", "1")
         .env_remove("RUSTFLAGS");
     apply_profile_pins(cmd, profile);
+    Ok(())
 }
 
 /// Apply the two deliberately different Cargo cache boundaries:
@@ -548,11 +604,12 @@ pub(super) fn apply_codegen_configuration(
     global_cfgs.push(format!("{BACKEND_IDENTITY_CFG}=\"{backend_digest}\""));
     global_cfgs.extend(user_device_cfgs.iter().cloned());
 
-    apply_codegen_rustflags(cmd, ctx, profile, &global_cfgs);
+    apply_codegen_rustflags(cmd, ctx, profile, &global_cfgs)?;
     cmd.env(CODEGEN_FINGERPRINT_ENV, codegen_fingerprint);
     Ok(())
 }
 
+/// Apply [`apply_codegen_configuration`] and exit with a formatted message on error.
 pub(super) fn apply_codegen_configuration_or_exit(
     cmd: &mut Command,
     ctx: &Context,
@@ -1020,7 +1077,8 @@ pub(super) fn format_sm_arch((major, minor): (u32, u32)) -> String {
     }
 }
 
-fn inherited_or_configured_env(ctx: &Context, key: &str) -> Option<String> {
+/// Read `key` from the process environment, falling back to `.cargo/cuda-oxide.toml` `[env]`.
+pub(super) fn inherited_or_configured_env(ctx: &Context, key: &str) -> Option<String> {
     std::env::var(key).ok().or_else(|| {
         ctx.config
             .env

@@ -794,13 +794,36 @@ pub fn doctor(ctx: &Context) {
         }
     }
 
-    // 11. wild (optional) -- the same PATH lookup `CUDA_OXIDE_LINKER=wild`
-    // uses, so doctor and the build always agree on whether wild is found.
-    let wild_requested = std::env::var(super::codegen_env::HOST_LINKER_ENV)
-        .is_ok_and(|value| value.trim() == "wild");
+    // 11. wild (optional) -- uses the same env/config resolution and parser as
+    // `CUDA_OXIDE_LINKER`, so doctor and the build always agree on both missing
+    // `wild` and unsupported values.
+    let configured_linker =
+        super::codegen_env::inherited_or_configured_env(ctx, super::codegen_env::HOST_LINKER_ENV);
+    let found_wild = super::toolkit::find_executable("wild", &[]);
+    let linker_check = super::codegen_env::host_linker_rustflags_for(
+        configured_linker.as_deref().map(std::ffi::OsStr::new),
+        || found_wild.clone(),
+    );
     print!("wild linker (optional)... ");
-    match super::toolkit::find_executable("wild", &[]) {
-        Some(path) => match Command::new(&path).arg("--version").output() {
+    match (found_wild, linker_check) {
+        (_, Err(err))
+            if configured_linker
+                .as_deref()
+                .is_some_and(|value| value.trim() == "wild") =>
+        {
+            println!(
+                "✗ not found, but {}=wild is set",
+                super::codegen_env::HOST_LINKER_ENV
+            );
+            eprintln!("  Install it with `cargo install wild-linker`.");
+            let _ = err;
+            ok = false;
+        }
+        (_, Err(err)) => {
+            println!("✗ {err}");
+            ok = false;
+        }
+        (Some(path), Ok(_)) => match Command::new(&path).arg("--version").output() {
             Ok(output) if output.status.success() => {
                 let version = String::from_utf8_lossy(&output.stdout);
                 if let Some(line) = version.lines().next() {
@@ -811,15 +834,7 @@ pub fn doctor(ctx: &Context) {
             }
             _ => println!("✓ {}", path.display()),
         },
-        None if wild_requested => {
-            println!(
-                "✗ not found, but {}=wild is set",
-                super::codegen_env::HOST_LINKER_ENV
-            );
-            eprintln!("  Install it with `cargo install wild-linker`.");
-            ok = false;
-        }
-        None => println!(
+        (None, Ok(_)) => println!(
             "- not found (only needed for {}=wild)",
             super::codegen_env::HOST_LINKER_ENV
         ),

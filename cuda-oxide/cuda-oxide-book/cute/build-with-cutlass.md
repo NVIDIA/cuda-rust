@@ -36,13 +36,13 @@ CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir cargo oxide build fp16_gemm_256x352_cute 
 
 - Every CuTe kernel needs `CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir`. The native backend
   has no CuTe lowering and stops with a verification error.
-- Two targets: `sm_100a` and `sm_120a`. Anything else is rejected before compilation
-  and the error names the target. `tcgen05` operations need `sm_100a`; MXF4 register
-  MMA needs `sm_120a`.
+- Three targets: `sm_100a`, `sm_103a` and `sm_120a`. Anything else is rejected before
+  compilation and the error names the target. `tcgen05` operations need `sm_100a` or
+  `sm_103a`; MXF4 register MMA needs `sm_120a`.
 - `cargo oxide run` without `--arch` uses the detected GPU, so an RTX 5090 gets
   `sm_120a`. `cargo oxide build` needs `--arch`.
 - Each example README states its device and shape requirements. The
-  [support matrix](support-matrix.md) lists what the two targets cover.
+  [support matrix](support-matrix.md) lists what the targets cover.
 
 ## Options
 

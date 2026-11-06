@@ -1112,9 +1112,27 @@ fn m8n8k16_int8_mma_detection_applies_exact_sm75_and_ptx65_floors() {
         "{$0, $1}, {$4}, {$5}, {$2, $3};"
     );
     let requirements = detect_module_requirements_in_llvm_text(representative);
+    // The feature's own floor is sm_75 and stays there.
+    assert_eq!(
+        select_target(requirements.features)
+            .expect("feature floor")
+            .sm(),
+        "sm_75"
+    );
+    // Selection does not land below the capability device code was compiled
+    // against (#811). With nothing pinned that is the sm_80 default, which
+    // runs everything sm_75 does; pinning `--arch sm_75` selects sm_75.
     let (target, _) = resolve_ptx_target(None, "CUDA_OXIDE_TARGET", None, requirements.features)
         .expect("auto-resolve");
-    assert_eq!(target.sm(), "sm_75");
+    assert_eq!(target.sm(), "sm_80");
+    let (pinned, _) = resolve_ptx_target(
+        Some("sm_75"),
+        "CUDA_OXIDE_TARGET",
+        None,
+        requirements.features,
+    )
+    .expect("pinned");
+    assert_eq!(pinned.sm(), "sm_75");
     assert_eq!(
         required_ptx_feature(&"sm_75".parse().unwrap(), requirements.ptx_isa).unwrap(),
         Some("+ptx65")

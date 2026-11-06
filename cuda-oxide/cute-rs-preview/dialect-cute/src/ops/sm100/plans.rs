@@ -263,3 +263,46 @@ impl Verify for CuteSm100PipelinePlanAttr {
         Ok(())
     }
 }
+
+/// Static CTA-group contract for one `tcgen05.cp.32x128b.warpx4` scale-atom copy.
+#[pliron_attr(name = "cute.sm100_scale_copy_plan", format = "`<` $cta_group `>`")]
+#[derive(PartialEq, Eq, Clone, Copy, Debug, Hash)]
+pub struct CuteSm100ScaleCopyPlanAttr {
+    /// Number of CTAs participating in the collective contract (`1` or `2`).
+    pub cta_group: u32,
+}
+impl Verify for CuteSm100ScaleCopyPlanAttr {
+    fn verify(&self, _ctx: &Context) -> Result<(), Error> {
+        if !matches!(self.cta_group, 1 | 2) {
+            return verify_err_noloc!("SM100 scale copy requires CTA group 1 or 2");
+        }
+        Ok(())
+    }
+}
+
+/// Static shape and layout contract for one group-one SM100 block-scaled `mxf4nvf4` MMA step.
+#[pliron_attr(
+    name = "cute.sm100_block_scaled_mma_plan",
+    format = "`<` $m `,` $k `,` $a_layout `,` $b_layout `>`"
+)]
+#[derive(PartialEq, Eq, Clone, Debug, Hash)]
+pub struct CuteSm100BlockScaledMmaPlanAttr {
+    /// Output-row extent `M` (`128`).
+    pub m: u32,
+    /// Per-step reduction extent `K` (`64` FP4 elements).
+    pub k: u32,
+    /// Physical shared placement of the A tile.
+    pub a_layout: CuteComposedLayoutAttr,
+    /// Physical shared placement of the B tile.
+    pub b_layout: CuteComposedLayoutAttr,
+}
+impl Verify for CuteSm100BlockScaledMmaPlanAttr {
+    fn verify(&self, ctx: &Context) -> Result<(), Error> {
+        self.a_layout.verify(ctx)?;
+        self.b_layout.verify(ctx)?;
+        if self.m != 128 || self.k != 64 {
+            return verify_err_noloc!("SM100 block-scaled MMA requires M = 128 and K = 64");
+        }
+        Ok(())
+    }
+}

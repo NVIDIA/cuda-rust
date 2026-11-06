@@ -12,7 +12,7 @@
 //! Build and run with:
 //!   cargo oxide run swizzle_smem
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, SharedArray, kernel, swizzle::Swizzle, thread};
 use cuda_host::cuda_module;

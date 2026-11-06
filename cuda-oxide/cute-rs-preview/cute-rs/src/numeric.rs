@@ -63,14 +63,14 @@ impl BFloat16 {
     #[must_use]
     #[inline(always)]
     pub fn from_f32(value: f32) -> Self {
-        Self(ctm_rs::convert::f32_to_bf16_rne(value))
+        Self(__compiler::cvt_f32_to_bf16(value))
     }
 
     /// Widen to FP32 exactly, retaining all BF16 payload bits.
     #[must_use]
     #[inline(always)]
     pub fn to_f32(self) -> f32 {
-        ctm_rs::convert::bf16_to_f32(self.0)
+        cuda_device::convert::bf16_to_f32(self.0)
     }
 }
 
@@ -86,11 +86,11 @@ impl TensorElement<BFloat16> for BFloat16 {}
 pub fn silu_bf16(value: BFloat16) -> BFloat16 {
     let value = value.to_f32();
     let sigmoid = if value >= 0.0 {
-        let e = ctm_rs::float::ex2_approx_f32(-value * core::f32::consts::LOG2_E);
-        ctm_rs::float::rcp_approx_ftz_f32(1.0 + e)
+        let e = crate::arch::exp2_f32(-value * core::f32::consts::LOG2_E);
+        crate::arch::reciprocal_ftz_f32(1.0 + e)
     } else {
-        let e = ctm_rs::float::ex2_approx_f32(value * core::f32::consts::LOG2_E);
-        e * ctm_rs::float::rcp_approx_ftz_f32(1.0 + e)
+        let e = crate::arch::exp2_f32(value * core::f32::consts::LOG2_E);
+        e * crate::arch::reciprocal_ftz_f32(1.0 + e)
     };
     BFloat16::from_f32(value * sigmoid)
 }
@@ -127,8 +127,42 @@ pub struct Float8E8M0FNU;
 ///
 /// Unlike [`Float8E8M0FNU`], E4M3 carries three fraction bits so each 16-element NVFP4
 /// block scale can represent fractional steps such as `1.5` (`max_val / 6.0`).
+#[repr(transparent)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Float8E4M3FN;
+pub struct Float8E4M3FN(#[doc = "Raw 8-bit E4M3FN storage byte."] u8);
+
+impl Float8E4M3FN {
+    /// Preserve an existing E4M3FN byte without conversion.
+    #[must_use]
+    #[inline(always)]
+    pub const fn from_bits(bits: u8) -> Self {
+        Self(bits)
+    }
+
+    /// Return the raw 8-bit E4M3FN storage byte.
+    #[must_use]
+    #[inline(always)]
+    pub const fn to_bits(self) -> u8 {
+        self.0
+    }
+
+    /// Round an `f32` value to `Float8E4M3FN` using round-to-nearest-even with finite saturation
+    /// (CuTeDSL `val.to(cutlass.Float8E4M3FN)`).
+    #[must_use]
+    #[inline(always)]
+    pub fn from_f32(value: f32) -> Self {
+        Self(__compiler::cvt_f32_to_e4m3(value))
+    }
+
+    /// Widen this `Float8E4M3FN` value to `f32` (CuTeDSL `val.to(cutlass.Float32)`).
+    #[must_use]
+    #[inline(always)]
+    pub fn to_f32(self) -> f32 {
+        __compiler::cvt_e4m3_to_f32(self.0)
+    }
+}
+
+impl TensorElement<Float8E4M3FN> for Float8E4M3FN {}
 
 /// Four neighboring [`Float8E8M0FNU`] scale bytes carried in one `u32`.
 ///
@@ -172,6 +206,37 @@ impl TensorElement<f16> for Mxf4E2M1 {}
 impl TensorElement<u32> for UE8M0x4 {}
 impl TensorElement<u32> for E4M3x4 {}
 
+/// Eight neighboring [`Float4E2M1FN`] values packed into one 32-bit word (`u32`).
+///
+/// ```text
+/// u32: [FP4 7][FP4 6][FP4 5][FP4 4][FP4 3][FP4 2][FP4 1][FP4 0]
+/// ```
+///
+/// Serves as the 32-bit register carrier for 8-element and 16-element
+/// `TensorSSA<Float4E2M1FN, N>` vector conversions.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Float4E2M1FNx8(#[doc = "Eight packed 4-bit E2M1 nibbles in increasing K order."] u32);
+
+impl Float4E2M1FNx8 {
+    /// Wrap 32 packed bits as eight E2M1 values without changing them.
+    #[must_use]
+    #[inline(always)]
+    pub const fn from_bits(bits: u32) -> Self {
+        Self(bits)
+    }
+
+    /// Return the underlying 32-bit packed representation.
+    #[must_use]
+    #[inline(always)]
+    pub const fn to_bits(self) -> u32 {
+        self.0
+    }
+}
+
+impl TensorElement<u32> for Float4E2M1FNx8 {}
+impl TensorElement<Float4E2M1FNx8> for Float4E2M1FNx8 {}
+
 /// Two [`Float4E2M1FN`] values packed into one byte.
 ///
 /// ```text
@@ -209,7 +274,7 @@ impl Float4E2M1FNx2 {
     #[must_use]
     #[inline(always)]
     pub fn to_f32x2(self) -> (f32, f32) {
-        (e2m1_to_f32(self.0 & 0x0f), e2m1_to_f32(self.0 >> 4))
+        __compiler::cvt_e2m1x2_to_f32x2(self.0)
     }
 }
 
@@ -257,10 +322,7 @@ impl UE8M0x2 {
     #[must_use]
     #[inline(always)]
     pub fn to_f32x2(self) -> (f32, f32) {
-        (
-            ue8m0_to_f32(self.0 as u8),
-            ue8m0_to_f32((self.0 >> 8) as u8),
-        )
+        __compiler::cvt_ue8m0x2_to_f32x2(self.0)
     }
 }
 
@@ -307,61 +369,71 @@ impl E4M3x2 {
     #[must_use]
     #[inline(always)]
     pub fn to_f32x2(self) -> (f32, f32) {
-        (e4m3_to_f32(self.0 as u8), e4m3_to_f32((self.0 >> 8) as u8))
+        (
+            Float8E4M3FN::from_bits(self.0 as u8).to_f32(),
+            Float8E4M3FN::from_bits((self.0 >> 8) as u8).to_f32(),
+        )
     }
 }
 
-#[inline(always)]
-/// Decode one `Float8E4M3FN` byte to `f32`; `0x7f` and `0xff` become quiet NaN.
-pub const fn e4m3_to_f32(byte: u8) -> f32 {
-    let sign = (byte >> 7) as u32;
-    let exp = ((byte >> 3) & 0x0f) as u32;
-    let mantissa = (byte & 0x07) as u32;
-    if exp == 0x0f && mantissa == 0x07 {
-        f32::from_bits(0x7fff_ffff)
-    } else if exp == 0 {
-        if mantissa == 0 {
-            f32::from_bits(sign << 31)
-        } else {
-            let mag = (mantissa as f32) * (1.0 / 512.0);
-            if sign == 0 { mag } else { -mag }
-        }
-    } else {
-        f32::from_bits((sign << 31) | ((exp + 120) << 23) | (mantissa << 20))
+/// Compiler hooks for reduced-precision scalar and register-tile conversions.
+#[doc(hidden)]
+pub mod __compiler {
+    /// Convert one `f32` scalar into one `BFloat16` `u16` (`arith.truncf : f32 to bf16`).
+    #[must_use]
+    #[inline(never)]
+    pub fn cvt_f32_to_bf16(value: f32) -> u16 {
+        cuda_device::convert::f32_to_bf16_rne(value)
     }
-}
 
-#[inline(always)]
-/// Decode the low FP4 E2M1 nibble, including its sign bit, to f32.
-fn e2m1_to_f32(nibble: u8) -> f32 {
-    let magnitude = match nibble & 0x07 {
-        0 => 0.0,
-        1 => 0.5,
-        2 => 1.0,
-        3 => 1.5,
-        4 => 2.0,
-        5 => 3.0,
-        6 => 4.0,
-        _ => 6.0,
-    };
-    if nibble & 0x08 == 0 {
-        magnitude
-    } else {
-        -magnitude
+    /// Convert one `f32` scalar into one `Float8E4M3FN` byte (`arith.truncf : f32 to f8E4M3FN`).
+    #[must_use]
+    #[inline(never)]
+    pub fn cvt_f32_to_e4m3(value: f32) -> u8 {
+        let _ = value;
+        unreachable!("CuTe numeric conversion marker requires device compilation")
     }
-}
 
-#[inline(always)]
-/// Decode one unsigned exponent-only scale; 0xff becomes NaN.
-fn ue8m0_to_f32(byte: u8) -> f32 {
-    match byte {
-        // UE8M0 code zero denotes 2^-127, exactly halfway through the first
-        // f32 subnormal exponent bin.
-        0 => f32::from_bits(0x0040_0000),
-        // The all-ones code is NaN. Keep a stable quiet payload without
-        // requiring a backend conversion intrinsic.
-        0xff => f32::from_bits(0x7fff_ffff),
-        exponent => f32::from_bits((exponent as u32) << 23),
+    /// Widen one `Float8E4M3FN` byte into `f32` (`arith.extf : f8E4M3FN to f32`).
+    #[must_use]
+    #[inline(never)]
+    pub fn cvt_e4m3_to_f32(bits: u8) -> f32 {
+        let _ = bits;
+        unreachable!("CuTe numeric conversion marker requires device compilation")
+    }
+
+    /// Widen one packed `Float4E2M1FNx2` byte into `(f32, f32)`.
+    #[must_use]
+    #[inline(never)]
+    pub fn cvt_e2m1x2_to_f32x2(bits: u8) -> (f32, f32) {
+        let _ = bits;
+        unreachable!("CuTe numeric conversion marker requires device compilation")
+    }
+
+    /// Widen one packed `UE8M0x2` `u16` pair into `(f32, f32)`.
+    #[must_use]
+    #[inline(never)]
+    pub fn cvt_ue8m0x2_to_f32x2(bits: u16) -> (f32, f32) {
+        let _ = bits;
+        unreachable!("CuTe numeric conversion marker requires device compilation")
+    }
+
+    /// Convert 8 `f32` scalars into 8 packed 4-bit `Float4E2M1FN` nibbles (`arith.truncf : vector<8xf32> to vector<8xf4E2M1FN>`).
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    #[inline(never)]
+    pub fn cvt_f32x8_to_e2m1x8(
+        v0: f32,
+        v1: f32,
+        v2: f32,
+        v3: f32,
+        v4: f32,
+        v5: f32,
+        v6: f32,
+        v7: f32,
+    ) -> u32 {
+        let _ = (v0, v1, v2, v3, v4, v5, v6, v7);
+        unreachable!("CuTe numeric conversion marker requires device compilation")
     }
 }
 
@@ -378,55 +450,14 @@ mod tests {
         }
     }
 
-    /// The low UE8M0 byte must decode as the first scale and the high byte as the second.
+    /// The low UE8M0 byte must store in the low half and the high byte in the high half.
     #[test]
     fn scale_pair_uses_low_byte_first() {
         let pair = UE8M0x2::from_bytes(0x7f, 0x80);
         assert_eq!(pair.to_bits(), 0x807f);
         assert_eq!(UE8M0x2::from_bits(0x807f), pair);
-    }
-
-    /// Every signed FP4 code must decode to the exact expected f32 bit pattern.
-    #[test]
-    fn e2m1_conversion_covers_every_code_bit_exactly() {
-        /// Independent positive FP4 reference values for all three-bit magnitude codes.
-        const MAGNITUDES: [f32; 8] = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0];
-        for (code, expected) in MAGNITUDES.into_iter().enumerate() {
-            assert_eq!(e2m1_to_f32(code as u8).to_bits(), expected.to_bits());
-            assert_eq!(
-                e2m1_to_f32(code as u8 | 0x08).to_bits(),
-                (-expected).to_bits()
-            );
-        }
-    }
-
-    /// Exponent-only decoding must handle the lowest exponent, normal codes and the NaN sentinel.
-    #[test]
-    fn ue8m0_conversion_handles_floor_normal_and_nan_codes() {
-        assert_eq!(ue8m0_to_f32(0).to_bits(), 0x0040_0000);
-        assert_eq!(ue8m0_to_f32(1).to_bits(), 0x0080_0000);
-        assert_eq!(ue8m0_to_f32(126), 0.5);
-        assert_eq!(ue8m0_to_f32(127), 1.0);
-        assert_eq!(ue8m0_to_f32(128), 2.0);
-        assert_eq!(ue8m0_to_f32(254).to_bits(), 0x7f00_0000);
-        assert!(ue8m0_to_f32(255).is_nan());
-    }
-
-    /// E4M3FN decoding must handle signed zero, subnormals, fractional normals, max 448.0, and NaN.
-    #[test]
-    fn e4m3_conversion_handles_zero_subnormal_fractional_max_and_nan() {
-        assert_eq!(e4m3_to_f32(0x00).to_bits(), 0x0000_0000);
-        assert_eq!(e4m3_to_f32(0x80).to_bits(), 0x8000_0000);
-        assert_eq!(e4m3_to_f32(0x01), 1.0 / 512.0);
-        assert_eq!(e4m3_to_f32(0x81), -1.0 / 512.0);
-        assert_eq!(e4m3_to_f32(0x38), 1.0);
-        assert_eq!(e4m3_to_f32(0x3c), 1.5);
-        assert_eq!(e4m3_to_f32(0xbc), -1.5);
-        assert_eq!(e4m3_to_f32(0x7e), 448.0);
-        assert_eq!(e4m3_to_f32(0xfe), -448.0);
-        assert!(e4m3_to_f32(0x7f).is_nan());
-        assert!(e4m3_to_f32(0xff).is_nan());
-        let pair = E4M3x2::from_bytes(0x38, 0x3c);
-        assert_eq!(pair.to_f32x2(), (1.0, 1.5));
+        let e4m3 = E4M3x2::from_bytes(0x38, 0x3c);
+        assert_eq!(e4m3.to_bits(), 0x3c38);
+        assert_eq!(E4M3x2::from_bits(0x3c38), e4m3);
     }
 }

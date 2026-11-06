@@ -31,22 +31,24 @@ use rustc_public::ty::{
     UintTy,
 };
 
-/// Exact defining path of `cute_rs::markers::C`; public reexports do not change it.
-const C: &str = "cute_rs::markers::C";
-/// Exact defining path of `cute_rs::markers::Layout`; public reexports do not change it.
-const LAYOUT: &str = "cute_rs::markers::Layout";
-/// Exact defining path of `cute_rs::markers::RowMajor`; public reexports do not change it.
-const ROW_MAJOR: &str = "cute_rs::markers::RowMajor";
-/// Exact defining path of `cute_rs::markers::ColMajor`; public reexports do not change it.
-const COL_MAJOR: &str = "cute_rs::markers::ColMajor";
-/// Exact defining path of `cute_rs::markers::CopyG2S`; public reexports do not change it.
-const COPY_G2S: &str = "cute_rs::markers::CopyG2S";
-/// Exact defining path of `cute_rs::markers::LeadingDim`; public reexports do not change it.
-const LEADING_DIM: &str = "cute_rs::markers::LeadingDim";
-/// Exact defining path of `cute_rs::markers::Swizzle`; public reexports do not change it.
-const SWIZZLE: &str = "cute_rs::markers::Swizzle";
-/// Exact defining path of `cute_rs::markers::ComposedLayout`; public reexports do not change it.
-const COMPOSED: &str = "cute_rs::markers::ComposedLayout";
+/// Exact defining path of `cute_layout::markers::C`; public reexports do not change it.
+const C: &str = "cute_layout::markers::C";
+/// Exact defining path of `cute_layout::markers::Layout`; public reexports do not change it.
+const LAYOUT: &str = "cute_layout::markers::Layout";
+/// Exact defining path of `cute_layout::markers::RowMajor`; public reexports do not change it.
+const ROW_MAJOR: &str = "cute_layout::markers::RowMajor";
+/// Exact defining path of `cute_layout::markers::ColMajor`; public reexports do not change it.
+const COL_MAJOR: &str = "cute_layout::markers::ColMajor";
+/// Exact defining path of `cute_rs::layout::CopyG2S`; public reexports do not change it.
+const COPY_G2S: &str = "cute_rs::layout::CopyG2S";
+/// Exact defining path of `cute_rs::layout::LeadingDim`; public reexports do not change it.
+const LEADING_DIM: &str = "cute_rs::layout::LeadingDim";
+/// Exact defining path of `cute_layout::markers::Swizzle`; public reexports do not change it.
+const SWIZZLE: &str = "cute_layout::markers::Swizzle";
+/// Exact defining path of `cute_layout::markers::ComposedLayout`; public reexports do not change it.
+const COMPOSED: &str = "cute_layout::markers::ComposedLayout";
+/// Exact defining path of `cute_rs::numeric::BFloat16`; public reexports do not change it.
+const BFLOAT16: &str = "cute_rs::numeric::BFloat16";
 
 /// Validated cooperative-copy instruction width.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,6 +114,10 @@ fn cooperative_element(ty: &Ty) -> Result<(i64, &'static str), String> {
         },
         // Rust `char` already lowers exactly to an unsigned 32-bit dialect integer.
         TyKind::RigidTy(RigidTy::Char) => (4, "char"),
+        TyKind::RigidTy(RigidTy::Adt(def, args)) if canonical_adt_path(&def) == BFLOAT16 => {
+            expect_schema(&args, &[], BFLOAT16)?;
+            (2, "BFloat16")
+        }
         _ => {
             return Err(format!(
                 "copy_g2s element must be a supported scalar, found {ty:?}"
@@ -337,8 +343,53 @@ fn decode_swizzle(ty: &Ty) -> Result<Swizzle, String> {
 
 /// Decode the sealed attention layout identity and its major mode.
 pub(crate) fn decode_attention_layout(ty: &Ty) -> Result<(ComposedLayout, bool), String> {
-    /// Exact defining path of `cute_rs::attention::sm100::shared::SharedLayout`; public reexports do not change it.
-    const PATH: &str = "cute_rs::attention::sm100::shared::SharedLayout";
+    /// Exact defining path of `cute_layout::layout::SharedLayout`; public reexports do not change it.
+    const PATH: &str = "cute_layout::layout::SharedLayout";
+    if let TyKind::RigidTy(RigidTy::Adt(def, args)) = ty.kind()
+        && canonical_adt_path(&def) == COMPOSED
+    {
+        expect_schema(&args, &["Type", "Const", "Type"], COMPOSED)?;
+        let swizzle = decode_swizzle(&type_arg(&args, 0, COMPOSED)?)?;
+        let offset = signed_const(&const_arg(&args, 1, COMPOSED)?, "composed offset")?;
+        if offset != 0 || swizzle.num_base != 3 || swizzle.num_shift != 3 {
+            return Err(
+                "SM100 shared ComposedLayout requires Swizzle<B, 3, 3> and offset 0".into(),
+            );
+        }
+        let outer = type_arg(&args, 2, COMPOSED)?;
+        let TyKind::RigidTy(RigidTy::Adt(outer_def, outer_args)) = outer.kind() else {
+            return Err(
+                "SM100 shared ComposedLayout outer layout must be RowMajor or ColMajor".into(),
+            );
+        };
+        let outer_path = canonical_adt_path(&outer_def);
+        if outer_path != ROW_MAJOR && outer_path != COL_MAJOR {
+            return Err(format!(
+                "SM100 shared ComposedLayout outer layout must be RowMajor or ColMajor, found `{outer_path}`"
+            ));
+        }
+        expect_schema(&outer_args, &["Const", "Const"], &outer_path)?;
+        let rows_i64 = signed_const(&const_arg(&outer_args, 0, &outer_path)?, "row count")?;
+        let cols_i64 = signed_const(&const_arg(&outer_args, 1, &outer_path)?, "column count")?;
+        let rows = u32::try_from(rows_i64).map_err(|_| "attention rows must fit in u32")?;
+        let cols = u32::try_from(cols_i64).map_err(|_| "attention columns must fit in u32")?;
+        let mn = outer_path == COL_MAJOR;
+        let expected_bits = if (if mn { rows } else { cols }) == 32 {
+            2
+        } else {
+            3
+        };
+        if swizzle.num_bits != expected_bits {
+            return Err(format!(
+                "SM100 shared ComposedLayout swizzle bits {} do not match span requirement {}",
+                swizzle.num_bits, expected_bits
+            ));
+        }
+        return Ok((
+            dialect_cute::sm100_attention_ops::shared_layout(rows, cols, mn)?.0,
+            mn,
+        ));
+    }
     let args = adt_owned(ty, PATH)?;
     expect_schema(&args, &["Const", "Const", "Const"], PATH)?;
     let rows = u32::try_from(unsigned_const(
@@ -392,7 +443,7 @@ pub(crate) fn decode_cooperative_config(args: &GenericArgs) -> Result<Cooperativ
     expect_schema(
         args,
         &["Type", "Type", "Type", "Type", "Type", "Type", "Type"],
-        "cute_rs::copy::cooperative::copy_g2s",
+        "cute_rs::atom::cooperative::copy_g2s",
     )?;
     let atom = decode_atom(&type_arg(args, 0, "copy_g2s")?)?;
     let thread_layout = decode_layout(&type_arg(args, 1, "copy_g2s")?)?;
@@ -464,7 +515,16 @@ pub(crate) fn decode_load_matrix_callee(func: &mir::Operand) -> Result<MatrixLoa
     let TyKind::RigidTy(RigidTy::FnDef(_, args)) = constant.const_.ty().kind() else {
         return Err("load_matrix callee is not a FnDef".to_string());
     };
-    expect_schema(&args, &["Type"], "cute_rs::mma::load_matrix")?;
+    expect_schema(
+        &args,
+        &["Type", "Type"],
+        "cute_rs::nvgpu::warp::load_matrix",
+    )?;
+    let element_type = type_arg(&args, 1, "load_matrix")?;
+    let (element_bytes, _) = cooperative_element(&element_type)?;
+    if element_bytes != 2 {
+        return Err("load_matrix requires a 2-byte (f16 or BFloat16) element type".to_string());
+    }
     let smem_layout = decode_smem_layout(&type_arg(&args, 0, "load_matrix")?)?;
 
     let modes = smem_layout.outer().modes();
@@ -515,7 +575,11 @@ pub(crate) fn decode_copy_tma_callee(func: &mir::Operand) -> Result<TmaCopyConfi
     let TyKind::RigidTy(RigidTy::FnDef(_, args)) = constant.const_.ty().kind() else {
         return Err("copy_tma_2d callee is not a FnDef".to_string());
     };
-    expect_schema(&args, &["Type", "Type"], "cute_rs::copy::tma::copy_tma_2d")?;
+    expect_schema(
+        &args,
+        &["Type", "Type"],
+        "cute_rs::nvgpu::cpasync::copy_tma_2d",
+    )?;
     let element_type = type_arg(&args, 0, "copy_tma_2d")?;
     let (element_bytes, _) = cooperative_element(&element_type)?;
     let smem_layout = decode_smem_layout(&type_arg(&args, 1, "copy_tma_2d")?)?;
@@ -540,7 +604,7 @@ pub(crate) fn decode_copy_tma_s2g_callee(func: &mir::Operand) -> Result<TmaCopyC
     expect_schema(
         &args,
         &["Type", "Type"],
-        "cute_rs::copy::tma::copy_tma_s2g_2d",
+        "cute_rs::nvgpu::cpasync::copy_tma_s2g_2d",
     )?;
     let element_type = type_arg(&args, 0, "copy_tma_s2g_2d")?;
     let (element_bytes, _) = cooperative_element(&element_type)?;
@@ -600,7 +664,7 @@ mod tests {
             "rustc".to_string(),
             "--edition=2024".to_string(),
             "--crate-type=rlib".to_string(),
-            "--crate-name=cute_rs".to_string(),
+            "--crate-name=cute_layout".to_string(),
             "--emit=metadata".to_string(),
             format!("--out-dir={}", root.display()),
             format!("--sysroot={sysroot}"),
@@ -679,10 +743,10 @@ pub fn foreign_leaf(_: Layout<(other::C<2>, C<3>), (C<3>, C<1>)>) {}
         expect("triple", "(2,3,4):(12,4,1)");
         let error = |name: &str| decoded[name].as_ref().expect_err(name).clone();
         assert!(error("empty_mode").contains("at least one mode"));
-        assert!(error("primitive_leaf").contains("must be a tuple or `cute_rs::markers::C`"));
+        assert!(error("primitive_leaf").contains("must be a tuple or `cute_layout::markers::C`"));
         assert_eq!(
             error("foreign_leaf"),
-            "expected a tuple or `cute_rs::markers::C`, found `cute_rs::other::C`"
+            "expected a tuple or `cute_layout::markers::C`, found `cute_layout::other::C`"
         );
     }
 

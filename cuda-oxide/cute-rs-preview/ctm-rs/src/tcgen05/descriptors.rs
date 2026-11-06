@@ -27,20 +27,20 @@ mod sealed {
 /// The shared operand's K coordinate is contiguous before swizzling.
 ///
 /// This descriptor marker is distinct from cute-rs's `KMajor<Mode>`
-/// (`cute_rs::block_scaled::KMajor`), a block-scaled operand layout that also
+/// (`cute_rs::utils::blockscaled::KMajor`), a block-scaled operand layout that also
 /// carries row and K extents.
 pub enum KMajor {}
 /// Left matrix input; cannot be substituted for [`OperandB`].
 ///
-/// cute-rs reexports this marker as `cute_rs::sm100::OperandA` (also at its
-/// crate root), so shared tiles there and instruction operands here share one
-/// role vocabulary.
+/// cute-rs defines the corresponding marker as `cute_rs::nvgpu::common::OperandA`
+/// (re-exported at its crate root), so shared tiles there and instruction
+/// operands here share one role vocabulary.
 pub enum OperandA {}
 /// Right matrix input; cannot be substituted for [`OperandA`].
 ///
-/// cute-rs reexports this marker as `cute_rs::sm100::OperandB` (also at its
-/// crate root), so shared tiles there and instruction operands here share one
-/// role vocabulary.
+/// cute-rs defines the corresponding marker as `cute_rs::nvgpu::common::OperandB`
+/// (re-exported at its crate root), so shared tiles there and instruction
+/// operands here share one role vocabulary.
 pub enum OperandB {}
 impl sealed::Role for OperandA {}
 impl sealed::Role for OperandB {}
@@ -135,6 +135,45 @@ pub enum DescriptorError {
     /// The shared byte offset exceeds the descriptor address field.
     AddressOutOfRange,
 }
+#[inline(always)]
+/// Pack a 16-byte-aligned shared offset into a no-swizzle K-major descriptor (`Tcgen05SwizzleMode::None`).
+/// Encodes `address >> 4`, `leading_dim_bytes >> 4`, and `stride_bytes >> 4` with the canonical
+/// bit-46 descriptor flag for `tcgen05.mma` and `tcgen05.cp`.
+#[must_use]
+pub const fn encode_no_swizzle_smem_desc(
+    address: u64,
+    leading_dim_bytes: u32,
+    stride_bytes: u32,
+) -> u64 {
+    Tcgen05SmemDescriptor::builder()
+        .address(address)
+        .leading_dim_bytes(leading_dim_bytes)
+        .stride_bytes(stride_bytes)
+        .swizzle(Tcgen05SwizzleMode::None)
+        .build()
+        .raw()
+}
+
+#[inline(always)]
+/// Encode a group-one dense FP16 instruction descriptor (`Tcgen05InstructionDescriptor`).
+/// Configures `M = m` and `N = n` with FP16 inputs and FP32 TMEM accumulation.
+#[must_use]
+pub const fn encode_cg1_f16_idesc(m: u32, n: u32) -> u32 {
+    Tcgen05InstructionDescriptor::builder()
+        .m(m)
+        .n(n)
+        .build()
+        .raw()
+}
+
+#[inline(always)]
+/// Encode a group-one NVFP4 (`mxf4nvf4.block_scale.block16`, `E2M1 × E2M1` with `E4M3` scales)
+/// instruction descriptor (`Tcgen05InstructionDescriptor`) for tile dimensions `(m, n)`.
+#[must_use]
+pub const fn encode_cg1_mxf4nvf4_block16_idesc(m: u32, n: u32) -> u32 {
+    0x0000_0480u32 | ((n >> 3) << 17) | ((m >> 4) << 24)
+}
+
 #[inline(always)]
 /// Pack a 16-byte-aligned shared offset into the fixed B128 K-major descriptor.
 fn encode_smem_offset(offset: ByteOffset) -> Result<Tcgen05SmemDescriptor, DescriptorError> {

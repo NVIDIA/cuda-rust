@@ -491,8 +491,10 @@ fn command_requests_full_device_debug_with_env(
 ///
 /// We avoid `-Zmir-opt-level=0` because its extra MIR shapes do not all import.
 /// These controls affect full-debug builds only.
-pub(super) const FULL_DEBUG_MIR_RUSTFLAGS: &[&str] =
-    &["-Zmir-enable-passes=-ScalarReplacementOfAggregates,-SingleUseConsts"];
+pub(super) const FULL_DEBUG_MIR_RUSTFLAGS: &[&str] = &[
+    "-Cdebuginfo=2",
+    "-Zmir-enable-passes=-ScalarReplacementOfAggregates,-SingleUseConsts",
+];
 
 pub(super) fn append_full_debug_rustflags(
     encoded: &mut String,

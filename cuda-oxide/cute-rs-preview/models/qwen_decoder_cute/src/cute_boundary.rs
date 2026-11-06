@@ -32,6 +32,10 @@ const KERNELS: &[(&str, &str)] = &[
         "predictor",
         include_str!("../src/predictor_graph_kernel.rs"),
     ),
+    (
+        "reference linear",
+        include_str!("../src/reference_linear_kernel.rs"),
+    ),
 ];
 
 /// Return the first forbidden CTM import or direct-instruction spelling.

@@ -8,8 +8,8 @@
   --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
  }
   @media (prefers-color-scheme: dark) { :root, svg {
-  --bg: #0f151b; --fg: #e4ebf2; --muted: #9fb0c0; --line: #4d5b6a; --panel: #171f28;
-  --meta: #5fe3d2; --meta-fill: #0f3a37; --code: #f6b544; --code-fill: #3b2a0c;
+  --bg: #1b1d23; --fg: #f2f4f7; --muted: #bcc4d0; --line: #5c6475; --panel: #282c36;
+  --meta: #7ed8bb; --meta-fill: #346357; --code: #f4c474; --code-fill: #735a3c;
  } }
 </style>
 <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" style="fill: var(--fg)"/></marker></defs>
@@ -42,7 +42,7 @@
 <text x="52" y="402" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">nonzero mask, ready barrier</text>
 <rect x="440" y="106" width="410" height="38" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
 <text x="452" y="123" text-anchor="start" style="font: 600 12px var(--mono); fill: var(--code)">tcgen05</text>
-<text x="838" y="123" text-anchor="end" style="font: 600 10.5px var(--mono); fill: var(--muted)">sm_100a</text>
+<text x="838" y="123" text-anchor="end" style="font: 600 10.5px var(--mono); fill: var(--muted)">sm_100a, sm_103a</text>
 <text x="452" y="138" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">alloc, dealloc, F16 two-CTA MMA, 32x32b ld/st, commit, fences</text>
 <rect x="440" y="150" width="410" height="38" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
 <text x="452" y="167" text-anchor="start" style="font: 600 12px var(--mono); fill: var(--code)">TMA</text>
@@ -92,8 +92,8 @@
 <text x="875" y="249.0" text-anchor="middle" style="font: 400 10px var(--sans); fill: var(--muted)">feeds</text>
 <rect x="900" y="338" width="300" height="62" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
 <text x="912" y="357" text-anchor="start" style="font: 600 11px var(--sans); fill: var(--meta)">targets</text>
-<text x="912" y="374" text-anchor="start" style="font: 400 10.5px var(--mono); fill: var(--muted)">sm_100a or sm_120a</text>
-<text x="912" y="390" text-anchor="start" style="font: 400 10.5px var(--sans); fill: var(--muted)">tcgen05 needs sm_100a; MXF4 needs sm_120a</text>
+<text x="912" y="374" text-anchor="start" style="font: 400 10.5px var(--mono); fill: var(--muted)">sm_100a, sm_103a or sm_120a</text>
+<text x="912" y="390" text-anchor="start" style="font: 400 10.5px var(--sans); fill: var(--muted)">tcgen05 needs sm_100a/103a; MXF4 needs sm_120a</text>
 <rect x="40" y="430" width="1160" height="56" rx="6" style="fill: var(--code-fill); stroke: var(--code); stroke-width: 1.2"/>
 <text x="52" y="452" text-anchor="start" style="font: 600 12px var(--sans); fill: var(--fg)">The author still owns, at every unsafe boundary:</text>
 <text x="52" y="472" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">election and lane participation · barrier phases and arrival counts · asynchronous completion before reuse · collector fill and release order · pointer lifetimes</text>

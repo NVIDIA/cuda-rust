@@ -22,7 +22,9 @@
 //! exit test that adds a constant to the counter (`while i + 2 <= n`), and range
 //! `for` loops (`for i in a..b` and `(a..b).rev()`) over any integer counter,
 //! including `isize`. Other iterator loops, such as `a..=b` or `.step_by(k)`,
-//! are not yet recognized.
+//! are not yet recognized. A full unroll's bound can be integer arithmetic on
+//! constants, such as `N / 8` with a const generic `N`. Casts and
+//! overflow-checked arithmetic in the bound are not yet folded.
 //!
 //! Several `continue` paths are supported: the pass joins their back-edges
 //! before unrolling. Full `#[unroll]` also preserves early `break` paths and
@@ -58,6 +60,7 @@ use pliron::context::{Context, Ptr};
 use pliron::graph::ControlFlowGraph;
 use pliron::graph::dominance::DomInfo;
 use pliron::irbuild::{
+    IRStatus,
     cloning::{IrMapping, clone_blocks_into},
     listener::DummyListener,
     rewriter::IRRewriter,
@@ -76,12 +79,15 @@ use pliron::r#type::{TypeHandle, Typed, TypedHandle};
 use pliron::utils::apint::APInt;
 use pliron::value::Value;
 use rustc_hash::FxHashSet;
+use std::fmt;
 use std::num::NonZero;
+use std::path::PathBuf;
 
 use crate::analyses::induction::{self, ArgKind, CmpPred};
 use crate::analyses::loop_info::LoopInfo;
 use crate::canonicalize::{
-    CanonicalizeOutcome, close_header_liveouts, merge_backedges, thread_iterator_exit_test,
+    CanonicalizeOutcome, close_header_liveouts, hoist_header_constants, merge_backedges,
+    thread_iterator_exit_test,
 };
 
 /// Hard safety limit on how many body copies one annotation may request.
@@ -113,20 +119,46 @@ fn unroll_kind(factor: u32) -> String {
     }
 }
 
-/// A hint op's source position as `file:line:column`, the form editors and
-/// terminals turn into a link. Returns `None` when the op does not carry a
+/// Where a loop annotation sits in the source.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HintLocation {
+    /// The file, as the compiler named it.
+    pub file: PathBuf,
+    /// 1-based line.
+    pub line: u32,
+    /// 1-based column.
+    pub column: u32,
+}
+
+/// `file:line:column`, the form editors and terminals turn into a link.
+impl fmt::Display for HintLocation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}:{}", self.file.display(), self.line, self.column)
+    }
+}
+
+/// A loop annotation a pass could not honour. Passes return these rather than
+/// print them, so each frontend reports them through its own diagnostics.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HintWarning {
+    /// What was requested and why it was not applied, without a `warning:` prefix.
+    pub message: String,
+    /// The annotation's position, when it carries one.
+    pub location: Option<HintLocation>,
+}
+
+/// A hint op's source position. Returns `None` when the op does not carry a
 /// single position in a file.
-fn hint_location(ctx: &Context, op: Ptr<Operation>) -> Option<String> {
+pub(crate) fn hint_location(ctx: &Context, op: Ptr<Operation>) -> Option<HintLocation> {
     match op.deref(ctx).loc() {
         Location::SrcPos {
             src: Source::File(path),
             pos,
-        } => Some(format!(
-            "{}:{}:{}",
-            pliron::uniqued_any::get(ctx, *path).display(),
-            pos.line,
-            pos.column
-        )),
+        } => Some(HintLocation {
+            file: pliron::uniqued_any::get(ctx, *path).to_path_buf(),
+            line: u32::try_from(pos.line).ok()?,
+            column: u32::try_from(pos.column).ok()?,
+        }),
         _ => None,
     }
 }
@@ -139,7 +171,7 @@ fn take_loop_hints(
     hints: &[(Ptr<Operation>, Ptr<BasicBlock>, u32)],
     info: &LoopInfo,
     loop_id: usize,
-) -> Option<String> {
+) -> Option<HintLocation> {
     let mut location = None;
     for (op, block, _f) in hints {
         if info.innermost_loop(*block) == Some(loop_id) {
@@ -150,15 +182,12 @@ fn take_loop_hints(
     location
 }
 
-/// The full text of one "not unrolled" warning: the reason line, then the
-/// annotation's source position on a `-->` line when `location` is `Some`.
-fn not_unrolled_warning(kind: &str, reason: &str, location: Option<&str>) -> String {
-    let mut warning = format!("warning: {kind} requested but the loop was not unrolled: {reason}");
-    if let Some(location) = location {
-        warning.push_str("\n  --> ");
-        warning.push_str(location);
+/// One "not unrolled" warning, pointing at the annotation when it has a position.
+fn not_unrolled_warning(kind: &str, reason: &str, location: Option<HintLocation>) -> HintWarning {
+    HintWarning {
+        message: format!("{kind} requested but the loop was not unrolled: {reason}"),
+        location,
     }
-    warning
 }
 
 /// Check code-growth budgets whose inputs have already been counted safely.
@@ -214,15 +243,17 @@ fn check_clone_budget(
 /// frontend plants for `#[unroll]` and `#[unroll(N)]`. Other functions are left
 /// untouched.
 ///
-/// Within each annotated function, this finds loops with [`LoopInfo`], maps
-/// every hint to its loop, joins multiple back-edges through one latch, analyzes
-/// the loop counter, and performs full or partial unrolling. It recomputes loop
+/// Within each annotated function, this folds constant expressions with SCCP
+/// so a bound such as `N / 8` reads as a constant, finds loops with
+/// [`LoopInfo`], maps every hint to its loop, joins multiple back-edges through
+/// one latch, analyzes the loop counter, and performs full or partial
+/// unrolling. It recomputes loop
 /// and induction facts after normalization. Annotated nested loops are processed
 /// from the inside out. Afterward, SCCP, CFG simplification, and dead-code
 /// elimination clean only that function: constant index expressions fold, dead
 /// branches disappear, and unreachable original loop blocks are removed.
 ///
-/// Unsupported loop shapes produce a warning and are not unrolled.
+/// Unsupported loop shapes are not unrolled; each is returned as a [`HintWarning`].
 pub fn unroll_annotated_loops(
     module: Ptr<Operation>,
     ctx: &mut Context,
@@ -231,15 +262,16 @@ pub fn unroll_annotated_loops(
     // stale that manager's cached dominator trees. We build a fresh manager
     // afterwards instead. (Kept in the signature to match pliron's pass shape.)
     _analyses: &mut AnalysisManager,
-) -> Result<()> {
+) -> Result<Vec<HintWarning>> {
     // Nothing annotated => leave every function byte-for-byte untouched.
     let has_hints = collect_functions(module, ctx)
         .iter()
         .any(|&f| !collect_hints(ctx, f.deref(ctx).get_region(0)).is_empty());
     if !has_hints {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
+    let mut warnings = Vec::new();
     let mut changed = false;
     for func_op in collect_functions(module, ctx) {
         let region = func_op.deref(ctx).get_region(0);
@@ -252,6 +284,15 @@ pub fn unroll_annotated_loops(
         // own MIR block; `simplify_cfg` merges that block back into the loop body
         // without changing unrelated functions in the module.
         simplify_cfg(func_op, ctx)?;
+
+        // Fold constant expressions before reading any trip count. A bound
+        // written `N / 8` with a const generic `N` arrives as a `mir.div` of
+        // two constants, which the induction analysis cannot read until `sccp`
+        // folds it to one.
+        if sccp(func_op, ctx)? == IRStatus::Changed {
+            function_changed = true;
+            changed = true;
+        }
 
         // Unroll one annotated loop per round, innermost-first, recomputing the
         // loop analyses each round. Each unroll rewrites the CFG -- and for a loop
@@ -305,14 +346,11 @@ pub fn unroll_annotated_loops(
                 // No remaining hint sits in a recognizable loop. The author asked
                 // for unrolling, so say so loudly, then drop the markers and stop.
                 for (op, _block, factor) in &hints {
-                    eprintln!(
-                        "{}",
-                        not_unrolled_warning(
-                            &unroll_kind(*factor),
-                            "the annotation is not inside a recognizable loop",
-                            hint_location(ctx, *op).as_deref(),
-                        )
-                    );
+                    warnings.push(not_unrolled_warning(
+                        &unroll_kind(*factor),
+                        "the annotation is not inside a recognizable loop",
+                        hint_location(ctx, *op),
+                    ));
                     op.unlink(ctx);
                 }
                 break;
@@ -322,16 +360,21 @@ pub fn unroll_annotated_loops(
             let Some(ph) = info.preheader(ctx, region, loop_id) else {
                 // The author asked for unrolling; never silently do nothing.
                 let location = take_loop_hints(ctx, &hints, &info, loop_id);
-                eprintln!(
-                    "{}",
-                    not_unrolled_warning(
-                        &kind,
-                        "it has no single preheader (it is entered from more than one place)",
-                        location.as_deref(),
-                    )
-                );
+                warnings.push(not_unrolled_warning(
+                    &kind,
+                    "it has no single preheader (it is entered from more than one place)",
+                    location,
+                ));
                 continue;
             };
+
+            // `sccp` leaves a folded bound where it was computed, which can be
+            // the header of a loop whose body also reads it. In the preheader,
+            // it no longer counts as a value the header computes.
+            if hoist_header_constants(ctx, &info, loop_id, ph) {
+                function_changed = true;
+                changed = true;
+            }
 
             // A range `for` loop tests the `Option` from `Iterator::next`, not
             // its counter. Move that test into the header first, then recompute.
@@ -344,10 +387,7 @@ pub fn unroll_annotated_loops(
                 }
                 CanonicalizeOutcome::Unsupported(reason) => {
                     let location = take_loop_hints(ctx, &hints, &info, loop_id);
-                    eprintln!(
-                        "{}",
-                        not_unrolled_warning(&kind, &reason, location.as_deref())
-                    );
+                    warnings.push(not_unrolled_warning(&kind, &reason, location));
                     continue;
                 }
             }
@@ -361,14 +401,11 @@ pub fn unroll_annotated_loops(
                 let exits = info.exit_blocks(ctx, region, loop_id);
                 if exiting.len() != 1 || exiting[0] != lp.header || exits.len() != 1 {
                     let location = take_loop_hints(ctx, &hints, &info, loop_id);
-                    eprintln!(
-                        "{}",
-                        not_unrolled_warning(
-                            &kind,
-                            "partial unrolling does not yet support an early `break` or multiple exits",
-                            location.as_deref(),
-                        )
-                    );
+                    warnings.push(not_unrolled_warning(
+                        &kind,
+                        "partial unrolling does not yet support an early `break` or multiple exits",
+                        location,
+                    ));
                     continue;
                 }
             }
@@ -387,14 +424,11 @@ pub fn unroll_annotated_loops(
                     }
                     CanonicalizeOutcome::Unsupported(reason) => {
                         let location = take_loop_hints(ctx, &hints, &info, loop_id);
-                        eprintln!(
-                            "{}",
-                            not_unrolled_warning(
-                                &kind,
-                                &format!("could not route its live-out values: {reason}"),
-                                location.as_deref(),
-                            )
-                        );
+                        warnings.push(not_unrolled_warning(
+                            &kind,
+                            &format!("could not route its live-out values: {reason}"),
+                            location,
+                        ));
                         continue;
                     }
                 }
@@ -413,14 +447,11 @@ pub fn unroll_annotated_loops(
                 }
                 CanonicalizeOutcome::Unsupported(reason) => {
                     let location = take_loop_hints(ctx, &hints, &info, loop_id);
-                    eprintln!(
-                        "{}",
-                        not_unrolled_warning(
-                            &kind,
-                            &format!("could not normalize its back-edges: {reason}"),
-                            location.as_deref(),
-                        )
-                    );
+                    warnings.push(not_unrolled_warning(
+                        &kind,
+                        &format!("could not normalize its back-edges: {reason}"),
+                        location,
+                    ));
                     continue;
                 }
             }
@@ -451,10 +482,7 @@ pub fn unroll_annotated_loops(
                 // Requested but unsupported shape: report exactly why, loudly, so
                 // it is never a silent no-op.
                 UnrollOutcome::Skipped(reason) => {
-                    eprintln!(
-                        "{}",
-                        not_unrolled_warning(&kind, &reason, location.as_deref())
-                    );
+                    warnings.push(not_unrolled_warning(&kind, &reason, location));
                 }
             }
         }
@@ -476,7 +504,7 @@ pub fn unroll_annotated_loops(
         // blocks are gone and the dominator-based verifier sees the final CFG.
         pliron::operation::verify_operation(module, ctx)?;
     }
-    Ok(())
+    Ok(warnings)
 }
 
 /// What happened when we tried to unroll one loop.
@@ -1319,6 +1347,11 @@ fn partial_unroll(
     }
     let last_latch = copies[factor_usize - 1].latch_term;
     rewire_goto(ctx, last_latch, main_h, &running);
+    MirGotoOp::new(last_latch).set_loop_unroll_disable(ctx);
+    let rem_latch = s.latch.deref(ctx).get_tail();
+    if let Some(rem_latch) = rem_latch {
+        MirGotoOp::new(rem_latch).set_loop_unroll_disable(ctx);
+    }
 
     // The main-loop counter is mh_iv = init + (factor*step)*t, so it is always
     // init plus a multiple of factor*step. That lets us replace counter-derived
@@ -1653,7 +1686,7 @@ fn append_cmp(
 }
 
 /// All function ops in the module (each `mir.func`).
-fn collect_functions(module: Ptr<Operation>, ctx: &Context) -> Vec<Ptr<Operation>> {
+pub(crate) fn collect_functions(module: Ptr<Operation>, ctx: &Context) -> Vec<Ptr<Operation>> {
     let mut out = Vec::new();
     let module_region = module.deref(ctx).get_region(0);
     let blocks: Vec<Ptr<BasicBlock>> = module_region.deref(ctx).iter(ctx).collect();
@@ -1740,23 +1773,27 @@ mod tests {
             hint.deref_mut(&ctx).set_loc(loc);
 
             let location = hint_location(&ctx, hint).expect("a source position renders");
-            let warning = not_unrolled_warning(&unroll_kind(factor), reason, Some(&location));
-            let lines: Vec<&str> = warning.lines().collect();
+            assert_eq!(
+                (location.file.to_str(), location.line, location.column),
+                (Some(file), line as u32, column as u32),
+                "factor={factor}"
+            );
+            let warning =
+                not_unrolled_warning(&unroll_kind(factor), reason, Some(location.clone()));
             let case = format!("factor={factor}: {reason}");
-            assert_eq!(lines.len(), 2, "{case}");
-            assert!(lines[0].starts_with("warning: "), "{case}");
-            assert!(lines[0].contains(reason), "{case}");
-            let location_line = lines[1];
-            assert!(location_line.starts_with("  --> "), "{case}");
-            assert!(
-                location_line.ends_with(&format!("{file}:{line}:{column}")),
-                "{case}: {location_line}"
+            assert!(warning.message.starts_with(&unroll_kind(factor)), "{case}");
+            assert!(warning.message.ends_with(reason), "{case}");
+            assert_eq!(warning.location, Some(location), "{case}");
+            assert_eq!(
+                warning.location.unwrap().to_string(),
+                format!("{file}:{line}:{column}"),
+                "{case}"
             );
         }
     }
 
     #[test]
-    fn a_hint_op_without_a_position_prints_only_the_reason_line() {
+    fn a_hint_op_without_a_position_gives_a_warning_without_one() {
         let mut ctx = Context::new();
         let hint = MirUnrollHintOp::new(&mut ctx, 0).get_operation();
         assert_eq!(
@@ -1766,12 +1803,8 @@ mod tests {
         );
 
         let reason = "it has no single preheader (it is entered from more than one place)";
-        let warning = not_unrolled_warning(
-            &unroll_kind(0),
-            reason,
-            hint_location(&ctx, hint).as_deref(),
-        );
-        assert!(!warning.contains('\n'), "{warning}");
-        assert!(warning.ends_with(reason), "{warning}");
+        let warning = not_unrolled_warning(&unroll_kind(0), reason, hint_location(&ctx, hint));
+        assert_eq!(warning.location, None);
+        assert!(warning.message.ends_with(reason), "{}", warning.message);
     }
 }

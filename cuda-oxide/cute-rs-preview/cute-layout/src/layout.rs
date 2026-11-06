@@ -76,6 +76,474 @@ pub fn crd2idx(coord: &IntTuple, shape: &IntTuple, stride: &IntTuple) -> i64 {
     }
 }
 
+/// Unpacks a flat 1D coordinate `idx` into a logical coordinate tuple matching
+/// `shape` under CuTe's colexicographic (leftmost-mode-fastest) walk
+/// (CuTeDSL `cute.idx2crd`).
+///
+/// This is the inverse of the flat-coordinate decomposition in [`crd2idx`]:
+/// for any `0 <= idx < shape.size()`, evaluating `crd2idx(&idx2crd(idx, shape), shape, stride)`
+/// produces the exact same offset as `crd2idx(&IntTuple::Leaf(idx), shape, stride)`.
+pub fn idx2crd(idx: i64, shape: &IntTuple) -> IntTuple {
+    match shape {
+        IntTuple::Leaf(_s) => IntTuple::Leaf(idx),
+        IntTuple::Tuple(ss) => {
+            let mut rem = idx;
+            let mut coords = Vec::with_capacity(ss.len());
+            for (i, s) in ss.iter().enumerate() {
+                let sz = s.size();
+                let c_i = if i + 1 == ss.len() { rem } else { rem % sz };
+                coords.push(idx2crd(c_i, s));
+                rem /= sz;
+            }
+            IntTuple::Tuple(coords)
+        }
+    }
+}
+
+/// Allocation-free 2D column-major `idx2crd` (`(rows, cols) : (1, rows)`).
+///
+/// Unpacks a flat coordinate `idx` into `(row, col) = (idx % rows, idx / rows)`
+/// with the row mode (`0..rows`) changing fastest (CuTeDSL `cute.idx2crd`).
+#[allow(clippy::manual_checked_ops)]
+#[must_use]
+#[inline(always)]
+pub const fn idx2crd_col_major_2d(idx: u32, rows: u32) -> (u32, u32) {
+    if rows == 0 {
+        (0, 0)
+    } else {
+        (idx % rows, idx / rows)
+    }
+}
+
+/// Allocation-free 2D row-major `idx2crd` (`(rows, cols) : (cols, 1)`).
+///
+/// Unpacks a flat coordinate `idx` into `(row, col) = (idx / cols, idx % cols)`
+/// with the column mode (`0..cols`) changing fastest (CuTeDSL `cute.idx2crd`).
+#[allow(clippy::manual_checked_ops)]
+#[must_use]
+#[inline(always)]
+pub const fn idx2crd_row_major_2d(idx: u32, cols: u32) -> (u32, u32) {
+    if cols == 0 {
+        (0, 0)
+    } else {
+        (idx / cols, idx % cols)
+    }
+}
+
+/// Allocation-free grouped-M 2D tile coordinate mapping (`logical_divide` on M by `GROUP_M`
+/// followed by `idx2crd`).
+///
+/// Divides an `(m_tiles, n_tiles)` tile grid into L2-cache-friendly groups of up to
+/// `GROUP_M` M-tiles (`((actual_m, n_tiles), m_groups)`), then unpacks the flat
+/// persistent tile index `tile` into `(m_tile, n_tile)` via [`idx2crd_col_major_2d`].
+#[must_use]
+#[inline(always)]
+pub const fn idx2crd_grouped_2d<const GROUP_M: u32>(
+    tile: u32,
+    m_tiles: u32,
+    n_tiles: u32,
+) -> (u32, u32) {
+    const { assert!(GROUP_M > 0) };
+    let group_m = if m_tiles >= GROUP_M { GROUP_M } else { m_tiles };
+    let group_tiles = group_m * n_tiles;
+    let (in_group, group_id) = idx2crd_col_major_2d(tile, group_tiles);
+    let first_m = group_id * group_m;
+    let rem_m = m_tiles - first_m;
+    let actual_m = if rem_m >= group_m { group_m } else { rem_m };
+    let (m_in_group, n_tile) = idx2crd_col_major_2d(in_group, actual_m);
+    (first_m + m_in_group, n_tile)
+}
+
+/// Allocation-free 2D column-major `crd2idx` (`(rows, cols) : (1, rows)`).
+///
+/// Maps `(row, col)` to its linear offset `row + col * rows` (CuTeDSL `cute.crd2idx`).
+#[must_use]
+#[inline(always)]
+pub const fn crd2idx_col_major_2d(row: u32, col: u32, rows: u32) -> u32 {
+    row + col * rows
+}
+
+/// Allocation-free 3D column-major `crd2idx` (`(d0, d1, d2) : (1, d0, d0 * d1)`).
+///
+/// Maps `(i0, i1, i2)` to its linear offset `i0 + (i1 + i2 * d1) * d0` (CuTeDSL `cute.crd2idx`).
+#[must_use]
+#[inline(always)]
+pub const fn crd2idx_col_major_3d(i0: u32, i1: u32, i2: u32, d0: u32, d1: u32) -> u32 {
+    i0 + (i1 + i2 * d1) * d0
+}
+
+/// Allocation-free 2D row-major `crd2idx` (`(rows, cols) : (cols, 1)`).
+///
+/// Maps `(row, col)` to its linear offset `row * cols + col` (CuTeDSL `cute.crd2idx`).
+#[must_use]
+#[inline(always)]
+pub const fn crd2idx_row_major_2d(row: usize, col: usize, cols: usize) -> usize {
+    row * cols + col
+}
+
+/// Allocation-free 3D row-major `crd2idx` (`(d0, d1, d2) : (d1 * d2, d2, 1)`).
+///
+/// Maps `(i0, i1, i2)` to its linear offset `(i0 * d1 + i1) * d2 + i2` (CuTeDSL `cute.crd2idx`).
+#[must_use]
+#[inline(always)]
+pub const fn crd2idx_row_major_3d(i0: usize, i1: usize, i2: usize, d1: usize, d2: usize) -> usize {
+    (i0 * d1 + i1) * d2 + i2
+}
+
+/// Allocation-free `crd2idx` helper for a canonical SM100 tiled FP16 shared-memory layout
+/// given explicit `(rows, cols, mn_major)` extents.
+#[must_use]
+#[inline(always)]
+pub const fn sm100_smem_crd2idx_with_extents(
+    row: u32,
+    col: u32,
+    rows: u32,
+    cols: u32,
+    mn_major: bool,
+) -> usize {
+    let contiguous = if mn_major { rows } else { cols };
+    let outer_extent = if mn_major { cols } else { rows };
+    let span = if contiguous == 32 { 32 } else { 64 };
+    let y_mask = if span == 32 { 3usize << 6 } else { 7usize << 6 };
+    let (inner, outer) = if mn_major { (row, col) } else { (col, row) };
+    let (inner_in_span, span_idx) = if span == 32 {
+        (inner & 31, inner >> 5)
+    } else {
+        (inner & 63, inner >> 6)
+    };
+    let plain = (span_idx * (span * outer_extent) + outer * span + inner_in_span) as usize;
+    plain ^ ((plain & y_mask) >> 3)
+}
+
+/// Allocation-free `crd2idx` for a canonical SM100 tiled FP16 shared-memory layout
+/// (`tile_to_shape` of the `8 × SPAN` swizzle atom composed with `Swizzle<B, 3, 3>`).
+///
+/// Evaluates the outer tiled layout `((8, ROWS/8), (SPAN, COLS/SPAN))` (for K-major) or
+/// `((SPAN, ROWS/SPAN), (8, COLS/8))` (for MN-major) and applies [`crate::Swizzle::apply`].
+#[must_use]
+#[inline(always)]
+pub const fn sm100_smem_crd2idx<const ROWS: u32, const COLS: u32, const MN_MAJOR: bool>(
+    row: u32,
+    col: u32,
+) -> usize {
+    let (span, outer_extent, y_mask) = const {
+        let contiguous = if MN_MAJOR { ROWS } else { COLS };
+        let outer_extent = if MN_MAJOR { COLS } else { ROWS };
+        assert!(contiguous >= 32 && contiguous.is_multiple_of(32));
+        assert!(outer_extent > 0 && outer_extent.is_multiple_of(8));
+        assert!(contiguous == 32 || contiguous.is_multiple_of(64));
+        let span = if contiguous == 32 { 32u32 } else { 64u32 };
+        let swizzle_bits = if span == 32 { 2u32 } else { 3u32 };
+        let y_mask = crate::Swizzle::new(swizzle_bits, 3, 3).y_mask() as usize;
+        (span, outer_extent, y_mask)
+    };
+    let (inner, outer) = if MN_MAJOR { (row, col) } else { (col, row) };
+    let (inner_in_span, span_idx) = if span == 32 {
+        (inner & 31, inner >> 5)
+    } else {
+        (inner & 63, inner >> 6)
+    };
+    let plain = (span_idx * (span * outer_extent) + outer * span + inner_in_span) as usize;
+    plain ^ ((plain & y_mask) >> 3)
+}
+
+/// Allocation-free `u32` word offset within one 128-row × 4-group Blackwell scale atom
+/// (`((32, 4)) : ((4, 1))`, i.e. `idx2crd_col_major_2d(row % 128, 32)` composed with `RowMajor<32, 4>`).
+#[must_use]
+#[inline(always)]
+pub const fn sm1xx_scale_atom_word_offset(row: usize) -> usize {
+    let (r_in_32, quarter) = idx2crd_col_major_2d((row % 128) as u32, 32);
+    crd2idx_row_major_2d(r_in_32 as usize, quarter as usize, 4)
+}
+
+/// Allocation-free byte offset for Blackwell's canonical `(32, 4, 4)` block-scale layout
+/// (`Sm1xxBlockScaleKMajor` `crd2idx`).
+///
+/// Decomposes `row` into `(row_in_atom, m_block)` via [`idx2crd_col_major_2d`] and `group` into
+/// `(group_in_atom, k_block)` via [`idx2crd_col_major_2d`], then combines the 512-byte atom index
+/// (`crd2idx_row_major_3d(batch, m_block, k_block, rest_m, rest_k)`) with the in-atom byte offset.
+#[must_use]
+#[inline(always)]
+pub const fn sm1xx_block_scale_crd2idx(
+    batch: usize,
+    row: usize,
+    group: usize,
+    rest_m: usize,
+    rest_k: usize,
+) -> usize {
+    let (row_in_atom, m_block) = idx2crd_col_major_2d(row as u32, 128);
+    let (group_in_atom, k_block) = idx2crd_col_major_2d(group as u32, 4);
+    let atom_idx = crd2idx_row_major_3d(batch, m_block as usize, k_block as usize, rest_m, rest_k);
+    let word_in_atom = sm1xx_scale_atom_word_offset(row_in_atom as usize);
+    let byte_in_atom = crd2idx_row_major_2d(word_in_atom, group_in_atom as usize, 4);
+    crd2idx_row_major_2d(atom_idx, byte_in_atom, 512)
+}
+
+/// Allocation-free `u64` offset for a `tcgen05` `SWIZZLE_NONE` (`LBO = rows * 16, SBO = 128`)
+/// `K = 512` (`32` scale groups of `16` FP4 elements) burst tile with `ROWS` (`128` or `256`) rows:
+///
+/// ```text
+/// Hierarchical layout over 8-byte (16-FP4) `u64` elements per burst:
+///   Shape  = (ROWS, (2_u64s_per_16B, 2_halves_per_K64, 8_K64_steps_per_burst))
+///   Stride = (   2, (             1,         ROWS * 2,              ROWS * 4))
+/// ```
+///
+/// Decomposes `scale_group` into `(grp_in_burst 0..32, burst)` and `(u64_in_16b, half_k64, step_k64)`
+/// using [`idx2crd_col_major_2d`] and evaluates the hierarchical stride via [`crd2idx_row_major_2d`].
+#[must_use]
+#[inline(always)]
+pub const fn sm100_noswizzle_burst_u64_crd2idx<const ROWS: usize>(
+    group_batch: usize,
+    row_in_tile: usize,
+    scale_group: usize,
+    k_bursts: usize,
+) -> usize {
+    let (grp_in_burst, burst) = idx2crd_col_major_2d(scale_group as u32, 32);
+    let (u64_in_16b, half_and_step) = idx2crd_col_major_2d(grp_in_burst, 2);
+    let (half_k64, step_k64) = idx2crd_col_major_2d(half_and_step, 2);
+    let burst_idx = crd2idx_row_major_2d(group_batch, burst as usize, k_bursts);
+    let sub_u64 = (step_k64 as usize) * (ROWS * 4)
+        + (half_k64 as usize) * (ROWS * 2)
+        + (row_in_tile * 2)
+        + (u64_in_16b as usize);
+    crd2idx_row_major_2d(burst_idx, sub_u64, ROWS * 32)
+}
+
+/// Sealed supertrait restricting [`SmemLayout`] to canonical `cute-layout` definitions.
+mod sealed_smem {
+    /// Marks only shared layouts recognized by the compiler.
+    pub trait Layout {}
+}
+
+/// Static contract for a canonical SM100 tiled FP16 shared-memory layout.
+///
+/// Implemented by [`SharedLayout`]; provides compile-time dimensions, swizzle
+/// parameters, byte footprint, and element-level `crd2idx` evaluation.
+pub trait SmemLayout: sealed_smem::Layout {
+    /// Evaluating this constant rejects an unsupported physical layout at compile time.
+    const VALID: ();
+    /// Logical MN extent in FP16 elements.
+    const ROWS: u32;
+    /// Logical K extent in FP16 elements.
+    const COLS: u32;
+    /// Whether the MN mode (`true`) or the K mode (`false`) is contiguous.
+    const MN_MAJOR: bool;
+    /// Contiguous FP16 values in one swizzle atom (`32` for B64, `64` for B128).
+    const SPAN: u32;
+    /// Number of XOR bits in the shared-memory swizzle (`2` for B64, `3` for B128).
+    const SWIZZLE_BITS: u32;
+    /// Byte footprint of one complete `ROWS × COLS` FP16 shared tile.
+    const BYTES: usize;
+    /// Map a logical `(row, col)` coordinate into shared storage in FP16 elements
+    /// (CuTeDSL `cute.crd2idx`).
+    fn crd2idx(row: u32, col: u32) -> usize;
+}
+
+/// Canonical SM100 `(MN, K)` tiled FP16 shared-memory layout marker.
+///
+/// `MN_MAJOR` selects the contiguous logical mode (`false` = K-major, `true` = MN-major).
+/// Contiguous dimensions wider than 64 FP16 values are tiled in 128-byte chunks via
+/// [`crate::algebra::tile_to_shape`] and swizzled with `Swizzle<B, 3, 3>`.
+pub struct SharedLayout<const ROWS: u32, const COLS: u32, const MN_MAJOR: bool = false>;
+
+impl<const R: u32, const C: u32, const MN: bool> SharedLayout<R, C, MN> {
+    /// Reject unsupported contiguous swizzle spans and outer tile extents at compile time.
+    pub const VALID: () = {
+        let contiguous = if MN { R } else { C };
+        let outer = if MN { C } else { R };
+        assert!(contiguous >= 32 && contiguous.is_multiple_of(32));
+        assert!(outer > 0 && outer.is_multiple_of(8));
+        assert!(contiguous == 32 || contiguous.is_multiple_of(64));
+    };
+
+    /// Byte footprint of one complete `R × C` FP16 shared tile (`R * C * 2` bytes).
+    pub const BYTES: usize = {
+        let () = Self::VALID;
+        (R as usize) * (C as usize) * 2
+    };
+
+    /// Offset in FP16 elements from the start of this shared tile (CuTeDSL `cute.crd2idx`).
+    #[must_use]
+    #[inline(always)]
+    pub const fn crd2idx(row: u32, col: u32) -> usize {
+        let () = Self::VALID;
+        sm100_smem_crd2idx::<R, C, MN>(row, col)
+    }
+}
+
+impl<const R: u32, const C: u32, const MN: bool> sealed_smem::Layout for SharedLayout<R, C, MN> {}
+
+impl<const R: u32, const C: u32, const MN: bool> SmemLayout for SharedLayout<R, C, MN> {
+    const VALID: () = SharedLayout::<R, C, MN>::VALID;
+    const ROWS: u32 = R;
+    const COLS: u32 = C;
+    const MN_MAJOR: bool = MN;
+    const SPAN: u32 = if (if MN { R } else { C }) == 32 {
+        32
+    } else {
+        64
+    };
+    const SWIZZLE_BITS: u32 = if Self::SPAN == 32 { 2 } else { 3 };
+    const BYTES: usize = SharedLayout::<R, C, MN>::BYTES;
+
+    #[inline(always)]
+    fn crd2idx(row: u32, col: u32) -> usize {
+        Self::crd2idx(row, col)
+    }
+}
+
+impl<const B: u32, const R: i64, const C: i64>
+    crate::markers::ComposedLayout<
+        crate::markers::Swizzle<B, 3, 3>,
+        0,
+        crate::markers::RowMajor<R, C>,
+    >
+{
+    /// Offset in FP16 elements from the start of this K-major SM100 shared tile
+    /// (CuTeDSL `cute.crd2idx`).
+    #[must_use]
+    #[inline(always)]
+    pub const fn crd2idx(row: u32, col: u32) -> usize {
+        let (span, outer_extent, y_mask) = const {
+            let () = <Self as SmemLayout>::VALID;
+            let span = <Self as SmemLayout>::SPAN;
+            let y_mask = crate::Swizzle::new(B, 3, 3).y_mask() as usize;
+            (span, R as u32, y_mask)
+        };
+        let (inner_in_span, span_idx) = if span == 32 {
+            (col & 31, col >> 5)
+        } else {
+            (col & 63, col >> 6)
+        };
+        let plain = (span_idx * (span * outer_extent) + row * span + inner_in_span) as usize;
+        plain ^ ((plain & y_mask) >> 3)
+    }
+}
+
+impl<const B: u32, const R: i64, const C: i64> sealed_smem::Layout
+    for crate::markers::ComposedLayout<
+        crate::markers::Swizzle<B, 3, 3>,
+        0,
+        crate::markers::RowMajor<R, C>,
+    >
+{
+}
+
+impl<const B: u32, const R: i64, const C: i64> SmemLayout
+    for crate::markers::ComposedLayout<
+        crate::markers::Swizzle<B, 3, 3>,
+        0,
+        crate::markers::RowMajor<R, C>,
+    >
+{
+    const VALID: () = {
+        assert!(R > 0 && R <= u32::MAX as i64 && C > 0 && C <= u32::MAX as i64);
+        let r = R as u32;
+        let c = C as u32;
+        assert!(c >= 32 && c.is_multiple_of(32));
+        assert!(r.is_multiple_of(8));
+        assert!(c == 32 || c.is_multiple_of(64));
+        let expected_bits = if c == 32 { 2 } else { 3 };
+        assert!(B == expected_bits);
+    };
+    const ROWS: u32 = {
+        let () = Self::VALID;
+        R as u32
+    };
+    const COLS: u32 = {
+        let () = Self::VALID;
+        C as u32
+    };
+    const MN_MAJOR: bool = false;
+    const SPAN: u32 = if Self::COLS == 32 { 32 } else { 64 };
+    const SWIZZLE_BITS: u32 = B;
+    const BYTES: usize = {
+        let () = Self::VALID;
+        (R as usize) * (C as usize) * 2
+    };
+
+    #[inline(always)]
+    fn crd2idx(row: u32, col: u32) -> usize {
+        Self::crd2idx(row, col)
+    }
+}
+
+impl<const B: u32, const R: i64, const C: i64>
+    crate::markers::ComposedLayout<
+        crate::markers::Swizzle<B, 3, 3>,
+        0,
+        crate::markers::ColMajor<R, C>,
+    >
+{
+    /// Offset in FP16 elements from the start of this MN-major SM100 shared tile
+    /// (CuTeDSL `cute.crd2idx`).
+    #[must_use]
+    #[inline(always)]
+    pub const fn crd2idx(row: u32, col: u32) -> usize {
+        let (span, outer_extent, y_mask) = const {
+            let () = <Self as SmemLayout>::VALID;
+            let span = <Self as SmemLayout>::SPAN;
+            let y_mask = crate::Swizzle::new(B, 3, 3).y_mask() as usize;
+            (span, C as u32, y_mask)
+        };
+        let (inner_in_span, span_idx) = if span == 32 {
+            (row & 31, row >> 5)
+        } else {
+            (row & 63, row >> 6)
+        };
+        let plain = (span_idx * (span * outer_extent) + col * span + inner_in_span) as usize;
+        plain ^ ((plain & y_mask) >> 3)
+    }
+}
+
+impl<const B: u32, const R: i64, const C: i64> sealed_smem::Layout
+    for crate::markers::ComposedLayout<
+        crate::markers::Swizzle<B, 3, 3>,
+        0,
+        crate::markers::ColMajor<R, C>,
+    >
+{
+}
+
+impl<const B: u32, const R: i64, const C: i64> SmemLayout
+    for crate::markers::ComposedLayout<
+        crate::markers::Swizzle<B, 3, 3>,
+        0,
+        crate::markers::ColMajor<R, C>,
+    >
+{
+    const VALID: () = {
+        assert!(R > 0 && R <= u32::MAX as i64 && C > 0 && C <= u32::MAX as i64);
+        let r = R as u32;
+        let c = C as u32;
+        assert!(r >= 32 && r.is_multiple_of(32));
+        assert!(c.is_multiple_of(8));
+        assert!(r == 32 || r.is_multiple_of(64));
+        let expected_bits = if r == 32 { 2 } else { 3 };
+        assert!(B == expected_bits);
+    };
+    const ROWS: u32 = {
+        let () = Self::VALID;
+        R as u32
+    };
+    const COLS: u32 = {
+        let () = Self::VALID;
+        C as u32
+    };
+    const MN_MAJOR: bool = true;
+    const SPAN: u32 = if Self::ROWS == 32 { 32 } else { 64 };
+    const SWIZZLE_BITS: u32 = B;
+    const BYTES: usize = {
+        let () = Self::VALID;
+        (R as usize) * (C as usize) * 2
+    };
+
+    #[inline(always)]
+    fn crd2idx(row: u32, col: u32) -> usize {
+        Self::crd2idx(row, col)
+    }
+}
+
 /// Safe evaluator used after the compiler decodes an untrusted layout.
 ///
 /// Unlike [`crd2idx`], this returns `None` for an out-of-range coordinate, an
@@ -355,6 +823,31 @@ impl Layout {
     /// `(2,3)` becomes `(2,3):(1,2)`.
     pub fn col_major(shape: IntTuple) -> Layout {
         Layout::col_major_with(shape, 1)
+    }
+
+    /// Builds a compact layout with the smallest stride on the rightmost
+    /// coordinate number (row-major).
+    ///
+    /// For a `(row, column)` shape with `init = 1`, shape `(2,3)` becomes
+    /// `(2,3):(3,1)`.
+    pub fn row_major_with(shape: IntTuple, init: i64) -> Layout {
+        let leaves = shape.flatten();
+        let mut strides = vec![0; leaves.len()];
+        let mut running = init;
+        for (s, dst) in leaves.iter().rev().zip(strides.iter_mut().rev()) {
+            *dst = running;
+            running *= s;
+        }
+        let stride = shape.restructure(&mut strides.iter());
+        Layout { shape, stride }
+    }
+
+    /// Builds a compact row-major layout with unit spacing on the rightmost mode.
+    ///
+    /// This is [`Layout::row_major_with`] with `init = 1`. For example, shape
+    /// `(2,3)` becomes `(2,3):(3,1)`.
+    pub fn row_major(shape: IntTuple) -> Layout {
+        Layout::row_major_with(shape, 1)
     }
 
     /// Splits one layout into one sublayout per top-level [mode](crate#modes).

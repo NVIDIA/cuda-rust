@@ -22,7 +22,7 @@ fn unchecked_without_unsafe(
     module
         .contracted_unchecked(
             stream,
-            cuda_core::simt::LaunchConfig {
+            cuda_core::LaunchConfig {
                 grid_dim: (1, 1, 1),
                 block_dim: (64, 1, 1),
                 shared_mem_bytes: 0,

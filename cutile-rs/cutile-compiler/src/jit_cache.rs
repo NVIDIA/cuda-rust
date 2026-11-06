@@ -752,8 +752,15 @@ pub fn l2_key(
     put_field(&mut h, gpu_name.as_bytes());
     // The stage-2 flags are key material: a debug or sanitizer cubin must
     // never be served for a release request (or vice versa).
-    put_field(&mut h, &[opts.opt_level, opts.flags_byte()]);
+    put_field(&mut h, &[opts.codegen.opt_level(), opts.flags_byte()]);
     put_field(&mut h, tileiras_fp.as_bytes());
+    // Linked tile libraries, by path and digest (contents, dependencies and
+    // settings). Appended only when a kernel calls into one, so every other
+    // key (and `L2_KEY_SCHEMA`) is unchanged.
+    if let Some(digest) = opts.tilelib_digest() {
+        put_field(&mut h, b"tilelibs");
+        put_field(&mut h, digest.as_bytes());
+    }
     hex(&h.finalize())
 }
 
@@ -889,6 +896,7 @@ pub fn decode_entry(bytes: &[u8], params: &EntryParams<'_>) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hints::CodegenMode;
     use cutile_ir::bytecode::BytecodeVersion;
 
     #[cfg(unix)]
@@ -1016,9 +1024,40 @@ mod tests {
 
     fn opts(opt_level: u8) -> crate::cuda_tile_runtime_utils::TileirasOptions {
         crate::cuda_tile_runtime_utils::TileirasOptions {
-            opt_level,
+            codegen: CodegenMode::Optimized {
+                level: opt_level,
+                lineinfo: false,
+            },
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn tile_libraries_are_key_material_only_when_linked() {
+        use crate::tile_library::TileLibrary;
+        let base = l2_key(b"bc", V, "sm_90", &opts(3), "fp");
+        let lib = |digest: u8| TileLibrary {
+            path: "/opt/lib/fft.tilelib".into(),
+            digest: [digest; 32],
+            stamps: Default::default(),
+        };
+        let linked = opts(3).with_tilelibs(vec![lib(1)]);
+        let key = l2_key(b"bc", V, "sm_90", &linked, "fp");
+        assert_ne!(key, base);
+        assert_eq!(key, l2_key(b"bc", V, "sm_90", &linked, "fp"));
+        // A rebuilt library (new contents, dependencies or settings) gets a
+        // new key.
+        let rebuilt = opts(3).with_tilelibs(vec![lib(2)]);
+        assert_ne!(key, l2_key(b"bc", V, "sm_90", &rebuilt, "fp"));
+        // The same bytes at another path get a new key: a `.tilelib` can load
+        // a shared library next to it, so its folder changes the cubin.
+        let moved = opts(3).with_tilelibs(vec![TileLibrary {
+            path: "/srv/lib/fft.tilelib".into(),
+            digest: [1; 32],
+            stamps: Default::default(),
+        }]);
+        assert_ne!(key, l2_key(b"bc", V, "sm_90", &moved, "fp"));
+        assert_ne!(linked.tilelib_digest(), moved.tilelib_digest());
     }
 
     #[test]
@@ -1042,10 +1081,13 @@ mod tests {
         // Every stage-2 flag is key material: a debug, lineinfo, or
         // sanitizer cubin must never share a slot with a release one.
         let mut flagged = opts(3);
-        flagged.device_debug = true;
+        flagged.codegen = CodegenMode::Debug;
         assert_ne!(base, l2_key(b"bc", V, "sm_90", &flagged, "fp"));
         let mut flagged = opts(3);
-        flagged.lineinfo = true;
+        flagged.codegen = CodegenMode::Optimized {
+            level: 3,
+            lineinfo: true,
+        };
         assert_ne!(base, l2_key(b"bc", V, "sm_90", &flagged, "fp"));
         let mut flagged = opts(3);
         flagged.sanitize_memcheck = true;

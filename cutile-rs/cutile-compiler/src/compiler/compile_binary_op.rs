@@ -290,7 +290,8 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         // The region taken when `a` decides: yields the deciding constant
         // (`false` for `&&`, `true` for `||`).
         let (const_block_id, _) = cutile_ir::builder::build_block(module, &[]);
-        let deciding = self.compile_bool_constant(module, const_block_id, generic_vars, !is_and)?;
+        let deciding =
+            self.compile_bool_constant(module, const_block_id, generic_vars, !is_and, &span)?;
         let deciding_value = deciding
             .value
             .ok_or_else(|| self.jit_error(&span, "failed to compile a `bool` constant"))?;
@@ -334,7 +335,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         return_type: Option<TileRustType>,
         span: &proc_macro2::Span,
     ) -> Result<TileRustValue, JITError> {
-        if lhs.ty.rust_ty != rhs.ty.rust_ty {
+        if !lhs.ty.is_same_type(&rhs.ty) {
             return self.jit_error_result(
                 span,
                 &format!(
@@ -676,6 +677,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     block_id,
                     *bounds,
                     return_type,
+                    span,
                 );
             }
         }

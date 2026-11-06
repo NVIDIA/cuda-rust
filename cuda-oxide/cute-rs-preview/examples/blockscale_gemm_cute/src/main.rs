@@ -61,13 +61,13 @@ use ctm_rs::mbarrier::Barrier;
 use ctm_rs::memory::DynamicSharedArray;
 use ctm_rs::{cuda_module, kernel, launch_bounds, launch_contract, thread, warp};
 use cuda_core::{CudaContext, LaunchConfig1D};
-use cute_rs::copy::tma::{TmaEncodeOptions, create_tensor_map_tiled_with_options};
+use cute_rs::nvgpu::cpasync::{TmaEncodeOptions, create_tensor_map_tiled_with_options};
 use cute_rs::{
     C, ComposedLayout, Consumer, Layout, Mkl, Mxf4AccumulatorTile2x8, Mxf4E2M1, Mxf4TiledMma, Nkl,
     PipelineState, PipelineTmaAsync, PipelineTmaStore, Producer, RowMajor, SharedScaleAtom,
     SharedTensor, Sm1xxBlockScaleKMajor, Sm120Epilogue128x128, Sm120EpilogueHalfLayout,
     Sm120ScaleAtom, SmemTile, StaticPersistentTileScheduler, Swizzle, TensorMap, copy_tma_2d,
-    copy_tma_s2g_2d,
+    copy_tma_s2g_2d, size_in_bytes,
 };
 
 /// Output row count for the fixed benchmark problem.
@@ -110,10 +110,10 @@ type SharedB = SharedTensor<Mxf4E2M1, f16, SmemP, Nkl>;
 
 /// Number of 128-element K tiles consumed for each output tile.
 const K_STAGES: usize = KB / 4;
-/// Byte footprint of one packed input-operand stage.
-const DATA_STAGE_BYTES: usize = BLOCK_M * 64;
-/// Byte footprint of one SM120 scale atom.
-const SCALE_STAGE_BYTES: usize = Sm120ScaleAtom::BYTES;
+/// Byte footprint of one packed input-operand stage, derived from [`ByteSmem`] via [`size_in_bytes`].
+const DATA_STAGE_BYTES: usize = size_in_bytes::<u8, ByteSmem>() as usize;
+/// Byte footprint of one SM120 scale atom, derived from [`ScaleTmaSmem`] via [`size_in_bytes`].
+const SCALE_STAGE_BYTES: usize = size_in_bytes::<u16, ScaleTmaSmem>() as usize;
 /// Total A/B value and scale bytes announced to each full-stage barrier.
 const TMA_TX_BYTES: u32 = (2 * DATA_STAGE_BYTES + 2 * SCALE_STAGE_BYTES) as u32;
 /// Number of shared slots overlapped by the load pipeline.
@@ -183,11 +183,11 @@ mod kernels {
     )]
     #[kernel]
     pub fn blockscale_gemm(
-        a_tma: *const TensorMap<u8, ByteSmem>,
-        b_tma: *const TensorMap<u8, ByteSmem>,
-        sfa_tma: *const TensorMap<u16, ScaleTmaSmem>,
-        sfb_tma: *const TensorMap<u16, ScaleTmaSmem>,
-        out_tma: *const TensorMap<f16, Sm120EpilogueHalfLayout>,
+        #[grid_constant] a_tma: &TensorMap<u8, ByteSmem>,
+        #[grid_constant] b_tma: &TensorMap<u8, ByteSmem>,
+        #[grid_constant] sfa_tma: &TensorMap<u16, ScaleTmaSmem>,
+        #[grid_constant] sfb_tma: &TensorMap<u16, ScaleTmaSmem>,
+        #[grid_constant] out_tma: &TensorMap<f16, Sm120EpilogueHalfLayout>,
     ) {
         let tid = thread::threadIdx_x();
 
@@ -577,15 +577,6 @@ fn main() {
         TmaEncodeOptions::L2_128B,
     )
     .expect("SFB TMA descriptor encoding failed");
-    let a_desc_dev = cuda_core::DeviceBuffer::from_host(&stream, &a_desc.bytes).unwrap();
-    let b_desc_dev = cuda_core::DeviceBuffer::from_host(&stream, &b_desc.bytes).unwrap();
-    let sfa_desc_dev = cuda_core::DeviceBuffer::from_host(&stream, &sfa_desc.bytes).unwrap();
-    let sfb_desc_dev = cuda_core::DeviceBuffer::from_host(&stream, &sfb_desc.bytes).unwrap();
-    let a_desc_ptr = a_desc_dev.cu_deviceptr() as *const TensorMap<u8, ByteSmem>;
-    let b_desc_ptr = b_desc_dev.cu_deviceptr() as *const TensorMap<u8, ByteSmem>;
-    let sfa_desc_ptr = sfa_desc_dev.cu_deviceptr() as *const TensorMap<u16, ScaleTmaSmem>;
-    let sfb_desc_ptr = sfb_desc_dev.cu_deviceptr() as *const TensorMap<u16, ScaleTmaSmem>;
-
     let out = cuda_core::DeviceBuffer::<f16>::zeroed(&stream, M * N).unwrap();
     let out_desc: TensorMap<f16, Sm120EpilogueHalfLayout> = create_tensor_map_tiled_with_options(
         out.cu_deviceptr() as *mut core::ffi::c_void,
@@ -595,9 +586,6 @@ fn main() {
         TmaEncodeOptions::L2_128B,
     )
     .expect("C TMA descriptor encoding failed");
-    let out_desc_dev = cuda_core::DeviceBuffer::from_host(&stream, &out_desc.bytes).unwrap();
-    let out_desc_ptr =
-        out_desc_dev.cu_deviceptr() as *const TensorMap<f16, Sm120EpilogueHalfLayout>;
     // Ask the driver how many copies of this CTA fit on each SM. The
     // persistent scheduler needs that number to choose its physical grid.
     let probe = module
@@ -623,17 +611,13 @@ fn main() {
     // SAFETY: 288-thread blocks contain eight compute warps and one producer
     // warp. The grid-stride scheduler partitions all 256 output tiles into
     // disjoint CTA streams, and the warp/lane mapping partitions each tile.
-    module
-        .blockscale_gemm(
-            &stream,
-            &launch,
-            a_desc_ptr,
-            b_desc_ptr,
-            sfa_desc_ptr,
-            sfb_desc_ptr,
-            out_desc_ptr,
-        )
-        .expect("kernel launch failed");
+    unsafe {
+        module
+            .blockscale_gemm(
+                &stream, &launch, a_desc, b_desc, sfa_desc, sfb_desc, out_desc,
+            )
+            .expect("kernel launch failed");
+    }
     let got = out.to_host_vec(&stream).unwrap();
 
     let mut errors = 0;
@@ -674,41 +658,33 @@ fn main() {
     /// Number of measured kernel latencies used for percentile reporting.
     const SAMPLES: usize = 31;
     for _ in 0..WARMUP {
-        module
-            .blockscale_gemm(
-                &stream,
-                &launch,
-                a_desc_ptr,
-                b_desc_ptr,
-                sfa_desc_ptr,
-                sfb_desc_ptr,
-                out_desc_ptr,
-            )
-            .expect("warmup launch failed");
+        unsafe {
+            module
+                .blockscale_gemm(
+                    &stream, &launch, a_desc, b_desc, sfa_desc, sfb_desc, out_desc,
+                )
+                .expect("warmup launch failed");
+        }
     }
     stream.synchronize().expect("warmup sync failed");
 
     let mut times_ms = Vec::with_capacity(SAMPLES);
     for _ in 0..SAMPLES {
         let start = ctx
-            .new_event(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))
+            .new_event_with_flags(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))
             .expect("create start event");
         let end = ctx
-            .new_event(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))
+            .new_event_with_flags(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))
             .expect("create end event");
 
         start.record(&stream).expect("record start event");
-        module
-            .blockscale_gemm(
-                &stream,
-                &launch,
-                a_desc_ptr,
-                b_desc_ptr,
-                sfa_desc_ptr,
-                sfb_desc_ptr,
-                out_desc_ptr,
-            )
-            .expect("timed launch failed");
+        unsafe {
+            module
+                .blockscale_gemm(
+                    &stream, &launch, a_desc, b_desc, sfa_desc, sfb_desc, out_desc,
+                )
+                .expect("timed launch failed");
+        }
         end.record(&stream).expect("record end event");
         times_ms.push(start.elapsed_ms(&end).expect("event timing"));
     }

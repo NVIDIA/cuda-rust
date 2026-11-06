@@ -9,13 +9,14 @@
 //! readiness; none of the public runner or buffer-pool completion rules change.
 
 use crate::checkpoint::QwenWeights;
+use crate::decoder::DecoderShape;
 use crate::decoder_execution::{Completion, Guarded, LayerScratch, Modules, grid, one_warp};
 use crate::generation::{CodecFrame, PREDICTOR_LAYERS, PredictorWeights, REMAINING_CODES};
 use crate::model::{Batch, EPSILON};
 use crate::operator::{GUARD_LEN, Result};
 use crate::{attention_kernel, predictor_graph_kernel, rotary::RotarySpec};
 use cuda_core::{CudaStream, DeviceBuffer, DriverError, sys};
-use cute_rs::{BFloat16, decoder::DecoderShape};
+use cute_rs::BFloat16;
 use std::sync::Arc;
 
 // Device guard/index helpers encode this fixed model schedule. Fail compilation

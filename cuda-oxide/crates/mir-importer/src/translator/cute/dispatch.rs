@@ -520,6 +520,10 @@ pub(crate) fn try_translate_cute_call(
             ctx, body, args, destination, target, block_ptr, prev_op, value_map, block_map,
             loc.clone(),
         ),
+        CuteFn::Nvfp4MmaAtom => smem_mma::emit::emit_nvfp4_mma_atom(
+            ctx, body, args, destination, target, block_ptr, prev_op, value_map, block_map,
+            loc.clone(),
+        ),
         CuteFn::EpilogueOverlay => epilogue::emit::emit_overlay(
             ctx,
             body,
@@ -658,6 +662,76 @@ pub(crate) fn try_translate_cute_call(
             ctx,
             body,
             func,
+            args,
+            destination,
+            target,
+            block_ptr,
+            prev_op,
+            value_map,
+            block_map,
+            loc.clone(),
+        ),
+        CuteFn::CvtF32ToBf16 => emit::emit_cvt_f32_to_bf16(
+            ctx,
+            body,
+            args,
+            destination,
+            target,
+            block_ptr,
+            prev_op,
+            value_map,
+            block_map,
+            loc.clone(),
+        ),
+        CuteFn::CvtF32ToE4m3 => emit::emit_cvt_f32_to_e4m3(
+            ctx,
+            body,
+            args,
+            destination,
+            target,
+            block_ptr,
+            prev_op,
+            value_map,
+            block_map,
+            loc.clone(),
+        ),
+        CuteFn::CvtE4m3ToF32 => emit::emit_cvt_e4m3_to_f32(
+            ctx,
+            body,
+            args,
+            destination,
+            target,
+            block_ptr,
+            prev_op,
+            value_map,
+            block_map,
+            loc.clone(),
+        ),
+        CuteFn::CvtF32x8ToE2m1x8 => emit::emit_cvt_f32x8_to_e2m1x8(
+            ctx,
+            body,
+            args,
+            destination,
+            target,
+            block_ptr,
+            prev_op,
+            value_map,
+            block_map,
+            loc.clone(),
+        ),
+        CuteFn::RegisterTileBroadcast
+        | CuteFn::RegisterTileBinary
+        | CuteFn::RegisterTileScalar
+        | CuteFn::RegisterTileUnary
+        | CuteFn::RegisterTileReduce
+        | CuteFn::RegisterTileCast
+        | CuteFn::RegisterTileBitcast
+        | CuteFn::RegisterTileSlice
+        | CuteFn::RegisterTileConcat => emit::emit_register_tile_vector_op(
+            ctx,
+            body,
+            func,
+            cute_fn,
             args,
             destination,
             target,

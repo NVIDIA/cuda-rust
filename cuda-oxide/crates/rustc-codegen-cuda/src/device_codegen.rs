@@ -325,6 +325,8 @@ pub struct DeviceCodegenResult {
     pub debug_kind: llvm_export::export::DebugKind,
     /// Source launch bounds for kernel entries, keyed by exported kernel name.
     pub kernel_launch_bounds: BTreeMap<String, mir_importer::KernelLaunchBounds>,
+    /// Loop annotations the device pipeline could not honour.
+    pub warnings: Vec<mir_importer::HintWarning>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1334,6 +1336,7 @@ pub fn generate_device_code<'tcx>(
                     allow_fma_contraction: compilation_result.allow_fma_contraction,
                     debug_kind,
                     kernel_launch_bounds: compilation_result.kernel_launch_bounds,
+                    warnings: compilation_result.warnings,
                 })
             }
             Err(pipeline_err) => Err(DeviceCodegenError::PtxGeneration(format!(
@@ -1477,6 +1480,7 @@ mod tests {
             target: "sm_90".to_string(),
             allow_fma_contraction: false,
             kernel_launch_bounds: BTreeMap::new(),
+            warnings: Vec::new(),
         };
 
         let artifact = read_compilation_artifact(&result).unwrap().unwrap();
@@ -1504,6 +1508,7 @@ mod tests {
             target: "sm_90".to_string(),
             allow_fma_contraction: true,
             kernel_launch_bounds: BTreeMap::new(),
+            warnings: Vec::new(),
         };
 
         let artifact = read_compilation_artifact(&result).unwrap().unwrap();

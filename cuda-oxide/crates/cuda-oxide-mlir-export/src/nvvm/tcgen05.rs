@@ -109,6 +109,52 @@ pub fn register_nvvm_tcgen05_pack(
         1,
         0
     );
+    /// Register a shared-to-TMEM copy instruction (`nvvm.tcgen05.cp`).
+    macro_rules! cp {
+        ($op:ty, $marker:literal, $group:literal, $shape:literal, $multicast:expr) => {
+            registry.register_operation::<$op>(CpTranslation {
+                marker: $marker,
+                group: $group,
+                shape: $shape,
+                multicast: $multicast,
+                verify: |ctx, source| {
+                    <$op>::new(source)
+                        .verify(ctx)
+                        .map_err(|error| error.to_string())
+                },
+            })?;
+        };
+    }
+    cp!(Tcgen05CpSmemToTmemOp, "v1:i0354", 1, "shape_128x256b", None);
+    cp!(
+        Tcgen05CpSmemToTmemCg2Op,
+        "v1:i0366",
+        2,
+        "shape_128x256b",
+        None
+    );
+    cp!(Tcgen05Cp128x128bOp, "v1:i0582", 1, "shape_128x128b", None);
+    cp!(
+        Tcgen05Cp128x128bCg2Op,
+        "v1:i0583",
+        2,
+        "shape_128x128b",
+        None
+    );
+    cp!(
+        Tcgen05Cp32x128bWarpx4Op,
+        "v1:i0592",
+        1,
+        "shape_32x128b",
+        Some("warpx4")
+    );
+    cp!(
+        Tcgen05Cp32x128bWarpx4Cg2Op,
+        "v1:i0593",
+        2,
+        "shape_32x128b",
+        Some("warpx4")
+    );
     /// Register a tensor-memory transfer with exact scalar register count and packing mode.
     macro_rules! memory {
         ($op:ty, $marker:literal, $width:literal, $store:literal, $pack:literal) => {
@@ -230,21 +276,6 @@ impl OperationTranslation for MmaTranslation {
     ) -> Result<Vec<MlirOperation>, String> {
         let mma = Tcgen05MmaOp::new(source);
         mma.verify(ctx).map_err(|error| error.to_string())?;
-        let tensor_a = match mma.get_attr_nvvm_tcgen05_mma_form(ctx).as_deref() {
-            Some(Tcgen05MmaFormAttr::Shared) => false,
-            Some(Tcgen05MmaFormAttr::Tensor) => true,
-            _ => {
-                return Err(
-                    "CUTLASS TCGen05 mapping supports dense shared-A or tensor-A FP16 MMA only"
-                        .into(),
-                );
-            }
-        };
-        if mma.get_attr_nvvm_tcgen05_mma_kind(ctx).as_deref() != Some(&Tcgen05MmaKindAttr::F16) {
-            return Err(
-                "CUTLASS TCGen05 mapping supports dense shared-A or tensor-A FP16 MMA only".into(),
-            );
-        }
         let group = match mma.get_attr_nvvm_tcgen05_mma_cta_group(ctx).as_deref() {
             Some(Tcgen05MmaCtaGroupAttr::Cg1) => 1,
             Some(Tcgen05MmaCtaGroupAttr::Cg2) => 2,
@@ -257,6 +288,122 @@ impl OperationTranslation for MmaTranslation {
             Some(Tcgen05MmaCollectorAAttr::Use) => "use",
             None => return Err("TCGen05 MMA requires a collector-A selector".into()),
         };
+
+        let form = mma.get_attr_nvvm_tcgen05_mma_form(ctx);
+        let kind = mma.get_attr_nvvm_tcgen05_mma_kind(ctx);
+        if let Some((tensor_a, marker, mma_kind, scale_vec)) =
+            match (form.as_deref(), kind.as_deref()) {
+                (
+                    Some(Tcgen05MmaFormAttr::SharedMxf4BlockScale),
+                    Some(Tcgen05MmaKindAttr::Mxf4BlockScale),
+                ) => Some((false, "v1:i1043", "mxf4", "x2")),
+                (
+                    Some(Tcgen05MmaFormAttr::SharedMxf4BlockScaleBlock32),
+                    Some(Tcgen05MmaKindAttr::Mxf4BlockScaleBlock32),
+                ) => Some((false, "v1:i1044", "mxf4", "block32")),
+                (
+                    Some(Tcgen05MmaFormAttr::SharedMxf4nvf4BlockScaleBlock16),
+                    Some(Tcgen05MmaKindAttr::Mxf4nvf4BlockScaleBlock16),
+                ) => Some((false, "v1:i1045", "mxf4nvf4", "block16")),
+                (
+                    Some(Tcgen05MmaFormAttr::SharedMxf4nvf4BlockScaleBlock32),
+                    Some(Tcgen05MmaKindAttr::Mxf4nvf4BlockScaleBlock32),
+                ) => Some((false, "v1:i1046", "mxf4nvf4", "block32")),
+                (
+                    Some(Tcgen05MmaFormAttr::SharedMxf8f6f4BlockScale),
+                    Some(Tcgen05MmaKindAttr::Mxf8f6f4BlockScale),
+                ) => Some((false, "v1:i1047", "mxf8f6f4", "x1")),
+                (
+                    Some(Tcgen05MmaFormAttr::SharedMxf8f6f4BlockScaleBlock32),
+                    Some(Tcgen05MmaKindAttr::Mxf8f6f4BlockScaleBlock32),
+                ) => Some((false, "v1:i1048", "mxf8f6f4", "block32")),
+                (
+                    Some(Tcgen05MmaFormAttr::TensorMxf4BlockScale),
+                    Some(Tcgen05MmaKindAttr::Mxf4BlockScale),
+                ) => Some((true, "v1:i1049", "mxf4", "x2")),
+                (
+                    Some(Tcgen05MmaFormAttr::TensorMxf4BlockScaleBlock32),
+                    Some(Tcgen05MmaKindAttr::Mxf4BlockScaleBlock32),
+                ) => Some((true, "v1:i1050", "mxf4", "block32")),
+                (
+                    Some(Tcgen05MmaFormAttr::TensorMxf4nvf4BlockScaleBlock16),
+                    Some(Tcgen05MmaKindAttr::Mxf4nvf4BlockScaleBlock16),
+                ) => Some((true, "v1:i1051", "mxf4nvf4", "block16")),
+                (
+                    Some(Tcgen05MmaFormAttr::TensorMxf4nvf4BlockScaleBlock32),
+                    Some(Tcgen05MmaKindAttr::Mxf4nvf4BlockScaleBlock32),
+                ) => Some((true, "v1:i1052", "mxf4nvf4", "block32")),
+                (
+                    Some(Tcgen05MmaFormAttr::TensorMxf8f6f4BlockScale),
+                    Some(Tcgen05MmaKindAttr::Mxf8f6f4BlockScale),
+                ) => Some((true, "v1:i1053", "mxf8f6f4", "x1")),
+                (
+                    Some(Tcgen05MmaFormAttr::TensorMxf8f6f4BlockScaleBlock32),
+                    Some(Tcgen05MmaKindAttr::Mxf8f6f4BlockScaleBlock32),
+                ) => Some((true, "v1:i1054", "mxf8f6f4", "block32")),
+                _ => None,
+            }
+        {
+            require_input(&mut input, marker, 7, 0)?;
+            let (cast_d, tmem_d) =
+                tmem_pointer(session, input.operands[0].clone(), &input.location)?;
+            input.operands[0] = tmem_d;
+            let mut operations = vec![cast_d];
+            if tensor_a {
+                let (cast_a, pointer_a) =
+                    tmem_pointer(session, input.operands[1].clone(), &input.location)?;
+                operations.push(cast_a);
+                input.operands[1] = pointer_a;
+            }
+            let (cast_sfa, tmem_sfa) =
+                tmem_pointer(session, input.operands[5].clone(), &input.location)?;
+            operations.push(cast_sfa);
+            input.operands[5] = tmem_sfa;
+            let (cast_sfb, tmem_sfb) =
+                tmem_pointer(session, input.operands[6].clone(), &input.location)?;
+            operations.push(cast_sfb);
+            input.operands[6] = tmem_sfb;
+
+            let mut target = operation(
+                "nvvm.tcgen05.mma.block_scale",
+                input.operands,
+                vec![],
+                &input.location,
+            )?;
+            target.properties.insert(
+                "mmaKind".into(),
+                MlirAttribute::dialect(format!("#nvvm.tcgen05_mma_kind<{mma_kind}>"))?,
+            );
+            target
+                .properties
+                .insert("ctaGroup".into(), cta_group_value(group)?);
+            target.properties.insert(
+                "collectorOp".into(),
+                MlirAttribute::dialect(format!("#nvvm.tcgen05_mma_collectorop<{collector}>"))?,
+            );
+            target.properties.insert(
+                "scaleVecSize".into(),
+                MlirAttribute::dialect(format!("#nvvm.tcgen05_mma_scale_vec<{scale_vec}>"))?,
+            );
+            operations.push(target);
+            return Ok(operations);
+        }
+
+        let tensor_a = match form.as_deref() {
+            Some(Tcgen05MmaFormAttr::Shared) => false,
+            Some(Tcgen05MmaFormAttr::Tensor) => true,
+            _ => {
+                return Err(
+                    "CUTLASS TCGen05 mapping supports dense shared-A or tensor-A FP16 MMA only"
+                        .into(),
+                );
+            }
+        };
+        if kind.as_deref() != Some(&Tcgen05MmaKindAttr::F16) {
+            return Err(
+                "CUTLASS TCGen05 mapping supports dense shared-A or tensor-A FP16 MMA only".into(),
+            );
+        }
         require_input(
             &mut input,
             if tensor_a { "v1:i0764" } else { "v1:i0763" },
@@ -288,6 +435,52 @@ impl OperationTranslation for MmaTranslation {
             "operandSegmentSizes".into(),
             MlirAttribute::DenseI32Array(vec![1, 1, 1, 1, 1, 0, 0]),
         );
+        operations.push(target);
+        Ok(operations)
+    }
+}
+
+/// Translate `tcgen05.cp` shared-to-TMEM copies into `nvvm.tcgen05.cp`.
+struct CpTranslation {
+    /// Canonical catalog identity required before emitting this intrinsic.
+    marker: &'static str,
+    /// Number of CTAs participating in the native instruction.
+    group: u32,
+    /// `nvvm.tcgen05_cp_shape` selector.
+    shape: &'static str,
+    /// Optional `nvvm.tcgen05_cp_multicast` selector.
+    multicast: Option<&'static str>,
+    /// Check the source operation's selectors and operand contract.
+    verify: VerifyOperation,
+}
+
+impl OperationTranslation for CpTranslation {
+    fn translate(
+        &self,
+        ctx: &Context,
+        source: Ptr<Operation>,
+        mut input: OperationInput,
+        session: &mut TranslationSession<'_>,
+    ) -> Result<Vec<MlirOperation>, String> {
+        (self.verify)(ctx, source)?;
+        require_input(&mut input, self.marker, 2, 0)?;
+        let (cast, tmem) = tmem_pointer(session, input.operands[0].clone(), &input.location)?;
+        input.operands[0] = tmem;
+        let mut operations = vec![cast];
+        let mut target = operation("nvvm.tcgen05.cp", input.operands, vec![], &input.location)?;
+        target
+            .properties
+            .insert("group".into(), cta_group_value(self.group)?);
+        target.properties.insert(
+            "shape".into(),
+            MlirAttribute::dialect(format!("#nvvm.tcgen05_cp_shape<{}>", self.shape))?,
+        );
+        if let Some(multicast) = self.multicast {
+            target.properties.insert(
+                "multicast".into(),
+                MlirAttribute::dialect(format!("#nvvm.tcgen05_cp_multicast<{multicast}>"))?,
+            );
+        }
         operations.push(target);
         Ok(operations)
     }

@@ -81,10 +81,7 @@ impl OperationTranslation for Mma {
         let yes = e.constant(1, 1)?;
         for k in (0..p.k).step_by(16) {
             let av = if let Some(ad) = &ad {
-                let offset = e.constant(
-                    64,
-                    descriptor_offset(p.m / p.cta_group, p.k, p.a_mn, k) as i128,
-                )?;
+                let offset = e.constant(64, descriptor_offset(&p.a_layout, k) as i128)?;
                 e.binary("arith.addi", ad.clone(), offset)?
             } else {
                 // Two FP16 probability columns occupy one 32-bit TMEM column.
@@ -92,10 +89,7 @@ impl OperationTranslation for Mma {
                 let address = e.binary("arith.addi", a[1].clone(), offset)?;
                 e.cast("llvm.inttoptr", address, llvm_ptr_type(6)?)?
             };
-            let offset = e.constant(
-                64,
-                descriptor_offset(p.n / p.cta_group, p.k, p.b_mn, k) as i128,
-            )?;
+            let offset = e.constant(64, descriptor_offset(&p.b_layout, k) as i128)?;
             let bv = e.binary("arith.addi", bd.clone(), offset)?;
             let mut mma = e.operation(
                 "nvvm.tcgen05.mma",
@@ -124,14 +118,14 @@ impl OperationTranslation for Mma {
         Ok(e.ops)
     }
 }
-/// The address field is measured in 16-byte units, independently of swizzle.
-fn descriptor_offset(rows: u32, k_extent: u32, mn: bool, k: u32) -> u32 {
-    if mn {
-        k * rows.min(64) / 8
-    } else {
-        let span = k_extent.min(64);
-        ((k / span) * rows * span + k % span) / 8
-    }
+/// Evaluate the unswizzled 16-byte (`8`-element) descriptor step for `(row = 0, col = k)`
+/// directly through the operand's [`CuteComposedLayoutAttr`] outer layout.
+fn descriptor_offset(layout: &CuteComposedLayoutAttr, k: u32) -> u32 {
+    let coord = dialect_cute::layout::IntTuple::Tuple(vec![
+        dialect_cute::layout::IntTuple::Leaf(0),
+        dialect_cute::layout::IntTuple::Leaf(i64::from(k)),
+    ]);
+    (layout.0.outer().call(&coord) / 8) as u32
 }
 /// Build a shared-memory descriptor using the verified major mode and element-to-byte swizzle.
 fn descriptor(

@@ -944,7 +944,7 @@ pub(super) fn render_compat_tma(catalog: &CatalogFile, hash: &str) -> String {
                 );
                 if operation.is_cta_g2s() {
                     output.push_str(
-                        "/// `barrier` must point into the issuing CTA's shared memory, as for the other\n/// `mbarrier` operations. `dst` is a [`SharedPtr`], which points there by its type.\n",
+                        "/// `dst` and `barrier` must point into the issuing CTA's shared memory, as for the other\n/// `mbarrier` operations.\n",
                     );
                 }
             } else if is_s2g {
@@ -973,15 +973,8 @@ pub(super) fn render_compat_tma(catalog: &CatalogFile, hash: &str) -> String {
         output.push_str("#[inline(never)]\n");
         if is_g2s {
             let dimensions = dimensions.unwrap();
-            // The CTA-local forms take a typed CTA-shared destination; the
-            // raw ABI keeps `*mut u8`, as `*mut Barrier` keeps `*mut u64`.
-            let destination = if operation.is_cta_g2s() {
-                "dst: SharedPtr<u8>"
-            } else {
-                "dst: *mut u8"
-            };
             let mut arguments = vec![
-                destination.to_owned(),
+                "dst: *mut u8".to_owned(),
                 "tensor_map: *const TmaDescriptor".to_owned(),
             ];
             let mut values = vec!["dst".to_owned(), "tensor_map".to_owned()];
@@ -1220,6 +1213,11 @@ fn render_compat_tcgen05_mma_record(output: &mut String, record: &CatalogIntrins
                     "/// `B_BUFFER` is 0 through 3. `B_USAGE` is 0=discard, 1=lastuse, 2=fill, or 3=use.\n",
                 );
             }
+            Tcgen05MmaSelectorLayout::BlockScaled { .. } => {
+                output.push_str(
+                    "/// `CTA_GROUP` is 1 or 2. `COLLECTOR_A` is 0=discard, 1=lastuse, 2=fill, or 3=use.\n",
+                );
+            }
         }
     }
     output.push_str("///\n/// # Safety\n");
@@ -1291,7 +1289,7 @@ fn render_compat_tcgen05_mma_record(output: &mut String, record: &CatalogIntrins
 }
 
 pub(super) fn render_compat_tcgen05(catalog: &CatalogFile, hash: &str) -> String {
-    assert_eq!(tcgen05_intrinsics(catalog).count(), 233);
+    assert!(matches!(tcgen05_intrinsics(catalog).count(), 233 | 249));
     let mut output = rust_header(catalog, hash);
     output.push_str("// Included inside `cuda_device::tcgen05` to keep its public API stable.\n\n");
     for record in tcgen05_intrinsics(catalog) {

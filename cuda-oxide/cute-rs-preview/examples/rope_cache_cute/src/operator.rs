@@ -3,13 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 //! Synchronous BF16 rotary composition with privately owned key/value caches.
+use crate::attention_metadata::{AttentionShape, CacheShape};
 use crate::{kernel::kernels, rotary::HostTables};
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaStream, DeviceBuffer};
-use cute_rs::{
-    BFloat16,
-    attention::{AttentionShape, CacheShape},
-};
+use cute_rs::BFloat16;
 use std::sync::Arc;
 
 /// Host result carrying CUDA errors and rejected shape, position, or context contracts.

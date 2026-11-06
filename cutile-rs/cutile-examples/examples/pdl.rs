@@ -19,7 +19,7 @@
  *   cargo run -p cutile-examples --example pdl
  */
 
-use cuda_core::Device;
+use cuda_core::Context;
 use cutile::error::Error;
 use cutile::prelude::*;
 
@@ -58,7 +58,7 @@ fn main() -> Result<(), Error> {
         return Ok(());
     }
 
-    let device = Device::new(0)?;
+    let device = Context::new(0)?;
     let stream = device.new_stream()?;
     let staging = api::zeros::<i32>(&[N]).sync_on(&stream)?;
     let output = api::zeros::<i32>(&[N]).sync_on(&stream)?;

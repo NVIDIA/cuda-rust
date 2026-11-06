@@ -13,22 +13,30 @@ computation through cute-rs tensor views, layouts, partitions, register tiles,
 copies, reductions and MMA operations. This is a hard requirement, alongside
 numerical correctness and competitive measured performance.
 
-- A `*_cute` kernel imports `cute_rs` and, for instruction-level steps,
-  `ctm_rs`. It does not import `cuda_device`. Kernel entry attributes, thread
-  identifiers and shared-storage declarations come through the `ctm_rs`
-  re-exports. If a kernel needs something neither crate offers, add it to
-  cute-rs (or to ctm-rs when it is one instruction) as a typed operation; do
-  not reach past them.
+- A `*_cute` kernel imports `cute_rs` (and `ctm_rs` only for kernel entry
+  attributes `#[cuda_module]`, `#[kernel]`, `#[launch_bounds]`,
+  `#[launch_contract]`, `DisjointSlice`, `DynamicSharedArray`, and `thread`).
+  **Inside `cute-rs` itself (`cute-rs/src/`), `ctm-rs` is completely banned**
+  (not even in `Cargo.toml`).
+- **`cute-rs/src/` module structure must match CuTeDSL 1-to-1:**
+  `layout`, `tensor`, `atom`, `numeric`, `arch`, `nvgpu/{common, cpasync, warp, tcgen05}`,
+  `pipeline`, and `utils/{tmem_allocator, scheduler, blockscaled}`. Never add
+  model-specific folders (`attention/`, `ffn.rs`, `decoder.rs`, `reduction.rs`)
+  or legacy top-level hardware folders (`sm100/`, `copy/`, `mma/`, `epilogue/`)
+  inside `cute-rs/src/`.
+- **Inside `cute-rs/src/nvgpu/`, `cuda_device` and manual descriptor bit-packing
+  are completely banned:** All `nvgpu` copy/MMA operations must lower through
+  `__compiler::*` $\rightarrow$ `mir-importer` $\rightarrow$ `dialect-cute`
+  $\rightarrow$ `cuda-oxide-mlir-export` (or `cute_rs::arch` for 1-instruction
+  arch primitives). Both the 1-to-1 module tree and the `ctm-rs` / `nvgpu`
+  `cuda_device` bans are enforced by `scripts/check-cute-layout-algebra.sh` and
+  `cute-rs/tests/sm100_attention.rs`.
 - The deliverable is the exported MLIR, not a kernel that happens to run. The
   tensor computation must reach the CUTLASS compiler as `cute.*` operations;
   check with `CUDA_OXIDE_MLIR_OUTPUT=<file>` that the loads, copies and MMA
   steps appear as CuTe operations rather than scalar code. A kernel rewritten
   around a compiler gap or a missing operation is a workaround, and the
   repository rule applies: fix the compiler or add the operation.
-- Keep instruction-level CTM operations underneath reusable cute-rs
-  operations. CTM kernel declarations, launch contracts, thread identifiers and
-  ABI storage types may remain at kernel entry points. Explicit `*_ctm`
-  examples continue to demonstrate the lower-level instruction layer.
 - Do not hand-code hardware fragment packing, lane-to-value maps, or
   shared-memory swizzle formulas in cute-rs workload kernels. Describe those
   mappings using typed layouts and derive accesses from them.
@@ -50,10 +58,66 @@ numerical correctness and competitive measured performance.
 - Existing legacy violations are migration work, not a precedent for new code.
   Report any remaining violations explicitly when delivering a migration.
 
-## Names follow CuTeDSL
+## Encoding CuTe in Rust's type system & `cute-layout` algebra (mandatory hard rule)
 
-A CuTe concept carries the name CuTeDSL 4.7 gives it, so that a CuTeDSL author
-reads a cute-rs kernel without a glossary.
+**Hard rule 1 — Single source of truth in `cute-layout` (never reinvent layouts):**
+Everything to do with CuTe layouts, swizzles (`Swizzle`), composed layouts (`ComposedLayout`), coordinate mappings (`crd2idx`, `idx2crd`), tilings (`logical_divide`, `zipped_divide`, `logical_product`, `blocked_product`, `raked_product`), and layout algebra (`composition`, `complement`, `coalesce`, ` left_inverse`, `right_inverse`) **must be housed in the `cute-layout` crate** (and exposed to device code through `cute-rs` markers and `static_layout`).
+- **Never reinvent or duplicate layout or swizzle math outside `cute-layout`** (for example, never hand-write XOR swizzle bit-shifts `linear ^ (((linear >> 6) & mask) << 3)` in `cute-rs`, and never construct tiled layouts by formatting strings in `dialect-cute` when `cute-layout` algebra operations like `blocked_product` exist).
+
+**Hard rule 2 — All layout operations must go through CuTe layout algebra (nothing hand-rolled in final code):**
+CuTe's layout algebra abstractions in `cute-layout`, together with partitions, TMA transfers, pipelines, and Tensor Core MMA operations encoded in Rust's type system, are the two foundational pillars of `cute-rs`:
+- **Any coordinate, tiling, rasterization, thread-to-value mapping, or tensor offset operation that can be handled by CuTe layout algebra must be done through CuTe layout algebra (`cute-layout` / `cute-rs`)**—never by hand in a `*_cute` kernel:
+  1. **No hand-rolled tile swizzling / L2 rasterization** (such as `fn swizzle_tile` with manual `/`, `%`, and clamping) in kernel code—express grouped/tiled grid traversal through `cute-layout` / `cute-rs` layout algebra or scheduler types.
+  2. **No hand-rolled thread/lane coordinate unpacking** (such as `tid & 63`, `tid >> 6`, or manual `(warp_id * 32) << 16` TMEM shifts) in kernel code—express thread maps via `Layout` / `ColMajor` / `RowMajor` (`idx2crd` / `crd2idx`) and `tmem_row_address`.
+  3. **No raw global pointer offset math or raw pointer casts** (such as `ptr.add((row * num_heads + head) * 128)`, `slice.as_ptr().cast::<u128>()`, or `slice.as_mut_ptr().cast::<u64>()`) in kernel code—use typed `Tensor`, `TensorMut`, `StridedTensor`, `StridedTensorMut`, or `cute-layout` coordinate evaluation.
+  4. **Never copy hand-rolled index math from a Python reference:** Even if a Python reference script writes raw `/`, `%`, or bit-shift index math by hand, the `cute-rs` kernel must express that mapping through CuTe layout algebra.
+  5. **Beautiful Rust with GPU control-flow care (`clippy::collapsible_if`):** Follow Beautiful Rust's strong typing, zero-raw-cast discipline, and compile-time `const _: () = assert!(...)` invariants, **but never let CPU-oriented lints like `clippy::collapsible_if` flatten warp-specialized or collective guards** (e.g. `if warp_id == 4 { if elect_one_sync() { ... } }` or `if warp_id == 0 { if tid == 0 { ... } }`). Flattening those into `if a && b` can change `else`-branch routing across warps, break `elect_one_sync()` convergence, or defeat uniform-branch lowering in `dialect-cute` and `ptxas`, regressing performance. Keep the nested GPU control flow and add a targeted `#[allow(clippy::collapsible_if)]`.
+- **Exception for temporary rough work during development only:** Because CuTe layout algebra can be tricky to reason about at first, you may write temporary rough scalar math or test assertions while working out a mapping and checking correctness—**but the final implementation must use `cute-layout` / `cute-rs` layout algebra exclusively, with zero hand-rolled layout math left behind**. This is mechanically enforced by `cuda-oxide/scripts/check-cute-layout-algebra.sh` in `just check-guards`.
+
+**Hard rule 3 — Add missing CuTeDSL operations and Rust type encodings to `cute-layout` / `cute-rs` and the compiler first:**
+Because `cute-layout`, `cute-rs`, and the compiler (`mir-importer`, `dialect-cute`, `cuda-oxide-mlir-export`) are actively developed alongside new workloads, whenever a kernel needs a CuTe layout algebra operation, copy atom, pipeline, TMEM epilogue, or compile-time type-encoded concept that exists in **CuTeDSL 4.7** (or can be encoded in Rust's type system), **agents must mandatorily add it to `cute-layout` / `cute-rs` and the compiler first and then use it in the kernel**.
+- **A kernel qualifies as a `cute-rs` kernel ONLY if it actually uses `cute-layout` algebra and `cute-rs` abstractions.**
+- Never bypass a missing `cute-layout` / `cute-rs` operation or compiler lowering by writing raw `cuda-oxide` SIMT pointer offsets, manual bit shifts, untyped `u64` descriptors, or workload-local instruction wrappers and calling the result a `cute-rs` kernel.
+
+Every `cute-rs` GEMM / MoE / attention kernel must encode its compile-time plan
+through types so that mismatched layouts, swapped `OperandA` / `OperandB` tiles,
+swapped `Mkl` / `Nkl` scale tiles, or mismatched TMA transaction byte counts fail
+at compile time:
+
+```text
+MANDATORY TYPE-ENCODED `cute-rs` ARCHITECTURE
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  1. Compile-Time Layouts & Typed TMA Descriptors (`#[grid_constant]`)        │
+│     type WeightTileSmem = RowMajor<128, 256>;   // 32,768 B (K=512 FP4)      │
+│     type ActTileSmem    = RowMajor<64, 256>;    // 16,384 B (K=512 FP4)      │
+│     type ScaleTmaSmem   = RowMajor<8, 256>;     //  4,096 B (8 scale atoms)  │
+│     type EpilogueSmem   = RowMajor<64, 128>;    // 64x128 FP32 epilogue      │
+│     #[grid_constant] w_tma:   &TensorMap<u8,  WeightTileSmem>                │
+│     #[grid_constant] sfa_tma: &TensorMap<u16, ScaleTmaSmem>                  │
+├──────────────────────────────────────────────────────────────────────────────┤
+│  2. Warp-Specialized Producer/Consumer Pipeline (`PipelineTmaAsync`)         │
+│     const TMA_BURST_TX_BYTES: u32 =                                          │
+│         size_in_bytes::<u8, WeightTileSmem>()                                │
+│         + size_in_bytes::<u16, ScaleTmaSmem>(); // Verified by dialect-cute! │
+│     type MainloopPipeline = PipelineTmaAsync<1, 16, TMA_BURST_TX_BYTES>;     │
+│     • Producer Warp (`PipelineState<Producer, 1>`):                          │
+│         acquire ──► expect_tx ──► copy_tma_2d(w_tma, sfa_tma) ──► tail       │
+│     • Compute Warps (`PipelineState<Consumer, 1>`):                          │
+│         consumer_wait ──► TiledMma ──► consumer_release ──► advance          │
+├──────────────────────────────────────────────────────────────────────────────┤
+│  3. Role-Checked Shared Tiles, Block-Scaled MMA & Staged TMEM Epilogue       │
+│     type SharedWeightTile   = Sm100SharedTile<WeightTileSmem, OperandA>;     │
+│     type SharedActTile      = Sm100SharedTile<ActTileSmem, OperandB>;        │
+│     type SharedWeightScales = Sm100ScaleTile<Mkl>;                           │
+│     type SharedActScales    = Sm100ScaleTile<Nkl>;                           │
+│     type TiledMma = Sm100BlockScaledTiledMma<WeightTileSmem, ActTileSmem>;   │
+│     type TmemEpilogue = Sm100TmemEpilogue<EpilogueSmem>;                     │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Names follow CuTeDSL (hard rule)
+
+**Hard rule:** Every `cute-rs` type, trait, pipeline, barrier, and method must carry the exact name **CuTeDSL 4.7** gives it, so that a CuTeDSL author reads a `cute-rs` kernel without a glossary. Never invent a custom name when CuTeDSL already defines one.
 
 - Look the name up before writing it: the CuTeDSL sources
   (`python/CuTeDSL/cutlass/cute`, `cutlass/pipeline`, `cutlass/utils` and
@@ -109,13 +173,35 @@ parity with CuTeDSL, and every addition is measured against it.
 
 ## Example and model documentation
 
-- Keep each entry README approachable, following `examples/elementwise_cute`:
-  explain the computation, show the CuTe data flow, give a runnable command,
-  and describe the expected result.
-- Document public and private APIs, including helpers, types, fields and
-  constants. Explain shapes, units, ownership, readiness, rounding and error
-  behavior where relevant. Unsafe APIs must state caller obligations; comments
-  must not claim that types prove thread convergence or asynchronous completion.
+- **Keep documentation simple, short, jargon-free, and visual.** Avoid dense
+  walls of text. Use visual ASCII diagrams to show the kernel pipeline, memory
+  hierarchy (`Global ──► Shared ──► TMEM / Registers`), warp roles, and what is
+  captured inside a CUDA Graph:
+
+  ```text
+  THE 4 KERNELS OF THE MOE LAYER:
+  [K1: Quantize BF16->FP4] ──► [K2: Route] ──► [K3: FC1 + ReLU²] ──► [K4: FC2 + Finalize]
+
+  CUDA GRAPH CAPTURE & 1,000× REPLAY TIMER
+  ────────────────────────────────────────
+     BeginCapture                                                      EndCapture
+     ┌─────────────────────────────────────────────────────────────────────────┐
+     │  [K1: Quantize] ──► [K2: Route] ──► [K3: FC1+ReLU²] ──► [K4: FC2+Final] │
+     └─────────────────────────────────────────────────────────────────────────┘
+     Start Event ──► Replay Graph #1 .. #1000 ──► Stop Event (mean = total / 1000)
+  ```
+
+- Keep each entry README approachable, following `examples/elementwise_cute` and
+  `examples/blockscale_gemm_cute`: explain the computation, show the CuTe data
+  flow visually, give a runnable command, and describe the expected result.
+- **Document every single public AND private item with at least 2–3 lines of
+  documentation.** This includes every private helper, `#[kernel]`, `struct`,
+  struct field, `enum`, enum variant, `type` alias, `const`, `static` shared
+  array, and `mod`. Explain shapes, units, ownership, readiness, rounding and
+  error behavior in plain, jargon-free language. Never suppress `missing_docs`
+  or `clippy::missing_docs_in_private_items` with `#[allow(...)]`. Unsafe APIs
+  must state caller obligations; comments must not claim that types prove thread
+  convergence or asynchronous completion.
 - Put numerical contracts, comparison harnesses and reproduction commands in
   the workload's `reference/` folder, linked from its README. Do not commit
   measurement records: result JSON, traces, profiles, logs and SASS dumps

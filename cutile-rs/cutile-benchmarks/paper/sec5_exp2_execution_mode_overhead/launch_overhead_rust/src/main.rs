@@ -32,7 +32,7 @@
 
 use cuda_async::cuda_graph::CudaGraph;
 use cuda_async::device_operation::{BoxedDeviceOp, DeviceOp, Unzippable3};
-use cuda_core::{Device, Stream};
+use cuda_core::{Context, Stream};
 use cutile::api;
 use cutile::core::f16;
 use cutile::tensor::{IntoPartition, Partition, Tensor};
@@ -173,11 +173,11 @@ fn bench_sync_individual(
     for _ in 0..n_warmup {
         part = run(part);
     }
-    unsafe { stream.synchronize() }.expect("sync");
+    stream.synchronize().expect("sync");
 
     let mut samples = Vec::with_capacity(n_samples);
     for _ in 0..n_samples {
-        unsafe { stream.synchronize() }.expect("sync");
+        stream.synchronize().expect("sync");
         let t0 = Instant::now();
         for _ in 0..iters {
             part = run(part);
@@ -207,7 +207,7 @@ fn bench_sync_chained(
         let chain = build_chain(part, n, &x, &g, generics);
         part = chain.sync().expect("sync chain");
     }
-    unsafe { stream.synchronize() }.expect("sync");
+    stream.synchronize().expect("sync");
 
     // Time chain *execution* only, not construction. build_chain boxes one op
     // per launch; that boxing is an artifact of assembling the chain
@@ -216,7 +216,7 @@ fn bench_sync_chained(
     // the per-launch cost remains in the measured region.
     let mut samples = Vec::with_capacity(n_samples);
     for _ in 0..n_samples {
-        unsafe { stream.synchronize() }.expect("sync");
+        stream.synchronize().expect("sync");
         let mut elapsed = std::time::Duration::ZERO;
         for _ in 0..iters {
             let chain = build_chain(part, n, &x, &g, generics);
@@ -285,7 +285,7 @@ fn bench_async(
             let chain = build_chain(part, n, &x, &g, generics);
             part = chain.await.expect("chain");
         }
-        unsafe { stream.synchronize() }.expect("sync");
+        stream.synchronize().expect("sync");
 
         // Time chain execution (.await) only; build_chain is built outside the
         // timer for the same reason as the sync-chained mode (its per-launch
@@ -293,7 +293,7 @@ fn bench_async(
         // path), while per-launch cost stays in the execute walk.
         let mut samples = Vec::with_capacity(n_samples);
         for _ in 0..n_samples {
-            unsafe { stream.synchronize() }.expect("sync");
+            stream.synchronize().expect("sync");
             let mut elapsed = std::time::Duration::ZERO;
             for _ in 0..iters {
                 let chain = build_chain(part, n, &x, &g, generics);
@@ -328,11 +328,11 @@ fn bench_graph(
     for _ in 0..n_warmup {
         graph.launch().sync_on(stream).expect("graph warmup");
     }
-    unsafe { stream.synchronize() }.expect("sync");
+    stream.synchronize().expect("sync");
 
     let mut samples = Vec::with_capacity(n_samples);
     for _ in 0..n_samples {
-        unsafe { stream.synchronize() }.expect("sync");
+        stream.synchronize().expect("sync");
         let t0 = Instant::now();
         for _ in 0..iters {
             graph.launch().sync_on(stream).expect("graph replay");
@@ -371,7 +371,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|s| s.parse().ok())
         .unwrap_or(DEFAULT_N_SAMPLES);
 
-    let device = Device::new(0).expect("device");
+    let device = Context::new(0).expect("device");
     let stream = device.new_stream().expect("stream");
 
     let d = D as usize;

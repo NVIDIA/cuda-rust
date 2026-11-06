@@ -15,10 +15,12 @@ assert_eq!(layout.checked_call(&IntTuple::Leaf(1)), Some(3));
 | Module | Responsibility |
 | --- | --- |
 | [`tuple`](src/tuple.rs) | Nested `IntTuple` shapes, strides and coordinates |
-| [`layout`](src/layout.rs) | `Layout` construction and coordinate evaluation |
+| [`layout`](src/layout.rs) | `Layout` construction, `crd2idx` / `idx2crd` evaluation, and canonical SM100 shared layouts |
+| [`markers`](src/markers.rs) | Zero-sized compile-time layout and swizzle markers (`C`, `Layout`, `RowMajor`, `ColMajor`, `Swizzle`, `ComposedLayout`, `ReifySmem2D`) |
+| [`static_layout`](src/static_layout.rs) | Allocation-free `const` evaluation of static CuTe layout markers (`StaticLayout`, `crd2idx_2d`, `idx2crd_2d`) |
 | [`parse`](src/parse.rs) | Text formatting, parsing and `ParseLayoutError` |
 | [`algebra::mapping`](src/algebra/mapping.rs) | Flattening, coalescing, composition, complements, inverse maps and reshaping |
-| [`algebra::tiling`](src/algebra/tiling.rs) | Logical and zipped division, blocked products and raked products |
+| [`algebra::tiling`](src/algebra/tiling.rs) | Logical and zipped division, `tile_to_shape`, blocked products and raked products |
 | [`algebra::thread_value`](src/algebra/thread_value.rs) | Thread/value ownership maps |
 | [`algebra::alignment`](src/algebra/alignment.rs) | Static vector-access alignment |
 | [`composed`](src/composed.rs) and [`swizzle`](src/swizzle.rs) | Composed addresses, offset units and shared-memory swizzles |

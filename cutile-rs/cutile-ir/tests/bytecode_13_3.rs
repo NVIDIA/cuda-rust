@@ -160,7 +160,11 @@ fn first_function_body(bytecode: &[u8]) -> Vec<u8> {
 }
 
 fn body_reader(module: &Module) -> Reader<'static> {
-    let bytecode = cutile_ir::write_bytecode(module).expect("write bytecode");
+    let bytecode = cutile_ir::bytecode::write_bytecode_version(
+        module,
+        cutile_ir::bytecode::BytecodeVersion::V13_3,
+    )
+    .expect("write bytecode");
     let body = first_function_body(&bytecode);
     Reader::new(Box::leak(body.into_boxed_slice()))
 }
@@ -352,7 +356,11 @@ fn global_section_encodes_13_3_visibility_and_constant_flag() {
         constant: true,
         symbol_visibility: SymbolVisibility::Private,
     });
-    let bytecode = cutile_ir::write_bytecode(&module).expect("write bytecode");
+    let bytecode = cutile_ir::bytecode::write_bytecode_version(
+        &module,
+        cutile_ir::bytecode::BytecodeVersion::V13_3,
+    )
+    .expect("write bytecode");
     let decoded = cutile_ir::decode_bytecode(&bytecode).expect("decode bytecode");
     assert!(decoded.contains("private"));
     assert!(decoded.contains("constant=true"));

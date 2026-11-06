@@ -17,7 +17,7 @@
 // to a stable reference independent of upstream changes.
 
 use cuda_async::device_operation::DeviceOp;
-use cuda_core::{Device, IntoResult, Stream};
+use cuda_core::{Context, IntoResult, Stream};
 use cutile::api;
 use cutile::core::f16;
 use cutile::prelude::*;
@@ -756,7 +756,7 @@ fn option_label(value: Option<i32>) -> String {
         .unwrap_or_else(|| "default".to_string())
 }
 
-fn device_sm_count(device: &Arc<Device>) -> Result<i32, cuda_core::DriverError> {
+fn device_sm_count(device: &Arc<Context>) -> Result<i32, cuda_core::DriverError> {
     let mut result = 0i32;
     unsafe {
         cuda_core::sys::cuDeviceGetAttribute(
@@ -769,7 +769,7 @@ fn device_sm_count(device: &Arc<Device>) -> Result<i32, cuda_core::DriverError> 
     Ok(result)
 }
 
-fn device_sm_arch(device: &Arc<Device>) -> Result<i32, cuda_core::DriverError> {
+fn device_sm_arch(device: &Arc<Context>) -> Result<i32, cuda_core::DriverError> {
     let mut major = 0i32;
     let mut minor = 0i32;
     unsafe {
@@ -968,10 +968,10 @@ fn output_path(file_name: &str) -> std::path::PathBuf {
 
 fn sync_stream(stream: &Arc<Stream>, context: &str) {
     stream
-        .device()
+        .context()
         .bind_to_thread()
         .expect("bind stream device");
-    unsafe { stream.synchronize() }.expect(context);
+    stream.synchronize().expect(context);
 }
 
 fn check_gemm_output(
@@ -1684,7 +1684,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "optimized"
     };
 
-    let device = Device::new(0).expect("device");
+    let device = Context::new(0).expect("device");
     let stream = device.new_stream().expect("stream");
     let num_sms = device_sm_count(&device).unwrap_or(148);
     let sm_arch = device_sm_arch(&device).unwrap_or(0);

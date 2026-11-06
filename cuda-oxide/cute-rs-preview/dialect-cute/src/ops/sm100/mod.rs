@@ -35,13 +35,16 @@ use pliron::{verify_err, verify_err_noloc};
 use pliron_derive::{pliron_attr, pliron_op};
 
 use crate::attributes::{CuteComposedLayoutAttr, CuteTmaStorePipelineAttr};
-use crate::layout::{ComposedLayout, Layout, OffsetUnit, Swizzle};
+use crate::layout::{ComposedLayout, IntTuple, Layout, OffsetUnit, Swizzle};
+
+pub mod attention;
 
 /// Build a zero-offset FP16 row-major layout with the requested hardware swizzle.
 fn row_major(rows: u32, columns: u32, swizzle_bits: u32) -> ComposedLayout {
-    let outer: Layout = format!("({rows},{columns}):({columns},1)")
-        .parse()
-        .expect("fixed rank-two layout");
+    let outer = Layout::row_major(IntTuple::Tuple(vec![
+        IntTuple::Leaf(i64::from(rows)),
+        IntTuple::Leaf(i64::from(columns)),
+    ]));
     ComposedLayout::new(
         Swizzle::new(swizzle_bits, 3, 3),
         0,
@@ -57,16 +60,17 @@ mod verify;
 
 pub use operations::{
     CuteSm100AccumulatorAcquireOp, CuteSm100AccumulatorCommitOp, CuteSm100AccumulatorInitOp,
-    CuteSm100AccumulatorReleaseOp, CuteSm100AccumulatorWaitOp, CuteSm100ClusterTmaLoadOp,
-    CuteSm100PipelineAcquireOp, CuteSm100PipelineExpectOp, CuteSm100PipelineInitOp,
-    CuteSm100PipelineReleaseOp, CuteSm100PipelineWaitOp, CuteSm100StoreAcquireOp,
-    CuteSm100StoreCommitOp, CuteSm100StoreTailOp, CuteSm100TiledMmaOp, CuteSm100TmaStoreOp,
-    CuteSm100TmemAllocOp, CuteSm100TmemDeallocOp, CuteSm100TmemEpilogueOp, register, semantic_ids,
-    verify_local,
+    CuteSm100AccumulatorReleaseOp, CuteSm100AccumulatorWaitOp, CuteSm100BlockScaledCopyOp,
+    CuteSm100BlockScaledGemmOp, CuteSm100ClusterTmaLoadOp, CuteSm100PipelineAcquireOp,
+    CuteSm100PipelineExpectOp, CuteSm100PipelineInitOp, CuteSm100PipelineReleaseOp,
+    CuteSm100PipelineWaitOp, CuteSm100StoreAcquireOp, CuteSm100StoreCommitOp, CuteSm100StoreTailOp,
+    CuteSm100TiledMmaOp, CuteSm100TmaStoreOp, CuteSm100TmemAllocOp, CuteSm100TmemDeallocOp,
+    CuteSm100TmemEpilogueOp, register, semantic_ids, verify_local,
 };
 pub use plans::{
-    CuteSm100ClusterCopyPlanAttr, CuteSm100CollectorAttr, CuteSm100EpiloguePlanAttr,
-    CuteSm100MmaPlanAttr, CuteSm100PipelinePlanAttr, CuteSm100TmemPlanAttr,
+    CuteSm100BlockScaledMmaPlanAttr, CuteSm100ClusterCopyPlanAttr, CuteSm100CollectorAttr,
+    CuteSm100EpiloguePlanAttr, CuteSm100MmaPlanAttr, CuteSm100PipelinePlanAttr,
+    CuteSm100ScaleCopyPlanAttr, CuteSm100TmemPlanAttr,
 };
 pub use verify::verify_story;
 

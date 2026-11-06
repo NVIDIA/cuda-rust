@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- A kernel that imports from `cutile` while `cutile::core` is missing from the
+  module registry fails with an error that names the cause, instead of a later
+  "unable to resolve generic type" error. On `x86_64-pc-windows-gnu`, GNU ld's
+  `--gc-sections` drops the registry entries (#1605).
+
 ## [0.5.0] - 2026-11-04
 
 CUDA 13.5 tile-library calls and GPU communication, a shared Tile/SIMT host

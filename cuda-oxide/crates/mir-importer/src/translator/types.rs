@@ -101,7 +101,7 @@ pub(super) fn closure_upvar_tys(
 /// wrappers can still have `Single` layout (for example `struct Wrap(!)`).
 /// Walk aggregate fields recursively so such wrappers cannot make an enum
 /// variant look inhabitable merely because its outer shape is `Single`.
-fn monomorphized_ty_is_inhabited(ty: &rustc_public::ty::Ty) -> TranslationResult<bool> {
+pub(crate) fn monomorphized_ty_is_inhabited(ty: &rustc_public::ty::Ty) -> TranslationResult<bool> {
     if matches!(
         ty.layout()
             .map_err(|e| input_error_noloc!(TranslationErr::unsupported(format!(

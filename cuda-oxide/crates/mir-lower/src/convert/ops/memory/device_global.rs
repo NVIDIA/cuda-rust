@@ -5,7 +5,7 @@
 
 //! Conversion of `mir.global_alloc` to device globals, including relocated initializers.
 
-use super::common::{anyhow_to_pliron, counter_named_global};
+use super::common::{anyhow_to_pliron, keyed_global_name};
 use crate::context::{DeviceGlobalDeclaration, DeviceGlobalRecord, DeviceGlobalsMap};
 use crate::convert::types::{
     convert_type, llvm_type_size_align, validate_initialized_global_layout,
@@ -37,7 +37,6 @@ pub fn convert_global_alloc_dc(
     op: Ptr<Operation>,
     _operands_info: &OperandsInfo,
     device_globals: &mut DeviceGlobalsMap,
-    next_device_global_index: &mut usize,
 ) -> Result<()> {
     use pliron::builtin::attributes::{StringAttr, TypeAttr};
 
@@ -140,7 +139,6 @@ pub fn convert_global_alloc_dc(
             ctx,
             op,
             device_globals,
-            next_device_global_index,
             DeviceGlobalSpec {
                 key: &global_key,
                 mir_type: mir_global_type,
@@ -174,15 +172,13 @@ struct DeviceGlobalSpec<'a> {
     immutable: bool,
 }
 
-/// `next_device_global_index` is scoped to one `MirToLlvmConversionDriver`
-/// instance (one module), not a process-global counter: `N` is a function of
-/// this module's own MIR walk order, not of how many other modules have
-/// lowered a device global earlier in the process (#706).
+/// An ordinary device global is named `__device_global_<hash>` after its
+/// `global_key`, so its symbol depends neither on the module's MIR walk
+/// order nor on other modules lowered earlier in the process (#706, #1477).
 fn create_device_global(
     ctx: &mut Context,
     op: Ptr<Operation>,
     device_globals: &mut DeviceGlobalsMap,
-    next_device_global_index: &mut usize,
     spec: DeviceGlobalSpec<'_>,
 ) -> Result<pliron::identifier::Identifier> {
     // An explicit initializer is already the evaluated Rust allocation image.
@@ -226,7 +222,7 @@ fn create_device_global(
 
     // Constant-memory globals reuse the Rust-side mangled name so host code can
     // resolve them by name via `cuModuleGetGlobal`. Ordinary device globals
-    // are private to the kernel and get a counter-based unique name.
+    // are private to the kernel and get a name hashed from their key.
     let name: pliron::identifier::Identifier =
         if spec.addr_space == llvm_export::types::address_space::CONSTANT {
             let symbol = dialect_mir::ops::rust_static_symbol_from_global_key(spec.key)
@@ -243,11 +239,17 @@ fn create_device_global(
                 ))
             })?
         } else {
-            let counter = *next_device_global_index;
-            *next_device_global_index += 1;
-            counter_named_global(ctx, "__device_global", counter)
-                .try_into()
-                .unwrap()
+            let name = keyed_global_name(ctx, "__device_global", spec.key);
+            if let Some((other, _)) = device_globals
+                .iter()
+                .find(|(_, record)| record.symbol.to_string() == name)
+            {
+                return Err(anyhow_to_pliron(anyhow::anyhow!(
+                    "global_keys {other:?} and {:?} hash to the same symbol `{name}`",
+                    spec.key
+                )));
+            }
+            name.try_into().unwrap()
         };
 
     let global_op = if alignment > 0 {

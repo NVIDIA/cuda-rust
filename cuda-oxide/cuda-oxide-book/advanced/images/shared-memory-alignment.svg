@@ -27,12 +27,12 @@
 <text x="52" y="164" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">touched before a SharedArray&lt;u8, 33&gt; pad</text>
 <rect x="378" y="108" width="400" height="90" rx="6" style="fill: var(--code-fill); stroke: var(--code); stroke-width: 1.2"/>
 <text x="390" y="128" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--fg); white-space: pre">declared at the request</text>
-<text x="390" y="148" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">.shared .align 1 .b8 __shared_mem_&lt;hash&gt;_5[16]</text>
+<text x="390" y="148" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">.shared .align 1 .b8 __shared_mem_&lt;crate&gt;_&lt;hash&gt;[16]</text>
 <text x="390" y="164" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">st.shared.b64 [%rd4], %rd3</text>
 <text x="390" y="180" text-anchor="start" xml:space="preserve" style="font: 600 10.2px var(--mono); fill: var(--code); white-space: pre">DriverError(716, "misaligned address")</text>
 <rect x="804" y="108" width="396" height="90" rx="6" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1.2"/>
 <text x="816" y="128" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--meta); white-space: pre">raised to align_of::&lt;u64&gt;()</text>
-<text x="816" y="148" text-anchor="start" xml:space="preserve" style="font: 600 10.2px var(--mono); fill: var(--meta); white-space: pre">.shared .align 8 .b8 __shared_mem_&lt;hash&gt;_5[16]</text>
+<text x="816" y="148" text-anchor="start" xml:space="preserve" style="font: 600 10.2px var(--mono); fill: var(--meta); white-space: pre">.shared .align 8 .b8 __shared_mem_&lt;crate&gt;_&lt;hash&gt;[16]</text>
 <text x="816" y="164" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">values read back intact; memcheck and synccheck clean</text>
 <rect x="40" y="208" width="312" height="90" rx="6" style="fill: var(--rust-fill); stroke: var(--rust); stroke-width: 1.2"/>
 <text x="52" y="228" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--rust); white-space: pre">align(16) element, natural ALIGN</text>
@@ -41,12 +41,12 @@
 <text x="52" y="280" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">ALIGN 0; the raise lives on the Rust type</text>
 <rect x="378" y="208" width="400" height="90" rx="6" style="fill: var(--code-fill); stroke: var(--code); stroke-width: 1.2"/>
 <text x="390" y="228" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--fg); white-space: pre">declared at the exporter's guess</text>
-<text x="390" y="248" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">.shared .align 8 .b8 __shared_mem_&lt;hash&gt;_2[64]</text>
+<text x="390" y="248" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">.shared .align 8 .b8 __shared_mem_&lt;crate&gt;_&lt;hash&gt;[64]</text>
 <text x="390" y="264" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">st.shared.v4.b32 [%rd3], {%r2, %r4, %r3, %r1}</text>
 <text x="390" y="280" text-anchor="start" xml:space="preserve" style="font: 600 10.2px var(--mono); fill: var(--code); white-space: pre">DriverError(716, "misaligned address")</text>
 <rect x="804" y="208" width="396" height="90" rx="6" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1.2"/>
 <text x="816" y="228" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--meta); white-space: pre">raised to the Rust ABI alignment</text>
-<text x="816" y="248" text-anchor="start" xml:space="preserve" style="font: 600 10.2px var(--mono); fill: var(--meta); white-space: pre">.shared .align 16 .b8 __shared_mem_&lt;hash&gt;_2[64]</text>
+<text x="816" y="248" text-anchor="start" xml:space="preserve" style="font: 600 10.2px var(--mono); fill: var(--meta); white-space: pre">.shared .align 16 .b8 __shared_mem_&lt;crate&gt;_&lt;hash&gt;[64]</text>
 <text x="816" y="264" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">mir_type_abi_align carries the repr(align(16)) raise</text>
 <rect x="40" y="308" width="312" height="74" rx="6" style="fill: var(--rust-fill); stroke: var(--rust); stroke-width: 1.2"/>
 <text x="52" y="328" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--rust); white-space: pre">dynamic pool at ALIGN 1</text>
@@ -54,11 +54,11 @@
 <text x="52" y="364" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">one pool per kernel, declared once for every use</text>
 <rect x="378" y="308" width="400" height="74" rx="6" style="fill: var(--code-fill); stroke: var(--code); stroke-width: 1.2"/>
 <text x="390" y="328" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--fg); white-space: pre">pool declared at the request</text>
-<text x="390" y="348" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">.extern .shared .align 1 .b8 __dynamic_smem_&lt;hash&gt;_&lt;fn&gt;[]</text>
+<text x="390" y="348" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">.extern .shared .align 1 .b8 __dynamic_smem_&lt;crate&gt;_&lt;fn&gt;[]</text>
 <text x="390" y="364" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">weaker than the st.shared.b64 through it</text>
 <rect x="804" y="308" width="396" height="74" rx="6" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1.2"/>
 <text x="816" y="328" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--meta); white-space: pre">pool at its strongest typed use</text>
-<text x="816" y="348" text-anchor="start" xml:space="preserve" style="font: 600 10.2px var(--mono); fill: var(--meta); white-space: pre">.extern .shared .align 8 .b8 __dynamic_smem_&lt;hash&gt;_&lt;fn&gt;[]</text>
+<text x="816" y="348" text-anchor="start" xml:space="preserve" style="font: 600 10.2px var(--mono); fill: var(--meta); white-space: pre">.extern .shared .align 8 .b8 __dynamic_smem_&lt;crate&gt;_&lt;fn&gt;[]</text>
 <text x="816" y="364" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">max over get, get_raw and offset uses, then the launch contract</text>
 <rect x="40" y="392" width="312" height="90" rx="6" style="fill: var(--rust-fill); stroke: var(--rust); stroke-width: 1.2"/>
 <text x="52" y="412" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--rust); white-space: pre">ALIGN 3</text>
@@ -66,7 +66,7 @@
 <text x="52" y="448" text-anchor="start" xml:space="preserve" style="font: 400 10.8px var(--sans); fill: var(--muted); white-space: pre">not a power of two; nobody checked it</text>
 <rect x="378" y="392" width="400" height="90" rx="6" style="fill: var(--code-fill); stroke: var(--code); stroke-width: 1.2"/>
 <text x="390" y="412" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--fg); white-space: pre">reached LLVM; no PTX, no source position</text>
-<text x="390" y="432" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">@__shared_mem_&lt;hash&gt;_0 = addrspace(3) global</text>
+<text x="390" y="432" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">@__shared_mem_&lt;crate&gt;_&lt;hash&gt; = addrspace(3) global</text>
 <text x="390" y="448" text-anchor="start" xml:space="preserve" style="font: 400 10.2px var(--mono); fill: var(--fg); white-space: pre">    [4 x i64] zeroinitializer, align 3</text>
 <text x="390" y="464" text-anchor="start" xml:space="preserve" style="font: 600 10.2px var(--mono); fill: var(--code); white-space: pre">llc: error: alignment is not a power of two</text>
 <rect x="804" y="392" width="396" height="90" rx="6" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1.2"/>

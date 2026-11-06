@@ -81,9 +81,9 @@ impl std::fmt::Display for Target {
 pub enum Optimization {
     /// Feed verified, unoptimized LLVM IR directly to `llc`.
     None,
-    /// Require a same-major `opt` and run `opt -O2`.
+    /// Require a same-major `opt` and run `opt -O3`.
     #[default]
-    O2,
+    O3,
 }
 
 /// Device debug information policy.
@@ -129,7 +129,7 @@ impl CompileOptions {
     pub fn new(target: Target) -> Self {
         Self {
             target,
-            optimization: Optimization::O2,
+            optimization: Optimization::O3,
             fma_contraction: true,
             debug_info: DebugInfo::None,
             verbose: false,
@@ -181,7 +181,7 @@ impl CompileOptions {
     /// Without this, [`Compilation::diagnostics`] still reports the
     /// toolchain's own selection diagnostics and a final success note, but
     /// omits per-compilation detail such as which target-selection source won
-    /// or why `opt -O2` was skipped.
+    /// or why `opt -O3` was skipped.
     pub fn with_verbose(mut self, verbose: bool) -> Self {
         self.verbose = verbose;
         self
@@ -643,10 +643,10 @@ impl Compiler {
                 message: "full variable debug information requires Optimization::None".to_string(),
             });
         }
-        if options.optimization == Optimization::O2 && toolchain.inner.opt.is_none() {
+        if options.optimization == Optimization::O3 && toolchain.inner.opt.is_none() {
             return Err(CompileError::OptimizationUnavailable {
                 message:
-                    "Optimization::O2 requires an `opt` binary with the same LLVM major as llc"
+                    "Optimization::O3 requires an `opt` binary with the same LLVM major as llc"
                         .to_string(),
             });
         }

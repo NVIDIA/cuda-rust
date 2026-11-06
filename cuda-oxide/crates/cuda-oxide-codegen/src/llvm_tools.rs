@@ -5,7 +5,7 @@
 
 //! Matched-pair resolution of the LLVM `opt` and `llc` binaries.
 //!
-//! The middle-end (`opt -O2`) and the backend (`llc`) must come from the
+//! The middle-end (`opt -O3`) and the backend (`llc`) must come from the
 //! same LLVM major release: textual IR is not stable across majors. The
 //! concrete failure that motivated this module (issue #150): LLVM 22's
 //! inliner emits the new sizeless `llvm.lifetime.start(ptr)` intrinsic form
@@ -70,7 +70,7 @@ pub struct LlvmToolchain {
     /// Whether `llc_path` came from `opts.llc_override` (historically
     /// `CUDA_OXIDE_LLC`; affects messages).
     pub llc_from_env: bool,
-    /// The matched `opt` for the middle-end; `None` skips `opt -O2`
+    /// The matched `opt` for the middle-end; `None` skips `opt -O3`
     /// (either `opts.no_opt` or no same-major `opt` exists).
     pub opt: Option<OptTool>,
     /// The matched `llvm-link` for libdevice linking; `None` when no

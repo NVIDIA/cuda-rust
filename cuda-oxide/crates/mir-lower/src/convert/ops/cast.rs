@@ -942,7 +942,7 @@ fn const_i64(
 /// This is the only valid lowering when either side is an aggregate,
 /// because LLVM's `bitcast` is restricted to non-aggregate first-class
 /// types (an aggregate bitcast such as `bitcast [4 x i8] %v to i32` is
-/// rejected by `llc` with "invalid cast opcode"). The `opt -O2` middle
+/// rejected by `llc` with "invalid cast opcode"). The `opt -O3` middle
 /// end folds the round-trip away, so no real stack traffic survives.
 ///
 /// Guarded by a total-byte-size equality check so a size-mismatched

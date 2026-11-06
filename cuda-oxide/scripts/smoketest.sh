@@ -120,7 +120,7 @@ NO_LAUNCH_EXAMPLES=(wgmma_mma_bf16)
 
 # Examples whose verify-code-shape.sh reads unoptimized artifacts. Their
 # `#[inline(never)]` marker symbols reach LLVM as `noinline`, so most of them
-# now survive -O2 as real functions, but these scripts assert which markers
+# now survive -O3 as real functions, but these scripts assert which markers
 # the frontend reaches in which branch, and that is written against the text
 # emitted before opt folds and reorders it. The optimized build still runs and
 # still decides the verdict; these get one extra CUDA_OXIDE_NO_OPT=1 build

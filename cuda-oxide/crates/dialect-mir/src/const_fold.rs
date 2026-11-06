@@ -9,7 +9,7 @@
 //! simplifier (`simplify_cfg`). Both are dialect-agnostic: they only act on ops
 //! that opt in via an interface. This module implements those interfaces for the
 //! `dialect-mir` integer ops so the folding happens in **our** middle-end, before
-//! we export textual LLVM IR. That makes the fold independent of `opt -O2` and
+//! we export textual LLVM IR. That makes the fold independent of `opt -O3` and
 //! of whatever the NVVM backend optimises. By the time we export, the constants
 //! are already in the IR we hand off.
 //!

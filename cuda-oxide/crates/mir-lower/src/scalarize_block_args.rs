@@ -19,7 +19,7 @@
 //! %d = extractvalue { i32, { float, float } } %v, 0
 //! ```
 //!
-//! LLVM's -O2 pipeline cannot take such IR apart: SROA only splits allocas,
+//! LLVM's -O3 pipeline cannot take such IR apart: SROA only splits allocas,
 //! and InstCombine does not push `extractvalue` through a `phi`. A hot loop
 //! that merges an iterator's `Option` result keeps a materialized
 //! discriminant register plus one extra compare-and-branch per iteration,

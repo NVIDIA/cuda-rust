@@ -6,7 +6,7 @@
 //! Post-optimization diagnostics for Rust locals that remain stack-backed.
 //!
 //! Rust MIR locals are tagged before lowering and exported with an encoded SSA
-//! name. The ordinary LLVM `opt -O2` pipeline removes locals that mem2reg/SROA
+//! name. The ordinary LLVM `opt -O3` pipeline removes locals that mem2reg/SROA
 //! can promote. This module inspects the exact LLVM IR subsequently passed to
 //! `llc` and reports only tagged allocas that still exist there.
 //!

@@ -309,7 +309,7 @@ rustc MIR                         cuda-oxide / LLVM
 ------------------------------    ------------------
 ScalarReplacement...: off    ->   mem2reg: off
 SingleUseConsts: off               loop unrolling: off
-ReferencePropagation: on           opt -O2: off
+ReferencePropagation: on           opt -O3: off
 general inlining: on*              llc: -O0
 
 * only DisjointSlice::get_mut is outlined
@@ -361,7 +361,7 @@ materialized.
 
 > The promotion-aware `mir.dbg_value` salvage that Pliron `mem2reg` performs is
 > the building block for a future *optimized* debug tier (locals through
-> `opt -O2`, best-effort). It is not what `full` uses today.
+> `opt -O3`, best-effort). It is not what `full` uses today.
 
 ### What works today
 

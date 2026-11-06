@@ -85,7 +85,7 @@ pub struct BackendOptions {
     pub target_arch_source: &'static str,
     /// Advisory local-GPU arch; used only when it satisfies detected features.
     pub device_arch_hint: Option<DeviceArchHint>,
-    /// Skip the `opt -O2` middle-end.
+    /// Skip the `opt -O3` middle-end.
     pub no_opt: bool,
     /// Suppress `llc -fp-contract=fast` (fmul+fadd fusion to fma).
     pub no_fma: bool,

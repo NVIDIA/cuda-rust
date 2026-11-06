@@ -69,7 +69,7 @@ experience.
 
 An optimized verbose build also checks the exact LLVM IR that will be passed to
 `llc`. If a Rust local's stack allocation survives both cuda-oxide `mem2reg` and
-LLVM's `-O2` scalar-replacement pipeline, cuda-oxide reports it before PTX
+LLVM's `-O3` scalar-replacement pipeline, cuda-oxide reports it before PTX
 generation. For example:
 
 ```text

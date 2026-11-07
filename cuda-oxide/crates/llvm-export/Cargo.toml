@@ -24,3 +24,4 @@ reserved-oxide-symbols = { workspace = true }
 [dev-dependencies]
 expect-test = "1.4"
 libnvvm-sys = { workspace = true }
+serde_json = { workspace = true }

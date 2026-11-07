@@ -327,6 +327,10 @@ impl<'a> ModuleExportState<'a> {
     /// These intrinsics require warp-synchronous execution semantics and must
     /// be marked convergent to prevent LLVM from applying optimizations that
     /// would break GPU synchronization (like duplicating them into divergent branches).
+    /// The answer drives both the intrinsic's `declare` line and every call to
+    /// it; calls to any other `llvm.*` intrinsic carry no `convergent`, so a
+    /// collective missing here loses its protection on the PTX route unless
+    /// LLVM's own intrinsic table marks it.
     pub(super) fn is_convergent_intrinsic(name: &str) -> bool {
         // Block-level barriers
         name == "llvm.nvvm.barrier0"
@@ -353,12 +357,79 @@ impl<'a> ModuleExportState<'a> {
             // warpgroup must execute it together, so it is convergent and
             // side-effecting and must not be sunk into divergent branches.
             || name.starts_with("llvm.nvvm.setmaxnreg")
+            // Warp-collective matrix moves and elections (`.sync.aligned`)
+            || name.starts_with("llvm.nvvm.ldmatrix")
+            || name.starts_with("llvm.nvvm.stmatrix")
+            || name.starts_with("llvm.nvvm.movmatrix")
+            || name == "llvm.nvvm.elect.sync"
+            // Warpgroup MMA fence / commit / wait (`wgmma.*.sync.aligned`)
+            || name.starts_with("llvm.nvvm.wgmma")
+            // cp.async completion tracked on an mbarrier
+            || name.starts_with("llvm.nvvm.cp.async.mbarrier.arrive")
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::ModuleExportState;
+
+    #[test]
+    fn catalog_convergent_intrinsics_are_flagged_convergent() {
+        // A call to an `llvm.*` intrinsic is `convergent` only when this list
+        // says so, so every catalog intrinsic that can lower to an LLVM call
+        // and is convergent by its semantics must be listed. LLVM's own
+        // intrinsic table is not enough: it differs across LLVM releases and
+        // libNVVM
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../intrinsics/catalog.json");
+        let catalog: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).expect("read catalog"))
+                .expect("parse catalog");
+        let intrinsics = catalog["intrinsics"].as_array().expect("intrinsics array");
+
+        let mut checked = Vec::new();
+        let mut missing = Vec::new();
+        for intrinsic in intrinsics {
+            let Some(symbol) = intrinsic["llvm"]["symbol"].as_str() else {
+                continue;
+            };
+            if intrinsic["semantics"]["convergent"] != true {
+                continue;
+            }
+            // only entries proven to lower as inline PTX on every recorded
+            // backend are skipped; dedicated converters such as vote, match
+            // and redux record no backend lowerings yet still emit LLVM calls
+            let inline_ptx_only =
+                intrinsic["backend_lowerings"]
+                    .as_array()
+                    .is_some_and(|lowerings| {
+                        !lowerings.is_empty()
+                            && lowerings
+                                .iter()
+                                .all(|lowering| lowering["mechanism"] == "inline_ptx")
+                    });
+            if inline_ptx_only {
+                continue;
+            }
+
+            checked.push(symbol);
+            if !ModuleExportState::is_convergent_intrinsic(symbol) {
+                missing.push(symbol);
+            }
+        }
+
+        // guards against a schema change silently shrinking the selection:
+        // one entry with typed lowerings and one without any must be checked
+        for anchor in ["llvm.nvvm.shfl.sync.down.f32", "llvm.nvvm.vote.all.sync"] {
+            assert!(
+                checked.contains(&anchor),
+                "{anchor} was not checked; the catalog selection in this test is stale"
+            );
+        }
+        assert!(
+            missing.is_empty(),
+            "convergent catalog intrinsics missing from is_convergent_intrinsic: {missing:#?}"
+        );
+    }
 
     #[test]
     fn warp_match_collectives_are_convergent() {

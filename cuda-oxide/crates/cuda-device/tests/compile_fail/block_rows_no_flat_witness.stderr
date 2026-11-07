@@ -1,0 +1,21 @@
+error[E0599]: no method named `element_thread32` found for struct `DisjointSlice<'_, f32, BlockRows>` in the current scope
+  --> tests/compile_fail/block_rows_no_flat_witness.rs:21:17
+   |
+21 |     let _ = out.element_thread32(__internal::index_1d_u32(launch_context));
+   |                 ^^^^^^^^^^^^^^^^ method not found in `DisjointSlice<'_, f32, BlockRows>`
+   |
+   = note: the method was found for `DisjointSlice<'a, T>`
+
+error[E0599]: the method `get_mut` exists for struct `DisjointSlice<'_, f32, BlockRows>`, but its trait bounds were not satisfied
+  --> tests/compile_fail/block_rows_no_flat_witness.rs:22:17
+   |
+22 |     let _ = out.get_mut(legacy);
+   |                 ^^^^^^^ method cannot be called on `DisjointSlice<'_, f32, BlockRows>` due to unsatisfied trait bounds
+   |
+  ::: src/view.rs
+   |
+   | pub enum BlockRows {}
+   | ------------------ doesn't satisfy `BlockRows: FlatIndexSpace`
+   |
+   = note: the following trait bounds were not satisfied:
+           `BlockRows: FlatIndexSpace`

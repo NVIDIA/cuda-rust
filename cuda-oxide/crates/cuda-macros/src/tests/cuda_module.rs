@@ -1216,6 +1216,27 @@ fn disjoint_slice_packet_shape_is_bound_to_the_resolved_type() {
         ),
         "runtime-width spelling must bind HAS_ROW_WIDTH = true: {expanded}"
     );
+
+    // `BlockRows` reads its row width from the slice too, so the host must
+    // pass a `RowWidth` and the packet must carry the width
+    let module: ItemMod = parse_quote! {
+        mod kernels {
+            #[kernel]
+            pub fn block_rows(mut out: DisjointSlice<f32, BlockRows>) {}
+        }
+    };
+    let expanded = expand_to_compact_string(module);
+    assert!(
+        expanded.contains(
+            "for<'__cuda_oxide_disjoint>DisjointSlice<'__cuda_oxide_disjoint,f32,\
+                 BlockRows>:::cuda_device::__LaunchContractDisjointSliceAbi<f32,true>"
+        ),
+        "BlockRows must bind HAS_ROW_WIDTH = true: {expanded}"
+    );
+    assert!(
+        expanded.contains("out:::cuda_host::RowWidth<'_,f32>"),
+        "BlockRows must take its row width from the host: {expanded}"
+    );
 }
 
 #[test]

@@ -272,6 +272,7 @@ pub fn vecadd(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>) {
 | `get_mut`               | `(ThreadIndex<'_, IS>) -> Option<&mut T>`        | Bounds-checked mutable access from an explicit witness               |
 | `get_unchecked_mut`     | `(usize) -> &mut T`                              | Unsafe, unchecked access                                             |
 | `len`                   | `() -> usize`                                    | Number of elements                                                   |
+| `empty` / `default`     | `() -> DisjointSlice<'_, T, IS>`                 | Safe empty slice; every accessor on it returns `None`                |
 
 `get_mut_indexed` is gated on `IndexSpace: IndexFormula` (impl'd by
 `Index1D` and `Index2D<S>`). For `Runtime2DIndex` slices, use the
@@ -279,11 +280,23 @@ explicit `thread::index_2d_runtime(&slice)` + `get_mut(idx)` pair; the
 slice resolves the witness's coordinates against its own host-bound
 row width (`slice.row_width()`).
 
+`DisjointSlice::empty()` (also `Default`) stands in for an output a caller
+does not want. It needs no `unsafe` block: it covers no memory, and every
+accessor checks the slice length before it resolves an element.
+
 For fixed-size tiles, use `DisjointSlice<T, LinearTiles<N>>::tile_thread32`
 or `DisjointSlice<T, RowMajorTiles<R, C, S>>::tile_2d32`. Each method checks a
 complete tile once, then `at_const` accesses known positions without another
 runtime bounds check. `S` is the caller-declared logical row width and must
 match the buffer layout. See {ref}`Check a tile once <check-a-tile-once>`.
+
+For one block per row, use `DisjointSlice<T, BlockRows>::block_row32(lc)`
+under a `domain = 1` launch contract. Block `b` gets row `b`, or `None` when
+that row is not wholly inside the slice. The result is the same across the
+block when every thread calls it on the same, unchanged, host-bound slice.
+`row.thread_columns()` yields thread `t`'s columns `t, t + blockDim.x, ...`,
+each with `read`, `write` and `column`. The host binds the row width with
+`cuda_host::RowWidth`. See {ref}`Block-owned rows <block-owned-rows>`.
 
 ---
 

@@ -11,7 +11,8 @@ use super::const_alloc::{
     translate_static_array_as_slice,
 };
 use super::const_bytes::{
-    constant_bytes, translate_array_value_constant, translate_constant_value_from_bytes,
+    constant_bytes, constant_type_contains_disjoint_slice, translate_array_value_constant,
+    translate_constant_value_from_bytes, translate_disjoint_slice_constant,
     translate_struct_constant, translate_tuple_constant, translate_zero_sized_constant_value,
 };
 use super::const_enum::{read_uint_from_bytes, translate_enum_constant};
@@ -535,6 +536,24 @@ pub fn translate_operand(
                 return Ok((op.deref(ctx).get_result(0), Some(op)));
             }
 
+            // A `DisjointSlice` gets its own slice type rather than a struct,
+            // so it needs its own decoder (`DisjointSlice::empty()` folds to
+            // a constant)
+            if const_ty_ptr
+                .deref(ctx)
+                .is::<dialect_mir::types::MirDisjointSliceType>()
+            {
+                return translate_disjoint_slice_constant(
+                    ctx,
+                    constant,
+                    &rust_ty,
+                    const_ty_ptr,
+                    block_ptr,
+                    prev_op,
+                    loc,
+                );
+            }
+
             // Check if this is a struct type (non-ZST)
             // For struct constants, we need to construct the struct from its field values.
             let is_struct = const_ty_ptr
@@ -690,6 +709,26 @@ pub fn translate_operand(
                     (pointee, mutable, is_struct)
                 };
 
+                // both reference paths below materialize the pointee as a
+                // value and take its address, which is a local rather than
+                // storage that lives for `'static`, so a helper returning the
+                // reference would hand back a dead slot. A shared reference to
+                // a slice is of little use (every accessor takes `&mut self`),
+                // so those paths refuse it rather than extend that to slices.
+                // A raw pointer without provenance, such as a null one, names
+                // no storage and still takes the raw-pointer path
+                let pointee_holds_slice = constant_type_contains_disjoint_slice(ctx, pointee_ty);
+                let refuse_slice_reference = |loc| {
+                    input_err!(
+                        loc,
+                        TranslationErr::unsupported(
+                            "a reference to a constant holding a DisjointSlice is not supported; \
+                             pass the slice by value, or borrow a local such as \
+                             `&mut DisjointSlice::empty()`"
+                        )
+                    )
+                };
+
                 // Check if the constant has actual struct data (not all zeros)
                 // Handle both Allocated constants and promoted constants (Ty variant)
                 //
@@ -729,6 +768,9 @@ pub fn translate_operand(
 
                 if has_struct_data {
                     // This is a reference to a constant struct (like &(8..16))
+                    if pointee_holds_slice {
+                        return refuse_slice_reference(loc);
+                    }
 
                     // Create the struct constant, then use mir.ref to get a pointer
                     let (struct_val, last_op) = translate_struct_constant(
@@ -797,6 +839,9 @@ pub fn translate_operand(
                 if let Some(alloc) = backing_alloc
                     && let Some(&(prov_pos, prov)) = alloc.provenance.ptrs.first()
                 {
+                    if pointee_holds_slice {
+                        return refuse_slice_reference(loc);
+                    }
                     use rustc_public::mir::alloc::GlobalAlloc;
                     let alloc_id = prov.0;
 

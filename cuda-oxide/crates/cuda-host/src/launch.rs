@@ -310,13 +310,14 @@ pub fn push_kernel_device_slice(
 /// A device buffer together with the row width the kernel will index it by.
 ///
 /// Kernels whose index space fixes the row width in the type need nothing
-/// here. A kernel taking `DisjointSlice<T, RuntimeRowMajorTiles<R, C>>` or
-/// `DisjointSlice<T, Runtime2DIndex>` reads its row width from the slice, and
-/// this is where that width is supplied.
+/// here. A kernel taking `DisjointSlice<T, RuntimeRowMajorTiles<R, C>>`,
+/// `DisjointSlice<T, Runtime2DIndex>`, or `DisjointSlice<T, BlockRows>` reads
+/// its row width from the slice, and this is where that width is supplied.
 ///
 /// Binding the row width on the host is what makes the device-side accessor
 /// safe. One value is written into the launch packet, so every thread reads
-/// the same row width and distinct thread coordinates map to disjoint tiles.
+/// the same row width and distinct thread coordinates map to disjoint tiles
+/// (or, for `BlockRows`, distinct blocks map to disjoint rows).
 /// A width passed per call could not give that: device code can select between
 /// two launch-uniform values under a thread-varying condition, and two threads
 /// then resolve the same element.

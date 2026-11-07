@@ -66,7 +66,7 @@ pub(crate) use debug::{convert_dbg_value, convert_dbg_value_list};
 pub use device_global::convert_global_alloc_dc;
 pub use extern_shared::convert_extern_shared_dc;
 pub use shared::convert_shared_alloc_dc;
-pub(crate) use transfer::{convert_memcpy, convert_memmove};
+pub(crate) use transfer::{convert_memcpy, convert_memmove, convert_memset};
 
 #[cfg(test)]
 mod tests;

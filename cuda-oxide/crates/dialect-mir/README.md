@@ -220,13 +220,13 @@ Pointers carry an NVPTX address space independently of their source kind:
 
 ## Operations
 
-63 operations across 12 modules, one row per file in `src/ops/`:
+65 operations across 12 modules, one row per file in `src/ops/`:
 
 | Module         | Ops | Description                                                                                              |
 |----------------|-----|----------------------------------------------------------------------------------------------------------|
 | `function`     | 1   | `MirFuncOp` -- function definition                                                                       |
 | `control_flow` | 7   | return, goto, cond_branch, assert, unreachable, unroll_hint, nounroll_hint                               |
-| `memory`       | 11  | alloca, load, store, ref, assign, ptr_offset, memcpy, memmove, shared_alloc, global_alloc, extern_shared |
+| `memory`       | 12  | alloca, load, store, ref, assign, ptr_offset, memcpy, memmove, memset, shared_alloc, global_alloc, extern_shared |
 | `constants`    | 3   | integer, float, and undef constants                                                                      |
 | `arithmetic`   | 15  | add/sub/mul/div/rem, checked variants, bitwise, shifts                                                   |
 | `comparison`   | 7   | lt, le, gt, ge, eq, ne, cmp                                                                              |
@@ -235,7 +235,7 @@ Pointers carry an NVPTX address space independently of their source kind:
 | `cast`         | 1   | type conversions (kind tracked via `MirCastKindAttr`)                                                    |
 | `storage`      | 2   | storage_live, storage_dead (lifetime markers)                                                            |
 | `call`         | 1   | function calls                                                                                           |
-| `debug`        | 1   | dbg_value -- binds a value to a source-level variable                                                    |
+| `debug`        | 2   | dbg_value, dbg_value_list -- bind one or several values to a source-level variable                       |
 
 `MirAllocaOp` implements `PromotableAllocationInterface` and `MirLoadOp` / `MirStoreOp` implement `PromotableOpInterface`, so pliron's `mem2reg` pass can promote scalar stack slots back into SSA. `MirUndefOp` is the default reaching definition the pass materialises when a load is not dominated by any store.
 

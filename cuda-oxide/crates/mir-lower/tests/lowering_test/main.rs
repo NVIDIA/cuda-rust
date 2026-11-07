@@ -17,6 +17,7 @@ mod inline_ptx;
 mod loops;
 mod math_conversions;
 mod matrix_memory;
+mod memset;
 mod mma;
 mod sregs_and_warp;
 mod tma;

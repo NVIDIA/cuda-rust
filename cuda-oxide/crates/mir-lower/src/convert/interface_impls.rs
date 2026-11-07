@@ -32,8 +32,8 @@ use dialect_mir::ops::{
     MirDbgValueListOp, MirDbgValueOp, MirDivOp, MirEnumPayloadOp, MirEqOp,
     MirExtractArrayElementOp, MirExtractFieldOp, MirFieldAddrOp, MirFloatConstantOp, MirGeOp,
     MirGetDiscriminantOp, MirGotoOp, MirGtOp, MirInsertFieldOp, MirLeOp, MirLoadOp, MirLtOp,
-    MirMemcpyOp, MirMemmoveOp, MirMulOp, MirNeOp, MirNegOp, MirNotOp, MirPtrOffsetOp, MirRefOp,
-    MirRemOp, MirReturnOp, MirSetDiscriminantOp, MirShlOp, MirShrOp, MirStorageDeadOp,
+    MirMemcpyOp, MirMemmoveOp, MirMemsetOp, MirMulOp, MirNeOp, MirNegOp, MirNotOp, MirPtrOffsetOp,
+    MirRefOp, MirRemOp, MirReturnOp, MirSetDiscriminantOp, MirShlOp, MirShrOp, MirStorageDeadOp,
     MirStorageLiveOp, MirStoreOp, MirSubOp, MirUndefOp, MirUnreachableOp, MirUnrollHintOp,
 };
 use dialect_nvvm::ops::{
@@ -429,6 +429,18 @@ impl MirToLlvmConversion for MirMemmoveOp {
         operands_info: &OperandsInfo,
     ) -> Result<()> {
         super::ops::memory::convert_memmove(ctx, rewriter, self.get_operation(), operands_info)
+    }
+}
+
+#[op_interface_impl]
+impl MirToLlvmConversion for MirMemsetOp {
+    fn convert(
+        &self,
+        ctx: &mut Context,
+        rewriter: &mut DialectConversionRewriter,
+        operands_info: &OperandsInfo,
+    ) -> Result<()> {
+        super::ops::memory::convert_memset(ctx, rewriter, self.get_operation(), operands_info)
     }
 }
 

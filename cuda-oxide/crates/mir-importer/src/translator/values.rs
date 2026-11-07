@@ -42,6 +42,7 @@ use dialect_mir::ops::{MirAllocaOp, MirCastOp, MirLoadOp, MirStoreOp};
 use dialect_mir::types::{MirPointerKind, MirPtrType, MirSliceType, address_space};
 use pliron::basic_block::BasicBlock;
 use pliron::context::{Context, Ptr};
+use pliron::location::Location;
 use pliron::op::Op;
 use pliron::operation::Operation;
 use pliron::r#type::{TypeHandle, Typed};
@@ -247,6 +248,116 @@ impl ValueMap {
         insert_at(ctx, op, block, prev_op);
         Some(op)
     }
+}
+
+/// Emit `mir.store` of `value` through a computed destination address.
+///
+/// This is the projected-place counterpart of [`ValueMap::store_local`]:
+/// derefs, fields, array elements, and prepared call destinations all write
+/// through an address rather than a local's own slot. A pointer produced in a
+/// specific address space is first widened to the destination's declared
+/// generic pointee by [`widen_stored_pointer_address_space`]; every other
+/// mismatch reaches the `mir.store` verifier unchanged.
+pub(crate) fn store_through_address(
+    ctx: &mut Context,
+    dest_addr: Value,
+    value: Value,
+    block: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    loc: Location,
+) -> Ptr<Operation> {
+    let (value, prev_op) =
+        widen_stored_pointer_address_space(ctx, dest_addr, value, block, prev_op, &loc);
+    let op = Operation::new(
+        ctx,
+        MirStoreOp::get_concrete_op_info(),
+        vec![],
+        vec![dest_addr, value],
+        vec![],
+        0,
+    );
+    op.deref_mut(ctx).set_loc(loc);
+    insert_at(ctx, op, block, prev_op);
+    op
+}
+
+/// Widen a thin pointer stored through `dest_addr` into the generic address
+/// space its destination declares.
+///
+/// The slot-address-space analysis can type a value `addrspace(3)` while the
+/// place it is written to holds a generic `*mut T`, for example
+/// `*p = DynamicSharedArray::get()` with `p: &mut *mut T`. Unlike
+/// [`maybe_ptr_coerce`], which bridges arbitrary thin-pointer pointees, this
+/// conversion changes only the address space, and only when every other part
+/// of the pointer type already agrees:
+///
+/// - the pointee types are identical
+/// - mutability is identical
+/// - the kind is preserved or erased, as [`generic_pointer_kind_retype_allowed`]
+///   permits for local slots
+/// - the value is in a specific address space and the destination is generic
+///
+/// The cast targets the destination's declared pointee, never the reverse:
+/// under `--nvptx-short-ptr` a shared pointer is 4 bytes and a generic one
+/// is 8, so the stored width must be the one the place was laid out for.
+/// Widening into the generic space is always defined. Narrowing a generic
+/// pointer into a specific space is only defined when it already points
+/// there, which a store cannot prove, so that case and every other mismatch
+/// is left for the verifier to reject.
+fn widen_stored_pointer_address_space(
+    ctx: &mut Context,
+    dest_addr: Value,
+    value: Value,
+    block: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    loc: &Location,
+) -> (Value, Option<Ptr<Operation>>) {
+    let value_ty = value.get_type(ctx);
+    let target_ty = {
+        let dest_ty = dest_addr.get_type(ctx);
+        let dest_ref = dest_ty.deref(ctx);
+        let Some(dest_ptr) = dest_ref.downcast_ref::<MirPtrType>() else {
+            return (value, prev_op);
+        };
+        dest_ptr.pointee
+    };
+    if value_ty == target_ty {
+        return (value, prev_op);
+    }
+
+    let widens = {
+        let value_ref = value_ty.deref(ctx);
+        let target_ref = target_ty.deref(ctx);
+        match (
+            value_ref.downcast_ref::<MirPtrType>(),
+            target_ref.downcast_ref::<MirPtrType>(),
+        ) {
+            (Some(value_ptr), Some(target_ptr)) => {
+                value_ptr.pointee == target_ptr.pointee
+                    && value_ptr.is_mutable == target_ptr.is_mutable
+                    && generic_pointer_kind_retype_allowed(value_ptr.kind, target_ptr.kind)
+                    && value_ptr.address_space != address_space::GENERIC
+                    && target_ptr.address_space == address_space::GENERIC
+            }
+            _ => false,
+        }
+    };
+    if !widens {
+        return (value, prev_op);
+    }
+
+    let cast_op = Operation::new(
+        ctx,
+        MirCastOp::get_concrete_op_info(),
+        vec![target_ty],
+        vec![value],
+        vec![],
+        0,
+    );
+    cast_op.deref_mut(ctx).set_loc(loc.clone());
+    MirCastOp::new(cast_op).set_attr_cast_kind(ctx, MirCastKindAttr::PtrToPtr);
+    insert_at(ctx, cast_op, block, prev_op);
+    (cast_op.deref(ctx).get_result(0), Some(cast_op))
 }
 
 /// If `value` and `target_ty` are pointer-like MIR types with the same

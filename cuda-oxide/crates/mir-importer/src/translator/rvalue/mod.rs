@@ -44,6 +44,7 @@ mod place_iter;
 mod place_read;
 mod pointee;
 mod promoted;
+mod promoted_alloc;
 mod static_global;
 mod statics;
 

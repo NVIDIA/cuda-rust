@@ -39,7 +39,7 @@ Array value constants support primitive leaves (integers, `f16`, `f32`,
 enum, tuple, and zero-sized fields. Tuple element strides and field offsets
 come from rustc layout, including internal and trailing padding; direct tuple
 value constants use the same layout-aware decoder. Struct constants (direct
-and promoted-by-reference) also read every field at its rustc layout offset,
+and by reference) also read every field at its rustc layout offset,
 so padded, reordered, `#[repr(C)]`, and nested shapes decode correctly, and a
 struct's stored size is its padded size, which fixes the element stride for
 arrays of padded structs inside constants. Pointer-free initialized union
@@ -122,7 +122,47 @@ non-zero byte addends. This includes niche-encoded `Option<&T>` and
 direct-tagged enum layouts, both for direct thin-reference payloads and for
 pointers nested inside tuple, struct, or array payload fields. Relocation-carrying
 enum constants can also be nested inside tuple, struct, and array constants.
-Anonymous promoted allocations remain unsupported.
+
+Reference constants and rustc-promoted borrows (`const C: &T = &...`, `&(3, 4)`,
+`&42`) point at anonymous constant memory. Each such allocation becomes one
+module-level read-only device global holding rustc's evaluated byte image, so a
+`&'static` reference stays valid after the function that named it returns,
+including across an `#[inline(never)]` call. References into the same
+allocation share its global: `&PAIR.1` addresses 4 bytes into `PAIR`'s global.
+These globals are keyed by their contents (bytes, alignment, and what their
+pointers target), so adding unrelated constants or kernels never renames an
+existing one, and two read-only allocations with the same contents share one
+global, which Rust permits because it does not promise constants distinct
+addresses.
+A reference to a whole array (`&[T; N]`) keeps the promoted-table path above,
+whose globals are keyed by content, so it can get a separate copy of the bytes
+from a `&T` into the same allocation; Rust does not promise one address across
+uses of a constant. Pointers stored inside the allocation (`&&7`,
+`&&TABLE[2]`) are relocations to the inner allocation's own global or to the
+device static. `*mut T` constants formed with `as` casts from references
+(`&42 as *const u32 as *mut u32`) use the same read-only globals; the storage
+stays read-only. The same per-allocation globals back thin pointer fields of
+tuple, struct, array, and enum constants that point at anonymous memory, and
+the thin-pointer and slice data words of device-static initializers
+(`static S: &[u32] = &[1, 2]`). When the importer cannot prove the pointee's
+device layout byte-identical to rustc's (for example `&Option<u32>`), a
+reference to the whole allocation declares the same global typed as the
+pointee, and lowering validates that layout against the shared bytes, so
+`&Option<u32>` and `&u32` into its payload still compare equal. An interior
+pointer is rejected at compile time when the importer cannot prove the layout
+of the pointee it views. A pointer into shared memory cannot be stored inside
+a constant or a static: a constant or static initializer whose type holds a
+`*const`/`&` to a `SharedArray` or `Barrier` is rejected at compile time (see
+`error_shared_pointer_constant`), and so is a stored pointer that reaches a
+`SharedArray` or `Barrier` static through a type-erasing cast (see
+`error_shared_static_relocation`). Those statics live in per-block shared
+memory and have no initialized global to point at, and every stored pointer
+targets an initialized global. The type check is conservative: a constant
+whose type holds such a pointer is refused whenever it stores any relocated
+pointer, even when the shared-memory pointer itself is null. Slice references
+in `const` items and slice fat-pointer fields of aggregate constants whose data
+word points at anonymous memory remain unsupported and fail at compile time.
+See `promoted_ref_return`.
 
 ## Compiler: Closures
 

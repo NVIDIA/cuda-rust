@@ -25,7 +25,9 @@ ptx = re.sub(r"/\*.*?\*/|//[^\n]*", "", ptx, flags=re.S)
 # carries a `_TID_<hash>` suffix.
 names = ("nested_lane_range", "isize_range_for", "const_generic_bound")
 local_memory = re.compile(r"(?m)(?:^|\s)\.local\b|ld\.local|st\.local")
-for name in names:
+
+
+def entry_body(name):
     header = re.search(r"\.entry\s+" + re.escape(name) + r"(?:_TID_\w+)?\s*\(", ptx)
     if header is None:
         sys.exit(f"error: missing PTX entry {name} in {ptx_path}")
@@ -39,9 +41,21 @@ for name in names:
         end += 1
     if depth:
         sys.exit(f"error: unterminated PTX entry {name}")
-    body = ptx[brace + 1 : end - 1]
-    if local_memory.search(body):
+    return ptx[brace + 1 : end - 1]
+
+
+for name in names:
+    if local_memory.search(entry_body(name)):
         sys.exit(f"error: {name} uses local memory in {ptx_path}")
     print(f"{name}: no local memory PASS")
+
+# A partial `#[unroll(N)]` marks both its main and its remainder loop
+# `nounroll`. When the request is declined, LLVM leaves
+# `partial_block_stride` rolled and unmarked.
+name = "partial_block_stride"
+pragmas = entry_body(name).count('.pragma "nounroll";')
+if pragmas != 2:
+    sys.exit(f"error: {name} has {pragmas} nounroll loops, expected the unroller's 2")
+print(f"{name}: main and remainder loop PASS")
 print("unroll_smoke PTX shape: PASS")
 PY

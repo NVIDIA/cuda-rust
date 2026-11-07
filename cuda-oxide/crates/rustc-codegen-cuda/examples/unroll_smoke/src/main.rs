@@ -20,12 +20,15 @@
 //! `const_generic_bound` is the same nest with every bound written `LANES / 16`
 //! for a const generic `LANES`.
 //! `isize_range_for` covers `a..b`, `(a..b).rev()`, and `#[unroll(4)]` on an
-//! `isize` counter.
+//! `isize` counter. `partial_block_stride` is `#[unroll(4)]` on a loop that
+//! starts at the thread index and steps by the block size.
 //! All are semantics-preserving; the host checks the sums.
 //!
 //! `verify-code-shape.sh` asserts that `nested_lane_range`,
 //! `const_generic_bound`, and `isize_range_for` have no local memory in the
-//! generated PTX. GPU-less CI runs it through
+//! generated PTX, and that the unroller, not LLVM, split
+//! `partial_block_stride` into a main and a remainder loop. GPU-less CI runs
+//! it through
 //! `scripts/smoketest.sh --compile-only`.
 //!
 //! Run: cargo oxide run unroll_smoke
@@ -684,6 +687,25 @@ mod kernels {
         *folded = weighted.wrapping_add(base);
         *partial = sum;
     }
+
+    /// `#[unroll(4)]` on a block-stride loop: the counter starts at the thread
+    /// index and steps by the block size, both only known at runtime. The
+    /// `usize` counter reads and casts `blockDim.x` again on every iteration.
+    /// `out[tid]` sums `input[tid]`, `input[tid + blockDim]`, ... below `n`.
+    #[kernel]
+    pub fn partial_block_stride(input: &[u32], mut out: DisjointSlice<u32>, n: u32) {
+        let Some(out_elem) = out.get_mut(thread::index_1d()) else {
+            return;
+        };
+        let mut sum = 0u32;
+        let mut i = thread::threadIdx_x() as usize;
+        #[unroll(4)]
+        while i < n as usize {
+            sum = sum.wrapping_add(input[i]);
+            i += thread::blockDim_x() as usize;
+        }
+        *out_elem = sum;
+    }
 }
 
 fn main() {
@@ -890,6 +912,39 @@ fn main() {
             d_unrecognized.to_host_vec(&stream).unwrap(),
             vec![28; N],
             "`0..=4` and `(0..10).step_by(3)`"
+        );
+
+        // 9 full strides plus `range_trip` elements: every thread runs two
+        // 4-iteration groups, and the first `range_trip` threads run one more
+        // remainder iteration than the rest
+        let stride_input: Vec<u32> = (0..BLOCK * 10).map(|i| i * 7 + 1).collect();
+        let d_stride_input = DeviceBuffer::from_host(&stream, &stride_input).unwrap();
+        let stride_n = BLOCK * 9 + range_trip;
+        let mut d_stride = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
+        // SAFETY: each thread writes its own element; reads stay below `stride_n`.
+        unsafe {
+            module.partial_block_stride(
+                stream.as_ref(),
+                cfg,
+                &d_stride_input,
+                &mut d_stride,
+                stride_n,
+            )
+        }
+        .expect("launch partial_block_stride");
+        let want_stride: Vec<u32> = (0..N)
+            .map(|tid| {
+                stride_input[..stride_n as usize]
+                    .iter()
+                    .skip(tid)
+                    .step_by(BLOCK as usize)
+                    .fold(0u32, |sum, &x| sum.wrapping_add(x))
+            })
+            .collect();
+        assert_eq!(
+            d_stride.to_host_vec(&stream).unwrap(),
+            want_stride,
+            "block-stride `{stride_n}` elements"
         );
 
         let signed_input: Vec<u32> = (0..64u32).map(|i| i * 7 + 1).collect();

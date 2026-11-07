@@ -22,6 +22,10 @@ run_step \
     cargo test -p cutile-kernels --test smoke
 
 run_step \
+    "fused QKV reference and launch-contract tests (driver-free)" \
+    cargo test -p cutile-examples --example fused_qkv
+
+run_step \
     "example runner accounting tests" \
     bash "$REPO_ROOT/scripts/test_example_runner.sh"
 

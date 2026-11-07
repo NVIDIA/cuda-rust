@@ -16,6 +16,7 @@ pub mod kvbm;
 pub mod moe;
 pub mod norms;
 pub mod nvfp4_moe;
+pub mod qkv;
 
 pub use attention::{
     attention_decode_kernel_grouped, fmha_prefill_gqa_lpt, fmha_prefill_gqa_lpt_split,
@@ -26,3 +27,4 @@ pub use gemm::gemm_f16;
 pub use kvbm::{copy_contiguous_to_stacked_f16, copy_stacked_to_contiguous_f16};
 pub use moe::group_gemm_f16_nt_desc;
 pub use norms::{add_rms_norm_decode_raw_f16, rms_norm_persistent_f16};
+pub use qkv::fused_qkv;

@@ -79,6 +79,39 @@ fn compile_cases_for_target(
 }
 
 #[test]
+fn smoke_compile_fused_qkv() {
+    for (target, version) in [
+        ("sm_90", BytecodeVersion::V13_3),
+        ("sm_100", BytecodeVersion::V13_2),
+        ("sm_120", BytecodeVersion::V13_2),
+        ("sm_100", BytecodeVersion::V13_5),
+    ] {
+        compile_cases_for_target(
+            vec![SmokeCase {
+                name: "fused_qkv",
+                module_ast: cutile_kernels::experimental::qkv::kernels::__module_ast_self,
+                module_name: "kernels",
+                function_name: "fused_qkv",
+                generics: g(&["64", "64", "8"]),
+                strides: vec![
+                    ("x", vec![96, 1]),
+                    ("w", vec![96, 1]),
+                    ("gamma_q", vec![1]),
+                    ("gamma_k", vec![1]),
+                    ("slots", vec![1]),
+                    ("q", vec![512, 1]),
+                    ("k_cache", vec![256, 1]),
+                    ("v_cache", vec![256, 1]),
+                ],
+                grid: Some((2, 1, 1)),
+            }],
+            target,
+            Some(version),
+        );
+    }
+}
+
+#[test]
 fn smoke_compile_argmax_embedding_pointwise_and_norms() {
     compile_cases(vec![
         SmokeCase {

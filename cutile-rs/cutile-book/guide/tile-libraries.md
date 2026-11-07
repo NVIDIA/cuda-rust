@@ -56,10 +56,12 @@ execution test.
 ### Reusable Rust kernels
 
 For Rust implementations of attention, normalization, transformer utilities,
-and NVFP4 MoE, see the
+fused QKV, and NVFP4 MoE, see the
 [`cutile-kernels` catalog](https://github.com/NVIDIA/cuda-rust/blob/main/cutile-rs/cutile-kernels/README.md)
 and the
 [`nvfp4_moe` example](https://github.com/NVIDIA/cuda-rust/blob/main/cutile-rs/cutile-examples/examples/nvfp4_moe.rs).
+The [fused QKV guide](https://github.com/NVIDIA/cuda-rust/blob/main/cutile-rs/cutile-examples/fused_qkv.md)
+describes its correctness example and opt-in benchmark.
 These are Rust source kernels launched from the host. A `.tilelib` supplies
 device functions called from inside a kernel through `#[cutile::foreign]`.
 

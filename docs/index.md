@@ -92,6 +92,9 @@ guides, and reference material. The runtime crates (`cuda-bindings`,
 
 - <a href="cuda-oxide/">cuda-oxide book</a>
 - <a href="cutile/">cutile-rs book</a>
+- [Reusable Tile kernels](https://github.com/NVIDIA/cuda-rust/blob/main/cutile-rs/cutile-kernels/README.md),
+  including fused QKV and NVFP4 MoE, with
+  [runnable examples](https://github.com/NVIDIA/cuda-rust/blob/main/cutile-rs/cutile-examples/README.md)
 
 ## Contributing
 

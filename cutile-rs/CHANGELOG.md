@@ -14,6 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   routing, quantization, FC1/FC2, and finalization kernels now live in the
   reusable corpus and are shared by the example. Peak performance requires
   the CUDA Toolkit 13.5 Tile IR assembler (#1746).
+- Add a reusable fused QKV projection, Q/K RMSNorm, FP8 conversion and paged
+  KV-scatter kernel, with a correctness example and opt-in CUDA graph benchmark
+  sweep. The initial schedule is not B200-tuned (#1746).
+
+### Documentation
+
+- Link the Tile library provider catalog and CUDA Oxide export workflow;
+  refresh kernel/example discovery, workspace paths, CUDA 13.5 setup, and
+  bytecode-version negotiation instructions (#1746).
 
 ## [0.5.0] - 2026-11-04
 

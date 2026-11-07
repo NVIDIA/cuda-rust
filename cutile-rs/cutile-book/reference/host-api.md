@@ -280,9 +280,10 @@ methods:
 | `.generics(values)` | Bind type and const generic arguments manually when they cannot be inferred. |
 
 The JIT compiler resolves `tileiras` in this order: `CUTILE_TILEIRAS_PATH`
-when set, then `$CUDA_TOOLKIT_PATH/bin/tileiras`, then the default CUDA 13.2+
-install directories (`/usr/local/cuda-13.4`, `/usr/local/cuda-13.3`, `/usr/local/cuda-13.2`,
-`/usr/local/cuda-13`, `/usr/local/cuda`), and finally `tileiras` through
+when set, then the toolkit selected by `CUDA_TOOLKIT_PATH` (or `CUDA_HOME`),
+then the default CUDA 13.2+ install directories (`/usr/local/cuda-13.5`,
+`/usr/local/cuda-13.4`, `/usr/local/cuda-13.3`, `/usr/local/cuda-13.2`,
+`/usr/local/cuda-13`, `/usr/local/cuda`, `/opt/cuda`), and finally `tileiras` through
 normal `PATH` lookup. Set `CUTILE_TILEIRAS_PATH` to force a specific binary:
 
 ```bash
@@ -291,7 +292,7 @@ CUTILE_TILEIRAS_PATH=/opt/cuda-tile/bin/tileiras cargo test -p cutile
 
 The selected binary's supported bytecode versions determine emission, not
 the CUDA headers used to build the Rust crates. The default is the highest
-mutually supported version (13.2, 13.3, or 13.4). `CUTILE_BYTECODE_VERSION`
+mutually supported version (13.2 through 13.5). `CUTILE_BYTECODE_VERSION`
 can pin one of those versions, but cannot force a version that the selected
 assembler does not support. Configure these variables before launching;
 already-resolved launch sites retain their toolchain snapshot.

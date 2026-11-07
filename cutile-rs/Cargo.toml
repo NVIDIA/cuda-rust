@@ -91,6 +91,7 @@ cutile-compiler = { path = "cutile-compiler", version = "=0.5.0" }
 cutile-macro = { path = "cutile-macro", version = "=0.5.0" }
 cutile = { path = "cutile", version = "=0.5.0" }
 cutile-ir = { path = "cutile-ir", version = "=0.5.0" }
+cutile-kernels = { path = "cutile-kernels", version = "=0.5.0" }
 
 # Lint policy shared by every workspace crate (`[lints] workspace = true`).
 [workspace.lints.rust]

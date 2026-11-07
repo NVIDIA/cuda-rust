@@ -395,3 +395,14 @@ case.
 
 For the operation-level reference behind this pattern, see
 [Matrix Multiply](../reference/dsl-api.md#matrix-multiply).
+
+## Reusable MoE kernels
+
+For an end-to-end NVFP4 mixture of experts pipeline, see the
+[`cutile-kernels` catalog](https://github.com/NVIDIA/cuda-rust/blob/main/cutile-rs/cutile-kernels/README.md#nvfp4-moe)
+and the
+[`nvfp4_moe` example](https://github.com/NVIDIA/cuda-rust/blob/main/cutile-rs/cutile-examples/README.md).
+The example imports the shared kernels and supplies device routing, allocation,
+numerical validation, and CUDA graph timing. Use CUDA 13.5's Tile IR assembler
+for peak performance; the minimum execution requirements remain Tile IR 13.3
+and a compatible Blackwell GPU.

@@ -609,6 +609,7 @@ dependencies = [
  "cutile",
  "cutile-compiler",
  "cutile-ir",
+ "cutile-kernels",
  "tokio",
 ]
 
@@ -628,6 +629,7 @@ version = "0.5.0"
 dependencies = [
  "cutile",
  "cutile-compiler",
+ "cutile-ir",
 ]
 
 [[package]]

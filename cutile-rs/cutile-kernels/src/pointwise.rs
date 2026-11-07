@@ -102,3 +102,57 @@ pub mod gather_row_f16_module {
 }
 
 pub use gather_row_f16_module::gather_row_f16;
+
+#[cutile::module]
+pub mod add_vec_f16_module {
+    use cutile::core::*;
+
+    /// Elementwise addition of two f16 vectors.
+    #[cutile::entry(print_ir=false,
+                       optimization_hints = (
+                         sm_120 = (occupancy=1, max_divisibility=16,),
+                       ))]
+    fn add_vec_f16<const S: [i32; 1]>(
+        out: &mut Tensor<f16, S>,
+        lhs: &Tensor<f16, { [-1] }>,
+        rhs: &Tensor<f16, { [-1] }>,
+    ) {
+        let lhs_tile = load_tile_like(lhs, out);
+        let rhs_tile = load_tile_like(rhs, out);
+        out.store(lhs_tile + rhs_tile);
+    }
+}
+
+pub use add_vec_f16_module::add_vec_f16;
+
+#[cutile::module]
+pub mod silu_mul_vec_f16_module {
+    use cutile::core::*;
+
+    /// Fused SiLU and multiplication of f16 vectors.
+    #[cutile::entry(print_ir=false,
+                       optimization_hints = (
+                         sm_120 = (occupancy=1, max_divisibility=16,),
+                       ))]
+    fn silu_mul_vec_f16<const S: [i32; 1]>(
+        out: &mut Tensor<f16, S>,
+        gate: &Tensor<f16, { [-1] }>,
+        up: &Tensor<f16, { [-1] }>,
+    ) {
+        let gate_f16 = load_tile_like(gate, out);
+        let up_f16 = load_tile_like(up, out);
+        let gate_f32: Tile<f32, S> = convert_tile(gate_f16);
+        let up_f32: Tile<f32, S> = convert_tile(up_f16);
+        let one: Tile<f32, S> = constant(1.0f32, out.shape());
+        let zero: Tile<f32, S> = constant(0.0f32, out.shape());
+        let neg_gate: Tile<f32, S> = zero - gate_f32;
+        let exp_neg_gate: Tile<f32, S> = exp(neg_gate);
+        let denom: Tile<f32, S> = one + exp_neg_gate;
+        let sigmoid: Tile<f32, S> = true_div(one, denom);
+        let y: Tile<f32, S> = sigmoid * gate_f32 * up_f32;
+        let y_f16: Tile<f16, S> = convert_tile(y);
+        out.store(y_f16);
+    }
+}
+
+pub use silu_mul_vec_f16_module::silu_mul_vec_f16;

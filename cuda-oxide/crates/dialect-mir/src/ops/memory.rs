@@ -414,7 +414,7 @@ impl MirMemcpyOp {
         src: Value,
         count: Value,
     ) -> Result<Ptr<Operation>, Error> {
-        build_mem_transfer::<Self>(ctx, dst, src, count, "mir.memcpy", "memcpy_elem_type")
+        build_mem_op::<Self>(ctx, dst, src, count, "mir.memcpy", "memcpy_elem_type")
     }
 }
 
@@ -429,12 +429,13 @@ impl Verify for MirMemcpyOp {
     }
 }
 
-/// Shared builder for `mir.memcpy` / `mir.memmove`: stamp `elem_type` from
-/// `dst`'s build-time pointer type.
-fn build_mem_transfer<OpT: Op>(
+/// Shared builder for `mir.memcpy` / `mir.memmove` / `mir.memset`, whose
+/// operands are `(dst, src or val, count)`: stamp `elem_type` from `dst`'s
+/// build-time pointer type.
+fn build_mem_op<OpT: Op>(
     ctx: &mut Context,
     dst: Value,
-    src: Value,
+    second: Value,
     count: Value,
     op_name: &str,
     elem_type_key: &str,
@@ -455,7 +456,7 @@ fn build_mem_transfer<OpT: Op>(
         ctx,
         OpT::get_concrete_op_info(),
         vec![],
-        vec![dst, src, count],
+        vec![dst, second, count],
         vec![],
         0,
     );
@@ -561,7 +562,7 @@ impl MirMemmoveOp {
         src: Value,
         count: Value,
     ) -> Result<Ptr<Operation>, Error> {
-        build_mem_transfer::<Self>(ctx, dst, src, count, "mir.memmove", "memmove_elem_type")
+        build_mem_op::<Self>(ctx, dst, src, count, "mir.memmove", "memmove_elem_type")
     }
 }
 
@@ -574,6 +575,97 @@ impl Verify for MirMemmoveOp {
                 .map(|a| a.get_type(ctx)),
             "MirMemmoveOp",
         )
+    }
+}
+
+// ============================================================================
+// MirMemsetOp
+// ============================================================================
+
+/// MIR memset operation.
+///
+/// Sets every byte of `count` elements at `dst` to `val`. Backs
+/// `core::intrinsics::write_bytes` (`ptr::write_bytes`), which `mem::zeroed`,
+/// `MaybeUninit::zeroed` and `<[T]>::fill` reach. Like [`MirMemcpyOp`], the
+/// count is element-count, not byte-count.
+///
+/// # Operands
+///
+/// ```text
+/// | Name    | Type          | Description                       |
+/// |---------|---------------|-----------------------------------|
+/// | `dst`   | MirPtrType    | Destination pointer               |
+/// | `val`   | 8-bit integer | Value written to every byte       |
+/// | `count` | Integer       | Number of pointee elements to set |
+/// ```
+///
+/// # Attributes
+///
+/// Same element-type fact as [`MirMemcpyOp`] (`memset_elem_type`), stamped by [`Self::build`],
+/// read by lowering for the byte count.
+///
+/// # Verification
+///
+/// - Destination operand must be `MirPtrType`.
+/// - The elem-type attribute must be present and equal the destination pointee.
+/// - Value operand must be an 8-bit integer.
+/// - Count operand must be an integer.
+#[pliron_op(
+    name = "mir.memset",
+    format,
+    interfaces = [NOpdsInterface<3>, NResultsInterface<0>],
+    attributes = (memset_elem_type: pliron::builtin::attributes::TypeAttr)
+)]
+pub struct MirMemsetOp;
+
+impl MirMemsetOp {
+    /// Create a new MirMemsetOp wrapper.
+    pub fn new(op: Ptr<Operation>) -> Self {
+        MirMemsetOp { op }
+    }
+
+    /// Build a `mir.memset` with its element-type fact stamped from `dst`.
+    /// See [`MirMemcpyOp::build`].
+    pub fn build(
+        ctx: &mut Context,
+        dst: Value,
+        val: Value,
+        count: Value,
+    ) -> Result<Ptr<Operation>, Error> {
+        build_mem_op::<Self>(ctx, dst, val, count, "mir.memset", "memset_elem_type")
+    }
+}
+
+impl Verify for MirMemsetOp {
+    fn verify(&self, ctx: &Context) -> Result<(), Error> {
+        let elem_type = self.get_attr_memset_elem_type(ctx).map(|a| a.get_type(ctx));
+        let op = &*self.get_operation().deref(ctx);
+        let dst_ty = op.get_operand(0).get_type(ctx);
+        let val_ty = op.get_operand(1).get_type(ctx);
+        let count_ty = op.get_operand(2).get_type(ctx);
+
+        let dst_ty_ref = dst_ty.deref(ctx);
+        let Some(dst_ptr_ty) = dst_ty_ref.downcast_ref::<MirPtrType>() else {
+            return verify_err!(op.loc(), "MirMemsetOp destination must be a MirPtrType");
+        };
+        let Some(elem_type) = elem_type else {
+            return verify_err!(op.loc(), "MirMemsetOp missing elem_type attribute");
+        };
+        if elem_type != dst_ptr_ty.pointee {
+            return verify_err!(op.loc(), "MirMemsetOp elem_type must equal the dst pointee");
+        }
+        if !val_ty
+            .deref(ctx)
+            .downcast_ref::<IntegerType>()
+            .is_some_and(|ty| ty.width() == 8)
+        {
+            return verify_err!(op.loc(), "MirMemsetOp value must be an 8-bit integer");
+        }
+        if count_ty.deref(ctx).downcast_ref::<IntegerType>().is_none() {
+            return verify_err!(op.loc(), "MirMemsetOp count must be an integer");
+        }
+
+        Ok(())
     }
 }
 
@@ -1604,6 +1696,7 @@ pub fn register(ctx: &mut Context) {
     MirStoreOp::register(ctx);
     MirMemcpyOp::register(ctx);
     MirMemmoveOp::register(ctx);
+    MirMemsetOp::register(ctx);
     MirLoadOp::register(ctx);
     MirRefOp::register(ctx);
     MirPtrOffsetOp::register(ctx);

@@ -1,0 +1,24 @@
+[package]
+name = "write_bytes"
+version = "0.1.0"
+edition = "2024"
+authors = ["Vignesh Chaturvedi <vigneshchaturvedi@gmail.com>"]
+license = "Apache-2.0"
+
+# Mark as standalone crate (not part of parent workspace)
+[workspace]
+
+# Exercises ptr::write_bytes, mem::zeroed, MaybeUninit::zeroed and
+# <[T]>::fill, which all call core::intrinsics::write_bytes.
+# Build with:
+#   cargo oxide run write_bytes
+
+[dependencies]
+# Device-side intrinsics (thread indexing, barriers, etc.)
+cuda-device = { path = "../../../cuda-device" }
+
+# Host-side utilities (CudaKernel trait, etc.)
+cuda-host = { path = "../../../cuda-host" }
+
+# Host-side CUDA runtime
+cuda-core = { path = "../../../../../cuda-core" }

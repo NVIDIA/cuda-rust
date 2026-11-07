@@ -2587,6 +2587,101 @@ fn emit_ptr_memmove(
     )
 }
 
+/// Emit `core::intrinsics::write_bytes` (`ptr::write_bytes`) as a `mir.memset`.
+///
+/// rustc's intrinsic argument order is `(dst, val, count)` with `count` in
+/// pointee elements, which is also `mir.memset`'s operand order. Besides
+/// `ptr::write_bytes`, the intrinsic backs `mem::zeroed`,
+/// `MaybeUninit::zeroed` and `<[T]>::fill`: `fill`'s generic body keeps a
+/// `write_bytes` branch for one-byte elements, so every instantiation reaches
+/// it. The intrinsic returns `()`, handled as in `emit_ptr_memmove`.
+#[allow(clippy::too_many_arguments)]
+fn emit_ptr_write_bytes(
+    ctx: &mut Context,
+    body: &mir::Body,
+    args: &[mir::Operand],
+    destination: &mir::Place,
+    target: &Option<usize>,
+    block_ptr: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    value_map: &mut ValueMap,
+    block_map: &[Ptr<BasicBlock>],
+    loc: Location,
+) -> TranslationResult<Ptr<Operation>> {
+    use dialect_mir::ops::{MirConstructTupleOp, MirMemsetOp};
+    use dialect_mir::types::MirTupleType;
+
+    if args.len() != 3 {
+        return input_err!(
+            loc,
+            TranslationErr::unsupported(
+                "ptr::write_bytes intrinsic requires (dst, val, count) operands".to_string()
+            )
+        );
+    }
+
+    let (dst, last) = rvalue::translate_operand(
+        ctx,
+        body,
+        &args[0],
+        value_map,
+        block_ptr,
+        prev_op,
+        loc.clone(),
+    )?;
+    let (val, last) =
+        rvalue::translate_operand(ctx, body, &args[1], value_map, block_ptr, last, loc.clone())?;
+    let (count, last) =
+        rvalue::translate_operand(ctx, body, &args[2], value_map, block_ptr, last, loc.clone())?;
+
+    let (prepared_destination, prepared_last_op) = helpers::prepare_destination_write(
+        ctx,
+        body,
+        destination,
+        value_map,
+        block_ptr,
+        last,
+        loc.clone(),
+    )?;
+
+    // The typed builder stamps the elem_type fact from dst for lowering's
+    // byte count.
+    let memset = MirMemsetOp::build(ctx, dst, val, count)?;
+    memset.deref_mut(ctx).set_loc(loc.clone());
+    match prepared_last_op {
+        Some(p) => memset.insert_after(ctx, p),
+        None => memset.insert_at_front(block_ptr, ctx),
+    }
+
+    // The intrinsic yields `()`; materialize it after the memset and write it
+    // through the destination prepared before the memory operation ran.
+    let unit_ty = MirTupleType::get(ctx, vec![]);
+    let unit_op = Operation::new(
+        ctx,
+        MirConstructTupleOp::get_concrete_op_info(),
+        vec![unit_ty.into()],
+        vec![],
+        vec![],
+        0,
+    );
+    unit_op.deref_mut(ctx).set_loc(loc.clone());
+    unit_op.insert_after(ctx, memset);
+    let unit_val = unit_op.deref(ctx).get_result(0);
+
+    helpers::emit_prepared_result_and_goto(
+        ctx,
+        prepared_destination,
+        unit_val,
+        target,
+        block_ptr,
+        unit_op,
+        value_map,
+        block_map,
+        loc,
+        "ptr::write_bytes intrinsic call without target not supported",
+    )
+}
+
 /// Lower `core::intrinsics::typed_swap_nonoverlapping::<T>(x, y)`, the
 /// primitive behind `core::mem::swap`/`mem::replace`, as load/load/store/store.
 /// The two pointers are guaranteed non-overlapping, so the temp-free crossover
@@ -3049,6 +3144,20 @@ fn try_dispatch_intrinsic(
             block_map,
             loc,
         )?)),
+        "core::intrinsics::write_bytes" | "std::intrinsics::write_bytes" => {
+            Ok(Some(emit_ptr_write_bytes(
+                ctx,
+                body,
+                args,
+                destination,
+                target,
+                block_ptr,
+                prev_op,
+                value_map,
+                block_map,
+                loc,
+            )?))
+        }
         "core::intrinsics::select_unpredictable" | "std::intrinsics::select_unpredictable" => {
             // `select_unpredictable(b, true_val, false_val)` is the
             // compiler-hint form of `if b { true_val } else { false_val }`,

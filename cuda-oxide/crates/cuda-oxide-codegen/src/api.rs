@@ -179,9 +179,11 @@ impl CompileOptions {
     /// Request progress and tool-selection diagnostics.
     ///
     /// Without this, [`Compilation::diagnostics`] still reports the
-    /// toolchain's own selection diagnostics and a final success note, but
-    /// omits per-compilation detail such as which target-selection source won
-    /// or why `opt -O2` was skipped.
+    /// toolchain's own selection diagnostics, a final success note, and a
+    /// warning for each local that stays in local memory because a rolled
+    /// loop with a constant trip count indexes it. It omits per-compilation
+    /// detail such as which target-selection source won, why LLVM optimization
+    /// was skipped, or why any other local stayed in local memory.
     pub fn with_verbose(mut self, verbose: bool) -> Self {
         self.verbose = verbose;
         self
@@ -282,6 +284,17 @@ impl Diagnostic {
             level: DiagnosticLevel::Warning,
             stage,
             message: message.into(),
+        }
+    }
+
+    /// One message from the PTX pipeline's diagnostic list.
+    ///
+    /// The pipeline spells its warnings with a `warning: ` prefix, as the
+    /// command-line backend prints them; everything else it reports is a note.
+    fn from_pipeline(message: String) -> Self {
+        match message.strip_prefix("warning: ") {
+            Some(warning) => Self::warning(CompilationStage::Codegen, warning),
+            None => Self::note(CompilationStage::Codegen, message),
         }
     }
 }
@@ -717,7 +730,7 @@ impl Compiler {
                 generated
                     .diagnostics
                     .into_iter()
-                    .map(|message| Diagnostic::note(CompilationStage::Codegen, message)),
+                    .map(Diagnostic::from_pipeline),
             );
             diagnostics.extend(generated.warnings.into_iter().map(|warning| {
                 let message = match &warning.location {

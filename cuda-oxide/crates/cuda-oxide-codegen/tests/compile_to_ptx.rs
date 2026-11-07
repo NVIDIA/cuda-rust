@@ -282,6 +282,81 @@ awk '
         }
     }
 
+    /// An `opt` that appends a rolled `for e in 0..4 { r[e] = .. }` fill whose
+    /// local `r` stays stack-backed, the shape default builds warn about
+    fn post_opt_rolled_loop_local() -> Self {
+        let guard = FAKE_TOOLS_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let root = unique_test_dir("post_opt_rolled_loop_local");
+        let llc = write_tool(
+            &root,
+            "llc",
+            r#"#!/bin/sh
+if [ "${1:-}" = "--version" ]; then
+  echo "LLVM version 21.0.0"
+  exit 0
+fi
+out=""
+target="sm_80"
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -mcpu=*) target="${1#-mcpu=}" ;;
+    -o) shift; out="$1" ;;
+  esac
+  shift
+done
+printf '.version 8.0\n.target %s\n.address_size 64\n.visible .entry fake() { ret; }\n' "$target" > "$out"
+"#,
+        );
+        let opt = Some(write_tool(
+            &root,
+            "opt",
+            r#"#!/bin/sh
+if [ "${1:-}" = "--version" ]; then
+  echo "LLVM version 21.0.0"
+  exit 0
+fi
+input=""
+out=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) shift; out="$1" ;;
+    -*) ;;
+    *) input="$1" ;;
+  esac
+  shift
+done
+cp "$input" "$out"
+cat >> "$out" <<'IR'
+
+define void @rolled_fill() {
+entry:
+  %__cuda_oxide_local_x340931360972095b6633323b20345d_ = alloca [4 x float], align 4
+  br label %body
+
+body:
+  %e = phi i64 [ 0, %entry ], [ %e.next, %body ]
+  %slot = getelementptr inbounds nuw [4 x i8], ptr %__cuda_oxide_local_x340931360972095b6633323b20345d_, i64 %e
+  store float 1.0, ptr %slot, align 4
+  %e.next = add nuw nsw i64 %e, 1
+  %done = icmp eq i64 %e.next, 4
+  br i1 %done, label %exit, label %body
+
+exit:
+  ret void
+}
+IR
+"#,
+        ));
+        Self {
+            _guard: guard,
+            root,
+            llc,
+            opt,
+        }
+    }
+
     fn failing_llc() -> Self {
         let guard = FAKE_TOOLS_LOCK
             .lock()
@@ -819,6 +894,7 @@ fn verbose_post_opt_local_memory_is_reported() {
         .iter()
         .find(|diagnostic| diagnostic.message.contains("local `scratch`"))
         .expect("verbose optimized build should report the surviving Rust local");
+    assert_eq!(diagnostic.level, DiagnosticLevel::Warning);
     assert!(diagnostic.message.contains("`[u32; 4]`, 16 bytes"));
     assert!(
         diagnostic
@@ -848,6 +924,37 @@ fn quiet_post_opt_local_memory_is_not_reported() {
             .all(|diagnostic| !diagnostic.message.contains("local `scratch`")),
         "local-memory promotion diagnostics are opt-in through verbose mode"
     );
+}
+
+#[test]
+fn rolled_loop_local_is_a_warning_in_default_builds() {
+    let tools = FakeTools::post_opt_rolled_loop_local();
+    let compiler = tools.compiler();
+    let mut module = CodegenModule::new("rolled_loop_local").unwrap();
+    add_empty_function(&mut module, true);
+
+    let compilation = compiler
+        .compile(
+            &mut module,
+            &CompileOptions::new(Target::parse("sm_80").unwrap()),
+        )
+        .unwrap();
+
+    let diagnostic = compilation
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.message.contains("local `r`"))
+        .expect("a rolled loop's counter-indexed local is reported without verbose mode");
+    assert_eq!(diagnostic.level, DiagnosticLevel::Warning);
+    assert_eq!(diagnostic.stage, CompilationStage::Codegen);
+    assert!(
+        diagnostic
+            .message
+            .starts_with("local `r` (`[f32; 4]`, 16 bytes)"),
+        "the level carries the severity, not a `warning: ` prefix: {}",
+        diagnostic.message
+    );
+    assert!(diagnostic.message.contains("add `#[unroll]` to that loop"));
 }
 
 #[test]

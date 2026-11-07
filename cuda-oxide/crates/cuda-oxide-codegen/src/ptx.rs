@@ -685,13 +685,23 @@ fn generate_ptx_impl(
     // actually reach llc. Looking earlier would report slots that LLVM SROA
     // still removes, while full-debug and no-opt builds intentionally retain
     // stack storage and therefore are not meaningful promotion diagnostics.
-    if opts.verbose && optimized.is_some() && !debug_kind.variables_enabled() {
-        match crate::local_memory_diagnostic::diagnose_file(llc_input) {
+    // Default builds report only locals indexed by a rolled loop's counter;
+    // verbose builds report every surviving local.
+    if optimized.is_some() && !debug_kind.variables_enabled() {
+        let reporting = if opts.verbose {
+            crate::local_memory_diagnostic::Reporting::All
+        } else {
+            crate::local_memory_diagnostic::Reporting::LoopCounterIndexOnly
+        };
+        match crate::local_memory_diagnostic::diagnose_file(llc_input, reporting) {
             Ok(local_memory_diagnostics) => {
                 for diagnostic in local_memory_diagnostics {
                     record_diagnostic(&mut diagnostics, diagnostic_sink, diagnostic);
                 }
             }
+            // a default build should not warn about a diagnostic it was only
+            // trying to offer
+            Err(_) if !opts.verbose => {}
             Err(error) => record_diagnostic(
                 &mut diagnostics,
                 diagnostic_sink,

@@ -309,11 +309,22 @@ first.
 
 To bound compile time and memory, one annotation may create at most 1,024 body
 copies, 8,192 cloned basic blocks, and 65,536 cloned operations. A request over
-one of those limits warns and is not unrolled. Every warning about a loop that
-was not unrolled is an ordinary compiler warning that points at the `#[unroll]`
-attribute it refers to: rustc prints its `file:line:column` on a `-->` line and
-underlines it, so a kernel with several annotated loops shows which one was left
-alone.
+one of those limits warns and is not unrolled.
+
+The operation count includes inner loops that were already unrolled, so an
+outer loop around a few fully unrolled inner loops can exceed 65,536
+operations at modest sizes. Left rolled, such a loop usually moves any local
+array it indexes by its counter to `.local` memory. `#[unroll(max_ops = M)]`
+or `#[unroll(N, max_ops = M)]` sets that loop's operation limit to `M` instead.
+The warning for a loop over its operation limit shows the attribute with the
+`M` the loop needs. The copy and block limits stay in force. A larger unroll
+takes longer to compile and produces more code, and the unrolled loop may need
+more registers than the target has, so check the result with `ptxas -v`.
+
+Every warning about a loop that was not unrolled is an ordinary compiler
+warning that points at the `#[unroll]` attribute it refers to: rustc prints its
+`file:line:column` on a `-->` line and underlines it, so a kernel with several
+annotated loops shows which one was left alone.
 
 For the complete kernel-author reference, see {ref}`Loop unrolling <loop-unrolling>`.
 

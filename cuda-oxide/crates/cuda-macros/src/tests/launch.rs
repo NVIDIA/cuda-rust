@@ -485,6 +485,57 @@ fn partial_unroll_factor_must_be_at_least_two() {
 }
 
 #[test]
+fn unroll_max_ops_selects_the_budget_marker() {
+    let func: ItemFn = parse_quote! {
+        fn k<P: Policy>(n: u32) {
+            let mut t = 0u32;
+            #[unroll(max_ops = 200_000)]
+            while t < 32 { t += 1; }
+            #[unroll(4, max_ops = P::MAX_OPS)]
+            for i in 0..n { let _ = i; }
+            #[unroll(2)]
+            for i in 0..n { let _ = i; }
+        }
+    };
+    let out = run_loop_unroll_visitor(func);
+    for marker in [
+        "whilet<32{cuda_device::thread::__unroll_max_ops_config::<{0u32},{200_000}>();",
+        "foriin0..n{cuda_device::thread::__unroll_max_ops_config::<{4},{P::MAX_OPS}>();",
+        "foriin0..n{cuda_device::thread::__unroll_config::<{2}>();",
+    ] {
+        assert!(out.contains(marker), "missing `{marker}`:\n{out}");
+    }
+    assert!(
+        out.contains("[();(P::MAX_OPS)asusize]:"),
+        "a generic budget needs its evaluatability bound:\n{out}"
+    );
+}
+
+#[test]
+fn unroll_max_ops_rejects_malformed_budgets() {
+    for (args, expected) in [
+        ("max_ops = 0", "greater than zero"),
+        ("4, max_ops = 0", "greater than zero"),
+        ("max_ops = 8, max_ops = 9", "more than once"),
+        ("max_ops = 8, 4", "unroll expects"),
+        ("4, 8", "unroll expects"),
+        ("4, max = 8", "the only option is max_ops"),
+        ("1, max_ops = 8", "use #[nounroll]"),
+        ("1025, max_ops = 8", "cannot exceed 1024"),
+        ("never, max_ops = 8", "takes no other arguments"),
+    ] {
+        let message = match syn::parse_str::<UnrollArgs>(args) {
+            Ok(_) => panic!("#[unroll({args})] must be rejected"),
+            Err(err) => err.to_string(),
+        };
+        assert!(
+            message.contains(expected),
+            "#[unroll({args})]: unexpected error: {message}"
+        );
+    }
+}
+
+#[test]
 fn launch_bounds_keeps_policy_expressions_typed() {
     let mut function: ItemFn = parse_quote! {
         fn configured<P: Policy>() {}

@@ -20,12 +20,14 @@
 //! `const_generic_bound` is the same nest with every bound written `LANES / 16`
 //! for a const generic `LANES`.
 //! `isize_range_for` covers `a..b`, `(a..b).rev()`, and `#[unroll(4)]` on an
-//! `isize` counter.
+//! `isize` counter. `partial_low_budget` is a partial request with
+//! `max_ops = 8`, too small a budget for four copies.
 //! All are semantics-preserving; the host checks the sums.
 //!
 //! `verify-code-shape.sh` asserts that `nested_lane_range`,
 //! `const_generic_bound`, and `isize_range_for` have no local memory in the
-//! generated PTX. GPU-less CI runs it through
+//! generated PTX, and that the unroller left `partial_low_budget` alone.
+//! GPU-less CI runs it through
 //! `scripts/smoketest.sh --compile-only`.
 //!
 //! Run: cargo oxide run unroll_smoke
@@ -684,6 +686,26 @@ mod kernels {
         *folded = weighted.wrapping_add(base);
         *partial = sum;
     }
+
+    /// `#[unroll(4, max_ops = 8)]` on a `0..n` loop that `#[unroll(4)]` would
+    /// split into a main and a remainder loop. Four body copies need more than
+    /// 8 cloned operations, so the unroller declines it and says so, which
+    /// shows the per-loop budget reaches the pass. Raising the budget needs a
+    /// loop over the default 65,536 operations, too slow to compile for a
+    /// smoke test; the `mir-transforms` tests cover that direction. The result
+    /// is the sum of `input[..n]`.
+    #[kernel]
+    pub fn partial_low_budget(input: &[u32], mut out: DisjointSlice<u32>, n: u32) {
+        let Some(out_elem) = out.get_mut(thread::index_1d()) else {
+            return;
+        };
+        let mut sum = 0u32;
+        #[unroll(4, max_ops = 8)]
+        for i in 0..n {
+            sum = sum.wrapping_add(input[i as usize]);
+        }
+        *out_elem = sum;
+    }
 }
 
 fn main() {
@@ -894,6 +916,27 @@ fn main() {
 
         let signed_input: Vec<u32> = (0..64u32).map(|i| i * 7 + 1).collect();
         let d_signed_input = DeviceBuffer::from_host(&stream, &signed_input).unwrap();
+        let mut d_low_budget = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
+        // SAFETY: each thread writes its own element; reads stay below `range_trip`.
+        unsafe {
+            module.partial_low_budget(
+                stream.as_ref(),
+                cfg,
+                &d_signed_input,
+                &mut d_low_budget,
+                range_trip,
+            )
+        }
+        .expect("launch partial_low_budget");
+        let want_low_budget = signed_input
+            .iter()
+            .take(range_trip as usize)
+            .fold(0u32, |sum, &x| sum.wrapping_add(x));
+        assert_eq!(
+            d_low_budget.to_host_vec(&stream).unwrap(),
+            vec![want_low_budget; N],
+            "`0..{range_trip}` under `max_ops = 8`"
+        );
         let mut d_signed = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
         let mut d_signed_part = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
         // SAFETY: each thread writes its own element of the buffer; the kernel

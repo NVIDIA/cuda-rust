@@ -263,7 +263,7 @@ This catches mismatches immediately after `mir-importer` translates from rustc, 
 
 ## Attributes
 
-The dialect defines eight domain-specific attribute types (following the pliron best practice of avoiding overloaded `IntegerAttr`), one row per `#[pliron_attr(...)]` in `src/attributes.rs`:
+The dialect defines nine domain-specific attribute types (following the pliron best practice of avoiding overloaded `IntegerAttr`), one row per `#[pliron_attr(...)]` in `src/attributes.rs`:
 
 | Attribute                     | Rust Type                   | Description                                                                                                          |
 |-------------------------------|-----------------------------|----------------------------------------------------------------------------------------------------------------------|
@@ -274,6 +274,7 @@ The dialect defines eight domain-specific attribute types (following the pliron 
 | `mir.variant_index`           | `VariantIndexAttr`          | Enum variant index for `construct_enum`, `enum_payload`                                                              |
 | `mir.fp16_attr`               | `MirFP16Attr`               | IEEE 754 binary16 value for `f16` constants, paired with `MirFP16Type`                                               |
 | `mir.unroll`                  | `UnrollAttr`                | Unroll factor carried by `mir.unroll_hint` -- `0` means full unroll, `n >= 2` means `n` body copies per trip          |
+| `mir.unroll_max_ops`          | `UnrollMaxOpsAttr`          | Optional cloned-operation budget on `mir.unroll_hint`, from `#[unroll(max_ops = M)]`; replaces the default for that loop |
 | `mir.compiler_result_bundle`  | `CompilerResultBundleAttr`  | Marks an aggregate that exists only to adapt a compiler-owned multi-result op to a Rust aggregate return ABI          |
 
 ## Registration

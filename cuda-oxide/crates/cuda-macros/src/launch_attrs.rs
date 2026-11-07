@@ -367,10 +367,15 @@ pub(crate) fn add_launch_bounds_evaluatability_from_attrs(input: &mut ItemFn) ->
 /// Arguments for the `#[unroll]` / `#[unroll(N)]` attribute.
 ///
 /// Bare `#[unroll]` parses to factor `0` (full unroll); `#[unroll(N)]` requires
-/// `N >= 2`.
+/// `N >= 2`. Either form may end with `max_ops = M`, as in
+/// `#[unroll(max_ops = M)]` or `#[unroll(N, max_ops = M)]`, to replace this
+/// loop's cloned-operation budget.
 pub(crate) struct UnrollArgs {
     pub(crate) factor: ConstU32Expr,
+    pub(crate) max_ops: Option<ConstU32Expr>,
 }
+
+const UNROLL_USAGE: &str = "unroll expects no argument (full unroll), one factor, and an optional budget: #[unroll], #[unroll(N)], #[unroll(max_ops = M)] or #[unroll(N, max_ops = M)]";
 
 impl Parse for UnrollArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
@@ -378,6 +383,7 @@ impl Parse for UnrollArgs {
         if input.is_empty() {
             return Ok(UnrollArgs {
                 factor: ConstU32Expr::literal(0),
+                max_ops: None,
             });
         }
 
@@ -388,40 +394,82 @@ impl Parse for UnrollArgs {
                 let _: Ident = input.parse()?;
                 return Ok(UnrollArgs {
                     factor: ConstU32Expr::literal(u32::MAX - 1),
+                    max_ops: None,
                 });
             }
         }
 
+        // `max_ops = M` parses as an assignment expression, so one list covers
+        // both the positional factor and the named budget
         let args: Punctuated<Expr, Token![,]> = Punctuated::parse_terminated(input)?;
-        let mut values = args
-            .into_iter()
-            .map(ConstU32Expr::new)
-            .collect::<syn::Result<Vec<_>>>()?;
+        let mut factor = None;
+        let mut max_ops = None;
+        for arg in args {
+            match arg {
+                Expr::Assign(assign) => {
+                    let is_max_ops = matches!(
+                        assign.left.as_ref(),
+                        Expr::Path(path) if path.path.is_ident("max_ops")
+                    );
+                    if !is_max_ops {
+                        return Err(syn::Error::new_spanned(
+                            &assign.left,
+                            "unknown unroll option; the only option is max_ops = M",
+                        ));
+                    }
+                    if max_ops.is_some() {
+                        return Err(syn::Error::new_spanned(
+                            &assign,
+                            "max_ops is given more than once",
+                        ));
+                    }
+                    let value = ConstU32Expr::new(*assign.right)?;
+                    if value.literal_value == Some(0) {
+                        return Err(syn::Error::new_spanned(
+                            &value.expr,
+                            "max_ops must be greater than zero",
+                        ));
+                    }
+                    max_ops = Some(value);
+                }
+                Expr::Path(path) if path.path.is_ident("never") => {
+                    return Err(syn::Error::new_spanned(
+                        &path,
+                        "#[unroll(never)] takes no other arguments",
+                    ));
+                }
+                expr if factor.is_none() && max_ops.is_none() => {
+                    factor = Some(ConstU32Expr::new(expr)?);
+                }
+                expr => return Err(syn::Error::new_spanned(&expr, UNROLL_USAGE)),
+            }
+        }
 
-        match values.len() {
-            1 => {
-                let factor = values.pop().unwrap();
-                match factor.literal_value {
-                    Some(1) => Err(syn::Error::new_spanned(
+        let factor = match factor {
+            None => ConstU32Expr::literal(0),
+            Some(factor) => match factor.literal_value {
+                Some(1) => {
+                    return Err(syn::Error::new_spanned(
                         &factor.expr,
                         "an unroll factor of 1 does not unroll; use #[nounroll] to keep the loop rolled",
-                    )),
-                    Some(0) => Err(syn::Error::new_spanned(
+                    ));
+                }
+                Some(0) => {
+                    return Err(syn::Error::new_spanned(
                         &factor.expr,
                         "partial unroll factor must be at least 2; use #[unroll] for full unrolling",
-                    )),
-                    Some(value) if value > 1024 => Err(syn::Error::new_spanned(
+                    ));
+                }
+                Some(value) if value > 1024 => {
+                    return Err(syn::Error::new_spanned(
                         &factor.expr,
                         "partial unroll factor cannot exceed 1024",
-                    )),
-                    _ => Ok(UnrollArgs { factor }),
+                    ));
                 }
-            }
-            _ => Err(syn::Error::new(
-                input.span(),
-                "unroll expects no argument (full unroll) or one factor: #[unroll] or #[unroll(N)]",
-            )),
-        }
+                _ => factor,
+            },
+        };
+        Ok(UnrollArgs { factor, max_ops })
     }
 }
 
@@ -443,7 +491,9 @@ impl Parse for UnrollArgs {
 ///    statement of that loop's body block.
 ///
 /// `FACTOR` follows [`UnrollArgs`]: bare `#[unroll]` => `0` (full unroll),
-/// `#[unroll(N)]` => `N`. `#[nounroll]` inserts
+/// `#[unroll(N)]` => `N`. A request with `max_ops = M` inserts
+/// `cuda_device::thread::__unroll_max_ops_config::<FACTOR, M>();` instead, so
+/// markers without a budget keep their existing form. `#[nounroll]` inserts
 /// `cuda_device::thread::__nounroll_config();` instead. The importer reads the
 /// marker from the block it lands in, so the request applies to that loop only.
 /// A loop may carry one of the two requests, not both.
@@ -462,23 +512,26 @@ pub(crate) struct LoopUnrollAttrVisitor {
 
 impl LoopUnrollAttrVisitor {
     /// If `attrs` contains an outer `#[unroll]` / `#[unroll(N)]`, remove it and
-    /// return the parsed factor with the attribute's span. Returns `None` when
-    /// no `unroll` attribute is present (leaving `attrs` untouched). Records a
-    /// parse error and returns `None` if the attribute is malformed.
-    fn take_unroll_factor(
+    /// return the parsed arguments with the attribute's span. Returns `None`
+    /// when no `unroll` attribute is present (leaving `attrs` untouched).
+    /// Records a parse error and returns `None` if the attribute is malformed.
+    fn take_unroll_args(
         &mut self,
         attrs: &mut Vec<syn::Attribute>,
-    ) -> Option<(ConstU32Expr, proc_macro2::Span)> {
+    ) -> Option<(UnrollArgs, proc_macro2::Span)> {
         let idx = attrs
             .iter()
             .position(|attr| attr.path().is_ident("unroll"))?;
         let attr = attrs.remove(idx);
 
         // `#[unroll]` (bare) is `Meta::Path`; `#[unroll(N)]` is `Meta::List`.
-        let factor = match &attr.meta {
-            syn::Meta::Path(_) => ConstU32Expr::literal(0),
+        let args = match &attr.meta {
+            syn::Meta::Path(_) => UnrollArgs {
+                factor: ConstU32Expr::literal(0),
+                max_ops: None,
+            },
             syn::Meta::List(list) => match list.parse_args::<UnrollArgs>() {
-                Ok(parsed) => parsed.factor,
+                Ok(parsed) => parsed,
                 Err(err) => {
                     if self.error.is_none() {
                         self.error = Some(err);
@@ -488,18 +541,17 @@ impl LoopUnrollAttrVisitor {
             },
             syn::Meta::NameValue(_) => {
                 if self.error.is_none() {
-                    self.error = Some(syn::Error::new_spanned(
-                        &attr,
-                        "unroll expects no argument (full unroll) or one factor: #[unroll] or #[unroll(N)]",
-                    ));
+                    self.error = Some(syn::Error::new_spanned(&attr, UNROLL_USAGE));
                 }
                 return None;
             }
         };
-        if factor.literal_value.is_none() {
-            self.const_expressions.push(factor.clone());
+        for value in std::iter::once(&args.factor).chain(&args.max_ops) {
+            if value.literal_value.is_none() {
+                self.const_expressions.push(value.clone());
+            }
         }
-        Some((factor, attr.span()))
+        Some((args, attr.span()))
     }
 
     /// If `attrs` contains an outer `#[nounroll]`, remove it and return its
@@ -525,7 +577,7 @@ impl LoopUnrollAttrVisitor {
     /// marker statement for it. Both on one loop contradict each other, so
     /// that records an error instead of picking one.
     fn take_loop_marker(&mut self, attrs: &mut Vec<syn::Attribute>) -> Option<Stmt> {
-        let unroll = self.take_unroll_factor(attrs);
+        let unroll = self.take_unroll_args(attrs);
         let nounroll = self.take_nounroll(attrs);
         match (unroll, nounroll) {
             (Some(_), Some(span)) => {
@@ -537,12 +589,12 @@ impl LoopUnrollAttrVisitor {
                 }
                 None
             }
-            (Some((factor, span)), None) if factor.literal_value == Some(u32::MAX - 1) => {
+            (Some((args, span)), None) if args.factor.literal_value == Some(u32::MAX - 1) => {
                 Some(syn::parse_quote_spanned! {span=>
                     cuda_device::thread::__nounroll_config();
                 })
             }
-            (Some((factor, span)), None) => Some(Self::marker_stmt(&factor, span)),
+            (Some((args, span)), None) => Some(Self::marker_stmt(&args, span)),
             (None, Some(span)) => Some(syn::parse_quote_spanned! {span=>
                 cuda_device::thread::__nounroll_config();
             }),
@@ -550,17 +602,27 @@ impl LoopUnrollAttrVisitor {
         }
     }
 
-    /// Build the `__unroll_config::<FACTOR>()` marker statement. The call
-    /// carries `span`, the `#[unroll]` attribute's, so diagnostics about the
-    /// loop point at the attribute. The braces around the factor keep the
-    /// macro's own span. On the attribute's span rustc treats them as written
-    /// by the user, and its `unused_braces` lint then reports every literal
-    /// factor with a fix-it that deletes the attribute.
-    fn marker_stmt(factor: &ConstU32Expr, span: proc_macro2::Span) -> Stmt {
-        let expr = &factor.expr;
+    /// Build the `__unroll_config::<FACTOR>()` marker statement, or
+    /// `__unroll_max_ops_config::<FACTOR, MAX_OPS>()` when the request sets a
+    /// budget. The call carries `span`, the `#[unroll]` attribute's, so
+    /// diagnostics about the loop point at the attribute. The braces around
+    /// each argument keep the macro's own span. On the attribute's span rustc
+    /// treats them as written by the user, and its `unused_braces` lint then
+    /// reports every literal argument with a fix-it that deletes the attribute.
+    fn marker_stmt(args: &UnrollArgs, span: proc_macro2::Span) -> Stmt {
+        let expr = &args.factor.expr;
         let factor_arg = quote! { { #expr } };
-        syn::parse_quote_spanned! {span=>
-            cuda_device::thread::__unroll_config::<#factor_arg>();
+        match &args.max_ops {
+            None => syn::parse_quote_spanned! {span=>
+                cuda_device::thread::__unroll_config::<#factor_arg>();
+            },
+            Some(max_ops) => {
+                let expr = &max_ops.expr;
+                let max_ops_arg = quote! { { #expr } };
+                syn::parse_quote_spanned! {span=>
+                    cuda_device::thread::__unroll_max_ops_config::<#factor_arg, #max_ops_arg>();
+                }
+            }
         }
     }
 }

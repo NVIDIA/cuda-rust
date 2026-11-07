@@ -68,6 +68,8 @@ warn and are not unrolled.
 
 One annotation may create at most 1,024 body copies, 8,192 cloned basic blocks,
 and 65,536 cloned operations. Larger requests warn and are not unrolled.
+`#[unroll(max_ops = M)]` or `#[unroll(N, max_ops = M)]` sets the operation limit
+for one loop to `M`.
 
 ### Debug and PTX Macros
 

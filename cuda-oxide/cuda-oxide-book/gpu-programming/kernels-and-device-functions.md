@@ -388,7 +388,29 @@ annotated loops shows which one was left alone.
 
 To keep generated code bounded, one annotation may create at most 1,024 body
 copies, 8,192 cloned basic blocks, and 65,536 cloned operations. A larger
-request warns and is not unrolled. Full variable-debug builds also skip
+request warns and is not unrolled. The operation count includes inner loops
+that were already unrolled, so an outer loop around fully unrolled inner loops
+reaches it sooner than its source suggests. To raise the operation limit for
+one loop, add `max_ops`:
+
+```rust
+#[unroll(max_ops = 200_000)]
+while t < 32 {
+    // fully unrolled inner loops that update acc[t]
+    t += 1;
+}
+
+#[unroll(4, max_ops = 100_000)]
+while i < n {
+    process(i);
+    i += 1;
+}
+```
+
+The warning for a loop over its operation limit shows the attribute with the
+value that loop needs. `max_ops` changes only the operation limit. A larger
+unroll compiles more slowly and can need more registers than the target has,
+so check spills with `ptxas -v`. Full variable-debug builds also skip
 unrolling because they keep loop variables in memory instead of SSA form.
 
 Unrolling trades larger generated code for fewer branches and more

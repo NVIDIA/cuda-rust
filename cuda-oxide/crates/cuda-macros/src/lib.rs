@@ -473,6 +473,13 @@ pub fn cuda_module(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// operations. Factors above 1,024 are rejected; unsupported loop shapes warn
 /// and are not unrolled.
 ///
+/// The operation count includes inner loops that were already unrolled. Add
+/// `max_ops = M` to set one loop's operation limit to `M`, as in
+/// `#[unroll(max_ops = 200_000)]` or `#[unroll(4, max_ops = 100_000)]`. The
+/// warning for a loop over its limit shows the attribute with the value it
+/// needs. `max_ops` must be greater than zero and does not change the copy or
+/// block limits.
+///
 /// # Keeping a loop rolled
 ///
 /// Put `#[nounroll]` on a loop to keep it rolled. ptxas otherwise fully unrolls
@@ -884,8 +891,10 @@ pub fn cooperative_launch(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// and no exit besides the normal header test.
 ///
 /// One annotation may create at most 1,024 body copies, 8,192 cloned basic
-/// blocks, and 65,536 cloned operations. Factors above 1,024 are rejected;
-/// unsupported loop shapes warn and are not unrolled.
+/// blocks, and 65,536 cloned operations; `max_ops = M`, as in
+/// `#[unroll(max_ops = M)]` or `#[unroll(N, max_ops = M)]`, sets one loop's
+/// operation limit. Factors above 1,024 are rejected; unsupported loop shapes
+/// warn and are not unrolled.
 ///
 /// `#[nounroll]` keeps a loop rolled through LLVM, libNVVM, and ptxas, as in
 /// kernels.

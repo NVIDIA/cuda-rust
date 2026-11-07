@@ -34,7 +34,10 @@
 //!
 //! To bound compile time and memory, one request may create at most 1,024 body
 //! copies, 8,192 cloned blocks, and 65,536 cloned operations. Larger requests
-//! warn and are not unrolled.
+//! warn and are not unrolled. A hint with a `max_ops` attribute, written
+//! `#[unroll(max_ops = M)]` or `#[unroll(N, max_ops = M)]`, replaces the
+//! operation limit for its loop, and the over-limit warning names the value
+//! the loop needs.
 //!
 //! If an annotated loop contains another loop, only the annotated loop is
 //! unrolled. The inner loop is copied intact into each body copy and remains a
@@ -100,22 +103,52 @@ const MAX_UNROLL_COPIES: u64 = 1_024;
 /// below [`MAX_UNROLL_COPIES`].
 const MAX_CLONED_BLOCKS: u64 = 8_192;
 
-/// Hard safety limit on the total number of operations cloned by one unroll.
+/// Default limit on the total number of operations cloned by one unroll.
 /// A block budget alone is insufficient because one block may contain an
-/// arbitrarily large straight-line body.
+/// arbitrarily large straight-line body. An annotation's `max_ops` replaces it
+/// for that loop: the count includes inner loops that were already unrolled, so
+/// a legitimate outer loop can exceed it, and a rolled loop that indexes a local
+/// array usually sends the array to `.local` memory.
 const MAX_CLONED_OPS: u64 = 65_536;
 
 fn verbose() -> bool {
     std::env::var("CUDA_OXIDE_VERBOSE").is_ok()
 }
 
-/// How the author spelled the request, for diagnostics: `#[unroll]` (full) or
-/// `#[unroll(N)]` (partial by N).
-fn unroll_kind(factor: u32) -> String {
-    if factor == 0 {
-        "#[unroll]".to_string()
-    } else {
-        format!("#[unroll({factor})]")
+/// One `mir.unroll_hint`'s request: the factor (`0` = full unroll) and the
+/// cloned-operation budget set with `max_ops`, if any.
+#[derive(Clone, Copy, Debug)]
+struct UnrollRequest {
+    factor: u32,
+    max_ops: Option<u32>,
+}
+
+impl UnrollRequest {
+    fn of(ctx: &Context, hint: MirUnrollHintOp) -> Self {
+        Self {
+            factor: hint.factor(ctx),
+            max_ops: hint.max_ops(ctx),
+        }
+    }
+
+    /// How the author spelled the request, for diagnostics: `#[unroll]`
+    /// (full) or `#[unroll(N)]` (partial by N), with any `max_ops`.
+    fn kind(self) -> String {
+        self.spelled(self.max_ops)
+    }
+
+    /// This request's attribute spelled with `max_ops` set to `max_ops`.
+    fn spelled(self, max_ops: Option<u32>) -> String {
+        match (self.factor, max_ops) {
+            (0, None) => "#[unroll]".to_string(),
+            (0, Some(max_ops)) => format!("#[unroll(max_ops = {max_ops})]"),
+            (factor, None) => format!("#[unroll({factor})]"),
+            (factor, Some(max_ops)) => format!("#[unroll({factor}, max_ops = {max_ops})]"),
+        }
+    }
+
+    fn op_budget(self) -> u64 {
+        self.max_ops.map_or(MAX_CLONED_OPS, u64::from)
     }
 }
 
@@ -168,12 +201,12 @@ pub(crate) fn hint_location(ctx: &Context, op: Ptr<Operation>) -> Option<HintLoc
 /// when none of them carries a source position.
 fn take_loop_hints(
     ctx: &Context,
-    hints: &[(Ptr<Operation>, Ptr<BasicBlock>, u32)],
+    hints: &[(Ptr<Operation>, Ptr<BasicBlock>, UnrollRequest)],
     info: &LoopInfo,
     loop_id: usize,
 ) -> Option<HintLocation> {
     let mut location = None;
-    for (op, block, _f) in hints {
+    for (op, block, _request) in hints {
         if info.innermost_loop(*block) == Some(loop_id) {
             location = location.or_else(|| hint_location(ctx, *op));
             op.unlink(ctx);
@@ -192,6 +225,7 @@ fn not_unrolled_warning(kind: &str, reason: &str, location: Option<HintLocation>
 
 /// Check code-growth budgets whose inputs have already been counted safely.
 fn check_growth_budget(
+    request: UnrollRequest,
     copies: u64,
     blocks_per_copy: u64,
     ops_per_copy: u64,
@@ -212,9 +246,22 @@ fn check_growth_budget(
     let total_ops = copies
         .checked_mul(ops_per_copy)
         .ok_or_else(|| "the requested unroll is too large to budget safely".to_string())?;
-    if total_ops > MAX_CLONED_OPS {
+    let op_budget = request.op_budget();
+    if total_ops > op_budget {
+        let limit = match request.max_ops {
+            None => format!("the default limit is {op_budget} cloned operations"),
+            Some(_) => format!("this loop's max_ops limit is {op_budget} cloned operations"),
+        };
+        // name the exact budget that fits; past `u32` no annotation can
+        let raise = match u32::try_from(total_ops) {
+            Ok(needed) => format!(
+                "; to unroll it anyway, write {}",
+                request.spelled(Some(needed))
+            ),
+            Err(_) => String::new(),
+        };
         return Err(format!(
-            "unrolling would clone {total_ops} operations ({copies} copies x {ops_per_copy} operations); the safety limit is {MAX_CLONED_OPS} cloned operations"
+            "unrolling would clone {total_ops} operations ({copies} copies x {ops_per_copy} operations); {limit}{raise}"
         ));
     }
     Ok(())
@@ -223,6 +270,7 @@ fn check_growth_budget(
 /// Count one body copy and check every code-growth budget before cloning.
 fn check_clone_budget(
     ctx: &Context,
+    request: UnrollRequest,
     copies: u64,
     body_blocks: &[Ptr<BasicBlock>],
 ) -> std::result::Result<(), String> {
@@ -236,7 +284,7 @@ fn check_clone_budget(
             .checked_add(block_ops)
             .ok_or_else(|| "the loop body has too many operations to budget safely".to_string())?;
     }
-    check_growth_budget(copies, blocks_per_copy, ops_per_copy)
+    check_growth_budget(request, copies, blocks_per_copy, ops_per_copy)
 }
 
 /// Unroll each loop that carries an in-body `mir.unroll_hint`, which the
@@ -333,21 +381,21 @@ pub fn unroll_annotated_loops(
             // Pick the innermost annotated loop still to do (smallest body wins;
             // in a reducible CFG a container's body is a strict superset of its
             // child's, so "smallest body" is exactly "innermost").
-            let mut best: Option<(usize, usize, u32)> = None; // (loop_id, body_size, factor)
-            for (_op, block, factor) in &hints {
+            let mut best: Option<(usize, usize, UnrollRequest)> = None; // (loop_id, body_size, request)
+            for (_op, block, request) in &hints {
                 if let Some(loop_id) = info.innermost_loop(*block) {
                     let size = info.loops()[loop_id].blocks.len();
                     if best.is_none_or(|(_, bs, _)| size < bs) {
-                        best = Some((loop_id, size, *factor));
+                        best = Some((loop_id, size, *request));
                     }
                 }
             }
-            let Some((loop_id, _size, factor)) = best else {
+            let Some((loop_id, _size, request)) = best else {
                 // No remaining hint sits in a recognizable loop. The author asked
                 // for unrolling, so say so loudly, then drop the markers and stop.
-                for (op, _block, factor) in &hints {
+                for (op, _block, request) in &hints {
                     warnings.push(not_unrolled_warning(
-                        &unroll_kind(*factor),
+                        &request.kind(),
                         "the annotation is not inside a recognizable loop",
                         hint_location(ctx, *op),
                     ));
@@ -355,7 +403,8 @@ pub fn unroll_annotated_loops(
                 }
                 break;
             };
-            let kind = unroll_kind(factor);
+            let kind = request.kind();
+            let factor = request.factor;
 
             let Some(ph) = info.preheader(ctx, region, loop_id) else {
                 // The author asked for unrolling; never silently do nothing.
@@ -469,10 +518,10 @@ pub fn unroll_annotated_loops(
             }
             let outcome = if factor == 0 {
                 // Full unroll: only works when the trip count is a constant.
-                full_unroll(ctx, &info, region, loop_id, ph, &rec)?
+                full_unroll(ctx, &info, region, loop_id, ph, &rec, request)?
             } else {
                 // Partial unroll by `factor`, with a remainder loop for the tail.
-                partial_unroll(ctx, &info, region, loop_id, ph, &rec, factor)?
+                partial_unroll(ctx, &info, region, loop_id, ph, &rec, request)?
             };
             match outcome {
                 UnrollOutcome::Unrolled => {
@@ -1048,6 +1097,7 @@ fn full_unroll(
     id: usize,
     preheader: Ptr<BasicBlock>,
     rec: &induction::LoopRecurrences,
+    request: UnrollRequest,
 ) -> Result<UnrollOutcome> {
     let s = match analyze_shape(ctx, info, region, id, preheader, rec, true) {
         Ok(s) => s,
@@ -1061,7 +1111,7 @@ fn full_unroll(
             ));
         }
     };
-    if let Err(reason) = check_clone_budget(ctx, trip_count, &s.body_blocks_ordered) {
+    if let Err(reason) = check_clone_budget(ctx, request, trip_count, &s.body_blocks_ordered) {
         return Ok(UnrollOutcome::Skipped(reason));
     }
     if !liveouts_are_safe(ctx, &s) {
@@ -1224,8 +1274,9 @@ fn partial_unroll(
     id: usize,
     preheader: Ptr<BasicBlock>,
     rec: &induction::LoopRecurrences,
-    factor: u32,
+    request: UnrollRequest,
 ) -> Result<UnrollOutcome> {
+    let factor = request.factor;
     if factor < 2 {
         return Ok(UnrollOutcome::Skipped(format!(
             "unroll factor {factor} is too small (need 2 or more)"
@@ -1236,7 +1287,8 @@ fn partial_unroll(
         Ok(s) => s,
         Err(why) => return Ok(UnrollOutcome::Skipped(why)),
     };
-    if let Err(reason) = check_clone_budget(ctx, u64::from(factor), &s.body_blocks_ordered) {
+    if let Err(reason) = check_clone_budget(ctx, request, u64::from(factor), &s.body_blocks_ordered)
+    {
         return Ok(UnrollOutcome::Skipped(reason));
     }
     let factor_usize = match usize::try_from(factor) {
@@ -1701,17 +1753,17 @@ pub(crate) fn collect_functions(module: Ptr<Operation>, ctx: &Context) -> Vec<Pt
 }
 
 /// Find the `mir.unroll_hint` ops in `region`, each with the block it sits in
-/// (used to locate the enclosing loop) and its requested factor (0 = full).
+/// (used to locate the enclosing loop) and its request.
 fn collect_hints(
     ctx: &Context,
     region: Ptr<Region>,
-) -> Vec<(Ptr<Operation>, Ptr<BasicBlock>, u32)> {
+) -> Vec<(Ptr<Operation>, Ptr<BasicBlock>, UnrollRequest)> {
     let mut out = Vec::new();
     let blocks: Vec<Ptr<BasicBlock>> = region.deref(ctx).iter(ctx).collect();
     for block in blocks {
         for op in block.deref(ctx).iter(ctx).collect::<Vec<_>>() {
             if let Some(hint) = Operation::get_op::<MirUnrollHintOp>(op, ctx) {
-                out.push((op, block, hint.factor(ctx)));
+                out.push((op, block, UnrollRequest::of(ctx, hint)));
             }
         }
     }
@@ -1723,20 +1775,45 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        MirUnrollHintOp, check_growth_budget, hint_location, not_unrolled_warning, unroll_kind,
+        MirUnrollHintOp, UnrollRequest, check_growth_budget, hint_location, not_unrolled_warning,
     };
     use pliron::combine::stream::position::SourcePosition;
     use pliron::context::Context;
     use pliron::location::{Location, Source};
     use pliron::op::Op;
 
+    fn request(factor: u32, max_ops: Option<u32>) -> UnrollRequest {
+        UnrollRequest { factor, max_ops }
+    }
+
     #[test]
     fn growth_budget_counts_operations_not_only_blocks() {
-        let err = check_growth_budget(1_024, 1, 65).unwrap_err();
+        let err = check_growth_budget(request(0, None), 1_024, 1, 65).unwrap_err();
         assert!(err.contains("65536 cloned operations"));
         assert!(
-            check_growth_budget(1_024, 1, 64).is_ok(),
+            check_growth_budget(request(0, None), 1_024, 1, 64).is_ok(),
             "the exact operation limit remains allowed"
+        );
+    }
+
+    #[test]
+    fn max_ops_replaces_the_operation_budget_and_the_warning_names_it() {
+        let full = check_growth_budget(request(0, None), 32, 1, 4_771).unwrap_err();
+        assert!(
+            full.ends_with("write #[unroll(max_ops = 152672)]"),
+            "{full}"
+        );
+        assert!(check_growth_budget(request(0, Some(152_672)), 32, 1, 4_771).is_ok());
+
+        let partial = check_growth_budget(request(4, Some(100)), 4, 1, 26).unwrap_err();
+        assert!(
+            partial.contains("this loop's max_ops limit is 100")
+                && partial.ends_with("write #[unroll(4, max_ops = 104)]"),
+            "{partial}"
+        );
+        assert!(
+            check_growth_budget(request(4, Some(1_000_000)), 1_025, 1, 1).is_err(),
+            "max_ops does not lift the body-copy limit"
         );
     }
 
@@ -1778,10 +1855,16 @@ mod tests {
                 (Some(file), line as u32, column as u32),
                 "factor={factor}"
             );
-            let warning =
-                not_unrolled_warning(&unroll_kind(factor), reason, Some(location.clone()));
+            let warning = not_unrolled_warning(
+                &request(factor, None).kind(),
+                reason,
+                Some(location.clone()),
+            );
             let case = format!("factor={factor}: {reason}");
-            assert!(warning.message.starts_with(&unroll_kind(factor)), "{case}");
+            assert!(
+                warning.message.starts_with(&request(factor, None).kind()),
+                "{case}"
+            );
             assert!(warning.message.ends_with(reason), "{case}");
             assert_eq!(warning.location, Some(location), "{case}");
             assert_eq!(
@@ -1803,7 +1886,8 @@ mod tests {
         );
 
         let reason = "it has no single preheader (it is entered from more than one place)";
-        let warning = not_unrolled_warning(&unroll_kind(0), reason, hint_location(&ctx, hint));
+        let warning =
+            not_unrolled_warning(&request(0, None).kind(), reason, hint_location(&ctx, hint));
         assert_eq!(warning.location, None);
         assert!(warning.message.ends_with(reason), "{}", warning.message);
     }

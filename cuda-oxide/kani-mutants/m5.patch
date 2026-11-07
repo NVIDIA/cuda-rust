@@ -1,0 +1,18 @@
+Kani mutant m5: Runtime2D get_mut drops the `col >= width` check, so a witness whose
+column is past this slice's width resolves into the next row.
+
+Must be killed by: kani_proofs::p3_cross_slice_no_alias_b1x1, kani_proofs::p3_cross_slice_no_alias_b32x8
+
+diff --git a/cuda-oxide/crates/cuda-device/src/disjoint.rs b/cuda-oxide/crates/cuda-device/src/disjoint.rs
+--- a/cuda-oxide/crates/cuda-device/src/disjoint.rs
++++ b/cuda-oxide/crates/cuda-device/src/disjoint.rs
+@@ -564,9 +564,6 @@
+         // what makes `row * width + col` injective; it also rejects a zero
+         // width. `row` and `col` each fit 32 bits (packed representation) and
+         // `width <= u32::MAX`, so the flat index cannot wrap 64-bit `usize`.
+-        if col >= width {
+-            return None;
+-        }
+         let i = row * width + col;
+         if i < self.len {
+             // SAFETY:

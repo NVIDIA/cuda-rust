@@ -1,0 +1,17 @@
+Kani mutant m7: index_2d_runtime ignores threadIdx.x, so every thread of a
+block row shares the column of the block's first thread.
+
+Must be killed by: kani_proofs::p2_index_2d_runtime_coords, kani_proofs::p1_index_2d_runtime_witnesses_distinct_b32x8
+
+diff --git a/cuda-oxide/crates/cuda-device/src/thread.rs b/cuda-oxide/crates/cuda-device/src/thread.rs
+--- a/cuda-oxide/crates/cuda-device/src/thread.rs
++++ b/cuda-oxide/crates/cuda-device/src/thread.rs
+@@ -752,7 +752,7 @@
+         let col = checked_axis(
+             super::blockIdx_x(),
+             super::blockDim_x(),
+-            super::threadIdx_x(),
++            0,
+         );
+         if row == usize::MAX || col == usize::MAX || col >= row_stride {
+             return None;

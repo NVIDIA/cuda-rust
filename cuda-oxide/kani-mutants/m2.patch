@@ -1,0 +1,17 @@
+Kani mutant m2: index_2d drops the `col >= ROW_STRIDE` rejection, so a column past the
+const row stride wraps into the next row's cells.
+
+Must be killed by: kani_proofs::p1_index_2d_s5_d2_b32x8
+
+diff --git a/cuda-oxide/crates/cuda-device/src/thread.rs b/cuda-oxide/crates/cuda-device/src/thread.rs
+--- a/cuda-oxide/crates/cuda-device/src/thread.rs
++++ b/cuda-oxide/crates/cuda-device/src/thread.rs
+@@ -709,7 +709,7 @@
+             super::blockDim_x(),
+             super::threadIdx_x(),
+         );
+-        if row == usize::MAX || col == usize::MAX || col >= ROW_STRIDE {
++        if row == usize::MAX || col == usize::MAX {
+             return None;
+         }
+         // col < ROW_STRIDE proves a non-zero divisor. Check the complete

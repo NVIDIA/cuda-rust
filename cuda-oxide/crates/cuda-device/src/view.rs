@@ -1640,6 +1640,67 @@ const fn run_bounds_count(bounds: u64) -> u32 {
 mod tests {
     use super::*;
 
+    /// A slice over `buffer` in index space `S`, for host tests.
+    fn slice_over<S: crate::disjoint::SpaceLayout>(
+        buffer: &mut [f32],
+        space: S::Data,
+    ) -> DisjointSlice<'_, f32, S> {
+        // SAFETY: `buffer` is exclusively borrowed for the slice's lifetime,
+        // and these single-threaded tests resolve one witness at a time.
+        unsafe {
+            DisjointSlice::from_raw_parts_with_space(buffer.as_mut_ptr(), buffer.len(), space)
+        }
+    }
+
+    /// Every 32-bit accessor that resolves an element on a non-empty slice
+    /// returns `None` for the same witness on [`DisjointSlice::empty`].
+    #[test]
+    fn empty_slice_rejects_every_32bit_witness() {
+        let mut buffer = [0.0f32; 16];
+
+        let mut flat = slice_over::<Index1D>(&mut buffer, ());
+        assert!(flat.element_thread32(ThreadIndex32::for_test(0)).is_some());
+        let mut empty = DisjointSlice::<f32, Index1D>::empty();
+        assert!(empty.element_thread32(ThreadIndex32::for_test(0)).is_none());
+
+        let mut tiles = slice_over::<LinearTiles<4>>(&mut buffer, ());
+        assert!(tiles.tile_thread32(ThreadIndex32::for_test(0)).is_some());
+        assert!(tiles.thread_run32(ThreadIndex32::for_test(0)).is_some());
+        let mut empty = DisjointSlice::<f32, LinearTiles<4>>::empty();
+        assert!(empty.tile_thread32(ThreadIndex32::for_test(0)).is_none());
+        assert!(empty.thread_run32(ThreadIndex32::for_test(0)).is_none());
+
+        // `grid_stride_runs32` reads the period from the launch geometry, so
+        // build the walk directly with a one-thread period
+        let mut runs = GridStrideRuns32 {
+            slice: &mut tiles,
+            next_tile: 0,
+            period: 1,
+        };
+        assert!(runs.next_run().is_some());
+        let mut runs = GridStrideRuns32 {
+            slice: &mut empty,
+            next_tile: 0,
+            period: 1,
+        };
+        assert!(runs.next_run().is_none());
+
+        let mut grid = slice_over::<RowMajorTiles<1, 1, 4>>(&mut buffer, ());
+        assert!(grid.tile_2d32(ThreadCoord2D32::for_test(0, 0)).is_some());
+        let mut empty = DisjointSlice::<f32, RowMajorTiles<1, 1, 4>>::empty();
+        assert!(empty.tile_2d32(ThreadCoord2D32::for_test(0, 0)).is_none());
+
+        let mut grid = slice_over::<RuntimeRowMajorTiles<1, 1>>(&mut buffer, 4);
+        assert!(grid.tile_2d32_rt(ThreadCoord2D32::for_test(0, 0)).is_some());
+        let mut empty = DisjointSlice::<f32, RuntimeRowMajorTiles<1, 1>>::empty();
+        assert_eq!(empty.row_width(), 0);
+        assert!(
+            empty
+                .tile_2d32_rt(ThreadCoord2D32::for_test(0, 0))
+                .is_none()
+        );
+    }
+
     #[test]
     fn local_indices_reject_invalid_extents_and_offsets() {
         assert!(LocalIndex32::<0>::new(0).is_none());

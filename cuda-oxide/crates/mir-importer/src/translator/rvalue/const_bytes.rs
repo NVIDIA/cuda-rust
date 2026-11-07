@@ -7,8 +7,9 @@
 
 use super::coerce::cast_struct_fields_to_expected_types;
 use super::const_alloc::{
-    translate_array_constant_from_alloc, translate_struct_constant_from_alloc,
-    translate_tuple_constant_from_alloc, validate_array_value_element_type,
+    translate_array_constant_from_alloc, translate_constant_value_from_alloc,
+    translate_struct_constant_from_alloc, translate_tuple_constant_from_alloc,
+    validate_array_value_element_type,
 };
 use super::const_enum::{read_uint_from_bytes, translate_enum_constant_from_bytes};
 use super::promoted::constant_allocation;
@@ -58,7 +59,7 @@ pub(super) fn translate_array_value_constant(
     };
 
     // Bare array values support primitive scalars, enums, initialized unions,
-    // tuples, structs, and nested arrays of those. Struct elements are decoded
+    // tuples, structs, DisjointSlice values, and nested arrays of those. Struct elements are decoded
     // through the existing layout-aware aggregate path while pointer-to-array
     // promotion remains intentionally unchanged; arrays nested inside struct
     // constants have their own layout-aware entry point.
@@ -958,17 +959,35 @@ pub(super) fn constant_storage_size(ctx: &Context, ty_ptr: TypeHandle) -> Option
 /// Provenance-aware aggregate paths use the same predicate to decide whether
 /// they need typed reconstruction instead.
 pub(super) fn constant_type_contains_pointer(ctx: &Context, ty: TypeHandle) -> bool {
+    constant_type_has_leaf(ctx, ty, &|ty_ref| {
+        ty_ref.is::<dialect_mir::types::MirPtrType>()
+            || ty_ref.is::<dialect_mir::types::MirSliceType>()
+            || ty_ref.is::<dialect_mir::types::MirDisjointSliceType>()
+    })
+}
+
+/// Whether a constant-storage type is or contains a `DisjointSlice`.
+pub(super) fn constant_type_contains_disjoint_slice(ctx: &Context, ty: TypeHandle) -> bool {
+    constant_type_has_leaf(ctx, ty, &|ty_ref| {
+        ty_ref.is::<dialect_mir::types::MirDisjointSliceType>()
+    })
+}
+
+/// Whether `ty`, or any type nested in it through arrays, tuples, structs,
+/// enum payloads or union fields, satisfies `is_leaf`.
+fn constant_type_has_leaf(
+    ctx: &Context,
+    ty: TypeHandle,
+    is_leaf: &dyn Fn(&dyn pliron::r#type::Type) -> bool,
+) -> bool {
     let ty_ref = ty.deref(ctx);
-    if ty_ref.is::<dialect_mir::types::MirPtrType>()
-        || ty_ref.is::<dialect_mir::types::MirSliceType>()
-        || ty_ref.is::<dialect_mir::types::MirDisjointSliceType>()
-    {
+    if is_leaf(&*ty_ref) {
         return true;
     }
     if let Some(array) = ty_ref.downcast_ref::<dialect_mir::types::MirArrayType>() {
         let element = array.element_type();
         drop(ty_ref);
-        return constant_type_contains_pointer(ctx, element);
+        return constant_type_has_leaf(ctx, element, is_leaf);
     }
     let children: Vec<TypeHandle> =
         if let Some(tuple) = ty_ref.downcast_ref::<dialect_mir::types::MirTupleType>() {
@@ -985,7 +1004,7 @@ pub(super) fn constant_type_contains_pointer(ctx: &Context, ty: TypeHandle) -> b
     drop(ty_ref);
     children
         .into_iter()
-        .any(|child| constant_type_contains_pointer(ctx, child))
+        .any(|child| constant_type_has_leaf(ctx, child, is_leaf))
 }
 
 /// Translate a struct value from raw bytes plus the Rust type/layout metadata.
@@ -1172,6 +1191,147 @@ fn translate_struct_constant_from_bytes(
     Ok((op.deref(ctx).get_result(0), Some(op)))
 }
 
+/// Build a top-level `DisjointSlice` constant from its allocation.
+///
+/// rustc folds a slice literal whose fields are all constants into one
+/// allocation. `DisjointSlice::empty()` becomes exactly that once inlined: a
+/// dangling address, a zero length and, for a runtime-width index space, a
+/// zero row width. The allocation decoder rejects a slice that carries
+/// provenance, since no safe constructor builds a constant slice pointing
+/// into an allocation, and zeroes the padding after the fields before
+/// [`translate_disjoint_slice_constant_from_bytes`] reads them.
+pub(super) fn translate_disjoint_slice_constant(
+    ctx: &mut Context,
+    constant: &mir::ConstOperand,
+    rust_ty: &rustc_public::ty::Ty,
+    const_ty_ptr: TypeHandle,
+    block_ptr: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    loc: Location,
+) -> TranslationResult<(Value, Option<Ptr<Operation>>)> {
+    let Some(alloc) = constant_allocation(constant) else {
+        return input_err!(
+            loc,
+            TranslationErr::unsupported(format!(
+                "DisjointSlice constant has no byte-backed allocation (constant kind: {:?})",
+                constant.const_.kind()
+            ))
+        );
+    };
+    translate_constant_value_from_alloc(
+        ctx,
+        alloc,
+        0,
+        rust_ty,
+        const_ty_ptr,
+        block_ptr,
+        prev_op,
+        loc,
+    )
+}
+
+/// Build a `DisjointSlice` constant from its memory image.
+///
+/// Each runtime field is decoded from its own byte range at its rustc layout
+/// offset, so the padding after the fields (four bytes after the row width
+/// of a runtime-width slice on a 64-bit target) is never read as a field.
+/// The fields are reassembled with `mir.construct_disjoint_slice`, the op a
+/// slice literal builds, so the result matches the unfolded literal.
+fn translate_disjoint_slice_constant_from_bytes(
+    ctx: &mut Context,
+    rust_ty: &rustc_public::ty::Ty,
+    const_ty_ptr: TypeHandle,
+    bytes: &[u8],
+    block_ptr: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    loc: Location,
+) -> TranslationResult<(Value, Option<Ptr<Operation>>)> {
+    use rustc_public::ty::{RigidTy, TyKind};
+
+    let (adt_def, substs) = match rust_ty.kind() {
+        TyKind::RigidTy(RigidTy::Adt(adt_def, substs)) => (adt_def, substs),
+        other => {
+            return input_err!(
+                loc,
+                TranslationErr::unsupported(format!(
+                    "Expected the DisjointSlice ADT for a slice constant, got {other:?}"
+                ))
+            );
+        }
+    };
+    let layout = rust_ty.layout().map_err(|e| {
+        input_error_noloc!(TranslationErr::unsupported(format!(
+            "Failed to query layout for DisjointSlice constant: {e:?}"
+        )))
+    })?;
+    let rustc_public::abi::FieldsShape::Arbitrary { offsets } = &layout.shape().fields else {
+        return input_err!(
+            loc,
+            TranslationErr::unsupported(format!(
+                "DisjointSlice constant fields use unsupported shape {:?}",
+                layout.shape().fields
+            ))
+        );
+    };
+    let variant = adt_def.variants().into_iter().next().ok_or_else(|| {
+        input_error_noloc!(TranslationErr::unsupported(
+            "DisjointSlice ADT has no variants in metadata"
+        ))
+    })?;
+
+    // the marker fields and a `()` layout are zero-sized and dropped by
+    // `construct_disjoint_slice_aggregate`, so decode only fields with bytes
+    let mut field_values = Vec::new();
+    let mut current_prev_op = prev_op;
+    for (field, offset) in variant.fields().iter().zip(offsets) {
+        let field_rust_ty = field.ty_with_args(&substs);
+        let field_size = rust_type_layout_size(field_rust_ty, loc.clone())?;
+        if field_size == 0 {
+            continue;
+        }
+        let start = offset.bytes();
+        let Some(field_bytes) = bytes.get(start..start + field_size) else {
+            return input_err!(
+                loc,
+                TranslationErr::unsupported(format!(
+                    "DisjointSlice constant field `{}` at {start}..{} lies outside its {} bytes",
+                    field.name,
+                    start + field_size,
+                    bytes.len()
+                ))
+            );
+        };
+        let field_ty = types::translate_type(ctx, &field_rust_ty)?;
+        let (value, new_prev_op) = translate_constant_value_from_bytes(
+            ctx,
+            &field_rust_ty,
+            field_ty,
+            field_bytes,
+            block_ptr,
+            current_prev_op,
+            loc.clone(),
+        )?;
+        field_values.push(value);
+        current_prev_op = new_prev_op;
+    }
+
+    let (op, value, current_prev_op) = super::aggregate::construct_disjoint_slice_aggregate(
+        ctx,
+        const_ty_ptr,
+        &field_values,
+        block_ptr,
+        current_prev_op,
+        loc,
+    )?;
+    let op = op.expect("construct_disjoint_slice_aggregate always builds an op");
+    if let Some(prev) = current_prev_op {
+        op.insert_after(ctx, prev);
+    } else {
+        op.insert_at_front(block_ptr, ctx);
+    }
+    Ok((value, Some(op)))
+}
+
 /// Translate one field-sized byte slice into a constant value.
 pub(super) fn translate_constant_value_from_bytes(
     ctx: &mut Context,
@@ -1198,6 +1358,16 @@ pub(super) fn translate_constant_value_from_bytes(
     // recover a Rust aggregate's active variant or field metadata.
     if ty_ptr.deref(ctx).is::<dialect_mir::types::MirTupleType>() {
         return translate_tuple_constant_from_bytes(
+            ctx, rust_ty, ty_ptr, bytes, block_ptr, prev_op, loc,
+        );
+    }
+    // a slice has its own MIR type rather than a struct, so it needs its own
+    // field decoder, whether it is the whole constant or a field of one
+    if ty_ptr
+        .deref(ctx)
+        .is::<dialect_mir::types::MirDisjointSliceType>()
+    {
+        return translate_disjoint_slice_constant_from_bytes(
             ctx, rust_ty, ty_ptr, bytes, block_ptr, prev_op, loc,
         );
     }

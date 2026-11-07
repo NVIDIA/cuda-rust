@@ -1325,8 +1325,9 @@ pub(super) fn translate_struct_constant_from_alloc(
 /// Element kinds admitted by a bare array value constant
 /// (`translate_array_value_constant`).
 ///
-/// Primitive scalars, enums, initialized unions, tuples, structs, and nested
-/// arrays are supported at this entry point. Nested arrays are walked
+/// Primitive scalars, enums, initialized unions, tuples, structs,
+/// `DisjointSlice` values, and nested arrays are supported at this entry
+/// point. Nested arrays are walked
 /// recursively so an unsupported leaf cannot hide behind nesting. Struct
 /// elements reuse the same layout-aware aggregate decoders used when structs
 /// appear inside other constants. Arrays inside struct or tuple constants are
@@ -1347,6 +1348,7 @@ pub(super) fn validate_array_value_element_type(
             || elem_obj.is::<dialect_mir::types::MirStructType>()
             || elem_obj.is::<dialect_mir::types::MirEnumType>()
             || elem_obj.is::<dialect_mir::types::MirUnionType>()
+            || elem_obj.is::<dialect_mir::types::MirDisjointSliceType>()
         {
             return Ok(());
         }
@@ -1356,7 +1358,7 @@ pub(super) fn validate_array_value_element_type(
                 TranslationErr::unsupported(format!(
                     "Array constant element type is not supported: {:?}. Supported array \
                      constants are primitive scalars, enums, initialized unions, tuples, \
-                     structs, or nested arrays of those.",
+                     structs, DisjointSlice values, or nested arrays of those.",
                     elem_obj
                 ))
             );

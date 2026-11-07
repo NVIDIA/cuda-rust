@@ -14,6 +14,7 @@ Run `cuda-oxide/scripts/check-error-example-status.sh` to verify both are in syn
 | Example                                | Kind                | Fails at                             |
 | :------------------------------------- | :------------------ | :----------------------------------- |
 | `error`                                | diagnostics-fixture | `core::fmt` reachable from device    |
+| `error_disjoint_slice_const_ref`       | diagnostics-fixture | `&` to a constant holding a slice    |
 | `error_enum_bool_payload_addr`         | diagnostics-fixture | `&mut` to a canonical-byte payload   |
 | `error_enum_pointer_overlap`           | support-gap         | Overlaid pointer/integer payload     |
 | `error_enum_shared_pointer_layout`     | support-gap         | Oversized AS3 pointer arrays/vectors |

@@ -4419,6 +4419,113 @@ fn plan_update_selects_advise_setup_or_cache_refresh() {
     assert_eq!(plan_update(false, true), UpdatePlan::RefreshCache);
 }
 
+/// Inside the workspace, setup resolves the context without building and
+/// then builds and publishes the local source. The fixture's backend crate
+/// cannot build, so an eager build during resolution would exit the test
+/// process instead of returning a context
+#[test]
+fn setup_in_the_workspace_builds_the_local_source_after_a_build_free_resolution() {
+    let root = unique_temp_dir("cargo_oxide_setup_workspace");
+    let codegen_crate = root.join("crates/rustc-codegen-cuda");
+    fs::create_dir_all(&codegen_crate).unwrap();
+    fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
+    fs::write(codegen_crate.join("Cargo.toml"), "not a manifest [").unwrap();
+
+    let ctx = setup_context_in(&root.join("crates")).expect("fixture is a workspace");
+    assert!(ctx.is_workspace);
+    assert_eq!(ctx.workspace_root, root);
+    assert_eq!(ctx.codegen_crate, codegen_crate);
+    // an exported `CUDA_OXIDE_BACKEND` wins, as in discovery
+    match std::env::var_os("CUDA_OXIDE_BACKEND") {
+        Some(env_backend) => assert_eq!(ctx.backend_so, PathBuf::from(env_backend)),
+        None => assert!(
+            ctx.backend_so.starts_with(codegen_crate.join("target")),
+            "{}",
+            ctx.backend_so.display()
+        ),
+    }
+    assert!(!codegen_crate.join("target").exists());
+
+    // a pin outranks the cache for other projects, but publishing the local
+    // build is still what setup is for inside the workspace
+    for backend_env in [None, Some("/tmp/env-backend.so".into())] {
+        assert_eq!(
+            plan_setup_with_env(&ctx, backend_env),
+            SetupPlan::BuildAndPublish {
+                codegen_crate: codegen_crate.clone()
+            }
+        );
+    }
+
+    fs::remove_dir_all(&root).unwrap();
+}
+
+/// Outside the workspace `codegen_crate` is the user's project, and building
+/// it as the backend fails (#1688). Setup rebuilds from the project's
+/// cuda-oxide dependency through `update`'s refresh instead, and resolution
+/// must not build first or a cold cache builds twice. The fixture pins a
+/// backend that does not exist, which eager resolution exits on
+#[test]
+fn setup_outside_the_workspace_refreshes_from_the_dependency_after_a_build_free_resolution() {
+    let root = unique_temp_dir("cargo_oxide_setup_standalone");
+    fs::create_dir_all(root.join(".cargo")).unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join(".cargo/cuda-oxide.toml"),
+        "backend = \"missing/librustc_codegen_cuda.so\"\n",
+    )
+    .unwrap();
+    let pinned = root.join(".cargo/missing/librustc_codegen_cuda.so");
+
+    let mut ctx = setup_context_in(&root).expect("fixture is a standalone project");
+    assert!(!ctx.is_workspace);
+    assert_eq!(ctx.workspace_root, root);
+    assert_eq!(ctx.config.backend.as_deref(), Some(pinned.as_path()));
+    // an exported `CUDA_OXIDE_BACKEND` wins, as in discovery
+    let expected = std::env::var_os("CUDA_OXIDE_BACKEND")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| pinned.clone());
+    assert_eq!(ctx.backend_so, expected);
+    // the fixture's pin must stay missing, or eager resolution would not exit
+    assert!(!pinned.exists(), "{}", pinned.display());
+
+    // a pinned backend outranks the cache the refresh would rebuild
+    let SetupPlan::RefusePinned(refusal) = plan_setup_with_env(&ctx, None) else {
+        panic!("a config pin must refuse standalone setup");
+    };
+    assert!(refusal.contains("`cargo oxide setup`"), "{refusal}");
+    assert!(refusal.contains(&pinned.display().to_string()), "{refusal}");
+    let SetupPlan::RefusePinned(refusal) =
+        plan_setup_with_env(&ctx, Some("/tmp/env-backend.so".into()))
+    else {
+        panic!("an exported CUDA_OXIDE_BACKEND must refuse standalone setup");
+    };
+    assert!(refusal.contains("CUDA_OXIDE_BACKEND is set"), "{refusal}");
+
+    ctx.config.backend = None;
+    assert_eq!(
+        plan_setup_with_env(&ctx, None),
+        SetupPlan::RefreshFromDependency {
+            project_dir: root.clone()
+        }
+    );
+
+    // the project directory is the refresh input, never `codegen_crate`
+    let unpinned = test_context(OxideConfig::default());
+    assert_eq!(
+        plan_setup_with_env(&unpinned, None),
+        SetupPlan::RefreshFromDependency {
+            project_dir: unpinned.workspace_root.clone()
+        }
+    );
+
+    fs::remove_dir_all(&root).unwrap();
+}
+
 /// A `.cargo/cuda-oxide.toml` backend pin outranks the shared cache, so
 /// `update` must refuse just like it does for `CUDA_OXIDE_BACKEND`.
 #[test]
@@ -4431,15 +4538,15 @@ fn update_refuses_when_the_config_pins_a_backend() {
     // the real one would let an exported value produce the env refusal for
     // both inputs, including the unpinned case asserted to be `None`.
     let refusal =
-        update_pin_refusal_with_env(&pinned, None).expect("config pin must refuse update");
+        pin_refusal_with_env("update", &pinned, None).expect("config pin must refuse update");
     assert!(refusal.contains("pins the backend"), "{refusal}");
     assert!(refusal.contains("/tmp/pinned-backend.so"), "{refusal}");
 
     let unpinned = test_context(OxideConfig::default());
-    assert_eq!(update_pin_refusal_with_env(&unpinned, None), None);
+    assert_eq!(pin_refusal_with_env("update", &unpinned, None), None);
 
     // The env var outranks the project pin: set, it refuses even unpinned.
-    let from_env = update_pin_refusal_with_env(&unpinned, Some("/tmp/env-backend.so".into()))
+    let from_env = pin_refusal_with_env("update", &unpinned, Some("/tmp/env-backend.so".into()))
         .expect("exported CUDA_OXIDE_BACKEND must refuse update");
     assert!(from_env.contains("CUDA_OXIDE_BACKEND is set"), "{from_env}");
 }

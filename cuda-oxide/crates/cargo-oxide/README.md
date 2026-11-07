@@ -484,6 +484,10 @@ anyway).
 
 Explicitly builds (or rebuilds) the codegen backend. Normally this happens automatically on every `run`/`build`/`pipeline` command, but `setup` is useful after pulling new changes or for CI.
 
+Inside the cuda-oxide workspace, `setup` builds the local backend source and publishes it to the shared cache (`~/.cargo/cuda-oxide/`).
+
+In a project outside the workspace, `setup` does the same as `cargo oxide update`: it rebuilds the backend from the commit the project's cuda-oxide dependency resolves to. A path dependency builds in place and leaves the shared cache alone; otherwise `setup` clears the shared cache and rebuilds it, from a `main` clone when the project has no cuda-oxide dependency (see [Backend Discovery](#backend-discovery)). Like `update`, it refuses while `CUDA_OXIDE_BACKEND` or a `.cargo/cuda-oxide.toml` `backend` entry pins the backend, because the pin outranks the cache it would rebuild.
+
 ### `cargo oxide update [--force]`
 
 Rebuilds the shared codegen backend cache used by projects outside this
@@ -492,7 +496,8 @@ dependency resolves to (see [Backend Discovery](#backend-discovery)). You
 rarely need it: a changed dependency rebuilds the cache on the next build by
 itself. Inside the cuda-oxide workspace the local source tree is
 authoritative, so the default path prints how to run `cargo oxide setup`;
-pass `--force` to run setup from this command.
+pass `--force` to run setup from this command. Outside the workspace,
+`cargo oxide setup` performs the same refresh.
 
 ```bash
 cargo oxide update

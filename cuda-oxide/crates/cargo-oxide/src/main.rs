@@ -1203,7 +1203,9 @@ fn main() {
             commands::doctor(&ctx);
         }
         Commands::Setup => {
-            let ctx = commands::resolve_context();
+            // setup builds the backend itself; eager resolution would build
+            // it first, twice on a standalone project's cold cache (#1688)
+            let ctx = commands::resolve_setup_context();
             commands::setup(&ctx);
         }
         Commands::Update { force } => {

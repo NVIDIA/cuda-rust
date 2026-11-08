@@ -222,6 +222,19 @@ pub fn new_device_context(
     })
 }
 
+/// Reject duplicate registrations before creating streams or replacing live state.
+fn insert_device_context_once<T>(
+    hashmap: &mut HashMap<usize, T>,
+    device_id: usize,
+    create: impl FnOnce() -> Result<T, DeviceError>,
+) -> Result<(), DeviceError> {
+    if hashmap.contains_key(&device_id) {
+        return Err(device_error(device_id, "Context is already initialized."));
+    }
+    hashmap.insert(device_id, create()?);
+    Ok(())
+}
+
 /// Add a device with a specific scheduling policy to the context map.
 ///
 /// # Example: Using 8 streams instead of the default 4
@@ -241,26 +254,24 @@ pub fn init_device(
     device_id: usize,
     policy: Arc<dyn SchedulingPolicy>,
 ) -> Result<(), DeviceError> {
-    let device_context = new_device_context(device_id, policy)?;
-    let pred = hashmap.insert(device_id, device_context).is_none();
-    device_assert(device_id, pred, "Context is already initialized.")
+    insert_device_context_once(hashmap, device_id, || new_device_context(device_id, policy))
 }
 
 pub fn init_with_default_policy(
     hashmap: &mut HashMap<usize, AsyncDeviceContext>,
     device_id: usize,
 ) -> Result<(), DeviceError> {
-    let device = get_or_init_device(device_id)?;
-    let policy = StreamPoolRoundRobin::new(&device, DEFAULT_ROUND_ROBIN_STREAM_POOL_SIZE)?;
-    let deallocator_stream = device.new_stream()?;
-    let device_context = AsyncDeviceContext {
-        device_id,
-        deallocator_stream,
-        policy: Arc::new(policy),
-        pool: None,
-    };
-    let pred = hashmap.insert(device_id, device_context).is_none();
-    device_assert(device_id, pred, "Context is already initialized.")
+    insert_device_context_once(hashmap, device_id, || {
+        let device = get_or_init_device(device_id)?;
+        let policy = StreamPoolRoundRobin::new(&device, DEFAULT_ROUND_ROBIN_STREAM_POOL_SIZE)?;
+        let deallocator_stream = device.new_stream()?;
+        Ok(AsyncDeviceContext {
+            device_id,
+            deallocator_stream,
+            policy: Arc::new(policy),
+            pool: None,
+        })
+    })
 }
 
 /// Holds the thread's context map while a closure runs against it, and puts it
@@ -550,6 +561,28 @@ mod context_map_tests {
 
     fn on_fresh_thread<F: FnOnce() + Send + 'static>(f: F) {
         std::thread::spawn(f).join().expect("test thread panicked");
+    }
+
+    #[test]
+    fn duplicate_device_registration_preserves_entry() {
+        let mut map = HashMap::from([(3, "existing")]);
+        let err = insert_device_context_once(&mut map, 3, || -> Result<&str, DeviceError> {
+            panic!("duplicate must not create a replacement")
+        })
+        .unwrap_err();
+        assert!(matches!(err, DeviceError::Context { device_id: 3, .. }));
+        assert_eq!(map.get(&3), Some(&"existing"));
+    }
+
+    #[test]
+    fn failed_device_registration_does_not_insert() {
+        let mut map = HashMap::<usize, usize>::new();
+        let result = insert_device_context_once(&mut map, 7, || Err(device_error(7, "failed")));
+        assert!(result.is_err());
+        assert!(map.is_empty());
+
+        insert_device_context_once(&mut map, 7, || Ok(42)).unwrap();
+        assert_eq!(map.get(&7), Some(&42));
     }
 
     /// A second `init_device_contexts` is rejected *and* the first map stays

@@ -71,9 +71,9 @@
 
 use crate::error::{TranslationErr, TranslationResult};
 use crate::translator::values::{ValueMap, establish_declared_pointer_type};
-use crate::translator::{rvalue, types};
+use crate::translator::{facts, rvalue, types};
 use dialect_mir::attributes::MirPointerKindAuthorityAttr;
-use dialect_mir::ops::MirCallOp;
+use dialect_mir::ops::{MirCallOp, MirRefOp};
 use pliron::basic_block::BasicBlock;
 use pliron::context::{Context, Ptr};
 use pliron::identifier::Legaliser;
@@ -214,10 +214,19 @@ pub(super) fn emit_drop_glue(
     // to the value being dropped). We obtain this by taking the address of
     // the dropped place.
     //
-    // For a simple local `_N`, this is just the alloca slot pointer.
-    // For a projected place like `_N.field`, we compute the field address.
-    let (place_ptr, last_op) =
-        compute_drop_place_address(ctx, body, place, value_map, block_ptr, prev_op, loc.clone())?;
+    // A slot-backed local `_N` uses its original alloca address. A bare ZST
+    // without a slot needs a temporary address; projected places such as
+    // `_N.field` still use the original field address.
+    let (place_ptr, last_op) = compute_drop_place_address(
+        ctx,
+        body,
+        place,
+        &declared_parameter.ty,
+        value_map,
+        block_ptr,
+        prev_op,
+        loc.clone(),
+    )?;
     let (place_ptr, last_op) = establish_declared_pointer_type(
         ctx,
         place_ptr,
@@ -280,14 +289,16 @@ pub(super) fn emit_drop_glue(
 
 /// Computes the in-memory address of the place being dropped.
 ///
-/// `drop_in_place::<T>` expects a `*mut T` argument. For a bare local `_N`
-/// this is just the local's alloca slot (which is already a pointer). For a
-/// projected place (`_N.field`, `(*_N)`, etc.) we walk the projection chain
-/// via `translate_place_address`.
+/// Prefer the original storage address, using `translate_place_address` for
+/// projected places and the existing alloca slot for slot-backed locals.
+/// A bare, slot-less local is materialized only if rustc proves it is a sized
+/// ZST. `drop_param_ty` supplies the shim's declared pointer kind; `mir.ref`
+/// lowering preserves the referent's ABI alignment for the temporary address.
 fn compute_drop_place_address(
     ctx: &mut Context,
     body: &mir::Body,
     place: &mir::Place,
+    drop_param_ty: &Ty,
     value_map: &ValueMap,
     block_ptr: Ptr<BasicBlock>,
     prev_op: Option<Ptr<Operation>>,
@@ -313,6 +324,68 @@ fn compute_drop_place_address(
         && let Some(slot) = value_map.get_slot(place.local)
     {
         return Ok((slot, prev_op));
+    }
+
+    // An effectful drop of an unprojected ZST still needs a valid pointer.
+    // Some ZST locals have no alloca slot. Materialize a temporary through
+    // the same value and mir.ref machinery used for ZST borrows; its lowering
+    // supplies a non-null address with the referent's ABI alignment.
+    //
+    // A missing slot alone is NOT evidence that a local is zero-sized.
+    // Unsupported non-ZST locals and projections must still fail closed.
+    if place.projection.is_empty() {
+        let rust_ty = &body.locals()[place.local].ty;
+        if rust_ty
+            .layout()
+            .is_ok_and(|layout| layout.shape().is_sized() && layout.shape().size.bytes() == 0)
+        {
+            let (value, last_op) = rvalue::translate_place(
+                ctx,
+                body,
+                place,
+                value_map,
+                block_ptr,
+                prev_op,
+                loc.clone(),
+            )?;
+
+            // The shim's rustc signature determines its pointer kind.
+            let (_, origin) = facts::pointer_origin_of_ty(drop_param_ty).ok_or_else(|| {
+                input_error!(
+                    loc.clone(),
+                    TranslationErr::unsupported("drop glue: invalid pointer parameter".to_string())
+                )
+            })?;
+
+            let authority = if origin.is_reference() {
+                MirPointerKindAuthorityAttr::Reborrow
+            } else {
+                MirPointerKindAuthorityAttr::RawAddress
+            };
+
+            let ptr_ty = facts::mint_generic_ptr_type(ctx, value.get_type(ctx), origin);
+
+            let ref_op = Operation::new(
+                ctx,
+                MirRefOp::get_concrete_op_info(),
+                vec![ptr_ty.into()],
+                vec![value],
+                vec![],
+                0,
+            );
+            ref_op.deref_mut(ctx).set_loc(loc);
+
+            let mir_ref = MirRefOp::new(ref_op);
+            mir_ref.set_mutable(ctx, origin.is_mutable());
+            mir_ref.set_pointer_kind_authority(ctx, authority);
+
+            match last_op {
+                Some(last) => ref_op.insert_after(ctx, last),
+                None => ref_op.insert_at_front(block_ptr, ctx),
+            }
+
+            return Ok((ref_op.deref(ctx).get_result(0), Some(ref_op)));
+        }
     }
 
     Err(input_error!(

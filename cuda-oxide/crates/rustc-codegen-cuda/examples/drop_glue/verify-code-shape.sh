@@ -4,7 +4,7 @@
 
 # The device-side drop no-op proof may erase a destructor call only when the
 # glue is effect-free and returns. Assert the importer's decision in the
-# pre-opt drop_glue.ll: the two diverging probes keep a call to their drop
+# pre-opt drop_glue.ll: the five diverging probes keep a call to their drop
 # glue in the kernel body, and the reconverging control has none. Then check
 # what LLVM made of it in the optimized PTX, so a regression in either
 # direction cannot pass compile-only CI.
@@ -107,7 +107,7 @@ def require_store(body, value, name, label="pre-drop"):
 # own MIR. The drop_glue.ll assertion is the one that tracks the importer's
 # own decision; this check confirms what LLVM made of the call it kept.
 def require_nonreturning_loop(body, after_store, name):
-    # Both optimized probes lower to a store followed by an unconditional
+    # The optimized probes lower to a store followed by an unconditional
     # self-loop. Tie the loop to that store's continuation: an unrelated
     # loop elsewhere in the entry would not prove the drop was preserved.
     pattern = r"\s*([\w$.]+):\s*bra(?:\.uni)?\s+\1\s*;"
@@ -126,6 +126,9 @@ def reject_store(body, value, name):
 diverging = (
     ("diverging_cfg_drop_probe", "LoopingDrop", 0x11111111, 0x22222222),
     ("diverging_recursive_drop_probe", "RecursiveDrop", 0x33333333, 0x44444444),
+    ("zst_drop_probe", "ZstDrop", 0x11111111, 0x22222222),
+    ("wrapped_zst_drop_probe", "WrappedZstDrop", 0x44441111, 0x44442222),
+    ("aligned_zst_drop_probe", "AlignedZstDrop", 0x77771111, 0x77772222),
 )
 
 for name, type_name, before, after in diverging:
@@ -138,6 +141,69 @@ for name, type_name, before, after in diverging:
         f"{name}: drop_glue::<{type_name}> call kept in drop_glue.ll, "
         "pre-drop store followed by non-returning self-loop in drop_glue.ptx PASS"
     )
+
+
+# The aligned ZST needs an actual 64-byte-aligned address, not merely
+# a correctly typed pointer or an unrelated aligned allocation.
+def require_aligned_zst_drop_address():
+    """Require a 64-byte-aligned address as the aligned guard's drop argument.
+    Follow pointer-preserving operations, not unrelated aligned allocations.
+    """
+    body = kernel_body("aligned_zst_drop_probe")
+
+    allocations = re.findall(
+        r"(?m)^\s*(%[\w.$-]+)\s*=\s*alloca\s+\{\s*\}\s*,\s*align\s+(\d+)\b",
+        body,
+    )
+    aligned = {
+        name for name, align in allocations
+        if int(align) >= 64
+    }
+    if not aligned:
+        raise SystemExit(
+            "error: aligned ZST has no 64-byte-aligned alloca"
+        )
+
+    # Follow only pointer-preserving SSA operations. Do not accept arbitrary
+    # pointer arithmetic as evidence that alignment was preserved.
+    for _ in range(len(body.splitlines())):
+        changed = False
+        for line in body.splitlines():
+            m = re.match(
+                r"\s*(%[\w.$-]+)\s*=\s*(?:bitcast|addrspacecast|freeze)\b(.*)",
+                line,
+            )
+            if not m or m.group(1) in aligned:
+                continue
+            sources = set(re.findall(r"%[\w.$-]+", m.group(2)))
+            if sources & aligned:
+                aligned.add(m.group(1))
+                changed = True
+        if not changed:
+            break
+
+    calls = [
+        line for line in body.splitlines()
+        if re.search(
+            r"call void @\S*drop_glue\d+AlignedZstDrop\S*\(",
+            line,
+        )
+    ]
+    if len(calls) != 1:
+        raise SystemExit(
+            "error: expected exactly one AlignedZstDrop glue call"
+        )
+
+    operands = set(re.findall(r"%[\w.$-]+", calls[0]))
+    if not operands & aligned:
+        raise SystemExit(
+            "error: AlignedZstDrop glue call is not proven to use "
+            "the 64-byte-aligned allocation"
+        )
+
+    print("aligned_zst_drop_probe: aligned drop address PASS")
+
+require_aligned_zst_drop_address()
 
 # Precision control: an effect-free destructor whose branches join back
 # together must still be proven a no-op, so no glue call may appear in the

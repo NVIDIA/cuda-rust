@@ -15,6 +15,9 @@
 //! - `MaybeUninit::write` + `assume_init_drop`
 //! - `MaybeUninit::assume_init_read`
 //!
+//! Compile-only probes also cover non-returning destructors and aligned drop
+//! addresses for zero-sized guards. `main` never launches those probes.
+//!
 //! Usage:
 //!   cargo oxide run drop_glue
 //!
@@ -92,9 +95,125 @@ impl Drop for DiamondDrop {
     }
 }
 
+/// Zero-byte guard whose destructor intentionally never returns.
+/// Exercises drop address materialization for a local without a storage slot.
+struct ZstDrop;
+
+impl Drop for ZstDrop {
+    /// Makes this drop non-erasable by intentionally never returning.
+    /// The compile-only probe must not reach its post-drop store.
+    #[allow(clippy::empty_loop)]
+    fn drop(&mut self) {
+        loop {}
+    }
+}
+
+/// Zero-byte guard with a 64-byte ABI alignment requirement.
+/// Its drop address must stay aligned even though the guard owns no bytes.
+#[repr(align(64))]
+struct AlignedZstDrop;
+
+impl Drop for AlignedZstDrop {
+    /// Keeps the aligned guard's drop non-erasable through nontermination.
+    /// This method is compiled for the probe but must never be executed.
+    #[allow(clippy::empty_loop)]
+    fn drop(&mut self) {
+        loop {}
+    }
+}
+
+/// Zero-byte wrapper with a field in its source-level type.
+/// Uses the existing slot-backed address path as a regression control.
+struct WrappedZstDrop(
+    /// Zero-byte payload that distinguishes this wrapper from a unit struct.
+    /// It contributes no bytes to the enclosing guard's Rust layout.
+    (),
+);
+
+impl Drop for WrappedZstDrop {
+    /// Prevents the wrapper's drop from being classified as a no-op.
+    /// Only the compiled output is inspected; the method never returns.
+    #[allow(clippy::empty_loop)]
+    fn drop(&mut self) {
+        loop {}
+    }
+}
+
 #[cuda_module]
 mod kernels {
     use super::*;
+
+    /// Compile-only probe for dropping a slot-less zero-sized local.
+    /// Only thread zero accesses `out`, which must cover at least one `u32`.
+    /// Never launch this kernel: its destructor intentionally never returns.
+    #[kernel]
+    pub fn zst_drop_probe(mut out: DisjointSlice<u32>) {
+        if thread::index_1d().get() != 0 {
+            return;
+        }
+
+        // SAFETY: the launch contract requires one output element, and only
+        // thread zero reaches these writes. This probe is never launched.
+        unsafe {
+            let slot = out.as_mut_ptr();
+            slot.write(0x1111_1111);
+
+            {
+                let _guard = ZstDrop;
+            }
+
+            // Unreachable: ZstDrop::drop never returns.
+            slot.write(0x2222_2222);
+        }
+    }
+
+    /// Compile-only probe for a zero-byte guard requiring 64-byte alignment.
+    /// Only thread zero accesses `out`, which must cover at least one `u32`.
+    /// Never launch this kernel: its destructor intentionally never returns.
+    #[kernel]
+    pub fn aligned_zst_drop_probe(mut out: DisjointSlice<u32>) {
+        if thread::index_1d().get() != 0 {
+            return;
+        }
+
+        // SAFETY: the launch contract requires one output element, and only
+        // thread zero reaches these writes. This probe is never launched.
+        unsafe {
+            let slot = out.as_mut_ptr();
+            slot.write(0x7777_1111);
+
+            {
+                let _guard = AlignedZstDrop;
+            }
+
+            // Unreachable: AlignedZstDrop::drop never returns.
+            slot.write(0x7777_2222);
+        }
+    }
+
+    /// Compile-only control for a zero-sized guard with an existing slot.
+    /// Only thread zero accesses `out`, which must cover at least one `u32`.
+    /// Never launch this kernel: its destructor intentionally never returns.
+    #[kernel]
+    pub fn wrapped_zst_drop_probe(mut out: DisjointSlice<u32>) {
+        if thread::index_1d().get() != 0 {
+            return;
+        }
+
+        // SAFETY: the launch contract requires one output element, and only
+        // thread zero reaches these writes. This probe is never launched.
+        unsafe {
+            let slot = out.as_mut_ptr();
+            slot.write(0x4444_1111);
+
+            {
+                let _guard = WrappedZstDrop(());
+            }
+
+            // Unreachable: WrappedZstDrop::drop never returns.
+            slot.write(0x4444_2222);
+        }
+    }
 
     #[kernel]
     pub fn drop_glue_kernel(mut out: DisjointSlice<u32>) {

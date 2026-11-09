@@ -314,21 +314,32 @@ fn build_test_tilelib(bin: &Path, sm: &str, simt_source: &Path, dir: &Path) {
     std::fs::remove_dir_all(&work).ok();
 }
 
+/// A skipped test passes, and the harness reports it as passed. The CUDA 13.5
+/// GPU job sets `CUTILE_REQUIRE_TILELIB=1`: there these tests must run, so a
+/// skip fails them instead.
+fn skip_tilelib(reason: &str) -> bool {
+    if std::env::var("CUTILE_REQUIRE_TILELIB").as_deref() == Ok("1") {
+        panic!("CUTILE_REQUIRE_TILELIB=1 but the tile library tests cannot run: {reason}");
+    }
+    eprintln!("SKIP static tile library: {reason}");
+    false
+}
+
 /// Builds the test library once per process (see [`tilelib`]). Returns
 /// false (skip) without Tile IR
 /// 13.5 foreign-call support or without `nvcc` next to `tileiras`; a tool
-/// that is present but fails is a test failure.
+/// that is present but fails is a test failure. With `CUTILE_REQUIRE_TILELIB=1`
+/// a skip is a failure too (see [`skip_tilelib`]).
 fn test_tilelib_available() -> bool {
     static BUILT: OnceLock<bool> = OnceLock::new();
     *BUILT.get_or_init(|| {
         if !supports(&[Feature::ForeignCall]) {
-            return false;
+            return skip_tilelib("the selected toolkit has no Tile IR 13.5 foreign-call support");
         }
         let tileiras = cutile_compiler::cuda_tile_runtime_utils::tileiras_binary();
         let bin = tileiras.parent().map(PathBuf::from).unwrap_or_default();
         if !bin.join("nvcc").is_file() {
-            eprintln!("SKIP static tile library: no nvcc next to {tileiras:?}");
-            return false;
+            return skip_tilelib(&format!("no nvcc next to {tileiras:?}"));
         }
         let sm = cutile_compiler::cuda_tile_runtime_utils::get_gpu_name(0);
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))

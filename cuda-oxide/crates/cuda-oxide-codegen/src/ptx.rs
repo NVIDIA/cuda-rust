@@ -1584,7 +1584,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    /// Line-table builds run `opt -O3`, which prints the same warning and
+    /// Line-table builds run `opt -O2`, which prints the same warning and
     /// exits 0 when it strips the debug graph; that must fail even in the
     /// lenient (non-strict) optimization mode.
     #[test]
@@ -1771,7 +1771,7 @@ mod tests {
 
     /// Regression test for IR-level libdevice linking: without
     /// `--internalize --only-needed` on the `llvm-link` invocation, all ~350
-    /// libdevice bodies keep external linkage, survive `opt -O3`, and a
+    /// libdevice bodies keep external linkage, survive `opt -O2`, and a
     /// one-call kernel's PTX balloons from ~130 to ~22,000 lines with 349
     /// exported `.visible .func __nv_*` definitions.
     #[test]

@@ -81,8 +81,7 @@ if ptx_path:
     # Counted loops that index a per-thread array and call libdevice's erff.
     # A `.local` depot means LLVM left the loop rolled: for `erf_fill_loop`,
     # `opt` priced the libdevice body before `__nvvm_reflect` folded (no
-    # `-mcpu`); for `erf_pair_loop`, it ran O2's full-unroll threshold instead
-    # of O3's.
+    # `-mcpu`); for `erf_pair_loop`, it ran unroll threshold.
     for entry in ("erf_fill_loop", "erf_pair_loop"):
         if local_memory.search(entry_body(entry)):
             sys.exit(f"error: {entry} uses local memory in {ptx_path}")

@@ -13,22 +13,30 @@ computation through cute-rs tensor views, layouts, partitions, register tiles,
 copies, reductions and MMA operations. This is a hard requirement, alongside
 numerical correctness and competitive measured performance.
 
-- A `*_cute` kernel imports `cute_rs` and, for instruction-level steps,
-  `ctm_rs`. It does not import `cuda_device`. Kernel entry attributes, thread
-  identifiers and shared-storage declarations come through the `ctm_rs`
-  re-exports. If a kernel needs something neither crate offers, add it to
-  cute-rs (or to ctm-rs when it is one instruction) as a typed operation; do
-  not reach past them.
+- A `*_cute` kernel imports `cute_rs` (and `use cutlass_primitives as prims;` only for kernel entry
+  attributes `#[cuda_module]`, `#[kernel]`, `#[launch_bounds]`,
+  `#[launch_contract]`, `DisjointSlice`, `DynamicSharedArray`, and `thread`).
+  **Inside `cute-rs` itself (`cute-rs/src/`), `cutlass-primitives` is completely banned**
+  (not even in `Cargo.toml`).
+- **`cute-rs/src/` module structure must match CuTeDSL 1-to-1:**
+  `layout`, `tensor`, `atom`, `numeric`, `arch`, `nvgpu/{common, cpasync, warp, tcgen05}`,
+  `pipeline`, and `utils/{tmem_allocator, scheduler, blockscaled}`. Never add
+  model-specific folders (`attention/`, `ffn.rs`, `decoder.rs`, `reduction.rs`)
+  or legacy top-level hardware folders (`sm100/`, `copy/`, `mma/`, `epilogue/`)
+  inside `cute-rs/src/`.
+- **Inside `cute-rs/src/nvgpu/`, `cuda_device` and manual descriptor bit-packing
+  are completely banned:** All `nvgpu` copy/MMA operations must lower through
+  `__compiler::*` $\rightarrow$ `mir-importer` $\rightarrow$ `dialect-cute`
+  $\rightarrow$ `cuda-oxide-mlir-export` (or `cute_rs::arch` for 1-instruction
+  arch primitives). Both the 1-to-1 module tree and the `cutlass-primitives` / `nvgpu`
+  `cuda_device` bans are enforced by `scripts/check-cute-layout-algebra.sh` and
+  `cute-rs/tests/sm100_attention.rs`.
 - The deliverable is the exported MLIR, not a kernel that happens to run. The
   tensor computation must reach the CUTLASS compiler as `cute.*` operations;
   check with `CUDA_OXIDE_MLIR_OUTPUT=<file>` that the loads, copies and MMA
   steps appear as CuTe operations rather than scalar code. A kernel rewritten
   around a compiler gap or a missing operation is a workaround, and the
   repository rule applies: fix the compiler or add the operation.
-- Keep instruction-level CTM operations underneath reusable cute-rs
-  operations. CTM kernel declarations, launch contracts, thread identifiers and
-  ABI storage types may remain at kernel entry points. Explicit `*_ctm`
-  examples continue to demonstrate the lower-level instruction layer.
 - Do not hand-code hardware fragment packing, lane-to-value maps, or
   shared-memory swizzle formulas in cute-rs workload kernels. Describe those
   mappings using typed layouts and derive accesses from them.
@@ -61,8 +69,9 @@ CuTe's layout algebra abstractions in `cute-layout`, together with partitions, T
 - **Any coordinate, tiling, rasterization, thread-to-value mapping, or tensor offset operation that can be handled by CuTe layout algebra must be done through CuTe layout algebra (`cute-layout` / `cute-rs`)**—never by hand in a `*_cute` kernel:
   1. **No hand-rolled tile swizzling / L2 rasterization** (such as `fn swizzle_tile` with manual `/`, `%`, and clamping) in kernel code—express grouped/tiled grid traversal through `cute-layout` / `cute-rs` layout algebra or scheduler types.
   2. **No hand-rolled thread/lane coordinate unpacking** (such as `tid & 63`, `tid >> 6`, or manual `(warp_id * 32) << 16` TMEM shifts) in kernel code—express thread maps via `Layout` / `ColMajor` / `RowMajor` (`idx2crd` / `crd2idx`) and `tmem_row_address`.
-  3. **No raw global pointer offset math** (such as `ptr.add((row * num_heads + head) * 128)`) in kernel code—use typed `Tensor`, `TensorMut`, `StridedTensor`, `StridedTensorMut`, or `cute-layout` coordinate evaluation.
+  3. **No raw global pointer offset math or raw pointer casts** (such as `ptr.add((row * num_heads + head) * 128)`, `slice.as_ptr().cast::<u128>()`, or `slice.as_mut_ptr().cast::<u64>()`) in kernel code—use typed `Tensor`, `TensorMut`, `StridedTensor`, `StridedTensorMut`, or `cute-layout` coordinate evaluation.
   4. **Never copy hand-rolled index math from a Python reference:** Even if a Python reference script writes raw `/`, `%`, or bit-shift index math by hand, the `cute-rs` kernel must express that mapping through CuTe layout algebra.
+  5. **Beautiful Rust with GPU control-flow care (`clippy::collapsible_if`):** Follow Beautiful Rust's strong typing, zero-raw-cast discipline, and compile-time `const _: () = assert!(...)` invariants, **but never let CPU-oriented lints like `clippy::collapsible_if` flatten warp-specialized or collective guards** (e.g. `if warp_id == 4 { if elect_one_sync() { ... } }` or `if warp_id == 0 { if tid == 0 { ... } }`). Flattening those into `if a && b` can change `else`-branch routing across warps, break `elect_one_sync()` convergence, or defeat uniform-branch lowering in `dialect-cute` and `ptxas`, regressing performance. Keep the nested GPU control flow and add a targeted `#[allow(clippy::collapsible_if)]`.
 - **Exception for temporary rough work during development only:** Because CuTe layout algebra can be tricky to reason about at first, you may write temporary rough scalar math or test assertions while working out a mapping and checking correctness—**but the final implementation must use `cute-layout` / `cute-rs` layout algebra exclusively, with zero hand-rolled layout math left behind**. This is mechanically enforced by `cuda-oxide/scripts/check-cute-layout-algebra.sh` in `just check-guards`.
 
 **Hard rule 3 — Add missing CuTeDSL operations and Rust type encodings to `cute-layout` / `cute-rs` and the compiler first:**
@@ -102,7 +111,7 @@ MANDATORY TYPE-ENCODED `cute-rs` ARCHITECTURE
 │     type SharedWeightScales = Sm100ScaleTile<Mkl>;                           │
 │     type SharedActScales    = Sm100ScaleTile<Nkl>;                           │
 │     type TiledMma = Sm100BlockScaledTiledMma<WeightTileSmem, ActTileSmem>;   │
-│     type StagedEpilogue = Sm100TmemStagedEpilogue<EpilogueSmem, 128>;        │
+│     type TmemEpilogue = Sm100TmemEpilogue<EpilogueSmem>;                     │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -123,12 +132,14 @@ MANDATORY TYPE-ENCODED `cute-rs` ARCHITECTURE
   `Swizzle<3, 3, 3>`, `zipped_divide::<8>()`), because the compiler reads it
   from the generic arguments; that is the one place the `make_*` vocabulary
   does not carry over.
-- ctm-rs uses PTX instruction names (`mbarrier_arrive_expect_tx`,
-  `barrier_cluster_arrive`, `cp_async_bulk_tensor_shared_cta_global`). The
-  cute.arch concept names (`thread_idx`, `warp_idx`, `elect_one_sync`,
-  `cluster_arrive`, `mbarrier_init_fence`) live in `cute_rs::arch` as
-  forwarders, mirroring cute.arch over primitives in CuTeDSL.
-- One name per concept across cute-rs, ctm-rs and the compiler crates. No
+- cutlass-primitives (`use cutlass_primitives as prims;`, matching CuTeDSL's
+  `from cutlass.experimental import primitives as prims`) uses PTX instruction
+  names (`mbarrier_arrive_expect_tx`, `barrier_cluster_arrive`,
+  `cp_async_bulk_tensor_shared_cta_global`). The cute.arch concept names
+  (`thread_idx`, `warp_idx`, `elect_one_sync`, `cluster_arrive`,
+  `mbarrier_init_fence`) live in `cute_rs::arch` as forwarders, mirroring
+  cute.arch over primitives in CuTeDSL.
+- One name per concept across cute-rs, cutlass-primitives and the compiler crates. No
   abbreviations the DSL does not use (`Fragment`, not `Frag`; `Mxf4`, the
   form of the PTX kind and the DSL op), no second name for something that
   already has one, and no CUDA C++ or PTX name where cute.arch has a concept

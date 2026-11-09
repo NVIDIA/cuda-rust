@@ -1,6 +1,6 @@
-# TMA Pipelines, Tensor Cores, and ctm-rs Interop
+# TMA Pipelines, Tensor Cores, and cutlass-primitives Interop
 
-The Blackwell kernels in this preview combine multi-stage TMA pipelines, swizzled shared-memory views, and tensor-core MMA operations. Depending on the workload, you can express the entire schedule in **cute-rs** (`blockscale_gemm_cute`) or pair **cute-rs** with **ctm-rs** instruction primitives in the same kernel (`fp16_gemm_256x352_cute`, `sm100_fmha_prefill_cute`, `sm100_mla_decode_fp16_cute`).
+The Blackwell kernels in this preview combine multi-stage TMA pipelines, swizzled shared-memory views, and tensor-core MMA operations. Depending on the workload, you can express the entire schedule in **cute-rs** (`blockscale_gemm_cute`) or pair **cute-rs** with **cutlass-primitives** instruction primitives in the same kernel (`fp16_gemm_256x352_cute`, `sm100_fmha_prefill_cute`, `sm100_mla_decode_fp16_cute`).
 
 ---
 

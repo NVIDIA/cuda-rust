@@ -58,9 +58,10 @@
 use dialect_mir::attributes::MirCastKindAttr;
 use dialect_mir::{
     ops::{
-        MirAddOp, MirArrayElementAddrOp, MirCastOp, MirCondBranchOp, MirConstantOp, MirFuncOp,
-        MirGeOp, MirGotoOp, MirGtOp, MirLeOp, MirLoadOp, MirLtOp, MirNoUnrollHintOp, MirNotOp,
-        MirStorageDeadOp, MirStorageLiveOp, MirStoreOp, MirSubOp,
+        MirAddOp, MirArrayElementAddrOp, MirCastOp, MirCondBranchOp, MirConstantOp,
+        MirDbgValueListOp, MirDbgValueOp, MirFuncOp, MirGeOp, MirGotoOp, MirGtOp, MirLeOp,
+        MirLoadOp, MirLtOp, MirNoUnrollHintOp, MirNotOp, MirStorageDeadOp, MirStorageLiveOp,
+        MirStoreOp, MirSubOp,
     },
     types::{MirArrayType, MirPtrType, address_space},
 };
@@ -290,6 +291,8 @@ fn counted_loop_operation_is_supported(ctx: &Context, operation: Ptr<Operation>)
     // `#[nounroll]` on the K loop leaves a hint in it until lowering. Fusion
     // replaces the loop and moves the request onto the fused operation
     Operation::get_op::<MirNoUnrollHintOp>(operation, ctx).is_some()
+        || Operation::get_op::<MirDbgValueOp>(operation, ctx).is_some()
+        || Operation::get_op::<MirDbgValueListOp>(operation, ctx).is_some()
         || Operation::get_op::<MirConstantOp>(operation, ctx).is_some()
         || Operation::get_op::<ConstantOp>(operation, ctx).is_some()
         || Operation::get_op::<MirStorageLiveOp>(operation, ctx).is_some()
@@ -1605,6 +1608,8 @@ fn apply_pointer_fallback(
 
 fn is_ignorable(ctx: &Context, op: Ptr<Operation>) -> bool {
     Operation::get_op::<MirNoUnrollHintOp>(op, ctx).is_some()
+        || Operation::get_op::<MirDbgValueOp>(op, ctx).is_some()
+        || Operation::get_op::<MirDbgValueListOp>(op, ctx).is_some()
         || Operation::get_op::<MirConstantOp>(op, ctx).is_some()
         || Operation::get_op::<ConstantOp>(op, ctx).is_some()
         || Operation::get_op::<MirStorageLiveOp>(op, ctx).is_some()

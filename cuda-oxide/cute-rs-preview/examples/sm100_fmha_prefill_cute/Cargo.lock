@@ -133,7 +133,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ctm-rs"
+name = "cutlass-primitives"
 version = "0.3.0"
 dependencies = [
  "cuda-device",
@@ -236,7 +236,6 @@ version = "0.3.0"
 name = "cute-rs"
 version = "0.3.0"
 dependencies = [
- "ctm-rs",
  "cuda-core",
  "cuda-device",
  "cute-layout",
@@ -564,7 +563,7 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 name = "sm100_fmha_prefill_cute"
 version = "0.1.0"
 dependencies = [
- "ctm-rs",
+ "cutlass-primitives",
  "cuda-core",
  "cuda-device",
  "cuda-host",

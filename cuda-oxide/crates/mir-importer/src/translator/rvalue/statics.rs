@@ -6,10 +6,9 @@
 //! Static identity and initializer plumbing.
 
 use crate::error::{TranslationErr, TranslationResult};
-use crate::translator::types::monomorphized_ty_is_inhabited;
 use crate::translator::values::is_constant_wrapper_type;
 use pliron::location::Location;
-use pliron::{input_err, input_error, input_error_noloc};
+use pliron::{input_err, input_error_noloc};
 use rustc_public::CrateDef;
 use rustc_public::mir;
 use rustc_public::ty::ConstantKind;
@@ -17,299 +16,38 @@ use rustc_public::ty::ConstantKind;
 pub(super) struct SharedStaticSourceIdentity {
     pub(super) name: String,
     pub(super) key: String,
-    /// Whether the pointer names the whole static rather than one of its
-    /// fields; only a whole static has a full-debug variable to join
-    pub(super) whole_static: bool,
 }
 
-/// Resolve a shared allocation's constant pointer to the Rust static, or the
-/// field of one, that it names, giving both a display path and an injective
-/// compiler identity.
+/// Resolve a whole-static shared allocation to both its display path and its
+/// injective compiler identity.
 ///
 /// `StaticDef::name()` deliberately omits DefPath disambiguators, so distinct
 /// same-leaf nested statics can have the same display path. The mangled static
-/// instance remains unique and is used, in every build profile, for
-/// deduplication, for the hash that names the lowered `__shared_mem_*` global,
-/// and for the full-debug side-table join.
-///
-/// `SharedArray` is zero-sized, so a pointer to such a field of a tuple,
-/// struct, union, enum or array static can carry the same byte offset as its
-/// siblings, often zero, and only its type tells them apart; union fields and
-/// enum variants overlap whatever their size, `Barrier` included. The static's
-/// layout is walked to the one field of the pointee's type at that offset and
-/// the key gains that field's path. The pointee type, not the pointer, is
-/// compared, so `*mut` and `*const` pointers to one field share one global.
-/// Two or more such fields cannot be told apart and would alias, so they are
-/// rejected. `Ok(None)` means the constant names no static, or no field of the
-/// pointee's type, and the caller falls back to the constant's own spelling.
+/// instance remains unique and is used for both deduplication and the full-debug
+/// side-table join. Interior pointers are rejected: a `SharedArray` or
+/// `Barrier` allocation always represents the entire static.
 pub(super) fn shared_static_source_identity(
     constant: &mir::ConstOperand,
-    loc: &Location,
-) -> TranslationResult<Option<SharedStaticSourceIdentity>> {
+) -> Option<SharedStaticSourceIdentity> {
     let ConstantKind::Allocated(allocation) = constant.const_.kind() else {
-        return Ok(None);
+        return None;
     };
-    let [(relocation_offset, _)] = allocation.provenance.ptrs.as_slice() else {
-        return Ok(None);
-    };
-    let Ok(Some(target)) = static_target_from_allocation_at(allocation, *relocation_offset) else {
-        return Ok(None);
-    };
-    let Some(pointee) = constant
-        .ty()
-        .kind()
-        .builtin_deref(true)
-        .map(|deref| deref.ty)
-    else {
-        return Ok(None);
-    };
-
-    // the instance type is normalized like the constant's, unlike the raw
-    // declared type, whose const generics can still be unevaluated paths
-    let static_ty = rustc_public::mir::mono::Instance::from(target.static_def).ty();
-    let mut walk = FieldWalk {
-        pointee: &pointee,
-        offset: target.byte_offset,
-        path: Vec::new(),
-        found: Vec::new(),
-        loc,
-    };
-    walk.visit(&static_ty, 0)?;
-
+    if allocation.provenance.ptrs.len() != 1 {
+        return None;
+    }
+    let &(relocation_offset, _) = allocation.provenance.ptrs.first()?;
+    let target = static_target_from_allocation_at(allocation, relocation_offset)
+        .ok()
+        .flatten()?;
+    if target.byte_offset != 0 {
+        return None;
+    }
     let name = target.static_def.name();
-    let static_key = crate::device_static_global_key(&target.static_def);
-    match walk.found.as_slice() {
-        [] => Ok(None),
-        [path] if path.is_empty() => Ok(Some(SharedStaticSourceIdentity {
-            name,
-            key: static_key,
-            whole_static: true,
-        })),
-        [path] => {
-            let path = field_path(path);
-            Ok(Some(SharedStaticSourceIdentity {
-                name: format!("{name}.{path}"),
-                // the static key is length-prefixed, so the suffix cannot
-                // collide with another static's key
-                key: format!("{static_key}:field:{path}"),
-                whole_static: false,
-            }))
-        }
-        [first, second, ..] => input_err!(
-            loc.clone(),
-            TranslationErr::unsupported(format!(
-                "static `{name}` has fields `.{}` and `.{}` of the same shared-memory \
-                 type at byte offset {}; a pointer to one cannot be told \
-                 apart from a pointer to the other, so they would share storage. Give \
-                 each `SharedArray` or `Barrier` its own static",
-                field_path(first),
-                field_path(second),
-                target.byte_offset,
-            ))
-        ),
-    }
+    let key = crate::device_static_global_key(&target.static_def);
+    Some(SharedStaticSourceIdentity { name, key })
 }
 
-fn field_path(path: &[usize]) -> String {
-    path.iter()
-        .map(usize::to_string)
-        .collect::<Vec<_>>()
-        .join(".")
-}
-
-/// Finds the fields of a static's type that have the pointee's type and start
-/// at the pointer's byte offset.
-struct FieldWalk<'a> {
-    pointee: &'a rustc_public::ty::Ty,
-    offset: u64,
-    path: Vec<usize>,
-    found: Vec<Vec<usize>>,
-    loc: &'a Location,
-}
-
-impl FieldWalk<'_> {
-    fn visit(&mut self, ty: &rustc_public::ty::Ty, base: u64) -> TranslationResult<()> {
-        use rustc_public::CrateDefType;
-        use rustc_public::abi::{FieldsShape, VariantsShape};
-        use rustc_public::ty::{AdtKind, RigidTy, TyKind};
-        use rustc_public_bridge::IndexedVal;
-
-        if ty == self.pointee {
-            if base == self.offset {
-                self.found.push(self.path.clone());
-            }
-            return Ok(());
-        }
-
-        let (def, args) = match ty.kind() {
-            TyKind::RigidTy(RigidTy::Tuple(fields)) => {
-                let FieldsShape::Arbitrary { offsets } = self.layout(ty)?.fields else {
-                    return Ok(());
-                };
-                let offsets = offsets.iter().map(|offset| offset.bytes() as u64);
-                return self.visit_fields(fields.into_iter().zip(offsets), base);
-            }
-            TyKind::RigidTy(RigidTy::Array(element, _)) => {
-                return self.visit_array(ty, &element, base);
-            }
-            TyKind::RigidTy(RigidTy::Adt(def, args)) => (def, args),
-            _ => return Ok(()),
-        };
-
-        let variant_fields = |variant: &rustc_public::ty::VariantDef| -> Vec<rustc_public::ty::Ty> {
-            variant
-                .fields()
-                .iter()
-                .map(|field| field.ty_with_args(&args))
-                .collect()
-        };
-        let variants = def.variants();
-        let layout = self.layout(ty)?;
-        match def.kind() {
-            AdtKind::Struct => {
-                let (Some(variant), FieldsShape::Arbitrary { offsets }) =
-                    (variants.first(), &layout.fields)
-                else {
-                    return Ok(());
-                };
-                let offsets = offsets.iter().map(|offset| offset.bytes() as u64);
-                self.visit_fields(variant_fields(variant).into_iter().zip(offsets), base)
-            }
-            // every union field starts at the union's base, so a field of the
-            // pointee's type there competes with the siblings outside it
-            AdtKind::Union => {
-                let Some(variant) = variants.first() else {
-                    return Ok(());
-                };
-                let fields = variant_fields(variant);
-                self.visit_fields(fields.into_iter().map(|field| (field, 0)), base)
-            }
-            // each variant's fields overlap the others', so every variant that
-            // can hold a value is walked; its index, rustc's own, joins the
-            // path to keep keys distinct
-            AdtKind::Enum => {
-                let offsets: Vec<(usize, Vec<u64>)> = match &layout.variants {
-                    VariantsShape::Single { index } => match &layout.fields {
-                        FieldsShape::Arbitrary { offsets } => vec![(
-                            index.to_index(),
-                            offsets.iter().map(|offset| offset.bytes() as u64).collect(),
-                        )],
-                        _ => Vec::new(),
-                    },
-                    VariantsShape::Multiple { variants, .. } => variants
-                        .iter()
-                        .enumerate()
-                        .map(|(index, variant)| {
-                            let offsets = variant.offsets.iter();
-                            (index, offsets.map(|offset| offset.bytes() as u64).collect())
-                        })
-                        .collect(),
-                    VariantsShape::Empty => Vec::new(),
-                };
-                'variants: for (index, offsets) in offsets {
-                    let Some(variant) = variants.get(index) else {
-                        continue;
-                    };
-                    // rustc keeps field offsets for a variant that can never
-                    // hold a value, and its fields would otherwise read as
-                    // false rivals to the live variant's
-                    let fields = variant_fields(variant);
-                    for field in &fields {
-                        if !monomorphized_ty_is_inhabited(field)? {
-                            continue 'variants;
-                        }
-                    }
-
-                    self.path.push(index);
-                    self.visit_fields(fields.into_iter().zip(offsets), base)?;
-                    self.path.pop();
-                }
-                Ok(())
-            }
-        }
-    }
-
-    /// Visits each field, given with its offset in the parent, whose byte
-    /// range can hold the pointer's offset; the end is included because a
-    /// zero-sized field can sit there.
-    fn visit_fields(
-        &mut self,
-        fields: impl IntoIterator<Item = (rustc_public::ty::Ty, u64)>,
-        base: u64,
-    ) -> TranslationResult<()> {
-        for (index, (field_ty, field_offset)) in fields.into_iter().enumerate() {
-            let start = base + field_offset;
-            if self.offset < start || self.offset > start + self.size(&field_ty)? {
-                continue;
-            }
-
-            self.path.push(index);
-            self.visit(&field_ty, start)?;
-            self.path.pop();
-        }
-        Ok(())
-    }
-
-    fn visit_array(
-        &mut self,
-        ty: &rustc_public::ty::Ty,
-        element: &rustc_public::ty::Ty,
-        base: u64,
-    ) -> TranslationResult<()> {
-        use rustc_public::abi::FieldsShape;
-
-        let FieldsShape::Array { stride, count } = self.layout(ty)?.fields else {
-            return Ok(());
-        };
-        let Some(relative) = self.offset.checked_sub(base) else {
-            return Ok(());
-        };
-
-        // a zero-sized element puts every index at the base, and two are
-        // enough to report the ambiguity; otherwise the offset falls in at
-        // most this element and, at its start, the end of the previous one
-        let stride = stride.bytes() as u64;
-        let candidates = match relative.checked_div(stride) {
-            None => 0..count.min(2),
-            Some(last) => last.saturating_sub(1)..(last + 1).min(count),
-        };
-        let element_size = self.size(element)?;
-        for index in candidates {
-            let start = base + index * stride;
-            if self.offset < start || self.offset > start + element_size {
-                continue;
-            }
-
-            self.path.push(index as usize);
-            self.visit(element, start)?;
-            self.path.pop();
-        }
-        Ok(())
-    }
-
-    fn layout(
-        &self,
-        ty: &rustc_public::ty::Ty,
-    ) -> TranslationResult<rustc_public::abi::LayoutShape> {
-        let layout = ty.layout().map_err(|error| {
-            input_error!(
-                self.loc.clone(),
-                TranslationErr::unsupported(format!(
-                    "Failed to query the layout of a shared static's type: {error:?}"
-                ))
-            )
-        })?;
-        Ok(layout.shape())
-    }
-
-    fn size(&self, ty: &rustc_public::ty::Ty) -> TranslationResult<u64> {
-        Ok(self.layout(ty)?.size.bytes() as u64)
-    }
-}
-
-/// Best-effort source label for a shared allocation whose constant does not
-/// resolve to a static or a field of one, so [`shared_static_source_identity`]
-/// gives up.
+/// Historical best-effort source label used by non-Full builds.
 ///
 /// This intentionally performs no strict validation: the comment label must
 /// never turn an otherwise valid translation into an error.

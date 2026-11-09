@@ -57,11 +57,7 @@ cd "$(dirname "$0")/.."
 EXAMPLES=crates/rustc-codegen-cuda/examples
 EXAMPLE=shared_static_names
 ARCH="${SHARED_STATIC_NAMES_ARCH:-sm_80}"
-KERNELS=(rotate_128 rotate_256 field_tiles)
-# field_tiles points at four `SharedArray` fields, each its own global, and
-# reads one back through a `*const` pointer that must share its global
-FIELD_KERNEL=field_tiles
-FIELD_GLOBALS=4
+KERNELS=(rotate_128 rotate_256)
 ADDED_KERNELS=(added_a added_b added_c added_d added_e added_f)
 # all on one line, so splicing them over a slot comment moves no other source
 # line
@@ -138,13 +134,13 @@ for mode in release full-debug; do
     for slot in first last; do
         build ".${EXAMPLE}_${slot}" "${mode}-${slot}" "${flags[@]}"
         python3 - "${work}/${mode}-base.ptx" "${work}/${mode}-${slot}.ptx" \
-            "${mode}" "${slot}" "${FIELD_KERNEL}" "${FIELD_GLOBALS}" \
+            "${mode}" "${slot}" \
             "${ADDED_KERNELS[*]}" "${KERNELS[@]}" <<'EOF'
 import difflib
 import re
 import sys
 
-base_path, variant_path, mode, slot, field_kernel, field_globals, added, *kernels = sys.argv[1:]
+base_path, variant_path, mode, slot, added, *kernels = sys.argv[1:]
 added = added.split()
 label = f"{mode}, kernels added {slot}"
 GLOBAL = re.compile(r"__(?:shared_mem|device_global)_[0-9a-f_]+")
@@ -211,14 +207,6 @@ if not any(
     for name in referenced(base_entries[kernel])
 ):
     sys.exit("parse self-test failed: no kernel references a __device_global_* global")
-field_shared = [
-    name for name in referenced(base_entries[field_kernel]) if name.startswith("__shared_mem_")
-]
-if len(field_shared) != int(field_globals):
-    sys.exit(
-        f"field self-test failed: {field_kernel} references {len(field_shared)} shared"
-        f" globals, expected {field_globals}, one per `SharedArray` field"
-    )
 added_globals = set()
 for kernel in added:
     if kernel not in variant_entries:

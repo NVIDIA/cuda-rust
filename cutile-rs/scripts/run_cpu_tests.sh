@@ -18,6 +18,14 @@ run_step \
     cargo test -p cutile-examples --lib requirements::
 
 run_step \
+    "reusable kernel IR and bytecode smoke tests" \
+    cargo test -p cutile-kernels --test smoke
+
+run_step \
+    "fused QKV reference and launch-contract tests (driver-free)" \
+    cargo test -p cutile-examples --example fused_qkv
+
+run_step \
     "example runner accounting tests" \
     bash "$REPO_ROOT/scripts/test_example_runner.sh"
 
@@ -61,6 +69,9 @@ for test_target in \
     element_type_zero_jit \
     error_quality \
     flash_attention_compile \
+    foreign_calls \
+    foreign_ordering \
+    foreign_wrappers \
     global_memory \
     generated_source_locations \
     integer_ops \
@@ -77,6 +88,9 @@ for test_target in \
     span_source_location \
     trait_dispatch_probe \
     tile_ir_capabilities \
+    tile_ir_13_5 \
+    tile_ir_13_5_multicast \
+    tile_ir_13_5_comms \
     token_threading \
     two_cga_trait_impl \
     type_inference_sanity \

@@ -207,7 +207,7 @@ pub fn translate_operand(
                 // global after a hash of the opaque alloc key, so without the
                 // source name the generated shared-memory blocks cannot be
                 // attributed back to source.
-                set_shared_static_keys(ctx, &shared_alloc, constant, value_map, &loc)?;
+                set_shared_static_keys(ctx, &shared_alloc, constant, value_map);
 
                 // Set alignment if specified (non-zero)
                 if alignment > 0 {
@@ -286,7 +286,7 @@ pub fn translate_operand(
 
                 // A `Barrier` static occupies shared memory too, so key and
                 // name it the same way as `SharedArray` above.
-                set_shared_static_keys(ctx, &shared_alloc, constant, value_map, &loc)?;
+                set_shared_static_keys(ctx, &shared_alloc, constant, value_map);
 
                 if let Some(prev) = prev_op {
                     shared_alloc.get_operation().insert_after(ctx, prev);
@@ -1277,31 +1277,29 @@ fn extract_shared_array_info(
     }
 }
 
-/// Key a `mir.shared_alloc` by the Rust static, or the field of one, that its
-/// constant points at, and label it with that path.
+/// Key a `mir.shared_alloc` by the Rust static that its constant points at,
+/// and label it with that path.
 ///
-/// The key is the static's mangled identity in every build profile, plus the
-/// field's path for a field, so the symbol lowering derives from it names that
-/// storage alone: adding, removing or reordering an unrelated kernel leaves it
-/// unchanged (#1477). Only a constant that resolves to neither falls back to
-/// the constant's Debug spelling, which still deduplicates within the
-/// compilation. `source_key` only joins the full-debug variable table, which
-/// describes whole statics, so it is set for a whole static in full-debug
-/// builds alone.
+/// The key is the static's mangled identity in every build profile, so the
+/// symbol lowering derives from it names that storage alone: adding, removing
+/// or reordering an unrelated kernel leaves it unchanged (#1477). Only a
+/// constant that does not resolve to a whole static falls back to the
+/// constant's Debug representation, which still deduplicates within the
+/// compilation. `source_key` joins the full-debug variable table and is set
+/// in full-debug builds alone.
 fn set_shared_static_keys(
     ctx: &mut Context,
     shared_alloc: &dialect_mir::ops::MirSharedAllocOp,
     constant: &mir::ConstOperand,
     value_map: &ValueMap,
-    loc: &Location,
-) -> TranslationResult<()> {
+) {
     use pliron::builtin::attributes::StringAttr;
 
-    match shared_static_source_identity(constant, loc)? {
+    match shared_static_source_identity(constant) {
         Some(identity) => {
             shared_alloc.set_attr_alloc_key(ctx, StringAttr::new(identity.key.clone()));
             shared_alloc.set_attr_source_name(ctx, StringAttr::new(identity.name));
-            if identity.whole_static && value_map.debug_variables() {
+            if value_map.debug_variables() {
                 shared_alloc.set_attr_source_key(ctx, StringAttr::new(identity.key));
             }
         }
@@ -1312,5 +1310,4 @@ fn set_shared_static_keys(
             }
         }
     }
-    Ok(())
 }

@@ -48,4 +48,5 @@ workspace = true
 # Used by the example targets only.
 [dev-dependencies]
 cutile = { workspace = true }
+cutile-kernels = { workspace = true }
 tokio = { workspace = true }

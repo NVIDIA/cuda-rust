@@ -27,10 +27,13 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         type_params: &HashMap<String, TypeParam>,
     ) -> Result<Option<TileRustType>, JITError> {
         // Consts named in the type resolve in the scope of the module whose
-        // source spelled it (the kernel's, or the inlined callee's).
-        let normalized_ty = self
-            .modules
-            .normalize_type_aliases_in(ty, Some(&self.current_module()))?;
+        // source spelled it (the kernel's, or the inlined callee's), unless
+        // a generic parameter in `generic_vars` shadows them.
+        let normalized_ty = self.modules.normalize_type_aliases_in_scope(
+            ty,
+            Some(&self.current_module()),
+            Some(generic_vars),
+        )?;
         let ty = &normalized_ty;
         let _ty_debug_str = ty.to_token_stream().to_string();
         let mut ty_attrs: Option<SingleMetaList> = None;

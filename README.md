@@ -80,6 +80,10 @@ and cuda-oxide each have a book with installation instructions, guides, and
 reference material. The runtime crates (cuda-bindings, cuda-core, cuda-async)
 are documented in the cutile-rs book.
 
+For reusable Tile kernels, including fused QKV and NVFP4 MoE, see the
+[`cutile-kernels` catalog](cutile-rs/cutile-kernels/README.md) and
+[runnable examples](cutile-rs/cutile-examples/README.md).
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for commit sign-off requirements, pull requests, and CI. Both components build on stable Rust and pin their toolchains in their respective `rust-toolchain.toml` files (with `rustc-dev` and `llvm-tools` for `cuda-oxide`, managed via `cargo oxide`); each book covers its own setup.
@@ -92,3 +96,5 @@ host crates. Every published crate declares `license = "Apache-2.0"`.
 
 Third-party attributions are listed in
 [`cuda-oxide/THIRD_PARTY_NOTICES`](./cuda-oxide/THIRD_PARTY_NOTICES).
+The TileGym-derived [fused QKV kernel](cutile-rs/cutile-kernels/src/experimental/qkv.rs)
+retains its MIT license and notice in the source.

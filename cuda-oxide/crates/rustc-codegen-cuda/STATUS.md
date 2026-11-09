@@ -27,8 +27,6 @@ Run `cuda-oxide/scripts/check-error-example-status.sh` to verify both are in syn
 | `error_kernel_shared_param`            | diagnostics-fixture | AS3/AS5 pointer as kernel parameter  |
 | `error_missing_device_attr`            | diagnostics-fixture | `thread::index_*` stub (#76)         |
 | `error_set_discriminant_uninhabited`   | diagnostics-fixture | Invalid enum variant selection       |
-| `error_shared_static_same_fields`      | diagnostics-fixture | Same-type `SharedArray` fields of one static |
-| `error_shared_static_union_field`      | diagnostics-fixture | Union `SharedArray` field aliasing a sibling |
 | `error_union_shared_pointer_addr`      | diagnostics-fixture | `&mut`/in-place write to a shared-pointer union field |
 | `error_union_shared_pointer_layout`    | support-gap         | Oversized AS3 pointer array in a union field |
 

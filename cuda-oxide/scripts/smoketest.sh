@@ -98,7 +98,7 @@ IKET_EXAMPLES=(iket_trace)
 BLACKWELL_COMPILE_EXAMPLES=(generated_intrinsics_blackwell)
 SM100_COMPILE_EXAMPLES=(redux_f32)
 NVVM_VERIFY_EXAMPLES=(array_from_fn constant_memory cp_async_small device_global enum_constant_provenance ex2_approx_f16 generated_intrinsics generated_intrinsics_blackwell generated_ldmatrix kernel_reference_validity legacy_atomic_fadd legacy_atomic_rmw_cas libdevice_math legacy_nvvm_pointer_shapes packed_atomic_add primitive_stress scoped_atomic_load_store shuffle_64 tcgen05 tuple_constant_provenance wgmma_mma_bf16)
-ERROR_EXAMPLES=(error error_set_discriminant_uninhabited error_enum_bool_payload_addr error_enum_pointer_overlap error_enum_shared_pointer_layout error_heap_alloc error_host_arch_intrinsic error_host_target_feature error_kernel_shared_param error_missing_device_attr error_generated_intrinsic_abi error_generated_intrinsic_unknown_id error_generated_intrinsic_fn_pointer error_generated_intrinsic_callable error_union_shared_pointer_addr error_union_shared_pointer_layout error_shared_static_same_fields error_shared_static_union_field)
+ERROR_EXAMPLES=(error error_set_discriminant_uninhabited error_enum_bool_payload_addr error_enum_pointer_overlap error_enum_shared_pointer_layout error_heap_alloc error_host_arch_intrinsic error_host_target_feature error_kernel_shared_param error_missing_device_attr error_generated_intrinsic_abi error_generated_intrinsic_unknown_id error_generated_intrinsic_fn_pointer error_generated_intrinsic_callable error_union_shared_pointer_addr error_union_shared_pointer_layout)
 
 # Per-example rustc flags policy: an example that needs a special rustc flag
 # (e.g. disjoint_slice_len needs -Zinline-mir=no to keep its regression
@@ -699,13 +699,6 @@ verdict_error() {
             # the enum fixture's, which carries `enum payload storage:`.
             if ! grep -Fq 'union field storage: arrays containing shared-memory pointers are not supported' "${log}"; then
                 echo "FAIL (missing shared-pointer union array layout diagnostic)"
-                return 1
-            fi
-            ;;
-        error_shared_static_same_fields | error_shared_static_union_field)
-            if ! grep -Fq 'of the same shared-memory type' "${log}" \
-                || ! grep -Fq 'Give each `SharedArray` or `Barrier` its own static' "${log}"; then
-                echo "FAIL (missing indistinguishable shared-static field diagnostic)"
                 return 1
             fi
             ;;
@@ -2209,6 +2202,11 @@ run_cargo() {
         # Build at the instruction floor; the host check skips before module loading.
         args+=("--arch=sm_75")
     fi
+    if [[ "${ex}" == "scalar_math_sm75" ]]; then
+        # always build at the sm_75 floor, so newer GPUs run JIT-compiled
+        # sm_75 PTX and the build keeps proving the Turing floor
+        args+=("--arch=sm_75")
+    fi
     if [[ "${ex}" == "debug" ]]; then
         # Its code-shape gate checks LLVM/PTX source locations, which only
         # exist when the example is compiled with full device debug metadata.
@@ -2287,7 +2285,9 @@ run_cargo() {
         done
     fi
     if [[ ${CARGO_EC} -eq 0 && -f "${shape_check}" ]]; then
-        if ! bash "${shape_check}" >>"${log}" 2>&1; then
+        # the build log lets a check assert on compiler warnings as well as
+        # on artifacts; scripts that only read artifacts ignore it
+        if ! CUDA_OXIDE_BUILD_LOG="${log}" bash "${shape_check}" >>"${log}" 2>&1; then
             printf '%s failed its verify-code-shape.sh assertions\n' "${ex}" >>"${log}"
             CARGO_EC=1
         fi

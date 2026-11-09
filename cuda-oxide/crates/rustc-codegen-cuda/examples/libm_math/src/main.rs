@@ -43,11 +43,8 @@ mod libm_lookalike {
 mod kernels {
     use super::*;
 
-    /// f32 libm entry points.
-    // libm::sqrtf / libm::sqrt are not exercised: libm routes sqrt
-    // through an arch-specific inline-asm wrapper that rustc MIR-inlines
-    // into the kernel before the call-site interception can fire, so
-    // sqrt is not yet supported via libm (f32::sqrt / f64::sqrt work).
+    /// f32 libm entry points (including `libm::sqrtf`, which rustc MIR-inlines
+    /// to an `arch` `InlineAsm` terminator before call-site interception).
     #[kernel]
     pub fn libm_f32(x: &[f32], mut out: DisjointSlice<f32>) {
         let idx = thread::index_1d();
@@ -56,7 +53,7 @@ mod kernels {
             let v = x[i];
             let trig = libm::sinf(v) + libm::cosf(v);
             let e = libm::expf(v);
-            let p = libm::powf(v, 1.5f32);
+            let p = libm::powf(v, 1.5f32) + libm::sqrtf(v);
             let r = libm::floorf(v) + libm::fabsf(v) + libm::rintf(v * 2.5);
             let mm = libm::fmaxf(v, 1.0) + libm::fminf(v, 2.0);
             let (sn, cs) = libm::sincosf(v);
@@ -66,7 +63,8 @@ mod kernels {
     }
 
     /// f64 libm entry points (bare names must dispatch to the f64
-    /// libdevice symbols, not the f32 ones).
+    /// libdevice symbols, not the f32 ones, and `libm::sqrt` / `libm::rint`
+    /// exercise the MIR-inlined `InlineAsm` path).
     #[kernel]
     pub fn libm_f64(x: &[f64], mut out: DisjointSlice<f64>) {
         let idx = thread::index_1d();
@@ -75,7 +73,7 @@ mod kernels {
             let v = x[i];
             let trig = libm::sin(v) + libm::cos(v);
             let e = libm::exp(v);
-            let p = libm::pow(v, 1.5f64);
+            let p = libm::pow(v, 1.5f64) + libm::sqrt(v);
             let t = libm::atan2(v, 2.0f64);
             let r = libm::rint(v * 2.5);
             let mm = libm::fmax(v, 1.0) + libm::fmin(v, 2.0);
@@ -130,7 +128,7 @@ fn main() {
         let (sn, cs) = (v.sin(), v.cos());
         let want = (v.sin() + v.cos())
             + v.exp()
-            + v.powf(1.5)
+            + (v.powf(1.5) + v.sqrt())
             + (v.floor() + v.abs() + (v * 2.5).round_ties_even())
             + (v.max(1.0) + v.min(2.0))
             + sn * cs
@@ -142,7 +140,7 @@ fn main() {
         let v = x64[i];
         let want = (v.sin() + v.cos())
             + v.exp()
-            + v.powf(1.5)
+            + (v.powf(1.5) + v.sqrt())
             + v.atan2(2.0)
             + (v * 2.5).round_ties_even()
             + (v.max(1.0) + v.min(2.0));

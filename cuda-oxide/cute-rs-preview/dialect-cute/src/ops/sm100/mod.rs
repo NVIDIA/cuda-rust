@@ -60,16 +60,17 @@ mod verify;
 
 pub use operations::{
     CuteSm100AccumulatorAcquireOp, CuteSm100AccumulatorCommitOp, CuteSm100AccumulatorInitOp,
-    CuteSm100AccumulatorReleaseOp, CuteSm100AccumulatorWaitOp, CuteSm100ClusterTmaLoadOp,
-    CuteSm100PipelineAcquireOp, CuteSm100PipelineExpectOp, CuteSm100PipelineInitOp,
-    CuteSm100PipelineReleaseOp, CuteSm100PipelineWaitOp, CuteSm100StoreAcquireOp,
-    CuteSm100StoreCommitOp, CuteSm100StoreTailOp, CuteSm100TiledMmaOp, CuteSm100TmaStoreOp,
-    CuteSm100TmemAllocOp, CuteSm100TmemDeallocOp, CuteSm100TmemEpilogueOp, register, semantic_ids,
-    verify_local,
+    CuteSm100AccumulatorReleaseOp, CuteSm100AccumulatorWaitOp, CuteSm100BlockScaledCopyOp,
+    CuteSm100BlockScaledGemmOp, CuteSm100ClusterTmaLoadOp, CuteSm100PipelineAcquireOp,
+    CuteSm100PipelineExpectOp, CuteSm100PipelineInitOp, CuteSm100PipelineReleaseOp,
+    CuteSm100PipelineWaitOp, CuteSm100StoreAcquireOp, CuteSm100StoreCommitOp, CuteSm100StoreTailOp,
+    CuteSm100TiledMmaOp, CuteSm100TmaStoreOp, CuteSm100TmemAllocOp, CuteSm100TmemDeallocOp,
+    CuteSm100TmemEpilogueOp, register, semantic_ids, verify_local,
 };
 pub use plans::{
-    CuteSm100ClusterCopyPlanAttr, CuteSm100CollectorAttr, CuteSm100EpiloguePlanAttr,
-    CuteSm100MmaPlanAttr, CuteSm100PipelinePlanAttr, CuteSm100TmemPlanAttr,
+    CuteSm100BlockScaledMmaPlanAttr, CuteSm100ClusterCopyPlanAttr, CuteSm100CollectorAttr,
+    CuteSm100EpiloguePlanAttr, CuteSm100MmaPlanAttr, CuteSm100PipelinePlanAttr,
+    CuteSm100ScaleCopyPlanAttr, CuteSm100TmemPlanAttr,
 };
 pub use verify::verify_story;
 

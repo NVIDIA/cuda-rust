@@ -39,10 +39,10 @@ const LAYOUT: &str = "cute_layout::markers::Layout";
 const ROW_MAJOR: &str = "cute_layout::markers::RowMajor";
 /// Exact defining path of `cute_layout::markers::ColMajor`; public reexports do not change it.
 const COL_MAJOR: &str = "cute_layout::markers::ColMajor";
-/// Exact defining path of `cute_rs::markers::CopyG2S`; public reexports do not change it.
-const COPY_G2S: &str = "cute_rs::markers::CopyG2S";
-/// Exact defining path of `cute_rs::markers::LeadingDim`; public reexports do not change it.
-const LEADING_DIM: &str = "cute_rs::markers::LeadingDim";
+/// Exact defining path of `cute_rs::layout::CopyG2S`; public reexports do not change it.
+const COPY_G2S: &str = "cute_rs::layout::CopyG2S";
+/// Exact defining path of `cute_rs::layout::LeadingDim`; public reexports do not change it.
+const LEADING_DIM: &str = "cute_rs::layout::LeadingDim";
 /// Exact defining path of `cute_layout::markers::Swizzle`; public reexports do not change it.
 const SWIZZLE: &str = "cute_layout::markers::Swizzle";
 /// Exact defining path of `cute_layout::markers::ComposedLayout`; public reexports do not change it.
@@ -443,7 +443,7 @@ pub(crate) fn decode_cooperative_config(args: &GenericArgs) -> Result<Cooperativ
     expect_schema(
         args,
         &["Type", "Type", "Type", "Type", "Type", "Type", "Type"],
-        "cute_rs::copy::cooperative::copy_g2s",
+        "cute_rs::atom::cooperative::copy_g2s",
     )?;
     let atom = decode_atom(&type_arg(args, 0, "copy_g2s")?)?;
     let thread_layout = decode_layout(&type_arg(args, 1, "copy_g2s")?)?;
@@ -515,7 +515,11 @@ pub(crate) fn decode_load_matrix_callee(func: &mir::Operand) -> Result<MatrixLoa
     let TyKind::RigidTy(RigidTy::FnDef(_, args)) = constant.const_.ty().kind() else {
         return Err("load_matrix callee is not a FnDef".to_string());
     };
-    expect_schema(&args, &["Type", "Type"], "cute_rs::mma::load_matrix")?;
+    expect_schema(
+        &args,
+        &["Type", "Type"],
+        "cute_rs::nvgpu::warp::load_matrix",
+    )?;
     let element_type = type_arg(&args, 1, "load_matrix")?;
     let (element_bytes, _) = cooperative_element(&element_type)?;
     if element_bytes != 2 {
@@ -571,7 +575,11 @@ pub(crate) fn decode_copy_tma_callee(func: &mir::Operand) -> Result<TmaCopyConfi
     let TyKind::RigidTy(RigidTy::FnDef(_, args)) = constant.const_.ty().kind() else {
         return Err("copy_tma_2d callee is not a FnDef".to_string());
     };
-    expect_schema(&args, &["Type", "Type"], "cute_rs::copy::tma::copy_tma_2d")?;
+    expect_schema(
+        &args,
+        &["Type", "Type"],
+        "cute_rs::nvgpu::cpasync::copy_tma_2d",
+    )?;
     let element_type = type_arg(&args, 0, "copy_tma_2d")?;
     let (element_bytes, _) = cooperative_element(&element_type)?;
     let smem_layout = decode_smem_layout(&type_arg(&args, 1, "copy_tma_2d")?)?;
@@ -596,7 +604,7 @@ pub(crate) fn decode_copy_tma_s2g_callee(func: &mir::Operand) -> Result<TmaCopyC
     expect_schema(
         &args,
         &["Type", "Type"],
-        "cute_rs::copy::tma::copy_tma_s2g_2d",
+        "cute_rs::nvgpu::cpasync::copy_tma_s2g_2d",
     )?;
     let element_type = type_arg(&args, 0, "copy_tma_s2g_2d")?;
     let (element_bytes, _) = cooperative_element(&element_type)?;

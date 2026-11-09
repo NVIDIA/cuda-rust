@@ -4,11 +4,11 @@ The compiler verifies the whole module before any MLIR is built. Types carry the
 static facts, the verifier checks how operations connect, and everything dynamic stays
 with the author at `unsafe` boundaries.
 
-```{figure} images/ctm-rs-at-a-glance.svg
+```{figure} images/cutlass-primitives-at-a-glance.svg
 :align: center
 :width: 100%
 
-Where ctm-rs sits: typed carriers select instruction families, one of two compiler profiles consumes them, and the author keeps the schedule.
+Where cutlass-primitives sits: typed carriers select instruction families, one of two compiler profiles consumes them, and the author keeps the schedule.
 ```
 
 ## What is checked

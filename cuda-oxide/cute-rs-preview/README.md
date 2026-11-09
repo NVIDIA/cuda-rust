@@ -15,8 +15,8 @@ pinned compiler. No Python interpreter, no runtime tracer.
 
 | Crate | Role |
 | --- | --- |
-| [`cute-rs`](cute-rs/README.md) | tensors, tiles, copies, pipelines and tiled MMA; the kernel-facing API |
-| [`ctm-rs`](ctm-rs/README.md) | typed instruction primitives beneath it: TMA, mbarrier, tcgen05, TMEM, mma.sync |
+| [`cute-rs`](cute-rs/README.md) | 1-to-1 CuTeDSL kernel API (`layout`, `tensor`, `atom`, `numeric`, `arch`, `nvgpu`, `pipeline`, `utils`), lowered directly through `dialect-cute` and `cuda-device` |
+| [`cutlass-primitives`](cutlass-primitives/README.md) | kernel entry macros (`#[cuda_module]`, `#[kernel]`, `DisjointSlice`, `DynamicSharedArray`) and standalone PTX instruction primitives for `*_ctm` examples |
 | [`cute-layout`](cute-layout/README.md) | layout algebra and the compile-time proofs shared with the compiler |
 | [`dialect-cute`](dialect-cute/README.md) | the Pliron dialect and the whole-module verifier |
 
@@ -46,19 +46,20 @@ the options and the failure rules.
 | [`rope_cache_cute`](examples/rope_cache_cute) | `sm_120a` | RoPE, owned KV cache, GQA attention |
 | [`nvfp4_gemv_cute`](examples/nvfp4_gemv_cute) | `sm_120a` | packed FP4 with block scales on CUDA cores |
 | [`blockscale_gemm_cute`](examples/blockscale_gemm_cute) | `sm_120a` | MXFP4 GEMM: 3-stage TMA ring, tensor cores, TMA-store epilogue |
-| [`blockscale_gemm_ctm`](examples/blockscale_gemm_ctm) | `sm_120a` | the same GEMM on `ctm-rs` alone |
+| [`blockscale_gemm_ctm`](examples/blockscale_gemm_ctm) | `sm_120a` | the same GEMM on `cutlass-primitives` alone |
 | [`fmha_prefill_sm120a_cute`](examples/fmha_prefill_sm120a_cute) | `sm_120a` | FP16 D64 prefill, causal or dense |
 | [`fmha_decode_sm120a_cute`](examples/fmha_decode_sm120a_cute) | `sm_120a` | FP16 D64 decode with split-KV reduction |
 | [`fp16_gemm_256x352_cute`](examples/fp16_gemm_256x352_cute) | `sm_100a` | two-CTA GEMM: cluster TMA, TMEM, A-collector reuse |
-| [`fp16_gemm_256x352_ctm`](examples/fp16_gemm_256x352_ctm) | `sm_100a` | the same GEMM on `ctm-rs` alone |
+| [`fp16_gemm_256x352_ctm`](examples/fp16_gemm_256x352_ctm) | `sm_100a` | the same GEMM on `cutlass-primitives` alone |
 | [`sm100_fmha_prefill_cute`](examples/sm100_fmha_prefill_cute) | `sm_100a` | FP16 D128 prefill, MHA or GQA, warp specialized |
 | [`sm100_mla_decode_fp16_cute`](examples/sm100_mla_decode_fp16_cute) | `sm_100a` | MLA decode with a paged latent cache and two-CTA clusters |
+| [`sm100_qkv_epilogue_cute`](examples/sm100_qkv_epilogue_cute) | `sm_100a` | two-CTA GEMM + fused RMSNorm + FP8 (`E4M3`) quantization + paged KV scatter ([visual guide](examples/sm100_qkv_epilogue_cute/visual.md)) |
 
 | Model | Target | Scope |
 | --- | --- | --- |
 | [`qwen_decoder_cute`](models/qwen_decoder_cute) | `sm_120a` | Qwen3-TTS 1.7B end to end, text in and waveform out ([visual guide](models/qwen_decoder_cute/visual.md)) |
 | [`qwen3_8b_cute`](models/qwen3_8b_cute) | `sm_120a` | 36-layer Qwen3-8B decoder in BF16 and NVFP4 ([visual guide](models/qwen3_8b_cute/visual.md)) |
-| [`nemotron3_moe_cute`](models/nemotron3_moe_cute) | `sm_100a` | Nemotron-3 NVFP4 `ReLU²` MoE layer (`B = 1 .. 16,384`) with 5th-Gen `tcgen05` Tensor Cores |
+| [`nemotron3_moe_cute`](models/nemotron3_moe_cute) | `sm_100a` | Nemotron-3 NVFP4 `ReLU²` MoE layer (8-expert `B = 1 .. 16,384` and wide 192-expert `H = 6144, I = 1536, E = 192, B = 1 .. 256`) with 5th-Gen `tcgen05` Tensor Cores |
 
 `cargo oxide list` prints both tables. Each README gives the device requirement, one
 command and the expected result; the `reference/` folders hold the comparison

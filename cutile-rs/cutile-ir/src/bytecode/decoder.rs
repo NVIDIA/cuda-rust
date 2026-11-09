@@ -28,8 +28,13 @@ pub fn decode_bytecode(data: &[u8]) -> Result<String> {
     let mut out = String::new();
 
     // Header
-    let version = r.read_header()?;
-    writeln!(out, "TileIR bytecode v{version}").unwrap();
+    let header_version = r.read_header()?;
+    let version = header_version.without_preview();
+    if header_version.is_preview() {
+        writeln!(out, "TileIR bytecode v{version} (preview)").unwrap();
+    } else {
+        writeln!(out, "TileIR bytecode v{version}").unwrap();
+    }
     writeln!(out).unwrap();
 
     // Collect raw sections first, then parse in dependency order.
@@ -96,7 +101,7 @@ pub fn decode_bytecode(data: &[u8]) -> Result<String> {
 
     // Function section.
     if let Some(payload) = sections.get(Section::Func as u8) {
-        let funcs = parse_func_section(payload, &strings, &types)?;
+        let funcs = parse_func_section(payload, &strings, &types, version)?;
         writeln!(out, "=== Functions ({}) ===", funcs.len()).unwrap();
         for f in &funcs {
             writeln!(out, "{f}").unwrap();
@@ -105,7 +110,7 @@ pub fn decode_bytecode(data: &[u8]) -> Result<String> {
 
     // Debug section.
     if let Some(payload) = sections.get(Section::Debug as u8) {
-        parse_debug_section(payload, &strings, &mut out)?;
+        parse_debug_section(payload, &strings, version, &mut out)?;
     }
 
     Ok(out)
@@ -289,7 +294,12 @@ impl<'a> Reader<'a> {
 /// Parses and pretty-prints the Debug section: per-function attribute-id
 /// lists plus the interned attribute table (tag byte + varint fields; see
 /// the writer's `write_debug_section` for the layout).
-fn parse_debug_section(payload: &[u8], strings: &[String], out: &mut String) -> Result<()> {
+fn parse_debug_section(
+    payload: &[u8],
+    strings: &[String],
+    version: BytecodeVersion,
+    out: &mut String,
+) -> Result<()> {
     use super::enums::DebugTag;
 
     let mut r = Reader::new(payload);
@@ -373,9 +383,14 @@ fn parse_debug_section(payload: &[u8], strings: &[String], out: &mut String) -> 
                 let linkage = a.read_varint()?;
                 let cu = a.read_varint()?;
                 let scope_line = a.read_varint()?;
+                let flags = if version >= BytecodeVersion::V13_5 {
+                    a.read_varint()?
+                } else {
+                    0
+                };
                 writeln!(
                     out,
-                    "DISubprogram(file=di[{file}], line={line}, name={:?}, linkage={:?}, cu=di[{cu}], scope_line={scope_line})",
+                    "DISubprogram(file=di[{file}], line={line}, name={:?}, linkage={:?}, cu=di[{cu}], scope_line={scope_line}, flags={flags})",
                     s(name),
                     s(linkage),
                 )
@@ -793,10 +808,15 @@ fn parse_global_section(
 // Function section parser
 // =========================================================================
 
-fn parse_func_section(data: &[u8], strings: &[String], types: &[String]) -> Result<Vec<String>> {
+fn parse_func_section(
+    data: &[u8],
+    strings: &[String],
+    types: &[String],
+    version: BytecodeVersion,
+) -> Result<Vec<String>> {
     let mut r = Reader::new(data);
     let count = r.read_varint()? as usize;
-    let mut funcs = Vec::with_capacity(count);
+    let mut funcs = Vec::with_capacity(count.min(data.len()));
 
     for _ in 0..count {
         let name_idx = r.read_varint()? as usize;
@@ -808,14 +828,20 @@ fn parse_func_section(data: &[u8], strings: &[String], types: &[String]) -> Resu
         let sig = types.get(sig_idx).cloned().unwrap_or("?".into());
 
         let is_kernel = flags_byte & FunctionFlag::KindKernel as u8 != 0;
-        let has_hints = flags_byte & FunctionFlag::HasOptimizationHints as u8 != 0;
+        let has_hints = if version >= BytecodeVersion::V13_5 {
+            is_kernel
+        } else {
+            flags_byte & FunctionFlag::HasOptimizationHints as u8 != 0
+        };
         let kind = if is_kernel { "entry" } else { "func" };
 
-        // Skip optimization hints if present (self-contained attribute).
+        // Optimization hints and argument attributes are self-contained
+        // attributes; they are skipped, not displayed.
         if has_hints {
-            // Skip the self-contained attribute — we'd need full attribute
-            // decoding to display it. For now just note it.
-            // TODO: decode optimization hints attribute.
+            skip_attribute(&mut r, types, 0)?;
+        }
+        if version >= BytecodeVersion::V13_5 {
+            skip_attribute(&mut r, types, 0)?;
         }
 
         let body_len = r.read_varint()? as usize;
@@ -831,6 +857,75 @@ fn parse_func_section(data: &[u8], strings: &[String], types: &[String]) -> Resu
         funcs.push(out);
     }
     Ok(funcs)
+}
+
+/// Consume function metadata without mistaking its bytes for a body length.
+fn skip_attribute(r: &mut Reader<'_>, types: &[String], depth: usize) -> Result<()> {
+    if depth > 64 {
+        return Err(err("attribute nesting exceeds 64 levels"));
+    }
+    match r.read_varint()? {
+        1 | 7 => {
+            r.read_varint()?;
+            r.read_varint()?;
+        }
+        2 => {
+            let ty = r.read_varint()? as usize;
+            let size = match types.get(ty).map(String::as_str) {
+                Some("f16" | "bf16") => 2,
+                Some("f32" | "tf32") => 4,
+                Some("f64") => 8,
+                _ => return Err(err("unsupported float attribute type")),
+            };
+            r.read_bytes(size)?;
+        }
+        3 => {
+            r.read_byte()?;
+        }
+        4 | 5 => {
+            r.read_varint()?;
+        }
+        6 => {
+            let count = r.read_varint()?;
+            for _ in 0..count {
+                skip_attribute(r, types, depth + 1)?;
+            }
+        }
+        8 => {
+            r.read_varint()?;
+            let flags = r.read_byte()?;
+            for bit in [1, 2] {
+                if flags & bit != 0 {
+                    r.read_varint()?;
+                }
+            }
+        }
+        9 => {
+            let count = r.read_varint()? as usize;
+            r.read_bytes(
+                count
+                    .checked_mul(8)
+                    .ok_or_else(|| err("attribute length overflow"))?,
+            )?;
+        }
+        10 | 11 => {
+            let count = r.read_varint()?;
+            for _ in 0..count {
+                r.read_varint()?;
+                skip_attribute(r, types, depth + 1)?;
+            }
+        }
+        12 => {
+            let flags = r.read_byte()?;
+            for bit in [1, 2] {
+                if flags & bit != 0 {
+                    r.read_varint()?;
+                }
+            }
+        }
+        _ => return Err(err("unknown function metadata attribute tag")),
+    }
+    Ok(())
 }
 
 /// Quick heuristic: count opcodes in a function body by scanning varints.

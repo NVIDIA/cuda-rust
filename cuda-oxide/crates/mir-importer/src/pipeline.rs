@@ -257,7 +257,7 @@ pub struct PipelineConfig {
     ///
     /// Explicit fused operations, such as `f32::mul_add`, are unaffected.
     pub allow_fma_contraction: bool,
-    /// Stable per-compilation identity woven into counter-named module-scope
+    /// Stable per-compilation identity woven into generated module-scope
     /// symbols (`__shared_mem_*`, `__device_global_*`) and the dynamic
     /// shared-memory pool externs (`__dynamic_smem_*`) during MIR lowering.
     ///
@@ -324,6 +324,20 @@ pub fn build_debug_global_variable_info(
     identity: DebugGlobalVariableIdentity,
     ty: &Ty,
 ) -> Option<DebugGlobalVariableInfo> {
+    if matches!(
+        ty.kind(),
+        rustc_public::ty::TyKind::RigidTy(
+            rustc_public::ty::RigidTy::Ref(_, pointee, _)
+                | rustc_public::ty::RigidTy::RawPtr(pointee, _)
+        ) if matches!(
+            pointee.kind(),
+            rustc_public::ty::TyKind::RigidTy(
+                rustc_public::ty::RigidTy::Slice(_) | rustc_public::ty::RigidTy::Str
+            )
+        )
+    ) {
+        return None;
+    }
     let debug_ty = crate::translator::body::debug_type_for_ty(ty)?;
     let semantic_size_bits = ty.layout().ok()?.shape().size.bytes() as u64 * 8;
     if debug_ty.size_bits() != semantic_size_bits {

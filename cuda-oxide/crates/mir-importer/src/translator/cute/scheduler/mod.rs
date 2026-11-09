@@ -27,10 +27,10 @@ use rustc_public::ty::{GenericArgs, RigidTy, Ty, TyKind};
 
 use super::tensor::{canonical_adt_path, const_arg, exact_schema, unsigned_const};
 
-/// Exact defining path of `cute_rs::scheduler::StaticPersistentTileScheduler`; public reexports do not change it.
-const SCHEDULER: &str = "cute_rs::scheduler::StaticPersistentTileScheduler";
-/// Exact defining path of `cute_rs::scheduler::WorkTileInfo`; public reexports do not change it.
-const WORK_TILE: &str = "cute_rs::scheduler::WorkTileInfo";
+/// Exact defining path of `cute_rs::utils::scheduler::StaticPersistentTileScheduler`; public reexports do not change it.
+const SCHEDULER: &str = "cute_rs::utils::scheduler::StaticPersistentTileScheduler";
+/// Exact defining path of `cute_rs::utils::scheduler::WorkTileInfo`; public reexports do not change it.
+const WORK_TILE: &str = "cute_rs::utils::scheduler::WorkTileInfo";
 
 /// Recognize one exact source ADT rather than a type with a similar printed name.
 fn exact_adt(ty: &Ty, expected: &str) -> Result<Option<GenericArgs>, String> {

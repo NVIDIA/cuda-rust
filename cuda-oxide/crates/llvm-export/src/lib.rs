@@ -411,13 +411,14 @@ pub mod ops {
     /// Stable rustc-side identity of the static represented by a `GlobalOp`.
     ///
     /// The emitted LLVM symbol is not sufficient for relocation lookup because
-    /// ordinary device globals receive generated `__device_global_N` names.
+    /// ordinary device globals receive generated `__device_global_<hash>`
+    /// names.
     const GLOBAL_SOURCE_KEY: &str = "cuda_oxide_global_source_key";
     /// Versioned, length-prefixed pointer-relocation metadata for an initialized
     /// Rust static.
     const GLOBAL_INITIALIZER_RELOCATIONS_KEY: &str = "cuda_oxide_global_initializer_relocations";
-    /// Rust path of the shared-memory `static` a generated `__shared_mem_N`
-    /// global came from.
+    /// Rust path of the shared-memory `static` a generated
+    /// `__shared_mem_<hash>` global came from.
     ///
     /// Distinct from [`GLOBAL_SOURCE_KEY`], which is a *relocation identity*:
     /// the exporter indexes it, requires it to be unique across globals, and

@@ -12,7 +12,9 @@ on:
     # No workflow-level paths: filter; the changes job below gates the jobs.
     branches:
       - main
+      - "release/v0.5.x"
       - "pull-request/[0-9]+"
+  workflow_dispatch:
   schedule:
     - cron: "44 3 * * 6"
 

@@ -4,31 +4,38 @@
  */
 
 #![doc = "Checks attention shared layouts, typed MMA shapes and complete tile-array contracts."]
-use cute_rs::attention::sm100::{MmaSs, MmaTs, SharedLayout, SharedTileArray, SmemLayout};
+use cute_rs::nvgpu::tcgen05::{MmaSs, MmaTs, SharedLayout, SharedTileArray, SmemLayout};
 use cute_rs::{OperandA, OperandB};
 
-/// Keep explicit SM100 instructions behind CTM in both kernels and their CuTe helpers.
-/// CuTe compiler markers for structured MMA/TMA remain a separate supported path.
+/// Ensure `cute-rs` does not depend on or invoke `cutlass-primitives`.
 #[test]
-fn sm100_attention_uses_ctm_for_explicit_device_operations() {
-    let cute_rs_preview = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap();
+fn cute_rs_is_free_of_cutlass_primitives() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let cargo_toml = std::fs::read_to_string(manifest_dir.join("Cargo.toml")).unwrap();
+    assert!(
+        !cargo_toml.contains("cutlass-primitives") && !cargo_toml.contains("ctm-rs"),
+        "cute-rs/Cargo.toml must not depend on cutlass-primitives"
+    );
     let paths = [
-        "examples/sm100_fmha_prefill_cute/src/kernel.rs",
-        "examples/sm100_mla_decode_fp16_cute/src/kernel.rs",
-        "cute-rs/src/arch.rs",
-        "cute-rs/src/attention/sm100/pipeline.rs",
-        "cute-rs/src/attention/sm100/tmem.rs",
-        "cute-rs/src/attention/sm100/tma.rs",
-        "cute-rs/src/attention/sm100/__compiler.rs",
+        "src/arch.rs",
+        "src/pipeline/sm100.rs",
+        "src/utils/tmem_allocator.rs",
+        "src/nvgpu/tcgen05/mma.rs",
+        "src/nvgpu/tcgen05/copy.rs",
+        "src/nvgpu/tcgen05/shared.rs",
     ];
     for path in paths {
-        let source = std::fs::read_to_string(cute_rs_preview.join(path)).unwrap();
+        let source = std::fs::read_to_string(manifest_dir.join(path)).unwrap();
         assert!(
-            !source.contains("cuda_device::"),
-            "{path} bypasses the CTM instruction/storage interface"
+            !source.contains("cutlass_primitives") && !source.contains("ctm_rs"),
+            "{path} must not reference cutlass_primitives"
         );
+        if path.starts_with("src/nvgpu/") {
+            assert!(
+                !source.contains("cuda_device") && !source.contains("encode_no_swizzle_smem_desc"),
+                "{path} must lower through __compiler -> dialect-cute without raw cuda_device or manual descriptor bit-packing"
+            );
+        }
     }
 }
 

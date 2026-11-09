@@ -1,0 +1,21 @@
+[package]
+name = "shared_static_names"
+version = "0.1.0"
+edition = "2024"
+authors = ["Praveen Perera <me@praveenperera.com>"]
+license = "Apache-2.0"
+
+# Mark as standalone crate (not part of parent workspace)
+[workspace]
+
+# Shared-memory and device-global symbols are named after the Rust static they
+# come from, so adding a kernel leaves the other kernels' PTX unchanged.
+# Run with:
+#   cargo oxide run shared_static_names
+# scripts/check-shared-static-names.sh builds copies with an added kernel and
+# compares the PTX.
+
+[dependencies]
+cuda-device = { path = "../../../cuda-device" }
+cuda-host = { path = "../../../cuda-host" }
+cuda-core = { path = "../../../../../cuda-core" }

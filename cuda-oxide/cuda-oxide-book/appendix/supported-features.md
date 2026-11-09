@@ -39,7 +39,7 @@ Array value constants support primitive leaves (integers, `f16`, `f32`,
 enum, tuple, and zero-sized fields. Tuple element strides and field offsets
 come from rustc layout, including internal and trailing padding; direct tuple
 value constants use the same layout-aware decoder. Struct constants (direct
-and promoted-by-reference) also read every field at its rustc layout offset,
+and by reference) also read every field at its rustc layout offset,
 so padded, reordered, `#[repr(C)]`, and nested shapes decode correctly, and a
 struct's stored size is its padded size, which fixes the element stride for
 arrays of padded structs inside constants. Pointer-free initialized union
@@ -122,7 +122,47 @@ non-zero byte addends. This includes niche-encoded `Option<&T>` and
 direct-tagged enum layouts, both for direct thin-reference payloads and for
 pointers nested inside tuple, struct, or array payload fields. Relocation-carrying
 enum constants can also be nested inside tuple, struct, and array constants.
-Anonymous promoted allocations remain unsupported.
+
+Reference constants and rustc-promoted borrows (`const C: &T = &...`, `&(3, 4)`,
+`&42`) point at anonymous constant memory. Each such allocation becomes one
+module-level read-only device global holding rustc's evaluated byte image, so a
+`&'static` reference stays valid after the function that named it returns,
+including across an `#[inline(never)]` call. References into the same
+allocation share its global: `&PAIR.1` addresses 4 bytes into `PAIR`'s global.
+These globals are keyed by their contents (bytes, alignment, and what their
+pointers target), so adding unrelated constants or kernels never renames an
+existing one, and two read-only allocations with the same contents share one
+global, which Rust permits because it does not promise constants distinct
+addresses.
+A reference to a whole array (`&[T; N]`) keeps the promoted-table path above,
+whose globals are keyed by content, so it can get a separate copy of the bytes
+from a `&T` into the same allocation; Rust does not promise one address across
+uses of a constant. Pointers stored inside the allocation (`&&7`,
+`&&TABLE[2]`) are relocations to the inner allocation's own global or to the
+device static. `*mut T` constants formed with `as` casts from references
+(`&42 as *const u32 as *mut u32`) use the same read-only globals; the storage
+stays read-only. The same per-allocation globals back thin pointer fields of
+tuple, struct, array, and enum constants that point at anonymous memory, and
+the thin-pointer and slice data words of device-static initializers
+(`static S: &[u32] = &[1, 2]`). When the importer cannot prove the pointee's
+device layout byte-identical to rustc's (for example `&Option<u32>`), a
+reference to the whole allocation declares the same global typed as the
+pointee, and lowering validates that layout against the shared bytes, so
+`&Option<u32>` and `&u32` into its payload still compare equal. An interior
+pointer is rejected at compile time when the importer cannot prove the layout
+of the pointee it views. A pointer into shared memory cannot be stored inside
+a constant or a static: a constant or static initializer whose type holds a
+`*const`/`&` to a `SharedArray` or `Barrier` is rejected at compile time (see
+`error_shared_pointer_constant`), and so is a stored pointer that reaches a
+`SharedArray` or `Barrier` static through a type-erasing cast (see
+`error_shared_static_relocation`). Those statics live in per-block shared
+memory and have no initialized global to point at, and every stored pointer
+targets an initialized global. The type check is conservative: a constant
+whose type holds such a pointer is refused whenever it stores any relocated
+pointer, even when the shared-memory pointer itself is null. Slice references
+in `const` items and slice fat-pointer fields of aggregate constants whose data
+word points at anonymous memory remain unsupported and fail at compile time.
+See `promoted_ref_return`.
 
 ## Compiler: Closures
 
@@ -131,7 +171,7 @@ Anonymous promoted allocations remain unsupported.
 | Move Closures (`FnOnce`) | **Full** | Closures that capture by value. The whole closure struct is pushed as one byval kernel argument. `move \|x\| x * factor` pattern. |
 | Reference Closures (`Fn`/`FnMut`) | **Full** | Non-move closures that capture by reference. The closure struct (containing host pointers) still travels as one byval argument; the GPU reads through those pointers via HMM. |
 | Host-to-Device Closures | **Full** | Closures defined on host passed to generic kernels. Polynomial evaluation with captured coefficients tested. |
-| Device-Internal Closures | **Full** | Closures created and used entirely on device, including closures passed to device functions. |
+| Device-Internal Closures | **Full** | Closures created and used entirely on device, including closures passed to device functions. A non-`move` closure can capture a shared-memory pointer by reference: the captured local holds the generic form of the pointer, and optimized builds recover `st.shared` / `cp.async...shared` after inlining. |
 
 ## Compiler: Control Flow
 
@@ -142,7 +182,7 @@ Anonymous promoted allocations remain unsupported.
 | For Loops (range, iterator, enumerate) | **Full** | Full iterator desugaring: range-based, `slice.iter()`, `enumerate()`, nested loops, `break`, `continue`. |
 | While Loops / If-Else | **Full** | Baseline control flow fully supported. |
 | Break and Continue | **Full** | `break` and `continue` in for/while loops, including early exit. |
-| Loop Unroll Annotations | **Partial** | `#[unroll]` and `#[unroll(N)]` request unrolling of explicit counted `while` loops and range `for` loops (`for i in a..b` and `(a..b).rev()`) over any integer counter, including `isize`. Other iterator loops, such as `a..=b` or `.step_by(k)`, are not yet recognized. Nested loops and multiple `continue` paths work; full unrolling preserves `break` paths and multiple exit targets, while partial unrolling requires a positive-step `<`/`<=` loop with an invariant limit and only the normal header exit. Requests are capped at 1,024 copies, 8,192 cloned blocks, and 65,536 cloned operations. `#[nounroll]` keeps any loop rolled through LLVM, libNVVM, and ptxas. |
+| Loop Unroll Annotations | **Partial** | `#[unroll]` and `#[unroll(N)]` request unrolling of explicit counted `while` loops and range `for` loops (`for i in a..b` and `(a..b).rev()`) over any integer counter, including `isize`. Other iterator loops, such as `a..=b` or `.step_by(k)`, are not yet recognized. Nested loops and multiple `continue` paths work; full unrolling preserves `break` paths and multiple exit targets, while partial unrolling requires a `<`/`<=` loop with an invariant limit, a positive constant or loop-invariant runtime step (block-stride loops included), and only the normal header exit. Requests are capped at 1,024 copies, 8,192 cloned blocks, and 65,536 cloned operations. `#[nounroll]` keeps any loop rolled through LLVM, libNVVM, and ptxas. |
 | Monomorphization-Dead Branches | **Partial** | Branches that become dead after generic specialization (e.g. the const-false arm of `if M::ENABLED`) are ignored by symbol collection, panic checks, and pointer address-space inference, so panic-only hooks in dead arms compile. Only switches rustc itself folds are pruned: a constant discriminant operand or a direct single-assignment constant. Multi-step constant copy chains keep both arms, matching rustc's host monomorphization; this is deliberate, not a general constant-propagation pass. |
 
 ## Compiler: Arithmetic and Casting
@@ -289,7 +329,7 @@ Anonymous promoted allocations remain unsupported.
 |:--------|:-------|:------------|
 | Warp-Level MMA (`wmma`) | **Full** | Register-only `mma.sync` shapes, `movmatrix`, and warp-cooperative `ldmatrix` loads. |
 | Sparse MMA | **Full** | Structured-sparsity `mma.sp` shapes alongside the dense ones, in the same `wmma` module. |
-| Warpgroup MMA (`wgmma`) | **Partial** | Hopper `sm_90a`: fence/commit/wait pipeline, shared-memory descriptors, and `m64n64k16` MMA with `bf16`/`f16` inputs and `f32` accumulate. Gap: the lowering covers specific proven loop patterns (`bf16` works in straight-line code, counted K-loops, and partial-wait pipelines; `f16` in straight-line code only), and `tf32` calls are rejected pending [#1076](https://github.com/NVlabs/cuda-oxide/issues/1076). |
+| Warpgroup MMA (`wgmma`) | **Partial** | Hopper `sm_90a`: fence/commit/wait pipeline, shared-memory descriptors, `m64n64k16` MMA with `bf16`/`f16` inputs and `f32` accumulate, and `m64n128k16` MMA with `bf16`/`f16` inputs and `f32` accumulate for canonical linear full-drain regions. Gap: the lowering covers specific proven loop patterns (`bf16` m64n64 works in straight-line code, counted K-loops, and partial-wait pipelines; `f16` m64n64 in straight-line code and counted K-loops; m64n128 is linear full-drain only), and `tf32` calls are rejected pending [#1076](https://github.com/NVlabs/cuda-oxide/issues/1076). |
 | Tensor Core Gen 5 (`tcgen05`) | **Full** | Blackwell sm_100+: TMEM alloc/dealloc, MMA, `stmatrix`, CTA-pair (cg2) variants. |
 | Accumulator Fragment Algebra (`mma_frag`) | **Full** | Index algebra for the `m16n8k16` accumulator, so a lane can address its own slots of the `[f32; 4]` fragment. |
 | FP8 / FP6 / FP4 Formats | **Partial** | Conversions (`convert::cvt_*` for `e4m3`/`e5m2`) and the matrix path (FP8 `mma.sync` shapes, the `mxf8f6f4` shapes, tcgen05 descriptors) ship; the `mma_mxf8f6f4` example compiles them. Gap: no *arithmetic* on these formats. There's no add/mul/min/max the way `f16` and `bf16` have, so values are carried as packed bit patterns and converted before use. |

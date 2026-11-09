@@ -210,7 +210,8 @@ impl Module {
     ///
     /// This is the backwards-compatible constructor used by modules that do
     /// not (yet) capture source text (e.g. the `core` DSL module).
-    pub fn new(name: &'static str, ast: ItemMod) -> Self {
+    pub fn new(name: &'static str, mut ast: ItemMod) -> Self {
+        crate::foreign_decl::normalize_module(&mut ast);
         Self {
             name,
             absolute_path: String::new(),
@@ -221,7 +222,8 @@ impl Module {
 
     /// Create a module **with** a [`SpanBase`] so that every runtime span in
     /// `ast` can be resolved to an absolute [`SourceLocation`].
-    pub fn with_span_base(name: &'static str, ast: ItemMod, span_base: SpanBase) -> Self {
+    pub fn with_span_base(name: &'static str, mut ast: ItemMod, span_base: SpanBase) -> Self {
+        crate::foreign_decl::normalize_module(&mut ast);
         Self {
             name,
             absolute_path: String::new(),

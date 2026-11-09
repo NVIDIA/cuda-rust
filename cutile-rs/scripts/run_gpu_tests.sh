@@ -194,6 +194,10 @@ run_gpu_step \
     gpu_test tile cutile warmup_suite
 
 run_gpu_step \
+    "reusable split-prefill and persistent RMSNorm kernels" \
+    gpu_test tile cutile-kernels gpu --ignored --serial
+
+run_gpu_step \
     "cutile GPU aggregate tests" \
     gpu_test tile cutile gpu
 

@@ -19,7 +19,7 @@
 //! - [`insert_op`]: Common operation insertion pattern.
 
 use crate::error::{TranslationErr, TranslationResult};
-use crate::translator::values::{ValueMap, establish_declared_pointer_type};
+use crate::translator::values::{ValueMap, establish_declared_pointer_type, store_through_address};
 use crate::translator::{payload_store, rvalue};
 use dialect_mir::{
     attributes::MirPointerKindAuthorityAttr,
@@ -170,25 +170,19 @@ pub(crate) fn finish_destination_write(
     prev_op: Ptr<Operation>,
     loc: Location,
 ) -> TranslationResult<Ptr<Operation>> {
-    use dialect_mir::ops::MirStoreOp;
-
     match destination {
         PreparedDestinationWrite::Local(local) => Ok(value_map
             .store_local(ctx, local, value, block_ptr, Some(prev_op))
+            .inspect(|store_op| store_op.deref_mut(ctx).set_loc(loc))
             .unwrap_or(prev_op)),
-        PreparedDestinationWrite::Address(address) => {
-            let store_op = Operation::new(
-                ctx,
-                MirStoreOp::get_concrete_op_info(),
-                vec![],
-                vec![address, value],
-                vec![],
-                0,
-            );
-            store_op.deref_mut(ctx).set_loc(loc);
-            store_op.insert_after(ctx, prev_op);
-            Ok(store_op)
-        }
+        PreparedDestinationWrite::Address(address) => Ok(store_through_address(
+            ctx,
+            address,
+            value,
+            block_ptr,
+            Some(prev_op),
+            loc,
+        )),
         PreparedDestinationWrite::CanonicalPayload(payload) => {
             payload_store::rebuild_and_store_prepared(
                 ctx,

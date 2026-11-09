@@ -303,16 +303,16 @@ they become `call` instructions to `@llvm.nvvm.*` intrinsics.
 
 ### Architecture Coverage
 
-At catalog SHA-256 `f496b568` (the stamp in every `ops/generated/` file
+At catalog SHA-256 `63b19efb` (the stamp in every `ops/generated/` file
 header), the dialect holds 589 operations across 42 modules, and they come
 from two different places. The split is the first thing to know about it,
 because it decides where -- and whether -- you would add one. If the header
-stamp no longer starts with `f496b568`, the counts on this page predate the
+stamp no longer starts with `63b19efb`, the counts on this page predate the
 catalog you are reading.
 
 **Hand-written**, directly under `cuda-oxide/crates/dialect-nvvm/src/ops/`. These are the
 ops with bespoke verification or lowering that the intrinsic catalog does not
-describe. There are seven modules and 27 operations:
+describe. There are seven modules and 29 operations:
 
 | Module    | Description                                                 | Ops |
 | :-------- | :---------------------------------------------------------- | --: |
@@ -322,12 +322,12 @@ describe. There are seven modules and 27 operations:
 | `debug`   | `assertfail`, `vprintf`                                     |   2 |
 | `grid`    | Cooperative `grid_sync`                                     |   1 |
 | `memory`  | Generic-to-shared address conversion and global stores     |   2 |
-| `wgmma`   | Warpgroup MMA descriptors; bf16/f16 at m64n64k16, bf16 at m64n128k16, tf32 at m64n64k8 |  14 |
+| `wgmma`   | Warpgroup MMA descriptors; bf16/f16 at m64n64k16, bf16/f16 at m64n128k16, tf32 at m64n64k8 |  16 |
 
 **Generated**, under `ops/generated/`, from `intrinsics/catalog.json` by
 `cuda-intrinsics-gen`. Every file there opens with `// @generated ... DO NOT
 EDIT.`, and editing one by hand is undone by the next generator run. This is
-the large majority -- 35 modules and 562 operations, resolved from 1066 catalog
+the large majority -- 35 modules and 562 operations, resolved from 1058 catalog
 entries, since several intrinsics can share one structural op:
 
 | Area                        | Modules                                                                       | Ops |

@@ -84,6 +84,7 @@ impl DebugAttrTable {
         linkage_name: &str,
         compile_unit: u64,
         scope_line: u64,
+        is_declaration: bool,
     ) -> u64 {
         let mut buf = vec![DebugTag::DISubprogram as u8];
         push_varint(&mut buf, file);
@@ -92,6 +93,8 @@ impl DebugAttrTable {
         push_varint(&mut buf, strings.get_or_insert(linkage_name));
         push_varint(&mut buf, compile_unit);
         push_varint(&mut buf, scope_line);
+        // Canonical interning uses the 13.5 flags field; older writers omit it.
+        push_varint(&mut buf, u64::from(is_declaration));
         self.intern(buf)
     }
 

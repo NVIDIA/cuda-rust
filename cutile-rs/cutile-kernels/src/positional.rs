@@ -228,3 +228,46 @@ pub mod qk_rope_dynpos_f16_module {
 }
 
 pub use qk_rope_dynpos_f16_module::qk_rope_dynpos_f16;
+
+#[cutile::module]
+pub mod rope_f16_module {
+    use cutile::core::*;
+
+    /// Apply chunked/GPT-NeoX rotary encoding to one token.
+    #[cutile::entry(print_ir=false,
+                       optimization_hints = (
+                         sm_120 = (occupancy=1, max_divisibility=16,),
+                       ))]
+    fn rope_f16<const D: i32, const HALF_D: i32>(
+        x: &mut Tensor<f16, { [1, D] }>,
+        inv_freq: &Tensor<f32, { [HALF_D] }>,
+        position: i32,
+    ) {
+        // Qwen3 text uses chunked/GPT-NeoX RoPE layout: [x0, x1] where each chunk is D/2.
+        let x_part: Partition<f16, { [1, HALF_D] }> = x.partition(const_shape![1, HALF_D]);
+        let x_lo_f16: Tile<f16, { [1, HALF_D] }> = x_part.load([0i32, 0i32]);
+        let x_hi_f16: Tile<f16, { [1, HALF_D] }> = x_part.load([0i32, 1i32]);
+        let x_lo: Tile<f32, { [1, HALF_D] }> = convert_tile(x_lo_f16);
+        let x_hi: Tile<f32, { [1, HALF_D] }> = convert_tile(x_hi_f16);
+
+        let inv_part = inv_freq.partition(const_shape![HALF_D]);
+        let freq: Tile<f32, { [HALF_D] }> = inv_part.load([0i32]);
+        let pos: f32 = convert_scalar(position);
+        let pos: Tile<f32, { [HALF_D] }> = pos.broadcast(const_shape![HALF_D]);
+        let theta: Tile<f32, { [HALF_D] }> = pos * freq;
+        let theta: Tile<f32, { [1, HALF_D] }> = theta.reshape(const_shape![1, HALF_D]);
+        let cos_t = cos(theta);
+        let sin_t = sin(theta);
+
+        let y_lo: Tile<f32, { [1, HALF_D] }> = x_lo * cos_t - x_hi * sin_t;
+        let y_hi: Tile<f32, { [1, HALF_D] }> = x_hi * cos_t + x_lo * sin_t;
+        let y_lo_f16: Tile<f16, { [1, HALF_D] }> = convert_tile(y_lo);
+        let y_hi_f16: Tile<f16, { [1, HALF_D] }> = convert_tile(y_hi);
+
+        let mut x_out = x.partition_mut(const_shape![1, HALF_D]);
+        x_out.store(y_lo_f16, [0i32, 0i32]);
+        x_out.store(y_hi_f16, [0i32, 1i32]);
+    }
+}
+
+pub use rope_f16_module::rope_f16;

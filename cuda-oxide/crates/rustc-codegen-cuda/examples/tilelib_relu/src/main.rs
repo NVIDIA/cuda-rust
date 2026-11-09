@@ -125,6 +125,12 @@ fn run() -> Fallible<Outcome> {
 
     let rust_ltoir = rust_ltoir(dir, &options)?;
     let caller_ltoir = compile_caller(&nvcc, &caller_cu, options.target())?;
+    // The caller defines one `call_<decl>` kernel per callable export.
+    let kernels: Vec<String> = exports
+        .iter()
+        .map(|desc| format!("call_{}", desc.decl))
+        .collect();
+    let kernels: Vec<&str> = kernels.iter().map(String::as_str).collect();
     // Both halves are LTOIR, so nvJitLink resolves the implementation symbols
     // at link time, the same way a real tile library is consumed.
     let cubin = LtoLinker::discover()?.link_ltoir(
@@ -134,7 +140,7 @@ fn run() -> Fallible<Outcome> {
         ],
         &options,
         FinalizerOutput::Cubin,
-        &["caller"],
+        &kernels,
     )?;
     println!(
         "nvJitLink: {} bytes of cubin for {}",

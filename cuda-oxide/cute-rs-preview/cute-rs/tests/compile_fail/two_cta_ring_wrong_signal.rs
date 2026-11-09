@@ -4,7 +4,7 @@
  */
 
 //! Compile-fail probe: reject signaling mechanisms incompatible with each ring policy.
-use cute_rs::attention::sm100::pipeline::{
+use cute_rs::pipeline::sm100::{
     AsyncCompletion, LocalMemory, SharedReuse, SharedToAsync, TensorMemory, TwoCtaRing,
 };
 

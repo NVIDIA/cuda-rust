@@ -29,6 +29,7 @@ fn all_registry_entries_require_both_version_and_architecture() {
                     Architecture::Any => true,
                     Architecture::AtLeast(min) => sm >= min,
                     Architecture::Only(exact) => sm == exact,
+                    Architecture::OneOf(sms) => sms.contains(&sm),
                 };
                 let target = TargetCapabilities::new(version, format!("sm_{sm}"));
                 let result = feature.check(&target, &loc);

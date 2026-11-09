@@ -354,6 +354,28 @@ semantic_op!(
     [],
     |_| true
 );
+semantic_op!(
+    /// Copy one 512-byte `(32, 4, 4)` scale atom from shared memory into TMEM (`tcgen05.cp.32x128b.warpx4`).
+    ///
+    /// Operands: `[tmem_col, s_scale, step]`.
+    CuteSm100BlockScaledCopyOp,
+    "cute.sm100_block_scaled_copy",
+    sm100_block_scaled_copy_plan,
+    CuteSm100ScaleCopyPlanAttr,
+    [U32, SharedU32, U32],
+    |_| true
+);
+semantic_op!(
+    /// Issue one `K = 64` step of a group-one block-scaled `mxf4nvf4` MMA (`tcgen05.mma.cta_group::1.kind::mxf4nvf4.block_scale.block16`).
+    ///
+    /// Operands: `[tmem_d, a, b, sfa_tmem, sfb_tmem, valid_n, b_lbo_bytes, step, accumulate]`.
+    CuteSm100BlockScaledGemmOp,
+    "cute.sm100_block_scaled_gemm",
+    sm100_block_scaled_gemm_plan,
+    CuteSm100BlockScaledMmaPlanAttr,
+    [U32, SharedF16, SharedF16, U32, U32, U32, U32, U32, Bool],
+    |_| true
+);
 
 /// Apply a callback to the closed paired-SM100 operation set.
 macro_rules! for_all_ops {
@@ -377,7 +399,9 @@ macro_rules! for_all_ops {
             CuteSm100TmaStoreOp,
             CuteSm100StoreCommitOp,
             CuteSm100StoreAcquireOp,
-            CuteSm100StoreTailOp
+            CuteSm100StoreTailOp,
+            CuteSm100BlockScaledCopyOp,
+            CuteSm100BlockScaledGemmOp
         )
     };
 }
@@ -398,6 +422,8 @@ pub fn register(ctx: &mut Context) {
     CuteSm100ClusterCopyPlanAttr::register(ctx);
     CuteSm100EpiloguePlanAttr::register(ctx);
     CuteSm100PipelinePlanAttr::register(ctx);
+    CuteSm100ScaleCopyPlanAttr::register(ctx);
+    CuteSm100BlockScaledMmaPlanAttr::register(ctx);
 }
 /// Locally verify a recognized operation; `None` means another family.
 pub fn verify_local(ctx: &Context, op: Ptr<Operation>) -> Option<Result<(), Error>> {

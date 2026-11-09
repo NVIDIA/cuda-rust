@@ -12,12 +12,19 @@ use cuda_core::{Context, DeviceBuffer, LaunchConfig};
 use std::{
     future::Future,
     pin::Pin,
-    sync::{Arc, mpsc},
+    sync::{Arc, Mutex, mpsc},
     task::{Context as TaskContext, Waker},
     time::Duration,
 };
 
 const PTX: &str = ".version 7.0\n.target sm_52\n.address_size 64\n.visible .entry use_slice(.param .u64 ptr, .param .u64 len) { ret; }";
+
+/// CUDA's driver callback thread services `cuLaunchHostFunc` callbacks for the
+/// primary context sequentially, and driver module/allocation calls can block
+/// while a host callback is parked. Serialize these host-callback-gated tests
+/// so default multi-threaded `cargo test` runs do not contend on the driver's
+/// callback worker and trip the 10-second gate timeout.
+static HOST_CALLBACK_GATE_LOCK: Mutex<()> = Mutex::new(());
 
 struct Gate(mpsc::Sender<()>);
 impl Drop for Gate {
@@ -27,6 +34,9 @@ impl Drop for Gate {
 }
 
 fn pending_launch_keeps_access(forget: bool, atomic: bool) {
+    let _guard = HOST_CALLBACK_GATE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let context = Context::new(0).unwrap();
     let stream = context.new_stream().unwrap();
     let other = context.new_stream().unwrap();
@@ -49,13 +59,6 @@ fn pending_launch_keeps_access(forget: bool, atomic: bool) {
         cuda_host::push_async_writable_device_slice(&mut builder, &mut buffer);
         drop(buffer);
     }
-    let (tx, rx) = mpsc::channel();
-    stream
-        .launch_host_function(move || {
-            let _ = rx.recv_timeout(Duration::from_secs(10));
-        })
-        .unwrap();
-    let gate = Gate(tx);
     // SAFETY: PTX declares exactly the pointer/length packet above and no
     // memory accesses. The descriptors still model a writable kernel argument,
     // so this test can observe exclusion without deliberately racing GPU memory.
@@ -69,6 +72,13 @@ fn pending_launch_keeps_access(forget: bool, atomic: bool) {
     let mut future = launch
         .schedule(&SingleStream::from_stream(stream.clone()))
         .unwrap();
+    let (tx, rx) = mpsc::channel();
+    stream
+        .launch_host_function(move || {
+            let _ = rx.recv_timeout(Duration::from_secs(10));
+        })
+        .unwrap();
+    let gate = Gate(tx);
     assert!(
         Pin::new(&mut future)
             .poll(&mut TaskContext::from_waker(Waker::noop()))
@@ -121,6 +131,9 @@ fn shared_atomic_arguments_exclude_ordinary_reads_after_drop() {
 #[test]
 #[ignore = "requires a live CUDA GPU"]
 fn device_box_preserves_concurrent_read_permissions() {
+    let _guard = HOST_CALLBACK_GATE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let context = Context::new(0).unwrap();
     let stream = context.new_stream().unwrap();
     let other = context.new_stream().unwrap();
@@ -148,6 +161,9 @@ fn device_box_preserves_concurrent_read_permissions() {
         // the no-op kernel never dereferences the modeled shared slices.
         unsafe { builder.finalize_unchecked(LaunchConfig::for_num_elems(32)) }
     };
+    let mut first = make_launch()
+        .schedule(&SingleStream::from_stream(stream.clone()))
+        .unwrap();
     let (tx, rx) = mpsc::channel();
     stream
         .launch_host_function(move || {
@@ -155,9 +171,6 @@ fn device_box_preserves_concurrent_read_permissions() {
         })
         .unwrap();
     let gate = Gate(tx);
-    let mut first = make_launch()
-        .schedule(&SingleStream::from_stream(stream.clone()))
-        .unwrap();
     assert!(
         Pin::new(&mut first)
             .poll(&mut TaskContext::from_waker(Waker::noop()))

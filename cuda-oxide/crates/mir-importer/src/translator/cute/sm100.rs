@@ -70,6 +70,10 @@ pub(crate) enum Sm100Fn {
     AccumulatorWait,
     /// Signal one consumer warp's completed accumulator reads.
     AccumulatorRelease,
+    /// Copy one 512-byte `(32, 4, 4)` scale atom from shared memory into TMEM.
+    BlockScaledCopy,
+    /// Issue one `K = 64` step of a group-one block-scaled `mxf4nvf4` MMA.
+    BlockScaledGemm,
 }
 
 /// Report an unsupported source contract at this CuTe boundary.
@@ -152,8 +156,9 @@ fn shared_operands(kind: Sm100Fn) -> &'static [usize] {
     match kind {
         TmemAlloc => &[0],
         TmemDealloc | StoreCommit | StoreAcquire | StoreTail => &[],
-        TmaStore => &[1],
+        TmaStore | BlockScaledCopy => &[1],
         TiledMma => &[1, 2, 3],
+        BlockScaledGemm => &[1, 2],
         TmemEpilogue => &[1],
         ClusterTmaLoad => &[1, 4],
         PipelineInit | AccumulatorInit => &[0, 1],
@@ -169,11 +174,12 @@ fn operand_count(kind: Sm100Fn) -> usize {
         TmemAlloc | TmemDealloc | AccumulatorCommit | AccumulatorRelease => 1,
         PipelineInit | PipelineExpect | PipelineRelease | AccumulatorInit | AccumulatorAcquire
         | AccumulatorWait => 2,
-        PipelineAcquire | PipelineWait => 3,
+        PipelineAcquire | PipelineWait | BlockScaledCopy => 3,
         TmemEpilogue | TmaStore => 4,
         StoreCommit | StoreAcquire | StoreTail => 0,
         TiledMma => 5,
         ClusterTmaLoad => 6,
+        BlockScaledGemm => 9,
     }
 }
 
@@ -373,6 +379,23 @@ pub(crate) fn emit(
             CuteSm100AccumulatorReleaseOp::new(ctx, operands, accumulator_plan(&static_args, &loc)?)
                 .get_operation()
         }
+        BlockScaledCopy => CuteSm100BlockScaledCopyOp::new(
+            ctx,
+            operands,
+            CuteSm100ScaleCopyPlanAttr { cta_group: 1 },
+        )
+        .get_operation(),
+        BlockScaledGemm => CuteSm100BlockScaledGemmOp::new(
+            ctx,
+            operands,
+            CuteSm100BlockScaledMmaPlanAttr {
+                m: constant(&static_args, 2, &loc)?,
+                k: constant(&static_args, 3, &loc)?,
+                a_layout: layout(&static_args, 0)?,
+                b_layout: layout(&static_args, 1)?,
+            },
+        )
+        .get_operation(),
     };
     operation.deref_mut(ctx).set_loc(loc.clone());
     insert(ctx, operation, block, after);

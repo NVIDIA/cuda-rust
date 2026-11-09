@@ -5,19 +5,20 @@
 
 //! Ampere-style FA2: typed CuTe copies, register MMA, and online softmax.
 //! One CTA owns 64 queries; four warps each own 16 rows of a 64-column tile.
-use ctm_rs::{
-    cuda_module, kernel, launch_bounds, launch_contract,
-    memory::{DisjointSlice, DynamicSharedArray},
-    thread,
-};
 use cute_rs::arch::{
     NamedBarrier, cp_async_commit_group, cp_async_wait_group, exp2_ftz_f32, fmax_f32,
     reciprocal_ftz_f32, threadquad_reduce_max_f32, threadquad_reduce_sum_f32,
 };
-use cute_rs::markers::{
+use cute_rs::layout::{
     C, ComposedLayout, CopyG2S, CopyUniversal, Layout, LeadingDim, RowMajor, Swizzle,
 };
 use cute_rs::{FragmentA, FragmentBPair, FragmentC, GmemMatrix, SmemTile, TiledCopy};
+use cutlass_primitives as prims;
+use prims::{
+    cuda_module, kernel, launch_bounds, launch_contract,
+    memory::{DisjointSlice, DynamicSharedArray},
+    thread,
+};
 
 /// Swizzled 64-by-64 FP16 layout shared by Q, K, V, and the output staging tile.
 type SharedLayout = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<64, 64>>;

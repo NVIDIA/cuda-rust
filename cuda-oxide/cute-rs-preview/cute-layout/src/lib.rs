@@ -189,7 +189,7 @@ pub use layout::{
     Layout, SharedLayout, SmemLayout, crd2idx, crd2idx_col_major_2d, crd2idx_col_major_3d,
     crd2idx_row_major_2d, crd2idx_row_major_3d, idx2crd, idx2crd_col_major_2d, idx2crd_grouped_2d,
     idx2crd_row_major_2d, sm1xx_block_scale_crd2idx, sm1xx_scale_atom_word_offset,
-    sm100_smem_crd2idx, sm100_smem_crd2idx_with_extents,
+    sm100_noswizzle_burst_u64_crd2idx, sm100_smem_crd2idx, sm100_smem_crd2idx_with_extents,
 };
 pub use parse::ParseLayoutError;
 pub use predication::{

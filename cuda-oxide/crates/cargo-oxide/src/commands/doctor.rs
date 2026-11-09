@@ -364,7 +364,7 @@ pub(super) fn backend_source_check(
 /// backend `.so` (informational), CUDA headers (`cuda.h`), CUDA toolkit
 /// (`nvcc`, libNVVM, nvJitLink, libdevice), LLVM (`llc`), clang/libclang,
 /// the NVIDIA driver / GPU (informational), and optionally `cuda-gdb` /
-/// `compute-sanitizer`.
+/// `compute-sanitizer` / the `wild` host linker.
 /// Exits non-zero if any required check fails.
 ///
 /// Doctor itself needs neither the CUDA toolkit nor a driver: every check
@@ -792,6 +792,52 @@ pub fn doctor(ctx: &Context) {
         None => {
             println!("- not found (only needed for `cargo oxide sanitize`)");
         }
+    }
+
+    // 11. wild (optional) -- uses the same env/config resolution and parser as
+    // `CUDA_OXIDE_LINKER`, so doctor and the build always agree on both missing
+    // `wild` and unsupported values.
+    let configured_linker =
+        super::codegen_env::inherited_or_configured_env(ctx, super::codegen_env::HOST_LINKER_ENV);
+    let found_wild = super::toolkit::find_executable("wild", &[]);
+    let linker_check = super::codegen_env::host_linker_rustflags_for(
+        configured_linker.as_deref().map(std::ffi::OsStr::new),
+        || found_wild.clone(),
+    );
+    print!("wild linker (optional)... ");
+    match (found_wild, linker_check) {
+        (_, Err(err))
+            if configured_linker
+                .as_deref()
+                .is_some_and(|value| value.trim() == "wild") =>
+        {
+            println!(
+                "✗ not found, but {}=wild is set",
+                super::codegen_env::HOST_LINKER_ENV
+            );
+            eprintln!("  Install it with `cargo install wild-linker`.");
+            let _ = err;
+            ok = false;
+        }
+        (_, Err(err)) => {
+            println!("✗ {err}");
+            ok = false;
+        }
+        (Some(path), Ok(_)) => match Command::new(&path).arg("--version").output() {
+            Ok(output) if output.status.success() => {
+                let version = String::from_utf8_lossy(&output.stdout);
+                if let Some(line) = version.lines().next() {
+                    println!("✓ {} ({})", line.trim(), path.display());
+                } else {
+                    println!("✓ {}", path.display());
+                }
+            }
+            _ => println!("✓ {}", path.display()),
+        },
+        (None, Ok(_)) => println!(
+            "- not found (only needed for {}=wild)",
+            super::codegen_env::HOST_LINKER_ENV
+        ),
     }
 
     println!();

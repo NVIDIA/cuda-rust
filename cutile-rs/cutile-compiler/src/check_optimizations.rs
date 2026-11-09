@@ -138,6 +138,7 @@ mod tests {
                 let o = TileirasOptions {
                     codegen,
                     sanitize_memcheck,
+                    tilelibs: Vec::new(),
                 };
                 assert!(seen.insert(o.flags_byte()), "flags_byte collision");
             }

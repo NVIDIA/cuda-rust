@@ -6,7 +6,7 @@
 
 This cuda-oxide example starts transformer integration with already projected
 and normalized Q/K, unrotated V, and explicit positions. It uses `cute-rs` for
-BF16 storage and checked attention geometry, and `ctm-rs` for kernel interfaces
+BF16 storage and checked attention geometry, and `cutlass-primitives` for kernel interfaces
 and instruction primitives. It computes causal/noncausal attention over the
 completed cache prefix; it does not yet run a model.
 

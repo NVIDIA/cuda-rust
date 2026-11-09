@@ -413,6 +413,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "ptx-parse"
+version = "0.3.0"
+
+[[package]]
 name = "quote"
 version = "1.0.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"

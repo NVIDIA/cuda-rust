@@ -3,9 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 //! BF16 linear and activation kernels used by the checked host composition.
-use ctm_rs::memory::DisjointSlice;
-use ctm_rs::{cuda_module, kernel, launch_contract, thread};
 use cute_rs::BFloat16;
+use cutlass_primitives as prims;
+use prims::memory::DisjointSlice;
+use prims::{cuda_module, kernel, launch_contract, thread};
 
 /// Device entries for BF16 projections and activation, shared by FFN and decoder examples.
 ///
@@ -15,8 +16,8 @@ use cute_rs::BFloat16;
 #[cuda_module]
 pub mod kernels {
     use super::*;
-    use cute_rs::mma::bf16::{Bf16Mma16x8x16, FragmentC, PackedDecode};
     use cute_rs::numeric::silu_bf16 as silu;
+    use cute_rs::nvgpu::warp::bf16::{Bf16Mma16x8x16, FragmentC, PackedDecode};
 
     /// Read `(row, col)` from an element-strided row-major BF16 matrix.
     ///

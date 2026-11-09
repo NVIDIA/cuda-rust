@@ -155,17 +155,26 @@ impl<const B: u32, const M: u32, const S: i32, const O: i64, Outer: StaticLayout
 #[must_use]
 #[inline(always)]
 pub const fn crd2idx_2d<L: ReifySmem2D>(row: usize, column: usize) -> usize {
-    let (stride_r, stride_c, offset, swizzle) = const {
+    let (stride_r, stride_c, offset, num_bits, num_shift, y_mask) = const {
         let _ = max_offset_2d::<L>();
+        let swz = crate::Swizzle::new(L::NUM_BITS, L::NUM_BASE, L::NUM_SHIFT);
         (
             L::STRIDE.0 as usize,
             L::STRIDE.1 as usize,
             L::OFFSET as usize,
-            crate::Swizzle::new(L::NUM_BITS, L::NUM_BASE, L::NUM_SHIFT),
+            L::NUM_BITS,
+            L::NUM_SHIFT,
+            swz.y_mask() as usize,
         )
     };
     let plain = row * stride_r + column * stride_c + offset;
-    swizzle.apply(plain as i64) as usize
+    if num_bits == 0 {
+        plain
+    } else if num_shift >= 0 {
+        plain ^ ((plain & y_mask) >> (num_shift as u32))
+    } else {
+        plain ^ ((plain & y_mask) << ((-num_shift) as u32))
+    }
 }
 
 /// Unpack a flat 1D coordinate into `(row, column)` through a typed 2D layout

@@ -143,6 +143,32 @@ pub(crate) enum CuteFn {
     CopyTma2d,
     /// Issue a typed two-dimensional shared-to-global TMA store.
     CopyTmaS2g2d,
+    /// Convert one `f32` scalar to one `BFloat16` word (`u16`).
+    CvtF32ToBf16,
+    /// Convert one `f32` scalar to one `Float8E4M3FN` byte (`u8`).
+    CvtF32ToE4m3,
+    /// Widen one `Float8E4M3FN` byte (`u8`) to `f32`.
+    CvtE4m3ToF32,
+    /// Convert 8 `f32` scalars to 8 packed `Float4E2M1FN` nibbles (`u32`).
+    CvtF32x8ToE2m1x8,
+    /// Broadcast one scalar into an `N`-lane `RegisterTile<T, N>`.
+    RegisterTileBroadcast,
+    /// Elementwise binary operation on two `RegisterTile<T, N>` vectors.
+    RegisterTileBinary,
+    /// Elementwise binary operation on a `RegisterTile<T, N>` and a broadcast scalar.
+    RegisterTileScalar,
+    /// Elementwise unary operation on a `RegisterTile<T, N>`.
+    RegisterTileUnary,
+    /// Horizontal reduction over a `RegisterTile<f32, N>`.
+    RegisterTileReduce,
+    /// Elementwise numeric conversion on a `RegisterTile<Src, N>`.
+    RegisterTileCast,
+    /// Bit-preserving reinterpretation of a `RegisterTile<Src, N>` as `RegisterTile<Dst, M>`.
+    RegisterTileBitcast,
+    /// Contiguous sub-vector extraction from a `RegisterTile<T, N>`.
+    RegisterTileSlice,
+    /// Concatenate two `RegisterTile<T, N>` vectors into one `RegisterTile<T, M>`.
+    RegisterTileConcat,
 }
 
 /// Expected kind of one generic argument in a recognized function's substs.
@@ -184,7 +210,7 @@ pub(crate) struct CuteFnSpec {
 /// One entry per recognized function, including its generic argument schema.
 pub(crate) const CUTE_FNS: &[CuteFnSpec] = &[
     CuteFnSpec {
-        canonical: "cute_rs::attention::sm100::__compiler::mma_ss",
+        canonical: "cute_rs::nvgpu::tcgen05::__compiler::mma_ss",
         func: CuteFn::Attention(sm100_attention::AttentionFn::MmaSs),
         schema: &[
             SubstKind::Type,
@@ -196,7 +222,7 @@ pub(crate) const CUTE_FNS: &[CuteFnSpec] = &[
         ],
     },
     CuteFnSpec {
-        canonical: "cute_rs::attention::sm100::__compiler::mma_ts",
+        canonical: "cute_rs::nvgpu::tcgen05::__compiler::mma_ts",
         func: CuteFn::Attention(sm100_attention::AttentionFn::MmaTs),
         schema: &[
             SubstKind::Type,
@@ -207,47 +233,47 @@ pub(crate) const CUTE_FNS: &[CuteFnSpec] = &[
         ],
     },
     CuteFnSpec {
-        canonical: "cute_rs::attention::sm100::__compiler::tma_load",
+        canonical: "cute_rs::nvgpu::tcgen05::__compiler::tma_load",
         func: CuteFn::Attention(sm100_attention::AttentionFn::TmaLoad),
         schema: &[SubstKind::Type, SubstKind::Const],
     },
     CuteFnSpec {
-        canonical: "cute_rs::attention::sm100::__compiler::tma_store",
+        canonical: "cute_rs::nvgpu::tcgen05::__compiler::tma_store",
         func: CuteFn::Attention(sm100_attention::AttentionFn::TmaStore),
         schema: &[SubstKind::Type, SubstKind::Const],
     },
     CuteFnSpec {
-        canonical: "cute_rs::sm100::__compiler::sm100_tma_store",
+        canonical: "cute_rs::nvgpu::tcgen05::__compiler::sm100_tma_store",
         func: CuteFn::Sm100(sm100::Sm100Fn::TmaStore),
         schema: &[SubstKind::Type],
     },
     CuteFnSpec {
-        canonical: "cute_rs::sm100::__compiler::sm100_store_commit",
+        canonical: "cute_rs::nvgpu::tcgen05::__compiler::sm100_store_commit",
         func: CuteFn::Sm100(sm100::Sm100Fn::StoreCommit),
         schema: &[SubstKind::Const],
     },
     CuteFnSpec {
-        canonical: "cute_rs::sm100::__compiler::sm100_store_acquire",
+        canonical: "cute_rs::nvgpu::tcgen05::__compiler::sm100_store_acquire",
         func: CuteFn::Sm100(sm100::Sm100Fn::StoreAcquire),
         schema: &[SubstKind::Const],
     },
     CuteFnSpec {
-        canonical: "cute_rs::sm100::__compiler::sm100_store_tail",
+        canonical: "cute_rs::nvgpu::tcgen05::__compiler::sm100_store_tail",
         func: CuteFn::Sm100(sm100::Sm100Fn::StoreTail),
         schema: &[SubstKind::Const],
     },
     CuteFnSpec {
-        canonical: "cute_rs::sm100::__compiler::sm100_tmem_alloc",
+        canonical: "cute_rs::nvgpu::tcgen05::__compiler::sm100_tmem_alloc",
         func: CuteFn::Sm100(sm100::Sm100Fn::TmemAlloc),
         schema: &[SubstKind::Const],
     },
     CuteFnSpec {
-        canonical: "cute_rs::sm100::__compiler::sm100_tmem_dealloc",
+        canonical: "cute_rs::nvgpu::tcgen05::__compiler::sm100_tmem_dealloc",
         func: CuteFn::Sm100(sm100::Sm100Fn::TmemDealloc),
         schema: &[SubstKind::Const],
     },
     CuteFnSpec {
-        canonical: "cute_rs::sm100::__compiler::sm100_tiled_mma",
+        canonical: "cute_rs::nvgpu::tcgen05::__compiler::sm100_tiled_mma",
         func: CuteFn::Sm100(sm100::Sm100Fn::TiledMma),
         schema: &[
             SubstKind::Type,
@@ -259,64 +285,79 @@ pub(crate) const CUTE_FNS: &[CuteFnSpec] = &[
         ],
     },
     CuteFnSpec {
-        canonical: "cute_rs::sm100::__compiler::sm100_tmem_epilogue",
+        canonical: "cute_rs::nvgpu::tcgen05::__compiler::sm100_tmem_epilogue",
         func: CuteFn::Sm100(sm100::Sm100Fn::TmemEpilogue),
         schema: &[SubstKind::Type],
     },
     CuteFnSpec {
-        canonical: "cute_rs::sm100::__compiler::sm100_cluster_tma_load",
+        canonical: "cute_rs::nvgpu::tcgen05::__compiler::sm100_cluster_tma_load",
         func: CuteFn::Sm100(sm100::Sm100Fn::ClusterTmaLoad),
         schema: &[SubstKind::Type],
     },
     CuteFnSpec {
-        canonical: "cute_rs::sm100::__compiler::sm100_pipeline_init",
+        canonical: "cute_rs::nvgpu::tcgen05::__compiler::sm100_pipeline_init",
         func: CuteFn::Sm100(sm100::Sm100Fn::PipelineInit),
         schema: &[SubstKind::Const, SubstKind::Const],
     },
     CuteFnSpec {
-        canonical: "cute_rs::sm100::__compiler::sm100_pipeline_acquire",
+        canonical: "cute_rs::nvgpu::tcgen05::__compiler::sm100_pipeline_acquire",
         func: CuteFn::Sm100(sm100::Sm100Fn::PipelineAcquire),
         schema: &[SubstKind::Const, SubstKind::Const],
     },
     CuteFnSpec {
-        canonical: "cute_rs::sm100::__compiler::sm100_pipeline_expect",
+        canonical: "cute_rs::nvgpu::tcgen05::__compiler::sm100_pipeline_expect",
         func: CuteFn::Sm100(sm100::Sm100Fn::PipelineExpect),
         schema: &[SubstKind::Const, SubstKind::Const],
     },
     CuteFnSpec {
-        canonical: "cute_rs::sm100::__compiler::sm100_pipeline_wait",
+        canonical: "cute_rs::nvgpu::tcgen05::__compiler::sm100_pipeline_wait",
         func: CuteFn::Sm100(sm100::Sm100Fn::PipelineWait),
         schema: &[SubstKind::Const, SubstKind::Const],
     },
     CuteFnSpec {
-        canonical: "cute_rs::sm100::__compiler::sm100_pipeline_release",
+        canonical: "cute_rs::nvgpu::tcgen05::__compiler::sm100_pipeline_release",
         func: CuteFn::Sm100(sm100::Sm100Fn::PipelineRelease),
         schema: &[SubstKind::Const, SubstKind::Const],
     },
     CuteFnSpec {
-        canonical: "cute_rs::sm100::__compiler::sm100_accumulator_init",
+        canonical: "cute_rs::nvgpu::tcgen05::__compiler::sm100_accumulator_init",
         func: CuteFn::Sm100(sm100::Sm100Fn::AccumulatorInit),
         schema: &[SubstKind::Const],
     },
     CuteFnSpec {
-        canonical: "cute_rs::sm100::__compiler::sm100_accumulator_acquire",
+        canonical: "cute_rs::nvgpu::tcgen05::__compiler::sm100_accumulator_acquire",
         func: CuteFn::Sm100(sm100::Sm100Fn::AccumulatorAcquire),
         schema: &[SubstKind::Const],
     },
     CuteFnSpec {
-        canonical: "cute_rs::sm100::__compiler::sm100_accumulator_commit",
+        canonical: "cute_rs::nvgpu::tcgen05::__compiler::sm100_accumulator_commit",
         func: CuteFn::Sm100(sm100::Sm100Fn::AccumulatorCommit),
         schema: &[SubstKind::Const],
     },
     CuteFnSpec {
-        canonical: "cute_rs::sm100::__compiler::sm100_accumulator_wait",
+        canonical: "cute_rs::nvgpu::tcgen05::__compiler::sm100_accumulator_wait",
         func: CuteFn::Sm100(sm100::Sm100Fn::AccumulatorWait),
         schema: &[SubstKind::Const],
     },
     CuteFnSpec {
-        canonical: "cute_rs::sm100::__compiler::sm100_accumulator_release",
+        canonical: "cute_rs::nvgpu::tcgen05::__compiler::sm100_accumulator_release",
         func: CuteFn::Sm100(sm100::Sm100Fn::AccumulatorRelease),
         schema: &[SubstKind::Const],
+    },
+    CuteFnSpec {
+        canonical: "cute_rs::nvgpu::tcgen05::__compiler::sm100_block_scaled_copy",
+        func: CuteFn::Sm100(sm100::Sm100Fn::BlockScaledCopy),
+        schema: &[],
+    },
+    CuteFnSpec {
+        canonical: "cute_rs::nvgpu::tcgen05::__compiler::sm100_block_scaled_gemm",
+        func: CuteFn::Sm100(sm100::Sm100Fn::BlockScaledGemm),
+        schema: &[
+            SubstKind::Type,
+            SubstKind::Type,
+            SubstKind::Const,
+            SubstKind::Const,
+        ],
     },
     CuteFnSpec {
         canonical: "cute_rs::tensor::make_tensor_read",
@@ -374,77 +415,77 @@ pub(crate) const CUTE_FNS: &[CuteFnSpec] = &[
         schema: &[SubstKind::Type, SubstKind::Const],
     },
     CuteFnSpec {
-        canonical: "cute_rs::block_scaled::__compiler::block_scaled_make",
+        canonical: "cute_rs::utils::blockscaled::__compiler::block_scaled_make",
         func: CuteFn::BlockScaledMake,
         schema: &[SubstKind::Type],
     },
     CuteFnSpec {
-        canonical: "cute_rs::block_scaled::__compiler::block_scaled_thread_row",
+        canonical: "cute_rs::utils::blockscaled::__compiler::block_scaled_thread_row",
         func: CuteFn::BlockScaledThreadRow,
         schema: &[SubstKind::Type],
     },
     CuteFnSpec {
-        canonical: "cute_rs::block_scaled::__compiler::block_scaled_k_tile",
+        canonical: "cute_rs::utils::blockscaled::__compiler::block_scaled_k_tile",
         func: CuteFn::BlockScaledKTile,
         schema: &[SubstKind::Type],
     },
     CuteFnSpec {
-        canonical: "cute_rs::block_scaled::__compiler::block_scaled_load_k64",
+        canonical: "cute_rs::utils::blockscaled::__compiler::block_scaled_load_k64",
         func: CuteFn::BlockScaledLoadK64,
         schema: &[SubstKind::Type],
     },
     CuteFnSpec {
-        canonical: "cute_rs::block_scaled::__compiler::block_scaled_dot_k64",
+        canonical: "cute_rs::utils::blockscaled::__compiler::block_scaled_dot_k64",
         func: CuteFn::BlockScaledDotK64,
         schema: &[],
     },
     CuteFnSpec {
-        canonical: "cute_rs::block_scaled::__compiler::nvfp4_make",
+        canonical: "cute_rs::utils::blockscaled::__compiler::nvfp4_make",
         func: CuteFn::BlockScaledMake,
         schema: &[SubstKind::Type],
     },
     CuteFnSpec {
-        canonical: "cute_rs::block_scaled::__compiler::nvfp4_thread_row",
+        canonical: "cute_rs::utils::blockscaled::__compiler::nvfp4_thread_row",
         func: CuteFn::BlockScaledThreadRow,
         schema: &[SubstKind::Type],
     },
     CuteFnSpec {
-        canonical: "cute_rs::block_scaled::__compiler::nvfp4_k_tile",
+        canonical: "cute_rs::utils::blockscaled::__compiler::nvfp4_k_tile",
         func: CuteFn::BlockScaledKTile,
         schema: &[SubstKind::Type],
     },
     CuteFnSpec {
-        canonical: "cute_rs::block_scaled::__compiler::nvfp4_load_k64",
+        canonical: "cute_rs::utils::blockscaled::__compiler::nvfp4_load_k64",
         func: CuteFn::BlockScaledLoadK64,
         schema: &[SubstKind::Type],
     },
     CuteFnSpec {
-        canonical: "cute_rs::block_scaled::__compiler::nvfp4_dot_k64",
+        canonical: "cute_rs::utils::blockscaled::__compiler::nvfp4_dot_k64",
         func: CuteFn::BlockScaledDotK64,
         schema: &[],
     },
     CuteFnSpec {
-        canonical: "cute_rs::scheduler::__compiler::scheduler_new_1d",
+        canonical: "cute_rs::utils::scheduler::__compiler::scheduler_new_1d",
         func: CuteFn::SchedulerNew1d,
         schema: &[SubstKind::Const, SubstKind::Const, SubstKind::Const],
     },
     CuteFnSpec {
-        canonical: "cute_rs::scheduler::__compiler::scheduler_has_work",
+        canonical: "cute_rs::utils::scheduler::__compiler::scheduler_has_work",
         func: CuteFn::SchedulerHasWork,
         schema: &[SubstKind::Const, SubstKind::Const, SubstKind::Const],
     },
     CuteFnSpec {
-        canonical: "cute_rs::scheduler::__compiler::scheduler_current_tile",
+        canonical: "cute_rs::utils::scheduler::__compiler::scheduler_current_tile",
         func: CuteFn::SchedulerCurrentTile,
         schema: &[SubstKind::Const, SubstKind::Const, SubstKind::Const],
     },
     CuteFnSpec {
-        canonical: "cute_rs::scheduler::__compiler::work_tile_coordinates",
+        canonical: "cute_rs::utils::scheduler::__compiler::work_tile_coordinates",
         func: CuteFn::WorkTileCoordinates,
         schema: &[SubstKind::Const, SubstKind::Const, SubstKind::Const],
     },
     CuteFnSpec {
-        canonical: "cute_rs::scheduler::__compiler::scheduler_advance",
+        canonical: "cute_rs::utils::scheduler::__compiler::scheduler_advance",
         func: CuteFn::SchedulerAdvance,
         schema: &[SubstKind::Const, SubstKind::Const, SubstKind::Const],
     },
@@ -504,7 +545,7 @@ pub(crate) const CUTE_FNS: &[CuteFnSpec] = &[
         schema: &[SubstKind::Const, SubstKind::Const, SubstKind::Const],
     },
     CuteFnSpec {
-        canonical: "cute_rs::copy::tiled::__compiler::shared_tensor_overlay",
+        canonical: "cute_rs::atom::tiled::__compiler::shared_tensor_overlay",
         func: CuteFn::SharedTensorOverlay,
         schema: &[
             SubstKind::Type,
@@ -514,72 +555,72 @@ pub(crate) const CUTE_FNS: &[CuteFnSpec] = &[
         ],
     },
     CuteFnSpec {
-        canonical: "cute_rs::mma::block_scaled::__compiler::tiled_mma_slice",
+        canonical: "cute_rs::nvgpu::warp::block_scaled::__compiler::tiled_mma_slice",
         func: CuteFn::TiledMmaSlice,
         schema: &[SubstKind::Type],
     },
     CuteFnSpec {
-        canonical: "cute_rs::mma::block_scaled::__compiler::fragment_fill",
+        canonical: "cute_rs::nvgpu::warp::block_scaled::__compiler::fragment_fill",
         func: CuteFn::MmaFragmentFill,
         schema: &[],
     },
     CuteFnSpec {
-        canonical: "cute_rs::mma::block_scaled::__compiler::mma_load_scales",
+        canonical: "cute_rs::nvgpu::warp::block_scaled::__compiler::mma_load_scales",
         func: CuteFn::MmaLoadScales,
         schema: &[SubstKind::Type],
     },
     CuteFnSpec {
-        canonical: "cute_rs::mma::block_scaled::__compiler::fragment_slice_k",
+        canonical: "cute_rs::nvgpu::warp::block_scaled::__compiler::fragment_slice_k",
         func: CuteFn::MmaFragmentSliceK,
         schema: &[],
     },
     CuteFnSpec {
-        canonical: "cute_rs::mma::block_scaled::__compiler::mma_load_a",
+        canonical: "cute_rs::nvgpu::warp::block_scaled::__compiler::mma_load_a",
         func: CuteFn::MmaLoadA,
         schema: &[SubstKind::Type],
     },
     CuteFnSpec {
-        canonical: "cute_rs::mma::block_scaled::__compiler::mma_partition_b",
+        canonical: "cute_rs::nvgpu::warp::block_scaled::__compiler::mma_partition_b",
         func: CuteFn::MmaPartitionB,
         schema: &[SubstKind::Type],
     },
     CuteFnSpec {
-        canonical: "cute_rs::mma::block_scaled::__compiler::tiled_gemm",
+        canonical: "cute_rs::nvgpu::warp::block_scaled::__compiler::tiled_gemm",
         func: CuteFn::TiledGemm,
         schema: &[SubstKind::Type],
     },
     CuteFnSpec {
-        canonical: "cute_rs::mma::block_scaled::__compiler::nvfp4_mma_atom_call",
+        canonical: "cute_rs::nvgpu::warp::block_scaled::__compiler::nvfp4_mma_atom_call",
         func: CuteFn::Nvfp4MmaAtom,
         schema: &[],
     },
     CuteFnSpec {
-        canonical: "cute_rs::epilogue::sm120::__compiler::epilogue_smem_overlay",
+        canonical: "cute_rs::nvgpu::warp::epilogue::__compiler::epilogue_smem_overlay",
         func: CuteFn::EpilogueOverlay,
         schema: &[],
     },
     CuteFnSpec {
-        canonical: "cute_rs::epilogue::sm120::__compiler::epilogue_warp_slice",
+        canonical: "cute_rs::nvgpu::warp::epilogue::__compiler::epilogue_warp_slice",
         func: CuteFn::EpilogueWarpSlice,
         schema: &[],
     },
     CuteFnSpec {
-        canonical: "cute_rs::mma::block_scaled::__compiler::epilogue_store_fragment",
+        canonical: "cute_rs::nvgpu::warp::block_scaled::__compiler::epilogue_store_fragment",
         func: CuteFn::EpilogueStoreFragment,
         schema: &[],
     },
     CuteFnSpec {
-        canonical: "cute_rs::epilogue::sm120::__compiler::epilogue_sync_reusable",
+        canonical: "cute_rs::nvgpu::warp::epilogue::__compiler::epilogue_sync_reusable",
         func: CuteFn::EpilogueSyncReusable,
         schema: &[],
     },
     CuteFnSpec {
-        canonical: "cute_rs::epilogue::sm120::__compiler::epilogue_sync_ready_for_tma",
+        canonical: "cute_rs::nvgpu::warp::epilogue::__compiler::epilogue_sync_ready_for_tma",
         func: CuteFn::EpilogueSyncReadyForTma,
         schema: &[],
     },
     CuteFnSpec {
-        canonical: "cute_rs::epilogue::sm120::__compiler::epilogue_half",
+        canonical: "cute_rs::nvgpu::warp::epilogue::__compiler::epilogue_half",
         func: CuteFn::EpilogueHalf,
         schema: &[SubstKind::Const],
     },
@@ -599,57 +640,137 @@ pub(crate) const CUTE_FNS: &[CuteFnSpec] = &[
         schema: &[SubstKind::Const],
     },
     CuteFnSpec {
-        canonical: "cute_rs::copy::vector::load_tile",
+        canonical: "cute_rs::atom::vector::load_tile",
         func: CuteFn::LoadTile,
         schema: &[SubstKind::Type, SubstKind::Const],
     },
     CuteFnSpec {
-        canonical: "cute_rs::copy::vector::store_tile",
+        canonical: "cute_rs::atom::vector::store_tile",
         func: CuteFn::StoreTile,
         schema: &[SubstKind::Type, SubstKind::Const],
     },
     CuteFnSpec {
-        canonical: "cute_rs::copy::vector::store_global_no_allocate",
+        canonical: "cute_rs::atom::vector::store_global_no_allocate",
         func: CuteFn::StoreGlobalNoAllocate,
         schema: &[SubstKind::Type, SubstKind::Const],
     },
     CuteFnSpec {
-        canonical: "cute_rs::copy::vector::assume",
+        canonical: "cute_rs::atom::vector::assume",
         func: CuteFn::AssumeDiv,
         schema: &[SubstKind::Const],
     },
     CuteFnSpec {
-        canonical: "cute_rs::mma::load_matrix_a",
+        canonical: "cute_rs::nvgpu::warp::load_matrix_a",
         func: CuteFn::LoadMatrixA,
         schema: &[SubstKind::Type, SubstKind::Type],
     },
     CuteFnSpec {
-        canonical: "cute_rs::mma::load_matrix_b",
+        canonical: "cute_rs::nvgpu::warp::load_matrix_b",
         func: CuteFn::LoadMatrixB,
         schema: &[SubstKind::Type, SubstKind::Type],
     },
     CuteFnSpec {
-        canonical: "cute_rs::mma::load_matrix_b_pair",
+        canonical: "cute_rs::nvgpu::warp::load_matrix_b_pair",
         func: CuteFn::LoadMatrixBPair,
         schema: &[SubstKind::Type, SubstKind::Type],
     },
     CuteFnSpec {
-        canonical: "cute_rs::mma::load_matrix_b_pair_k_major",
+        canonical: "cute_rs::nvgpu::warp::load_matrix_b_pair_k_major",
         func: CuteFn::LoadMatrixBPairKMajor,
         schema: &[SubstKind::Type, SubstKind::Type],
     },
     CuteFnSpec {
-        canonical: "cute_rs::copy::tma::copy_tma_2d",
+        canonical: "cute_rs::nvgpu::cpasync::copy_tma_2d",
         func: CuteFn::CopyTma2d,
         schema: &[SubstKind::Type, SubstKind::Type],
     },
     CuteFnSpec {
-        canonical: "cute_rs::copy::tma::copy_tma_s2g_2d",
+        canonical: "cute_rs::nvgpu::cpasync::copy_tma_s2g_2d",
         func: CuteFn::CopyTmaS2g2d,
         schema: &[SubstKind::Type, SubstKind::Type],
     },
     CuteFnSpec {
-        canonical: "cute_rs::copy::cooperative::copy_g2s",
+        canonical: "cute_rs::numeric::__compiler::cvt_f32_to_bf16",
+        func: CuteFn::CvtF32ToBf16,
+        schema: &[],
+    },
+    CuteFnSpec {
+        canonical: "cute_rs::numeric::__compiler::cvt_f32_to_e4m3",
+        func: CuteFn::CvtF32ToE4m3,
+        schema: &[],
+    },
+    CuteFnSpec {
+        canonical: "cute_rs::numeric::__compiler::cvt_e4m3_to_f32",
+        func: CuteFn::CvtE4m3ToF32,
+        schema: &[],
+    },
+    CuteFnSpec {
+        canonical: "cute_rs::numeric::__compiler::cvt_f32x8_to_e2m1x8",
+        func: CuteFn::CvtF32x8ToE2m1x8,
+        schema: &[],
+    },
+    CuteFnSpec {
+        canonical: "cute_rs::tensor::__compiler::register_tile_broadcast",
+        func: CuteFn::RegisterTileBroadcast,
+        schema: &[SubstKind::Type, SubstKind::Const],
+    },
+    CuteFnSpec {
+        canonical: "cute_rs::tensor::__compiler::register_tile_binary",
+        func: CuteFn::RegisterTileBinary,
+        schema: &[SubstKind::Type, SubstKind::Const, SubstKind::Const],
+    },
+    CuteFnSpec {
+        canonical: "cute_rs::tensor::__compiler::register_tile_scalar",
+        func: CuteFn::RegisterTileScalar,
+        schema: &[SubstKind::Type, SubstKind::Const, SubstKind::Const],
+    },
+    CuteFnSpec {
+        canonical: "cute_rs::tensor::__compiler::register_tile_unary",
+        func: CuteFn::RegisterTileUnary,
+        schema: &[SubstKind::Type, SubstKind::Const, SubstKind::Const],
+    },
+    CuteFnSpec {
+        canonical: "cute_rs::tensor::__compiler::register_tile_reduce",
+        func: CuteFn::RegisterTileReduce,
+        schema: &[SubstKind::Const, SubstKind::Const],
+    },
+    CuteFnSpec {
+        canonical: "cute_rs::tensor::__compiler::register_tile_cast",
+        func: CuteFn::RegisterTileCast,
+        schema: &[
+            SubstKind::Type,
+            SubstKind::Type,
+            SubstKind::Const,
+            SubstKind::Const,
+        ],
+    },
+    CuteFnSpec {
+        canonical: "cute_rs::tensor::__compiler::register_tile_bitcast",
+        func: CuteFn::RegisterTileBitcast,
+        schema: &[
+            SubstKind::Type,
+            SubstKind::Type,
+            SubstKind::Const,
+            SubstKind::Const,
+        ],
+    },
+    CuteFnSpec {
+        canonical: "cute_rs::tensor::__compiler::register_tile_slice",
+        func: CuteFn::RegisterTileSlice,
+        schema: &[
+            SubstKind::Type,
+            SubstKind::Const,
+            SubstKind::Const,
+            SubstKind::Const,
+        ],
+    },
+    CuteFnSpec {
+        canonical: "cute_rs::tensor::__compiler::register_tile_concat",
+        func: CuteFn::RegisterTileConcat,
+        schema: &[SubstKind::Type, SubstKind::Const, SubstKind::Const],
+    },
+    CuteFnSpec {
+        canonical: "cute_rs::atom::cooperative::copy_g2s",
         func: CuteFn::CopyG2S,
         schema: &[
             SubstKind::Type,
@@ -680,7 +801,7 @@ mod tests {
             ("load_matrix_b_pair", CuteFn::LoadMatrixBPair),
             ("load_matrix_b_pair_k_major", CuteFn::LoadMatrixBPairKMajor),
         ] {
-            let path = format!("cute_rs::mma::{name}");
+            let path = format!("cute_rs::nvgpu::warp::{name}");
             let spec = CUTE_FNS.iter().find(|spec| spec.canonical == path);
             let spec = spec.unwrap_or_else(|| panic!("matrix load is not recognized: {path}"));
             assert_eq!(spec.func, expected, "{path}");
@@ -693,12 +814,12 @@ mod tests {
     fn hook_paths_match_definitions_not_re_exports() {
         for path in [
             "::tensor::make_tensor_read",
-            "::copy::vector::assume",
-            "::copy::tma::copy_tma_2d",
-            "::copy::cooperative::copy_g2s",
-            "::mma::block_scaled::__compiler::tiled_gemm",
-            "::epilogue::sm120::__compiler::epilogue_half",
-            "::sm100::__compiler::sm100_tiled_mma",
+            "::atom::vector::assume",
+            "::nvgpu::cpasync::copy_tma_2d",
+            "::atom::cooperative::copy_g2s",
+            "::nvgpu::warp::block_scaled::__compiler::tiled_gemm",
+            "::nvgpu::warp::epilogue::__compiler::epilogue_half",
+            "::nvgpu::tcgen05::__compiler::sm100_tiled_mma",
         ] {
             assert!(is_cute_compiler_hook_path(path), "{path}");
         }
@@ -710,8 +831,8 @@ mod tests {
             "::tma::copy_tma_2d",
             "::block_scaled_mma::__compiler::tiled_gemm",
             "::epilogue::__compiler::epilogue_half",
-            "cute_rs::copy::tma::copy_tma_2d",
-            "copy::tma::copy_tma_2d",
+            "cute_rs::nvgpu::cpasync::copy_tma_2d",
+            "nvgpu::cpasync::copy_tma_2d",
         ] {
             assert!(!is_cute_compiler_hook_path(path), "{path}");
         }

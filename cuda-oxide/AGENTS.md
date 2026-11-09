@@ -12,16 +12,16 @@ under `cute-rs-preview/`, [`cute-rs-preview/AGENTS.md`](cute-rs-preview/AGENTS.m
 up or pass one off as the other:
 
 ```text
-┌─────────────────────────────────────┬──────────────────────────────────────────────┐
-│  1. Native SIMT (`cuda_device`)     │  2. CuTe in Rust (`cute-rs` + `ctm-rs`)      │
-├─────────────────────────────────────┼──────────────────────────────────────────────┤
-│  • Explicit per-thread / per-warp   │  • CUTLASS CuTe's layout algebra, partitions,│
-│    control (`thread`, `warp`,       │    TMA transfers, pipelines, and Tensor Core │
-│    `SharedArray`, `tcgen05_*`).     │    MMA ops encoded in Rust's type system.    │
-│  • Compiles via `dialect-mir` ──►   │  • Compiles via `dialect-cute` ──►           │
-│    LLVM / libNVVM ──► PTX.          │    `cutlass-mlir` (CUTLASS 4.7 compiler).    │
-│  • Lives in `models/*` & `examples` │  • Lives in `cute-rs-preview/`               │
-└─────────────────────────────────────┴──────────────────────────────────────────────┘
+┌─────────────────────────────────────┬────────────────────────────────────────────────────┐
+│  1. Native SIMT (`cuda_device`)     │  2. CuTe in Rust (`cute-rs` + `cutlass-primitives`)│
+├─────────────────────────────────────┼────────────────────────────────────────────────────┤
+│  • Explicit per-thread / per-warp   │  • CUTLASS CuTe's layout algebra, partitions,      │
+│    control (`thread`, `warp`,       │    TMA transfers, pipelines, and Tensor Core       │
+│    `SharedArray`, `tcgen05_*`).     │    MMA ops encoded in Rust's type system.          │
+│  • Compiles via `dialect-mir` ──►   │  • Compiles via `dialect-cute` ──►                 │
+│    LLVM / libNVVM ──► PTX.          │    `cutlass-mlir` (CUTLASS 4.7 compiler).          │
+│  • Lives in `models/*` & `examples` │  • Lives in `cute-rs-preview/`                     │
+└─────────────────────────────────────┴────────────────────────────────────────────────────┘
 ```
 
 * **Hard rule for `cute-rs` kernels (`cute-rs-preview/`):** CuTe’s layout
@@ -121,7 +121,7 @@ When adding or modifying compiler passes (`mir-importer`, `mir-transforms`,
 Real-world deployments (such as [speakrs](https://avencera.com/blog/writing-gpu-kernels-in-rust-speakrs-60x-faster-than-pyannote))
 and Blackwell SOTA benchmarks highlight four practical rules for agents:
 
-1. **Prefer typed `cuda_device` / `ctm_rs` / `cute_rs` operations over opaque `ptx_asm!`.**
+1. **Prefer typed `cuda_device` / `cutlass_primitives` / `cute_rs` operations over opaque `ptx_asm!`.**
    * Opaque `ptx_asm!` hides address arithmetic and memory effects from LLVM
      (causing Loop Strength Reduction to hoist base pointers and lose immediate
      offsets, or forcing overly conservative memory clobbers across
@@ -160,6 +160,23 @@ and Blackwell SOTA benchmarks highlight four practical rules for agents:
 4. **Keep validation fast, numerical, and self-contained.**
    * Verify every kernel change against a CPU or reference oracle (`normalized_max_error`),
      check register/spill counts with `ptxas -v`, and run an A/B timing comparison.
+
+5. **Beautiful Rust in both Native SIMT (`cuda-oxide`) and `cute-rs` — with GPU codegen caveats (hard rule).**
+   * **No raw pointer casts or ad-hoc pointer indexing in kernel bodies:** Do not scatter
+     `.as_ptr().cast::<...>()`, `.as_mut_ptr().cast::<...>()`, or raw `.as_ptr().add(...)`
+     across kernel code. Use typed tensor/slice views (`StridedTensor`, `StridedTensorMut`,
+     `SharedTensor`, `Sm100SharedTile`, `Sm100ScaleTile`, `SmemTile`, or typed slice/shared
+     wrappers) and `const _: () = assert!(...)` compile-time layout invariants.
+   * **Be careful with CPU-oriented Clippy/style rewrites (such as `clippy::collapsible_if`):**
+     Use Beautiful Rust as a structural reference, **but never blindly apply style lints that
+     alter GPU warp specialization, predication, convergence, or register pressure**. For
+     example, collapsing `if warp_id == 0 { if tid == 0 { ... } }` or
+     `if warp_id == 4 { if elect_one_sync() { ... } }` into `if a && b` to satisfy
+     `clippy::collapsible_if` can redirect non-leader threads into an `else` branch, place a
+     warp collective inside short-circuit evaluation, or defeat uniform-warp analysis in
+     `dialect-cute`, `mir-transforms`, and `ptxas` — costing significant performance. When a
+     lint conflicts with GPU control flow, preserve the two-level guard and annotate it with
+     `#[allow(clippy::collapsible_if)]` and a short explanation.
 
 ---
 

@@ -68,6 +68,7 @@ use std::mem::MaybeUninit;
 use std::sync::Arc;
 
 include!("kernels.rs");
+mod moe_192e;
 
 /// Hidden dimension `H` of each input and output token vector (`1,024` elements).
 /// Divided into `64` scale groups of `16` elements (`512` packed FP4 `E2M1` bytes per row).
@@ -775,6 +776,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("H={HIDDEN}, I={INTERMEDIATE}, experts={NUM_EXPERTS}, top-k={TOP_K}, tile_n={TILE_N}");
 
     let stream = ctx.new_stream()?;
+    if std::env::var("MOE_ONLY_192E").is_ok() {
+        return moe_192e::run_benchmark_192e(&ctx, &stream);
+    }
     let module = unsafe { kernels::load(&ctx)? };
 
     let mut results = Vec::with_capacity(BATCH_SIZES.len());
@@ -859,5 +863,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "{b:>10} | {sota_us:>23.3} | {native_us:>23.3} | {cute_us:>22.3} | {speedup:>9.2}x SOTA"
         );
     }
+    moe_192e::run_benchmark_192e(&ctx, &stream)?;
     Ok(())
 }

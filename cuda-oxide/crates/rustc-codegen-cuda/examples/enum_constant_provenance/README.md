@@ -28,5 +28,6 @@ Expected result:
 enum_constant_provenance: PASS
 ```
 
-Pointer/integer overlapping enum storage, address-space-3 pointer layouts, and
-anonymous promoted allocations remain unsupported.
+Pointer/integer overlapping enum storage and address-space-3 pointer layouts
+remain unsupported. Payload pointers into anonymous constant memory are covered
+by `promoted_ref_return`.

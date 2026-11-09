@@ -774,6 +774,88 @@ fn a_kernel_without_foreign_calls_ignores_library_files() -> Result<(), Error> {
     Ok(())
 }
 
+/// The in-memory cache key of `no_library_kernel` launched with `libraries`.
+/// Computing the key resolves (hashes) the libraries but compiles nothing,
+/// so any file serves as a library.
+fn no_library_key(libraries: &[&Path]) -> cutile::tile_kernel::TileFunctionKey {
+    let options = libraries
+        .iter()
+        .fold(CompileOptions::new(), |options, path| {
+            options.tile_library(TileLibrarySpec::new(*path))
+        });
+    kernels::no_library_kernel(api::meta::<f32>(&[32]).partition([32]))
+        .compile_options(options)
+        .l1_cache_key()
+        .expect("L1 key")
+}
+
+/// Every spelling of one set of tile libraries keys a kernel once: the
+/// list as written (a duplicate, a path through `.`, an order) is not part
+/// of the key, only the resolved, de-duplicated libraries are. Different
+/// contents still key differently. Needs no tile library toolchain.
+#[test]
+fn one_set_of_tile_libraries_is_one_cache_key() -> Result<(), Error> {
+    let dir = std::env::temp_dir().join(format!("cutile_tilelib_key_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create the libraries' folder");
+    let a = dir.join("a.tilelib");
+    let b = dir.join("b.tilelib");
+    std::fs::write(&a, b"library a").unwrap();
+    std::fs::write(&b, b"library b").unwrap();
+    let a_dotted = dir.join(".").join("a.tilelib");
+
+    let one = no_library_key(&[&a]);
+    assert_eq!(no_library_key(&[&a, &a]), one, "a duplicated library");
+    assert_eq!(
+        no_library_key(&[&a_dotted]),
+        one,
+        "another path to the library"
+    );
+    assert_eq!(
+        no_library_key(&[&a, &b]),
+        no_library_key(&[&b, &a]),
+        "the libraries' order"
+    );
+    assert!(one.compile_options.tile_libraries.is_empty());
+
+    assert_ne!(no_library_key(&[]), one, "no library");
+    assert_ne!(no_library_key(&[&a, &b]), one, "one more library");
+    std::fs::write(&a, b"library a, rebuilt").unwrap();
+    assert_ne!(no_library_key(&[&a]), one, "a rebuilt library");
+    std::fs::remove_dir_all(&dir).ok();
+    Ok(())
+}
+
+/// A launch that names a default library again keys the kernel as the
+/// same launch without the default: it compiles once, and its launches
+/// share one module and one copy of each `Global`. The list as written
+/// once keyed them apart, so `global_accesses_after_a_foreign_call_execute`
+/// failed whenever `default_tile_libraries_link_every_kernel` ran between
+/// its two launches: the second launch compiled a second module whose
+/// counter started at 0.
+#[test]
+fn a_default_library_named_again_keeps_the_cache_key() -> Result<(), Error> {
+    if !test_tilelib_available() {
+        return Ok(());
+    }
+    // Changes the defaults, part of every kernel's cache key.
+    let _lock = crate::common::cache_test_lock();
+    let key = || {
+        kernels::global_after_call_kernel(
+            api::meta::<f32>(&[32]).partition([32]),
+            api::meta::<i32>(&[1]).partition([1]),
+            api::meta::<i32>(&[1]).partition([1]),
+        )
+        .compile_options(with_tilelib())
+        .l1_cache_key()
+        .expect("L1 key")
+    };
+    let without_default = key();
+    let _restore = RestoreDefaultTileLibraries::save();
+    cutile::tile_kernel::set_default_tile_libraries([tilelib()]);
+    assert_eq!(key(), without_default);
+    Ok(())
+}
+
 /// Runs `launch` while another thread replaces `library` every millisecond
 /// with `contents(n)` for the `n`th write; the rename keeps each file whole.
 /// Returns its result and asserts that the library was replaced during it.

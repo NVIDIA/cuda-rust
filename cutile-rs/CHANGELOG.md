@@ -60,6 +60,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Update the optional `cuda-tile-rs` bindings and `cuda-tile-translate` build
   from CUDA Tile IR 13.2 to the public 13.5 release, including SIMT preview
   support and translator round-trip tests.
+- A kernel's in-memory cache key no longer holds the tile-library list as
+  written, only the digest of the resolved, de-duplicated libraries. A launch
+  that names a default library again, or names a library through another
+  path, used to compile the kernel a second time and load a second module,
+  with its own copy of every `Global` (#1749).
 
 ## [0.5.0] - 2026-11-04
 

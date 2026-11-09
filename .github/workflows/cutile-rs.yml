@@ -274,15 +274,31 @@ jobs:
           compression-level: 0 # The nested nextest archives are already compressed.
           retention-days: 1
 
+  # The test packages are built once (on CUDA 13.3) and run on a GPU under two
+  # toolkits. The tile library tests (cutile gpu::static_tilelib) need Tile IR
+  # 13.5: on the 13.3 job they skip and report as passed, so the 13.5 job sets
+  # CUTILE_REQUIRE_TILELIB=1 to turn that skip into a failure.
   gpu-tests:
+    name: gpu-tests${{ matrix.cuda.suffix }}
     needs: build
     runs-on: linux-amd64-gpu-rtxpro6000-latest-1
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        cuda:
+          - image: nvidia/cuda:13.3.0-devel-ubuntu24.04
+            suffix: ""
+            require_tilelib: ""
+          - image: nvcr.io/nvidia/cuda:13.5.0-devel-ubuntu24.04
+            suffix: " (CUDA 13.5.0)"
+            require_tilelib: "1"
     container:
-      image: nvidia/cuda:13.3.0-devel-ubuntu24.04
+      image: ${{ matrix.cuda.image }}
     env:
       CUDA_TOOLKIT_PATH: /usr/local/cuda
       CUTILE_TILEIRAS_PATH: /usr/local/cuda/bin/tileiras
+      CUTILE_REQUIRE_TILELIB: ${{ matrix.cuda.require_tilelib }}
     steps:
       - uses: actions/checkout@v7
 

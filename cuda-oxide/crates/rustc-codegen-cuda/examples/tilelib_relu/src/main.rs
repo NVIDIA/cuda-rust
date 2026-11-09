@@ -127,6 +127,11 @@ fn run() -> Fallible<Outcome> {
     let caller_ltoir = compile_caller(&nvcc, &caller_cu, options.target())?;
     // Both halves are LTOIR, so nvJitLink resolves the implementation symbols
     // at link time, the same way a real tile library is consumed.
+    let expected_kernels: Vec<String> = exports
+        .iter()
+        .map(|desc| format!("call_{}", desc.decl))
+        .collect();
+    let expected_kernels: Vec<&str> = expected_kernels.iter().map(String::as_str).collect();
     let cubin = LtoLinker::discover()?.link_ltoir(
         &[
             NamedInput::new("tilelib_relu.ltoir", &rust_ltoir),
@@ -134,7 +139,7 @@ fn run() -> Fallible<Outcome> {
         ],
         &options,
         FinalizerOutput::Cubin,
-        &["caller"],
+        &expected_kernels,
     )?;
     println!(
         "nvJitLink: {} bytes of cubin for {}",

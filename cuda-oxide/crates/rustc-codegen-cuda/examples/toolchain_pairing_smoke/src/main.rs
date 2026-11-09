@@ -11,7 +11,7 @@
 //!   CUDA_OXIDE_LLC=/usr/bin/llc-21 cargo oxide build toolchain_pairing_smoke --arch sm_90
 //!
 //! picks an LLVM 21 `opt` (or skips the middle-end with a warning when no
-//! same-major `opt` exists). The kernel is shaped so `opt -O3`'s inliner
+//! same-major `opt` exists). The kernel is shaped so `opt -O2`'s inliner
 //! inserts llvm.lifetime.start/end markers, whose signature changed in
 //! LLVM 22 (the `i64` size parameter was dropped): exactly the IR that a
 //! mismatched opt/llc pair fails the verifier on. Guards the fix for

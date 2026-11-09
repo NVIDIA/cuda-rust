@@ -5,17 +5,24 @@ set -euo pipefail
 
 root="$(cd "$(dirname "$0")" && pwd)"
 ptx="${1:-$root/unroll_smoke.ptx}"
+# Output of the `cargo oxide build` that produced the PTX. The warning check
+# needs it; `scripts/smoketest.sh` passes its log as `CUDA_OXIDE_BUILD_LOG`.
+build_log="${2:-${CUDA_OXIDE_BUILD_LOG:-}}"
 
 if [[ ! -f "$ptx" ]]; then
   echo "PTX file not found: $ptx" >&2
   exit 1
 fi
+if [[ -n "$build_log" && ! -f "$build_log" ]]; then
+  echo "build log not found: $build_log" >&2
+  exit 1
+fi
 
-python3 - "$ptx" <<'PY'
+python3 - "$ptx" "$root/src/main.rs" "$build_log" <<'PY'
 import re
 import sys
 
-ptx_path = sys.argv[1]
+ptx_path, src_path, log_path = sys.argv[1:4]
 ptx = open(ptx_path, encoding="utf-8").read()
 # Strip comments so a mention in a comment cannot satisfy or hide a check.
 ptx = re.sub(r"/\*.*?\*/|//[^\n]*", "", ptx, flags=re.S)
@@ -25,7 +32,9 @@ ptx = re.sub(r"/\*.*?\*/|//[^\n]*", "", ptx, flags=re.S)
 # carries a `_TID_<hash>` suffix.
 names = ("nested_lane_range", "isize_range_for", "const_generic_bound")
 local_memory = re.compile(r"(?m)(?:^|\s)\.local\b|ld\.local|st\.local")
-for name in names:
+
+
+def entry_body(name):
     header = re.search(r"\.entry\s+" + re.escape(name) + r"(?:_TID_\w+)?\s*\(", ptx)
     if header is None:
         sys.exit(f"error: missing PTX entry {name} in {ptx_path}")
@@ -39,9 +48,48 @@ for name in names:
         end += 1
     if depth:
         sys.exit(f"error: unterminated PTX entry {name}")
-    body = ptx[brace + 1 : end - 1]
-    if local_memory.search(body):
+    return ptx[brace + 1 : end - 1]
+
+
+for name in names:
+    if local_memory.search(entry_body(name)):
         sys.exit(f"error: {name} uses local memory in {ptx_path}")
     print(f"{name}: no local memory PASS")
+
+# A partial `#[unroll(N)]` marks both its main and its remainder loop
+# `nounroll`. LLVM runtime-unrolls this loop by itself when the request is
+# declined, and then marks only its own remainder loop.
+name = "partial_row_view"
+pragmas = entry_body(name).count('.pragma "nounroll";')
+if pragmas != 2:
+    sys.exit(f"error: {name} has {pragmas} nounroll loops, expected the unroller's 2")
+print(f"{name}: main and remainder loop PASS")
+
+# The unroller prints each declined request as a `warning:` line, then a
+# `-->` line at the annotation. None may point into `partial_row_view`.
+if log_path:
+    log = open(log_path, encoding="utf-8", errors="replace").read()
+    warned = re.findall(
+        r"warning: #\[unroll(?:\(\d+\))?\] requested but the loop was not unrolled:"
+        r"[^\n]*\n\s*--> ([^\n]*?):(\d+):\d+",
+        log,
+    )
+    # the example declines some loops on purpose, so a log without any of
+    # their warnings is not the output of a device build of this example
+    if not warned:
+        sys.exit(f"error: no unroll warnings in {log_path}; is it this build's output?")
+    src = open(src_path, encoding="utf-8").read().splitlines()
+    start = next(
+        (i for i, line in enumerate(src, 1) if f"fn {name}(" in line), None
+    )
+    if start is None:
+        sys.exit(f"error: missing kernel {name} in {src_path}")
+    end = next(i for i, line in enumerate(src[start:], start + 1) if line == "    }")
+    for path, line in warned:
+        if path.endswith("main.rs") and start <= int(line) <= end:
+            sys.exit(f"error: the build warned that {name}'s loop was not unrolled ({path}:{line})")
+    print(f"{name}: no not-unrolled warning PASS")
+else:
+    print(f"{name}: no build log given, warning check skipped")
 print("unroll_smoke PTX shape: PASS")
 PY

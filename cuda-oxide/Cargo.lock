@@ -371,17 +371,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ctm-rs"
-version = "0.3.0"
-dependencies = [
- "cuda-core",
- "cuda-device",
- "cuda-host",
- "thiserror 2.0.21",
- "trybuild",
-]
-
-[[package]]
 name = "cuda-artifact-finalizer"
 version = "0.3.0"
 dependencies = [
@@ -491,10 +480,10 @@ dependencies = [
 name = "cuda-macros"
 version = "0.3.0"
 dependencies = [
- "ctm-rs",
  "cuda-core",
  "cuda-device",
  "cuda-host",
+ "cutlass-primitives",
  "oxide-tile-export",
  "proc-macro2",
  "quote",
@@ -565,11 +554,21 @@ version = "0.3.0"
 name = "cute-rs"
 version = "0.3.0"
 dependencies = [
- "ctm-rs",
  "cuda-core",
  "cuda-device",
  "cuda-host",
  "cute-layout",
+ "trybuild",
+]
+
+[[package]]
+name = "cutlass-primitives"
+version = "0.3.0"
+dependencies = [
+ "cuda-core",
+ "cuda-device",
+ "cuda-host",
+ "thiserror 2.0.21",
  "trybuild",
 ]
 

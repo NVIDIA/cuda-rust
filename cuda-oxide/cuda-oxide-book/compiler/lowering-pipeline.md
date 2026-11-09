@@ -428,7 +428,7 @@ dbg.declare -> "this source variable lives at this address"
 Because the address is stable for the variable's whole scope, cuda-gdb can read
 it at any breakpoint inside that scope. To keep those addresses real, full-debug
 is a `-G`-style build: it **skips** Pliron `mem2reg` (so the stack slots
-survive), **skips** LLVM `opt -O3`, and runs `llc` at `-O0`. Promoting a local
+survive), **skips** LLVM `opt -O2`, and runs `llc` at `-O0`. Promoting a local
 to an SSA value would shrink its inspectable range to its register's liveness,
 which is exactly how an optimized build ends up showing in-scope locals as
 `<optimized out>`.

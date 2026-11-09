@@ -447,7 +447,7 @@ pub fn lower_mir_to_llvm_with_options(
     let mut rewriter = IRRewriter::<Recorder>::default();
     remove_blocks_inside_op(module_op, ctx, &mut rewriter);
     // mem2reg promotes enum/struct slots into whole-aggregate block arguments,
-    // which export as PHIs of first-class aggregates. LLVM's -O3 pipeline
+    // which export as PHIs of first-class aggregates. LLVM's -O2 pipeline
     // cannot split those (SROA only handles allocas), so e.g. an iterator
     // loop merging `Option<(f32, f32)>` keeps a materialized discriminant and
     // an extra branch per iteration. Split such arguments into scalar leaves
@@ -456,7 +456,7 @@ pub fn lower_mir_to_llvm_with_options(
     // Move eligible fixed-size scratch allocas (both from the MIR entry block
     // shifted to `bb0` by `convert_func`'s aggregate prologue and from
     // use-site converters) into each function's true `entry` block so both
-    // `opt -O3`/`llc` and `libNVVM` see static stack slots.
+    // `opt -O2`/`llc` and `libNVVM` see static stack slots.
     entry_allocas::hoist_fixed_allocas(ctx, module_op);
     Ok(nounroll.warnings)
 }

@@ -114,3 +114,41 @@ pub mod kv_cache_update_seq_dynpos_f16_module {
 }
 
 pub use kv_cache_update_seq_dynpos_f16_module::kv_cache_update_seq_dynpos_f16;
+
+#[cutile::module]
+pub mod kv_cache_update_f16_module {
+    use cutile::core::*;
+
+    /// Append one token to the key and value caches.
+    #[cutile::entry(print_ir=false,
+                       optimization_hints = (
+                         sm_120 = (occupancy=1, max_divisibility=16,),
+                       ))]
+    fn kv_cache_update_f16<const D: i32, const BLOCK_SIZE: i32, const MAX_SEQ: i32>(
+        new_k: &Tensor<f16, { [-1, D] }>,
+        new_v: &Tensor<f16, { [-1, D] }>,
+        k_cache: &mut Tensor<f16, { [1, MAX_SEQ, BLOCK_SIZE] }>,
+        v_cache: &mut Tensor<f16, { [1, MAX_SEQ, BLOCK_SIZE] }>,
+        position: i32,
+    ) {
+        let pid: (i32, i32, i32) = get_tile_block_id();
+        let head = pid.0;
+        let d_block = pid.2;
+
+        let new_k_part = new_k.partition(const_shape![1, BLOCK_SIZE]);
+        let new_v_part = new_v.partition(const_shape![1, BLOCK_SIZE]);
+        let mut k_cache_part = k_cache.partition_mut(const_shape![1, 1, BLOCK_SIZE]);
+        let mut v_cache_part = v_cache.partition_mut(const_shape![1, 1, BLOCK_SIZE]);
+
+        let k_tile = new_k_part
+            .load([head, d_block])
+            .reshape(const_shape![1, 1, BLOCK_SIZE]);
+        let v_tile = new_v_part
+            .load([head, d_block])
+            .reshape(const_shape![1, 1, BLOCK_SIZE]);
+        k_cache_part.store(k_tile, [0i32, position, 0i32]);
+        v_cache_part.store(v_tile, [0i32, position, 0i32]);
+    }
+}
+
+pub use kv_cache_update_f16_module::kv_cache_update_f16;

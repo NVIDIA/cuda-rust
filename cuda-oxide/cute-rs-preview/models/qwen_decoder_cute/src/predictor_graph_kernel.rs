@@ -5,10 +5,11 @@
 //! Scheduling helpers and guard checks for private decoder execution regions.
 use crate::attention_kernel::STATE_SIZE;
 use crate::operator::{GUARD, GUARD_LEN};
-use ctm_rs::memory::DisjointSlice;
-use ctm_rs::{cuda_module, kernel, thread};
 use cute_rs::BFloat16;
 use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
+use cutlass_primitives as prims;
+use prims::memory::DisjointSlice;
+use prims::{cuda_module, kernel, thread};
 
 /// Shared decoder guard/copy steps and fixed fifteen-step predictor helpers.
 ///
@@ -66,21 +67,40 @@ pub mod kernels {
         step: usize,
     ) {
         let lane = thread::threadIdx_x();
-        // SAFETY: the private plan launches a complete warp over 2048 logits;
-        // all lanes execute the same partition/reduction, including invalid data.
-        let selected = unsafe {
-            cute_rs::reduction::argmax_bf16(
-                StridedTensor::from_slice(logits).subview(0, 2048),
-                lane,
-            )
-        };
-        let valid = selected.is_valid();
+        let values = StridedTensor::from_slice(logits)
+            .subview(0, 2048)
+            .local_partition::<32>(lane as usize);
+        let mut idx = lane;
+        let (mut best_val, mut best_idx, valid) = values.fold(
+            (f32::NEG_INFINITY, u32::MAX, true),
+            |(bv, bi, ok), value| {
+                let v = value.to_f32();
+                let cur_idx = idx;
+                idx = idx.wrapping_add(32);
+                let ok_next = ok && (v.to_bits() & 0x7f80_0000 != 0x7f80_0000);
+                if v > bv || (v == bv && cur_idx < bi) {
+                    (v, cur_idx, ok_next)
+                } else {
+                    (bv, bi, ok_next)
+                }
+            },
+        );
+        let mut offset = 16u32;
+        while offset != 0 {
+            let other_val =
+                unsafe { cute_rs::arch::shuffle_sync_bfly_f32(best_val, offset, u32::MAX) };
+            let other_idx = unsafe { cute_rs::arch::shuffle_sync_bfly(best_idx, offset, u32::MAX) };
+            if other_val > best_val || (other_val == best_val && other_idx < best_idx) {
+                best_val = other_val;
+                best_idx = other_idx;
+            }
+            offset /= 2;
+        }
+        let valid = unsafe { cute_rs::arch::vote_all_sync(valid, u32::MAX) };
         if lane == 0 {
-            // Invalid frames still select a bounded fallback so their later
-            // embedding reads remain safe; the host rejects the final status.
             unsafe {
                 StridedTensorMut::from_disjoint_slice(&mut codes)
-                    .store_at(step, if valid { selected.index() } else { 0 });
+                    .store_at(step, if valid { best_idx } else { 0 });
                 StridedTensorMut::from_disjoint_slice(&mut status)
                     .update_at(0, |value| value | if valid { 0 } else { 1 });
             }

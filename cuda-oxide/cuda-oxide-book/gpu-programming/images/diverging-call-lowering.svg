@@ -59,7 +59,7 @@
 <text x="452" y="204" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">The call to write_then_diverge is gone. bb2 and bb4,</text>
 <text x="452" y="218" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">the other two diverging call sites, look the same.</text>
 <line x1="480" y1="236" x2="480" y2="264" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
-<text x="492" y="254" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--muted); white-space: pre">opt -O3, then llc -march=nvptx64</text>
+<text x="492" y="254" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--muted); white-space: pre">opt -O2, then llc -march=nvptx64</text>
 <rect x="440" y="266" width="365" height="152" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
 <text x="452" y="286" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--mono); fill: var(--fg); white-space: pre">PTX   (.entry diverging_callable)</text>
 <text x="452" y="306" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">$L__BB1_5:                              // %bb6</text>
@@ -81,7 +81,7 @@
 <text x="847" y="204" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">The call stays. unreachable only records that control</text>
 <text x="847" y="218" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--sans); fill: var(--muted); white-space: pre">never comes back to this block.</text>
 <line x1="875" y1="236" x2="875" y2="264" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
-<text x="887" y="254" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--muted); white-space: pre">opt -O3, then llc -march=nvptx64</text>
+<text x="887" y="254" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--muted); white-space: pre">opt -O2, then llc -march=nvptx64</text>
 <rect x="835" y="266" width="365" height="152" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
 <text x="847" y="286" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--mono); fill: var(--fg); white-space: pre">PTX   (.entry diverging_callable)</text>
 <text x="847" y="306" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">$L__BB0_7:                              // %bb6</text>

@@ -4,9 +4,10 @@
  */
 //! Explicit three-stage SM120 MXFP4 GEMM. No CuTe layout or pipeline operations.
 use crate::physical;
-use ctm_rs::mbarrier::BarrierAddressExt;
-use ctm_rs::memory::DynamicSharedArray;
-use ctm_rs::{
+use cutlass_primitives as prims;
+use prims::mbarrier::BarrierAddressExt;
+use prims::memory::DynamicSharedArray;
+use prims::{
     barrier, fence,
     mbarrier::{self, Barrier, GeneralBarrier, ManagedBarrier, Ready, TmaBarrier, Uninit},
     memory::{F16Tile128, Mxf4ScaleTile, Mxf4Tile128, PhysicalFormat, SharedAddress, SharedRegion},
@@ -14,7 +15,7 @@ use ctm_rs::{
     thread,
     tma::{self, Coordinates2D, TensorMap},
 };
-use ctm_rs::{cuda_module, kernel, launch_bounds, launch_contract};
+use prims::{cuda_module, kernel, launch_bounds, launch_contract};
 /// Output row count for the fixed benchmark problem.
 pub const M: usize = 2048;
 /// Output column count for the fixed benchmark problem.

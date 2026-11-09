@@ -172,7 +172,7 @@ fn collect_payload_leaves(
 /// it, the non-pointer leaves fall into `[N x i8]` filler bytes, the value
 /// round-trips through a spill slot (byte stores, one wide load), and SROA
 /// cannot reassemble the wide value from the byte slices — the spill slot
-/// survives `opt -O3` as local-memory traffic.
+/// survives `opt -O2` as local-memory traffic.
 fn try_decompose_aggregate_payload(
     ctx: &mut Context,
     mir_field_ty: TypeHandle,

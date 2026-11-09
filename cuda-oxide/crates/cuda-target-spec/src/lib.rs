@@ -66,7 +66,9 @@ impl CudaArch {
     /// Optional architecture-family suffix (`a` or `f`).
     ///
     /// Targets such as `sm_90a` enable architecture-specific instructions and
-    /// cannot be forwarded to a different compute capability.
+    /// cannot be forwarded to a different compute capability. Family targets
+    /// such as `sm_100f` also run on later GPUs of the same family, such as
+    /// `sm_103`.
     pub fn suffix(&self) -> Option<char> {
         self.suffix
     }

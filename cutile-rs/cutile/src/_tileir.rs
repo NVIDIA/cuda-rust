@@ -3,6 +3,39 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/// CUDA 13.5 multicast reduction combiners. Min/Max interpret integers as
+/// signed; Umin/Umax interpret their bit patterns as unsigned.
+pub mod multimem {
+    mod sealed {
+        pub trait Sealed {}
+    }
+    pub trait Mode: sealed::Sealed {}
+    pub struct Add;
+    pub struct Min;
+    pub struct Max;
+    pub struct And;
+    pub struct Or;
+    pub struct Xor;
+    pub struct Umin;
+    pub struct Umax;
+    impl sealed::Sealed for Add {}
+    impl Mode for Add {}
+    impl sealed::Sealed for Min {}
+    impl Mode for Min {}
+    impl sealed::Sealed for Max {}
+    impl Mode for Max {}
+    impl sealed::Sealed for And {}
+    impl Mode for And {}
+    impl sealed::Sealed for Or {}
+    impl Mode for Or {}
+    impl sealed::Sealed for Xor {}
+    impl Mode for Xor {}
+    impl sealed::Sealed for Umin {}
+    impl Mode for Umin {}
+    impl sealed::Sealed for Umax {}
+    impl Mode for Umax {}
+}
+
 /// Raw 1:1 Tile IR op surface.
 ///
 /// Every item here mirrors an op in the Tile IR specification
@@ -15,6 +48,7 @@
 /// Phase 2.
 #[cutile_macro::module(tile_rust_crate = true)]
 pub mod tileir {
+    pub use super::multimem;
     use crate::_core::core::*;
 
     /// View-based atomic reduction: element-wise
@@ -198,6 +232,199 @@ pub mod tileir {
         memory_ordering: O,
         memory_scope: Sc,
     ) -> (Tile<E, TILE_SHAPE>, Token) {
+        unreachable!()
+    }
+
+    /// Classify an NVLink peer pointer. Requires Tile IR 13.5.
+    ///
+    /// Use the result with ordinary pointer/view loads, stores, and atomics.
+    /// Inter-GPU signaling uses system-scope release/acquire operations;
+    /// chain their tokens to the data accesses they publish or consume.
+    /// Classification itself neither signals nor waits for a peer.
+    ///
+    /// # Safety
+    /// Every lane must refer to live, accessible peer memory on the NVLink
+    /// fabric. Classification does not enable peer access or retain storage.
+    #[cuda_tile::op(name="cuda_tile.ptr_to_ptr", since="V13_5", params=["source"], pointer_attribute="unicast")]
+    #[cuda_tile::variadic_op(N = 6)]
+    pub unsafe fn ptr_with_attr_unicast<E: ElementType, const S: [i32; N]>(
+        source: PointerTile<*mut E, S>,
+    ) -> PointerTile<*mut E, S> {
+        unreachable!()
+    }
+
+    /// Classify a CUDA multicast mapping. Requires Tile IR 13.5.
+    ///
+    /// Build a partition view for the `multimem_*_view_tko` operations.
+    /// Ordinary loads, stores, and atomics cannot access this classification.
+    /// Changing between ordinary and multicast aliases also requires a
+    /// token-ordered alias fence and any necessary inter-GPU synchronization.
+    ///
+    /// # Safety
+    /// Every lane must address a live CUDA multicast mapping backed by all
+    /// participants, with access enabled on an NVLink SHARP-capable NVSwitch.
+    /// Ordinary device allocations cannot be reclassified as multicast memory.
+    #[cuda_tile::op(name="cuda_tile.ptr_to_ptr", since="V13_5", params=["source"], pointer_attribute="multicast")]
+    #[cuda_tile::variadic_op(N = 6)]
+    pub unsafe fn ptr_with_attr_multicast<E: ElementType, const S: [i32; N]>(
+        source: PointerTile<*mut E, S>,
+    ) -> PointerTile<*mut E, S> {
+        unreachable!()
+    }
+
+    /// Raw view load with CUDA 13.5 TMA data-validity checking on sm_107.
+    /// `valid_check` must be a compile-time boolean. True requires TMA enabled,
+    /// a supported floating-point element type (for example, `f32`, `f16`, or
+    /// `bf16`), and relaxed or acquire ordering with a memory scope. Integer
+    /// element types and weak ordering do not support validity checking.
+    /// The other arguments have the same meaning as [`load_view_raw`].
+    ///
+    /// # Safety
+    /// All requirements of [`load_view_raw`] apply. When checking is enabled,
+    /// the producer and consumer must use the element type's data-validity
+    /// protocol. Validity checking does not replace bounds checks,
+    /// synchronization, or storage lifetime guarantees.
+    #[cuda_tile::op(name = "cuda_tile.load_view_tko", since = "V13_2")]
+    #[cuda_tile::variadic_op(N = 6)]
+    pub unsafe fn load_view_tko_valid_check<
+        E: ElementType,
+        const S: [i32; N],
+        V,
+        I,
+        O: ordering::LoadMode,
+        Sc: scope::Mode,
+        T: tma::Mode,
+    >(
+        view: &V,
+        index: I,
+        token: Option<Token>,
+        memory_ordering: O,
+        memory_scope: Sc,
+        tma: T,
+        latency: Option<i32>,
+        inbounds: [bool; N],
+        shape: Shape<S>,
+        valid_check: bool,
+    ) -> (Tile<E, S>, Token) {
+        unreachable!()
+    }
+
+    /// Raw atomic view reduction with CUDA 13.5 inbounds promises.
+    /// False entries preserve the behavior of [`atomic_red_view_raw`].
+    ///
+    /// # Safety
+    /// All requirements of [`atomic_red_view_raw`] apply. Each true entry
+    /// additionally promises that every accessed tile is in bounds on that axis.
+    #[cuda_tile::op(name = "cuda_tile.atomic_red_view_tko", since = "V13_3")]
+    #[cuda_tile::variadic_op(N = 6)]
+    pub unsafe fn atomic_red_view_tko_with_inbounds<
+        E: ElementType,
+        const S: [i32; N],
+        V,
+        I,
+        M: atomic::Mode,
+        O: ordering::AtomicMode,
+        Sc: scope::Mode,
+    >(
+        view: &V,
+        value: Tile<E, S>,
+        index: I,
+        mode: M,
+        memory_ordering: O,
+        memory_scope: Sc,
+        token: Option<Token>,
+        inbounds: [bool; N],
+    ) -> Token {
+        unreachable!()
+    }
+
+    /// Load and reduce the corresponding tile from all multicast participants.
+    /// Requires Tile IR 13.5, sm_100/103/107 and NVLink SHARP-capable NVSwitch.
+    /// Float min/max accept f16/bf16; other float reductions accept Add only.
+    ///
+    /// # Safety
+    /// The partition view must carry `ptr_attr<multicast>` and refer to live
+    /// multicast storage with readable backing on every participant. Order
+    /// conflicting accesses, retain all mappings through completion, and honor
+    /// every true inbounds promise. Tokens do not synchronize independent GPUs.
+    #[cuda_tile::op(name = "cuda_tile.multimem_load_reduce_view_tko", since = "V13_5")]
+    #[cuda_tile::variadic_op(N = 6)]
+    pub unsafe fn multimem_load_reduce_view_tko<
+        E: ElementType,
+        const S: [i32; N],
+        V,
+        I,
+        R: multimem::Mode,
+        O: ordering::LoadMode,
+        Sc: scope::Mode,
+    >(
+        view: &V,
+        index: I,
+        reduction: R,
+        memory_ordering: O,
+        memory_scope: Sc,
+        token: Option<Token>,
+        inbounds: [bool; N],
+        shape: Shape<S>,
+    ) -> (Tile<E, S>, Token) {
+        unreachable!()
+    }
+
+    /// Atomically combine a tile into every multicast participant's storage.
+    /// Requires Tile IR 13.5 and sm_100/103/107. Floating point accepts Add only.
+    ///
+    /// # Safety
+    /// The partition view must describe live writable multicast mappings on an
+    /// NVLink SHARP-capable NVSwitch. All participants must agree on the memory
+    /// protocol; retain mappings and honor inbounds promises through completion.
+    #[cuda_tile::op(name = "cuda_tile.multimem_reduce_view_tko", since = "V13_5")]
+    #[cuda_tile::variadic_op(N = 6)]
+    pub unsafe fn multimem_reduce_view_tko<
+        E: ElementType,
+        const S: [i32; N],
+        V,
+        I,
+        R: multimem::Mode,
+        O: ordering::AtomicStoreMode,
+        Sc: scope::Mode,
+    >(
+        view: &V,
+        value: Tile<E, S>,
+        index: I,
+        reduction: R,
+        memory_ordering: O,
+        memory_scope: Sc,
+        token: Option<Token>,
+        inbounds: [bool; N],
+    ) -> Token {
+        unreachable!()
+    }
+
+    /// Store a tile to every multicast participant. Requires Tile IR 13.5 and
+    /// sm_100/103/107.
+    ///
+    /// # Safety
+    /// The partition view must describe live writable multicast mappings on an
+    /// NVLink SHARP-capable NVSwitch. Prevent unordered conflicting accesses on
+    /// every participant and honor all inbounds promises through completion.
+    #[cuda_tile::op(name = "cuda_tile.multimem_store_view_tko", since = "V13_5")]
+    #[cuda_tile::variadic_op(N = 6)]
+    pub unsafe fn multimem_store_view_tko<
+        E: ElementType,
+        const S: [i32; N],
+        V,
+        I,
+        O: ordering::StoreMode,
+        Sc: scope::Mode,
+    >(
+        view: &V,
+        value: Tile<E, S>,
+        index: I,
+        memory_ordering: O,
+        memory_scope: Sc,
+        token: Option<Token>,
+        inbounds: [bool; N],
+    ) -> Token {
         unreachable!()
     }
 }

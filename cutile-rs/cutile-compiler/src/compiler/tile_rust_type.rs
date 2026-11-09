@@ -76,6 +76,15 @@ pub struct TileRustType {
 }
 
 impl TileRustType {
+    /// Whether two types are the same. In a generic caller one type can be
+    /// spelled two ways: a declared `Tile<f32, {[B, N]}>` keeps the symbols,
+    /// a helper's result is spelled with their values (`{[16, 16]}`), so the
+    /// instances decide when the spellings differ.
+    pub(crate) fn is_same_type(&self, other: &TileRustType) -> bool {
+        self.rust_ty == other.rust_ty
+            || self.type_instance.get_instantiated_type()
+                == other.type_instance.get_instantiated_type()
+    }
     pub(crate) fn get_instantiated_rust_element_type(
         &self,
         _primitives: &HashMap<(String, String), ItemImpl>,

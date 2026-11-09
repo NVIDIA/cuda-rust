@@ -63,7 +63,7 @@ jobs:
           - package: dialect-nvvm
           - package: mir-importer
           # CuTe types, semantic IR, and MLIR export need no CUDA toolkit.
-          # cute-rs and ctm-rs compile host metadata through cuda-host, so
+          # cute-rs and cutlass-primitives compile host metadata through cuda-host, so
           # they run in rust-unit-tests-cuda.
           - package: cute-layout
           - package: dialect-cute
@@ -152,8 +152,8 @@ jobs:
           - package: cuda-oxide-codegen
           # Facade macro tests compile host metadata through cuda-host.
           - package: cute-rs
-          - package: ctm-rs
-          - package: ctm-rs
+          - package: cutlass-primitives
+          - package: cutlass-primitives
             test_args: --all-targets --features host
           # launch_requires_unsafe trybuild fixture dev-depends on
           # cuda-host/cuda-core, which transitively pull cuda-bindings.

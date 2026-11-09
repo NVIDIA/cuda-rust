@@ -76,12 +76,19 @@ pub(super) fn write_op_body(
         | PtrToPtr
         | RemF
         | Reshape
-        | Select
         | Sin
         | SinH
         | Tan
         | Unpack
         | XOrI => {
+            write_result_types(op, w, ctx)?;
+            write_operands(op, w, ctx, false)?;
+        }
+
+        // Tile IR 13.5 encodes no optimization hints on `select` or `if`
+        // (`encode_SelectOp` / `encode_IfOp` in cuTile Python): a likelihood
+        // hint stays in the IR and is not serialized.
+        Select => {
             write_result_types(op, w, ctx)?;
             write_operands(op, w, ctx, false)?;
         }
@@ -486,12 +493,26 @@ pub(super) fn write_op_body(
             write_inline_attr(op, "memory_ordering_semantics", w, ctx)?;
             write_inline_attr(op, "memory_scope", w, ctx)?;
             write_inline_attr(op, "mode", w, ctx)?;
+            write_inbounds(op, 1, w, ctx)?;
             write_operand_group(op, w, ctx, 0, 1)?;
             write_variadic_operand_group(op, w, ctx, 1)?;
             write_operand_group(op, w, ctx, 2, 1)?;
             if flags & (1 << 0) != 0 {
                 write_operand_group(op, w, ctx, 3, 1)?;
             }
+        }
+
+        // ----- Public preview -----
+        PreviewCall => {
+            // Matches `encode_PreviewCallOp`: variadic results, flags for the
+            // optional arg_attrs/res_attrs (never emitted), callee, constant
+            // arguments, then the sized operand list.
+            w.write_varint(op.result_types.len() as u64);
+            write_result_types(op, w, ctx)?;
+            w.write_varint(0);
+            write_inline_attr(op, "callee", w, ctx)?;
+            write_inline_attr(op, "const_args", w, ctx)?;
+            write_operands(op, w, ctx, true)?;
         }
         LoadPtrTko => {
             write_result_types(op, w, ctx)?;
@@ -524,7 +545,8 @@ pub(super) fn write_op_body(
             write_result_types(op, w, ctx)?;
             let flags = flag_if_present(op, "memory_scope", 0)
                 | flag_if_present(op, "optimization_hints", 1)
-                | flag_if_operand_group(op, 2, 2);
+                | flag_if_operand_group(op, 2, 2)
+                | flag_if_bool_true(op, "valid_check", 3);
             w.write_varint(flags);
             write_inline_attr(op, "memory_ordering_semantics", w, ctx)?;
             if flags & (1 << 0) != 0 {
@@ -534,6 +556,9 @@ pub(super) fn write_op_body(
                 write_inline_attr(op, "optimization_hints", w, ctx)?;
             }
             write_inbounds(op, 1, w, ctx)?;
+            if flags & (1 << 3) != 0 {
+                w.write_byte(1);
+            }
             write_operand_group(op, w, ctx, 0, 1)?;
             write_variadic_operand_group(op, w, ctx, 1)?;
             if flags & (1 << 2) != 0 {
@@ -583,6 +608,38 @@ pub(super) fn write_op_body(
             write_variadic_operand_group(op, w, ctx, 2)?;
             if flags & (1 << 2) != 0 {
                 write_operand_group(op, w, ctx, 3, 1)?;
+            }
+        }
+
+        MultimemLoadReduceViewTko | MultimemReduceViewTko | MultimemStoreViewTko => {
+            w.write_varint(op.result_types.len() as u64);
+            write_result_types(op, w, ctx)?;
+            let load = op.opcode == MultimemLoadReduceViewTko;
+            let reduce = op.opcode == MultimemReduceViewTko;
+            let token_group = if load { 2 } else { 3 };
+            let token_bit = u32::from(!reduce);
+            let flags = flag_if_operand_group(op, token_group, token_bit)
+                | if reduce {
+                    0
+                } else {
+                    flag_if_present(op, "memory_scope", 0)
+                };
+            w.write_varint(flags);
+            write_inline_attr(op, "memory_ordering_semantics", w, ctx)?;
+            if reduce || flags & 1 != 0 {
+                write_inline_attr(op, "memory_scope", w, ctx)?;
+            }
+            if load || reduce {
+                write_inline_attr_or_default(op, "reduction", 0, w, ctx)?;
+            }
+            write_inbounds(op, if load { 1 } else { 2 }, w, ctx)?;
+            write_operand_group(op, w, ctx, 0, 1)?;
+            if !load {
+                write_operand_group(op, w, ctx, 1, 1)?;
+            }
+            write_variadic_operand_group(op, w, ctx, if load { 1 } else { 2 })?;
+            if flags & (1 << token_bit) != 0 {
+                write_operand_group(op, w, ctx, token_group, 1)?;
             }
         }
 
@@ -938,10 +995,21 @@ fn write_inbounds(
             )))
         }
     };
+    let since = if matches!(
+        op.opcode,
+        Opcode::AtomicRedViewTko
+            | Opcode::MultimemLoadReduceViewTko
+            | Opcode::MultimemReduceViewTko
+            | Opcode::MultimemStoreViewTko
+    ) {
+        BytecodeVersion::V13_5
+    } else {
+        BytecodeVersion::V13_4
+    };
     if values.iter().any(|&value| value) {
-        require_version("inbounds=true", Feature::Inbounds.since(), ctx.version)?;
+        require_version("inbounds=true", since, ctx.version)?;
     }
-    if ctx.version >= BytecodeVersion::V13_4 {
+    if ctx.version >= since {
         w.write_varint(rank as u64);
         for value in values {
             w.write_byte(u8::from(value));
@@ -1025,9 +1093,184 @@ mod tests {
             constants: ConstantManager::new(),
             debug: DebugInfoCollector::new(),
         };
+        // Nested region operations record debug provenance as they serialize.
+        ctx.debug
+            .begin_function(&mut ctx.strings, "test", None, &Location::Unknown);
         let mut w = EncodingWriter::new();
         write_op_body(module.op(op), &mut w, &mut ctx)?;
         Ok(w.into_bytes())
+    }
+
+    // Golden layouts for the Tile IR 13.5 bytecode format.
+    // Result counts, optional-token flags, dense inbounds bytes and operand
+    // segments are deliberately checked independently of the decoder.
+    #[test]
+    fn multimem_13_5_golden_layouts() {
+        for (opcode, mut expected, reduction) in [
+            (
+                Opcode::MultimemLoadReduceViewTko,
+                vec![2, 1, 2, 3, 2, 2, 5, 1, 1, 0, 1, 1, 2],
+                5,
+            ),
+            (
+                Opcode::MultimemReduceViewTko,
+                vec![1, 0, 1, 3, 2, 7, 1, 1, 0, 1, 1, 2, 3],
+                7,
+            ),
+            (
+                Opcode::MultimemStoreViewTko,
+                vec![1, 0, 3, 3, 2, 1, 1, 0, 1, 1, 2, 3],
+                0,
+            ),
+        ] {
+            for present in [true, false] {
+                let load = opcode == Opcode::MultimemLoadReduceViewTko;
+                let mut module = Module::new("wire");
+                let count = if load { 2 } else { 3 } + usize::from(present);
+                let (_, _, args) =
+                    build_single_block_region(&mut module, &vec![Type::Token; count]);
+                let mut builder = OpBuilder::new(opcode, Location::Unknown)
+                    .operands(args.iter().copied())
+                    .attr(
+                        "memory_ordering_semantics",
+                        Attribute::i32(if load { 2 } else { 3 }),
+                    )
+                    .attr("memory_scope", Attribute::i32(2))
+                    .attr("reduction", Attribute::i32(reduction))
+                    .attr("inbounds", Attribute::dense_bool_array([true]));
+                let mut segments = if load { vec![1, 1] } else { vec![1, 1, 1] };
+                segments.push(i64::from(present));
+                builder = builder.attr(
+                    "operandSegmentSizes",
+                    Attribute::Array(segments.into_iter().map(Attribute::i32).collect()),
+                );
+                if load {
+                    builder = builder.result(tile_f32());
+                }
+                let (op, _) = builder.result(Type::Token).build(&mut module);
+                if !present {
+                    expected.pop();
+                    let flag = if load { 3 } else { 2 };
+                    expected[flag] = if opcode == Opcode::MultimemReduceViewTko {
+                        0
+                    } else {
+                        1
+                    };
+                }
+                assert_eq!(
+                    op_body_bytes_version(&module, &args, op, BytecodeVersion::V13_5).unwrap(),
+                    expected,
+                    "{opcode:?} token={present}"
+                );
+                assert!(op_body_bytes_version(&module, &args, op, BytecodeVersion::V13_4).is_err());
+            }
+        }
+    }
+
+    /// The 13.5 wire format has no flags field on `select`. Advisory hints
+    /// must not shift its result type or operand IDs, even when present in IR.
+    #[test]
+    fn select_has_the_same_layout_in_13_5_with_or_without_hints() {
+        for (version, hint) in [
+            (BytecodeVersion::V13_4, None),
+            (BytecodeVersion::V13_5, None),
+            (BytecodeVersion::V13_5, Some(true)),
+            (BytecodeVersion::V13_5, Some(false)),
+        ] {
+            let mut module = Module::new("select");
+            let condition_type = Type::Tile(TileType {
+                shape: vec![],
+                element_type: TileElementType::Scalar(ScalarType::I1),
+            });
+            let (_, _, args) =
+                build_single_block_region(&mut module, &[condition_type, tile_f32(), tile_f32()]);
+            let mut builder = OpBuilder::new(Opcode::Select, Location::Unknown)
+                .operands(args.iter().copied())
+                .result(tile_f32());
+            if let Some(expected) = hint {
+                builder = builder.attr("optimization_hints", condition_hint(expected));
+            }
+            let (op, _) = builder.build(&mut module);
+            let bytes = op_body_bytes_version(&module, &args, op, version).unwrap();
+            assert_eq!(bytes, [1, 0, 1, 2], "{version}, hint: {hint:?}");
+            compare_python("Select", version, hint.is_some(), &bytes);
+        }
+    }
+
+    /// Check the complete `if` body without an assembler: result count/types,
+    /// condition, region count, and both branches' yield operands. The 13.5
+    /// schema has no flags field between the result types and condition.
+    #[test]
+    fn if_has_the_same_layout_in_13_5_with_or_without_hints() {
+        for (version, hint) in [
+            (BytecodeVersion::V13_4, None),
+            (BytecodeVersion::V13_5, None),
+            (BytecodeVersion::V13_5, Some(true)),
+            (BytecodeVersion::V13_5, Some(false)),
+        ] {
+            for result_count in 0..=2 {
+                let mut module = Module::new("if");
+                let condition_type = Type::Tile(TileType {
+                    shape: vec![],
+                    element_type: TileElementType::Scalar(ScalarType::I1),
+                });
+                let (_, _, args) = build_single_block_region(
+                    &mut module,
+                    &[tile_f32(), tile_f32(), condition_type],
+                );
+                let mut builder = OpBuilder::new(Opcode::If, Location::Unknown).operand(args[2]);
+                for _ in 0..result_count {
+                    builder = builder.result(tile_f32());
+                }
+                if let Some(expected) = hint {
+                    builder = builder.attr("optimization_hints", condition_hint(expected));
+                }
+                for _ in 0..2 {
+                    let (region, block, _) = build_single_block_region(&mut module, &[]);
+                    let (yield_op, _) = OpBuilder::new(Opcode::Yield, Location::Unknown)
+                        .operands(args[..result_count].iter().copied())
+                        .build(&mut module);
+                    append_op(&mut module, block, yield_op);
+                    builder = builder.region(region);
+                }
+                let (op, _) = builder.build(&mut module);
+                // Result type ID 1 is tile<f32>; condition value ID 2 is
+                // followed immediately by the two-region count.
+                let (mut expected, branch) = match result_count {
+                    0 => (vec![0, 2, 2], vec![1, 0, 1, 0x6d, 0, 0]),
+                    1 => (vec![1, 1, 2, 2], vec![1, 0, 1, 0x6d, 0, 1, 0]),
+                    2 => (vec![2, 1, 1, 2, 2], vec![1, 0, 1, 0x6d, 0, 2, 0, 1]),
+                    _ => unreachable!(),
+                };
+                // Each region contains one block, no arguments, and one
+                // yield (opcode 0x6d) with zero results and sized operands.
+                expected.extend_from_slice(&branch);
+                expected.extend_from_slice(&branch);
+                assert_eq!(
+                    op_body_bytes_version(&module, &args, op, version).unwrap(),
+                    expected,
+                    "{version}, hint: {hint:?}, result count: {result_count}",
+                );
+            }
+        }
+    }
+
+    /// Match the likelihood metadata emitted by the frontend.
+    fn condition_hint(expected: bool) -> Attribute {
+        let hint = if expected {
+            "LIKELY_TRUE"
+        } else {
+            "LIKELY_FALSE"
+        };
+        Attribute::OptimizationHints(crate::ir::OptimizationHints {
+            entries: vec![(
+                "default".into(),
+                vec![(
+                    "discardable_perf_hints".into(),
+                    Attribute::String(format!("{{\"condition_hint\":\"{hint}\"}}")),
+                )],
+            )],
+        })
     }
 
     fn compare_python(operation: &str, version: BytecodeVersion, option: bool, actual: &[u8]) {
@@ -1088,6 +1331,66 @@ mod tests {
                         .contains("13.4"));
                 }
             }
+        }
+    }
+
+    #[test]
+    fn preview_call_wire_layout_and_version_gate() {
+        use crate::ir::PreviewConstArg;
+        let t = Type::Tile(TileType {
+            shape: vec![4],
+            element_type: TileElementType::Scalar(ScalarType::F32),
+        });
+        let mut module = Module::new("preview_call");
+        let (_, _, args) = build_single_block_region(&mut module, &[t.clone(), Type::Token]);
+        let (op, _) = OpBuilder::new(Opcode::PreviewCall, Location::Unknown)
+            .operands(args.iter().copied())
+            .results([t.clone(), Type::Token])
+            .attr("callee", Attribute::String("f".into()))
+            .attr(
+                "const_args",
+                Attribute::Array(
+                    [
+                        PreviewConstArg::Int(-3),
+                        PreviewConstArg::Int(64),
+                        PreviewConstArg::Str("lower".into()),
+                        PreviewConstArg::Datatype(Type::Scalar(ScalarType::F64)),
+                    ]
+                    .into_iter()
+                    .map(Attribute::PreviewConstArg)
+                    .collect(),
+                ),
+            )
+            .build(&mut module);
+        // Name the table indices by interning in the writer's order.
+        let mut types = TypeManager::new();
+        let mut strings = StringManager::new();
+        let tile = types.get_or_insert(&t) as u8;
+        let token = types.get_or_insert(&Type::Token) as u8;
+        let callee = strings.get_or_insert("f") as u8;
+        let lower = strings.get_or_insert("lower") as u8;
+        let f64_ty = types.get_or_insert(&Type::Scalar(ScalarType::F64)) as u8;
+        #[rustfmt::skip]
+        let expected = vec![
+            2, tile, token, // results
+            0,              // no arg_attrs / res_attrs
+            callee,         // callee
+            4,              // constant arguments
+            0xD1, 0x01, 5,          // int -3 (zigzag)
+            0xD1, 0x01, 0x80, 0x01, // int 64
+            0xE4, 0x01, lower,      // string
+            0xDB, 0x01, f64_ty,     // datatype
+            2, 0, 1,        // operands
+        ];
+        assert_eq!(
+            op_body_bytes_version(&module, &args, op, BytecodeVersion::V13_5).unwrap(),
+            expected
+        );
+        for old in [BytecodeVersion::V13_3, BytecodeVersion::V13_4] {
+            assert!(op_body_bytes_version(&module, &args, op, old)
+                .unwrap_err()
+                .to_string()
+                .contains("13.5"));
         }
     }
 

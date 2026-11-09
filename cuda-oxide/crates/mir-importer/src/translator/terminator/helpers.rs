@@ -175,6 +175,7 @@ pub(crate) fn finish_destination_write(
     match destination {
         PreparedDestinationWrite::Local(local) => Ok(value_map
             .store_local(ctx, local, value, block_ptr, Some(prev_op))
+            .inspect(|store_op| store_op.deref_mut(ctx).set_loc(loc))
             .unwrap_or(prev_op)),
         PreparedDestinationWrite::Address(address) => {
             let store_op = Operation::new(

@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 /// Links `libdevice.10.bc` into the emitted IR using `llvm-link`.
 ///
 /// Resolves `__nv_*` calls (CUDA math library) at the IR level so they are
-/// inlined and optimized by `opt -O3` before `llc` lowers to PTX. This
+/// inlined and optimized by `opt -O2` before `llc` lowers to PTX. This
 /// avoids the legacy NVVM IR path (which uses the LLVM 7 dialect and cannot
 /// represent f16 types on pre-Blackwell targets).
 ///
@@ -32,7 +32,7 @@ use std::path::{Path, PathBuf};
 /// __nv_*` PTX body (a one-call kernel balloons from ~130 to ~22,000 lines
 /// and later cuLink/nvJitLink steps hit duplicate-symbol collisions). With
 /// the flags, only the referenced bodies are imported, as `internal`, and
-/// `opt -O3` inlines or discards them.
+/// `opt -O2` inlines or discards them.
 ///
 /// Failure is a hard error: the pipeline chooses the PTX path for a
 /// libdevice kernel only after confirming `llvm-link` is resolvable, so a
@@ -97,9 +97,9 @@ fn link_libdevice(
 /// Runs LLVM's middle-end on the emitted IR before `llc`.
 ///
 /// Modules with explicit `@llvm.used` roots internalize every other definition
-/// before the default O3 pipeline so fully inlined helpers are eligible for
+/// before the default O2 pipeline so fully inlined helpers are eligible for
 /// global dead-code elimination. Modules without an explicit root set retain
-/// the plain `opt -O3` pipeline.
+/// the historical `opt -O2` path.
 ///
 /// This is what consumes the per-op ABI alignment we emit: the
 /// LoadStoreVectorizer fuses aligned aggregate/element accesses, SROA
@@ -420,28 +420,19 @@ const LIBDEVICE_PRECISION_REFLECT_ARGS: [&str; 2] = [
 /// internalization lets GlobalDCE remove it instead of asking `llc` to emit an
 /// unreachable `.visible .func` body.
 ///
-/// Two settings decide whether small counted loops over a local array unroll
-/// (and so whether the array stays in registers), and both match clang and
-/// nvcc:
-///
-/// - `-mcpu`: NVPTX adds `NVVMReflectPass` to the start of `opt`'s pipeline
-///   only when the subtarget names a GPU. Without it every inlined libdevice
-///   body keeps both its `__CUDA_FTZ` arms (an FTZ and a non-FTZ copy of each
-///   `fma`/`fabs`, joined by `select`) until `llc` folds them, which is after
-///   the unroller has already priced the loop at roughly twice its real size.
-///   A four-step `libm::erff` loop then stays rolled and its array goes to
-///   `.local`.
-/// - `O3`: device code is compiled at rustc `opt-level = 3` (cargo-oxide pins
-///   it), and clang `-O3` and nvcc both run LLVM's aggressive full-unroll
-///   threshold (300 against O2's 150). A bias+GELU loop with two `erff` calls
-///   per step needs it.
+/// Passing `-mcpu` ensures NVPTX adds `NVVMReflectPass` to the start of `opt`'s
+/// pipeline. Without it every inlined libdevice body keeps both its
+/// `__CUDA_FTZ` arms (an FTZ and a non-FTZ copy of each `fma`/`fabs`, joined
+/// by `select`) until `llc` folds them, which is after the unroller has
+/// already priced the loop at roughly twice its real size. A four-step
+/// `libm::erff` loop then stays rolled and its array goes to `.local`.
 fn optimization_args(
     public_symbols: &[String],
     target_sm: &str,
     libdevice_linked: bool,
 ) -> Result<Vec<String>, PipelineError> {
     let mut args = if public_symbols.is_empty() {
-        vec!["-O3".to_string()]
+        vec!["-O2".to_string()]
     } else {
         if let Some(symbol) = public_symbols.iter().find(|symbol| symbol.contains(',')) {
             return Err(PipelineError::Optimization(format!(
@@ -449,7 +440,7 @@ fn optimization_args(
             )));
         }
         vec![
-            "-passes=internalize,default<O3>".to_string(),
+            "-passes=internalize,default<O2>".to_string(),
             format!("-internalize-public-api-list={}", public_symbols.join(",")),
         ]
     };
@@ -704,14 +695,14 @@ fn generate_ptx_impl(
     };
     let post_link_input: &Path = linked.as_deref().unwrap_or(module.llvm_ir);
 
-    // Run the LLVM middle-end (opt -O3) before llc. Source requirements are
+    // Run the LLVM middle-end (opt -O2) before llc. Source requirements are
     // detected above so target selection cannot lose a source-level contract
     // merely because optimization elides it. Requirements are detected again
     // from the exact llc input below because linking and optimization can also
     // introduce backend intrinsics (notably llvm.stacksave/stackrestore).
     //
     // Full-debug is a `-G`-style build: it keeps eligible imported locals in
-    // memory and describes them with `llvm.dbg.declare`. Running `opt -O3`
+    // memory and describes them with `llvm.dbg.declare`. Running `opt -O2`
     // would promote those slots to registers and collapse their live ranges,
     // turning most in-scope locals into `<optimized out>` under cuda-gdb. So we
     // feed the unoptimized IR straight to llc when variable info is requested,
@@ -721,7 +712,7 @@ fn generate_ptx_impl(
             record_diagnostic(
                 &mut diagnostics,
                 diagnostic_sink,
-                "Skipping opt -O3 (full debug keeps locals inspectable)".to_string(),
+                "Skipping opt -O2 (full debug keeps locals inspectable)".to_string(),
             );
         }
         None
@@ -745,7 +736,7 @@ fn generate_ptx_impl(
     };
     let llc_input: &Path = optimized.as_deref().unwrap_or(post_link_input);
 
-    // Diagnose Rust locals only from the successful post-O3 input that will
+    // Diagnose Rust locals only from the successful post-O2 input that will
     // actually reach llc. Looking earlier would report slots that LLVM SROA
     // still removes, while full-debug and no-opt builds intentionally retain
     // stack storage and therefore are not meaningful promotion diagnostics.
@@ -1224,7 +1215,7 @@ mod tests {
         assert_eq!(
             optimization_args(&symbols, "sm_120", false).unwrap(),
             [
-                "-passes=internalize,default<O3>",
+                "-passes=internalize,default<O2>",
                 "-internalize-public-api-list=constant_data,first_kernel",
                 "-mcpu=sm_120",
                 "-switch-to-lookup=false",
@@ -1236,7 +1227,7 @@ mod tests {
     fn modules_without_public_roots_keep_the_existing_optimization_pipeline() {
         assert_eq!(
             optimization_args(&[], "sm_80", false).unwrap(),
-            ["-O3", "-mcpu=sm_80", "-switch-to-lookup=false"]
+            ["-O2", "-mcpu=sm_80", "-switch-to-lookup=false"]
         );
     }
 

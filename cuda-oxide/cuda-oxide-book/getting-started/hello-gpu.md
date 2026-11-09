@@ -12,14 +12,6 @@ If you haven't already, install the build tool with the pinned toolchain:
 cargo +1.99.1 install --git https://github.com/NVIDIA/cuda-rust.git cargo-oxide
 ```
 
-Verify that your environment is set up correctly:
-
-```bash
-cargo oxide doctor
-```
-
-This checks for a compatible GPU, CUDA toolkit, LLVM, and the codegen backend. Fix any issues it reports before continuing (see [Installation](installation.md) for details).
-
 ---
 
 ## Create a project
@@ -44,6 +36,14 @@ my_first_kernel/
 └── src/
     └── main.rs          # kernel + host code in one file
 ```
+
+Verify that your environment is set up correctly:
+
+```bash
+cargo oxide doctor
+```
+
+This checks for a compatible GPU, CUDA toolkit, LLVM, and the codegen backend. It reads the project's toolchain pin and dependencies, so run it from the project directory. Fix any issues it reports before continuing (see [Installation](installation.md) for details).
 
 Build and run it:
 

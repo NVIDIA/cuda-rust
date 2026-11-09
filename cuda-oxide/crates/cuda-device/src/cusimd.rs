@@ -133,7 +133,8 @@ impl SimdElement for i16 {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct CuSimd<T: SimdElement, const N: usize> {
-    data: [T; N],
+    /// Underlying register array of `N` SIMD elements.
+    pub data: [T; N],
 }
 
 // =============================================================================

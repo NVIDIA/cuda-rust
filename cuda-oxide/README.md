@@ -289,6 +289,7 @@ compiles a Rust kernel to PTX, launches it on the GPU, and prints
 | `mathdx_ffi_test`         | cuFFTDx thread-level FFT + cuBLASDx block-level GEMM                     |
 | `device_ffi_test`         | Device FFI: Rust kernels calling C++ CCCL warp-level reductions via LTOIR|
 | `async_vecadd`            | Async GPU execution with `cuda-async` and `DeviceOperation`              |
+| `cuda_graph`              | SIMT launches captured into a `CudaGraph`, replayed vs eager launches    |
 | `cross_crate_kernel`      | Library crates defining kernels, bundled into binaries                   |
 | `cuda_module_in_lib`      | `#[cuda_module]` in a library crate, loaded by embedded bundle name      |
 
@@ -306,7 +307,7 @@ cargo oxide run gemm_sol_final
 | `cuda-device`       | Device intrinsics (`thread::*`, `warp::*`, barriers)                      |
 | `cute-layout`       | CuTe-style layout algebra and coordinate mapping |
 | `cute-rs`           | Typed CuTe tensors, tiles, copies, pipelines, and MMA operations |
-| `ctm-rs`            | Typed instruction-level CUDA primitives |
+| `cutlass-primitives`            | Typed instruction-level CUDA primitives |
 | `cuda-intrinsics`   | Generated low-level CUDA intrinsic declarations                           |
 | `cuda-host`         | Typed module loading, launch helpers, LTOIR loader                        |
 | `cuda-macros`       | Proc macros (`#[cuda_module]`, `#[kernel]`, `gpu_printf!`)                |

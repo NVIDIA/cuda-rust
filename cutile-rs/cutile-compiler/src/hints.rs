@@ -10,6 +10,7 @@
 use crate::ast::SourceLocation;
 use crate::cuda_tile_runtime_utils::DEFAULT_OPT_LEVEL;
 use crate::error::{JITError, SpannedJITError};
+pub use crate::tile_library::TileLibrarySpec;
 use quote::ToTokens;
 use std::collections::BTreeMap;
 use syn::{Expr, Lit};
@@ -24,6 +25,7 @@ pub struct SMHints {
     pub occupancy: Option<i32>,
     pub max_divisibility: Option<i32>,
     pub num_worker_warps_per_cta: Option<i32>,
+    pub min_ctas_per_sm: Option<i32>,
 }
 
 impl SMHints {
@@ -34,6 +36,7 @@ impl SMHints {
             occupancy: None,
             max_divisibility: None,
             num_worker_warps_per_cta: None,
+            min_ctas_per_sm: None,
         }
     }
 
@@ -52,6 +55,15 @@ impl SMHints {
                 .jit_error_result("occupancy hint has already been set");
         }
         self.occupancy = Some(get_int_hint(hint)?);
+        Ok(())
+    }
+
+    pub fn set_min_ctas_per_sm(&mut self, hint: &Expr) -> Result<(), JITError> {
+        if self.min_ctas_per_sm.is_some() {
+            return SourceLocation::unknown()
+                .jit_error_result("min_ctas_per_sm hint has already been set");
+        }
+        self.min_ctas_per_sm = Some(get_int_hint(hint)?);
         Ok(())
     }
 
@@ -179,10 +191,16 @@ pub struct CompileOptions {
     pub num_cta_in_cga: Option<i32>,
     pub max_divisibility: Option<i32>,
     pub num_worker_warps_per_cta: Option<i32>,
+    /// CUDA 13.5 minimum resident CTAs per SM (0–32); zero disables the constraint.
+    pub min_ctas_per_sm: Option<i32>,
     pub codegen: CodegenMode,
     /// Instrument memory accesses for Compute Sanitizer's memcheck tool
     /// (`tileiras --sanitize=memcheck`).
     pub sanitize_memcheck: bool,
+    /// Tile libraries this launch links in addition to the process-wide
+    /// defaults ([`crate::tile_library::set_default_tile_libraries`]); see
+    /// [`Self::tile_library`].
+    pub tile_libraries: Vec<TileLibrarySpec>,
 }
 
 impl Default for CompileOptions {
@@ -192,8 +210,10 @@ impl Default for CompileOptions {
             num_cta_in_cga: None,
             max_divisibility: None,
             num_worker_warps_per_cta: None,
+            min_ctas_per_sm: None,
             codegen: CodegenMode::RELEASE.with_debug_info(BUILD_DEBUG_INFO),
             sanitize_memcheck: false,
+            tile_libraries: Vec::new(),
         }
     }
 }
@@ -231,6 +251,12 @@ impl CompileOptions {
         self
     }
 
+    /// Set the CUDA 13.5 minimum-residency hint. Zero disables the constraint.
+    pub fn min_ctas_per_sm(mut self, min_ctas_per_sm: i32) -> Self {
+        self.min_ctas_per_sm = Some(min_ctas_per_sm);
+        self
+    }
+
     /// Selects optimized code at `opt_level`, keeping line info. This leaves
     /// debug mode, which `tileiras` supports only at level 0.
     pub fn opt_level(mut self, opt_level: u8) -> Self {
@@ -240,6 +266,25 @@ impl CompileOptions {
 
     pub fn sanitize_memcheck(mut self, sanitize_memcheck: bool) -> Self {
         self.sanitize_memcheck = sanitize_memcheck;
+        self
+    }
+
+    /// Links `library` into this launch's kernel, in addition to the
+    /// process-wide defaults. A kernel that calls a `#[cutile::foreign]`
+    /// function needs the library implementing it here or in the defaults.
+    pub fn tile_library(mut self, library: TileLibrarySpec) -> Self {
+        self.tile_libraries.push(library);
+        self
+    }
+
+    /// These options with the process-wide default tile libraries put
+    /// before this launch's own: the libraries the kernel links.
+    pub fn with_default_tile_libraries(mut self) -> Self {
+        let mut libraries = crate::tile_library::default_tile_libraries();
+        if !libraries.is_empty() {
+            libraries.append(&mut self.tile_libraries);
+            self.tile_libraries = libraries;
+        }
         self
     }
 }
@@ -289,7 +334,7 @@ impl OptimizationHints {
         for sm_key_val in &opt_hints.elems {
             let (opt_key, opt_value) = Self::parse_key_value(sm_key_val)?;
             {
-                if !opt_key.starts_with("sm_") {
+                if opt_key != "default" && !opt_key.starts_with("sm_") {
                     return SourceLocation::unknown().jit_error_result(&format!(
                         "Unexpected optimization hint {}.",
                         sm_key_val.to_token_stream()
@@ -310,6 +355,7 @@ impl OptimizationHints {
                         "num_worker_warps_per_cta" => {
                             sm_hints_result.set_num_worker_warps_per_cta(&hints)?
                         }
+                        "min_ctas_per_sm" => sm_hints_result.set_min_ctas_per_sm(&hints)?,
                         "allow_tma" | "latency" => {
                             return SourceLocation::unknown().jit_error_result(&format!(
                                     "'{key}' is a per-op hint and cannot be set at the entry level. \
@@ -347,6 +393,7 @@ impl OptimizationHints {
             && options.num_cta_in_cga.is_none()
             && options.max_divisibility.is_none()
             && options.num_worker_warps_per_cta.is_none()
+            && options.min_ctas_per_sm.is_none()
         {
             return;
         }
@@ -366,6 +413,9 @@ impl OptimizationHints {
         }
         if let Some(max_divisibility) = options.max_divisibility {
             sm_hints.max_divisibility = Some(max_divisibility);
+        }
+        if let Some(min_ctas_per_sm) = options.min_ctas_per_sm {
+            sm_hints.min_ctas_per_sm = Some(min_ctas_per_sm);
         }
         if let Some(num_worker_warps_per_cta) = options.num_worker_warps_per_cta {
             sm_hints.num_worker_warps_per_cta = Some(num_worker_warps_per_cta);

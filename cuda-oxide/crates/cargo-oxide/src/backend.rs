@@ -109,14 +109,14 @@ use std::time::SystemTime;
 
 use crate::backend_source::{self, DependencySource};
 
-/// Finds the workspace root by walking up from CWD.
+/// Finds the workspace root by walking up from `start`, normally the CWD.
 ///
 /// Supports the component workspace (`crates/rustc-codegen-cuda`) and the
 /// historical combined layout (`cuda-oxide/crates/rustc-codegen-cuda`).
 /// Starting below `cuda-oxide/` finds the component root before the stable
 /// parent workspace.
-pub fn find_workspace_root() -> Option<PathBuf> {
-    let mut dir = std::env::current_dir().ok()?;
+pub fn find_workspace_root(start: &Path) -> Option<PathBuf> {
+    let mut dir = start.to_path_buf();
     loop {
         if dir.join("Cargo.toml").is_file() && codegen_crate_path(&dir).join("Cargo.toml").is_file()
         {
@@ -192,7 +192,14 @@ pub fn find_or_build_backend(workspace_root: &Path, configured_backend: Option<&
 /// the shared cache is reused only when it records that same commit. See the
 /// module-level comment ("The backend follows the dependency").
 fn standalone_backend(project_dir: &Path) -> PathBuf {
-    let source = match backend_source::resolve_dependency_source(project_dir, false) {
+    backend_for_dependency(resolve_standalone_dependency(project_dir))
+}
+
+/// Resolves the project's cuda-oxide dependency, fetching and writing
+/// `Cargo.lock` if needed, and exits with guidance when it does not resolve to
+/// one checkout. `None` means the project has no cuda-oxide dependency.
+fn resolve_standalone_dependency(project_dir: &Path) -> Option<DependencySource> {
+    match backend_source::resolve_dependency_source(project_dir, false) {
         Ok(source) => source,
         Err(error) => {
             eprintln!("Error: could not resolve this project's cuda-oxide dependency: {error}");
@@ -203,8 +210,11 @@ fn standalone_backend(project_dir: &Path) -> PathBuf {
             );
             std::process::exit(1);
         }
-    };
+    }
+}
 
+/// The backend for a resolved dependency source (see [`standalone_backend`]).
+fn backend_for_dependency(source: Option<DependencySource>) -> PathBuf {
     let Some(source) = source else {
         // No cuda-oxide crate in the graph, so nothing pins a commit: the
         // shared cache and the `main` clone are all there is.
@@ -287,15 +297,20 @@ fn build_and_cache(source: &DependencySource) -> PathBuf {
 /// without a toolchain file in the checkout, let the build proceed and surface
 /// its own errors.
 fn refuse_unloadable_backend(checkout: &Path, description: &str) {
-    let Some(report) = unloadable_backend_report(
-        description,
-        active_toolchain().as_deref(),
-        backend_source::pinned_channel(checkout).as_deref(),
-    ) else {
+    let Some(report) = unloadable_checkout_report(checkout, description) else {
         return;
     };
     eprint!("{report}");
     std::process::exit(1);
+}
+
+/// The refusal [`refuse_unloadable_backend`] prints for `checkout`, if any.
+fn unloadable_checkout_report(checkout: &Path, description: &str) -> Option<String> {
+    unloadable_backend_report(
+        description,
+        active_toolchain().as_deref(),
+        backend_source::pinned_channel(checkout).as_deref(),
+    )
 }
 
 /// `rustup show active-toolchain` from the process cwd: the toolchain the
@@ -923,18 +938,40 @@ fn clear_cache_contents(cache_dir: &Path) {
 ///
 /// Returns the path to the freshly built `.so`.
 pub fn refresh_cached_backend(project_dir: &Path) -> PathBuf {
-    // A path dependency builds in place and never touches the shared cache;
-    // clearing it would only cost other projects a rebuild. Read-only
-    // resolution here; the real one, which may fetch, runs in
-    // `standalone_backend`.
-    let builds_in_place = matches!(
-        backend_source::resolve_dependency_source(project_dir, true),
-        Ok(Some(ref source)) if source.rev().is_none()
-    );
-    if !builds_in_place {
+    let (source, clears_cache) = refresh_plan(project_dir).unwrap_or_else(|report| {
+        eprint!("{report}");
+        std::process::exit(1);
+    });
+    if clears_cache {
         let _ = clear_cached_backend();
     }
-    standalone_backend(project_dir)
+    backend_for_dependency(source)
+}
+
+/// The dependency a refresh of `project_dir` rebuilds from, and whether the
+/// refresh clears the shared cache first, or the toolchain refusal when the
+/// dependency's backend could not be built or loaded by this project.
+///
+/// The refusal is settled here, before anything is cleared, because a
+/// refused refresh builds nothing: clearing first would delete a cache other
+/// projects still use and leave nothing in its place.
+///
+/// A path dependency builds in place and never touches the shared cache;
+/// clearing it would only cost other projects a rebuild. The decision uses
+/// the full resolution, which writes a missing `Cargo.lock`, because the
+/// read-only one fails on a fresh project and cannot tell a path dependency
+/// from a git one there.
+fn refresh_plan(project_dir: &Path) -> Result<(Option<DependencySource>, bool), String> {
+    let source = resolve_standalone_dependency(project_dir);
+    if let Some(report) = source
+        .as_ref()
+        .and_then(|source| unloadable_checkout_report(source.checkout(), &source.describe()))
+    {
+        return Err(report);
+    }
+
+    let builds_in_place = source.as_ref().is_some_and(|source| source.rev().is_none());
+    Ok((source, !builds_in_place))
 }
 
 /// Builds the backend from a local source tree, with the build tree at
@@ -2783,6 +2820,93 @@ mod tests {
                 "outside any repository there is nothing to record"
             );
         }
+    }
+
+    /// A project in `root` with a path dependency on a cuda-oxide checkout,
+    /// and no `Cargo.lock` yet. Returns the checkout and the project
+    fn lockless_path_dependency_project(root: &Path) -> (PathBuf, PathBuf) {
+        let checkout = root.join("checkout");
+        let codegen_crate = checkout.join(CODEGEN_CRATE_SUBDIR);
+        std::fs::create_dir_all(&codegen_crate).unwrap();
+        std::fs::write(codegen_crate.join("Cargo.toml"), "[package]\n").unwrap();
+        std::fs::write(
+            checkout.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/*\"]\nexclude = [\"crates/rustc-codegen-cuda\"]\n",
+        )
+        .unwrap();
+        let device = checkout.join("crates/cuda-device");
+        std::fs::create_dir_all(device.join("src")).unwrap();
+        std::fs::write(
+            device.join("Cargo.toml"),
+            "[package]\nname = \"cuda-device\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::write(device.join("src/lib.rs"), "").unwrap();
+
+        let project = root.join("project");
+        std::fs::create_dir_all(project.join("src")).unwrap();
+        std::fs::write(
+            project.join("Cargo.toml"),
+            format!(
+                "[package]\nname = \"project\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\
+                 [dependencies]\ncuda-device = {{ path = {:?} }}\n",
+                device.display().to_string()
+            ),
+        )
+        .unwrap();
+        std::fs::write(project.join("src/lib.rs"), "").unwrap();
+        (checkout, project)
+    }
+
+    /// A fresh project has no `Cargo.lock`, so only the full resolution sees
+    /// its path dependency; deciding from anything less clears the shared
+    /// cache that the in-place build never repopulates
+    #[test]
+    fn refresh_keeps_the_shared_cache_for_a_lockless_path_dependency() {
+        let root = tempdir();
+        let (_, project) = lockless_path_dependency_project(&root);
+        assert!(!project.join("Cargo.lock").exists());
+
+        let (source, clears_cache) = refresh_plan(&project).expect("the fixture pins no toolchain");
+        let source = source.expect("the path dependency must resolve");
+        assert_eq!(source.rev(), None);
+        assert!(!clears_cache, "a path dependency builds in place");
+
+        // without a cuda-oxide dependency the refresh rebuilds the cache
+        let plain = root.join("plain");
+        std::fs::create_dir_all(plain.join("src")).unwrap();
+        std::fs::write(
+            plain.join("Cargo.toml"),
+            "[package]\nname = \"plain\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::write(plain.join("src/lib.rs"), "").unwrap();
+        assert_eq!(refresh_plan(&plain), Ok((None, true)));
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A dependency whose toolchain this project cannot build or load is
+    /// refused while planning, so `refresh_cached_backend` exits before it
+    /// clears a cache that the refused refresh would never replace. Skipped
+    /// without rustup, which gives no verdict
+    #[test]
+    fn refresh_refuses_an_unloadable_dependency_before_clearing_the_cache() {
+        if active_toolchain().is_none() {
+            return;
+        }
+        let root = tempdir();
+        let (checkout, project) = lockless_path_dependency_project(&root);
+        std::fs::write(
+            checkout.join("rust-toolchain.toml"),
+            "[toolchain]\nchannel = \"nightly-2000-01-01\"\n",
+        )
+        .unwrap();
+
+        let report = refresh_plan(&project).expect_err("a mismatched toolchain must refuse");
+        assert!(report.contains("nightly-2000-01-01"), "{report}");
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     fn tempdir() -> PathBuf {

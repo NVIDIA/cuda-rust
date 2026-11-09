@@ -99,7 +99,7 @@ def require_store(body, value, name, label="pre-drop"):
         )
     return store.end()
 
-# The PTX adjacency below holds because `opt -O3` inlines the retained glue
+# The PTX adjacency below holds because `opt -O2` inlines the retained glue
 # and the destructor into the kernel. The destructors carry no inline
 # attribute: `#[inline(never)]` reaches LLVM as `noinline` and would keep them
 # real PTX functions, so the kernel would call them instead. MIR inlining is

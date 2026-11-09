@@ -89,7 +89,7 @@
 <text x="388" y="548" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">folding into the kernel. A user's own attribute on such a</text>
 <text x="388" y="563" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">helper still does not reach device code: #1471 stays open.</text>
 <rect x="805" y="98" width="395" height="150" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
-<text x="817" y="118" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--mono); fill: var(--fg); white-space: pre">PTX, inside .entry intent   (opt -O3, then llc)</text>
+<text x="817" y="118" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--mono); fill: var(--fg); white-space: pre">PTX, inside .entry intent   (opt -O2, then llc)</text>
 <text x="817" y="138" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--mono); fill: var(--meta); white-space: pre">call.uni (retval0), inline_intent__never_add, (param0);</text>
 <text x="817" y="154" text-anchor="start" xml:space="preserve" style="font: 600 10.5px var(--mono); fill: var(--meta); white-space: pre">call.uni (retval0), never_dev, (param0, param1);</text>
 <text x="817" y="170" text-anchor="start" xml:space="preserve" style="font: 400 10.5px var(--mono); fill: var(--fg); white-space: pre">fma.rn.f32  %r13, %r8, 0f40800000, %r12;</text>

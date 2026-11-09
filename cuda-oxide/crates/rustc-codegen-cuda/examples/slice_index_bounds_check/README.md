@@ -6,7 +6,7 @@ When `j` is out of range the kernel must trap or skip the access. It must never 
 
 `j` is loaded from device memory, so the compiler cannot prove `j < src.len()`.
 Under Rust semantics the access must be bounds-checked at runtime. 
-The check lowers to `mir.assert`, whose failure path must stay observable (`llvm.trap` → PTX `trap`) all the way through `opt -O3`. 
+The check lowers to `mir.assert`, whose failure path must stay observable (`llvm.trap` → PTX `trap`) all the way through `opt -O2`. 
 When the failure path is a bare `llvm.unreachable`, 
 SimplifyCFG rewrites the check  into `llvm.assume` and the kernel performs a silent out-of-bounds global read.
 

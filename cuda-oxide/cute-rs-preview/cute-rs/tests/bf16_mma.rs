@@ -7,15 +7,15 @@ use cute_rs::BFloat16;
 
 #[test]
 fn static_atom_layouts_match_cute_algebra_for_every_lane_and_value() {
-    use cute_rs::mma::bf16::{ALayout, BLayout, CLayout};
+    use cute_rs::nvgpu::warp::bf16::{ALayout, BLayout, CLayout};
     use cute_rs::static_layout::StaticLayout;
     fn check<L: StaticLayout>(description: &str) {
-        let oracle: cute_rs::layout::Layout = description.parse().unwrap();
+        let oracle: cute_layout::Layout = description.parse().unwrap();
         for flat in 0..L::SIZE {
             assert_eq!(
                 L::crd2idx(flat),
                 oracle
-                    .checked_call(&cute_rs::layout::IntTuple::Leaf(flat as i64))
+                    .checked_call(&cute_layout::IntTuple::Leaf(flat as i64))
                     .unwrap() as usize
             );
         }
@@ -27,7 +27,7 @@ fn static_atom_layouts_match_cute_algebra_for_every_lane_and_value() {
 
 #[test]
 fn packed_output_partition_visits_only_live_decode_rows() {
-    use cute_rs::mma::bf16::PackedDecode;
+    use cute_rs::nvgpu::warp::bf16::PackedDecode;
     #[repr(align(4))]
     struct Aligned([BFloat16; 256]);
     let data = Aligned([BFloat16::from_bits(0); 256]);
@@ -44,12 +44,12 @@ fn packed_output_partition_visits_only_live_decode_rows() {
         assert_eq!(seen, vec![1; rows * 8]);
     }
 }
-use cute_rs::markers::{ComposedLayout, RowMajor, Swizzle};
-use cute_rs::mma::bf16::{Bf16Mma16x8x16, FragmentC};
+use cute_rs::layout::{ComposedLayout, RowMajor, Swizzle};
+use cute_rs::nvgpu::warp::bf16::{Bf16Mma16x8x16, FragmentC};
 
 #[test]
 fn packed_decode_proof_rejects_incomplete_or_misaligned_operands() {
-    use cute_rs::mma::bf16::PackedDecode;
+    use cute_rs::nvgpu::warp::bf16::PackedDecode;
     #[repr(align(4))]
     struct Aligned([BFloat16; 1024]);
     let data = Aligned([BFloat16::from_bits(0); 1024]);
@@ -72,7 +72,7 @@ fn packed_decode_proof_rejects_incomplete_or_misaligned_operands() {
 
 #[test]
 fn validated_decode_callback_runs_once_only_for_proven_storage() {
-    use cute_rs::mma::bf16::PackedDecode;
+    use cute_rs::nvgpu::warp::bf16::PackedDecode;
     #[repr(align(4))]
     struct Aligned([BFloat16; 128]);
     let data = Aligned([BFloat16::from_bits(0); 128]);
@@ -169,14 +169,14 @@ fn operand_partition_matches_ptx_coordinates_and_covers_every_element() {
 #[test]
 fn shared_layout_offset_matches_independent_cute_layout_oracle() {
     type L = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<64, 128>>;
-    let layout: cute_rs::layout::Layout = "(64,128):(128,1)".parse().unwrap();
-    let swizzle = cute_rs::layout::Swizzle::new(3, 3, 3);
+    let layout: cute_layout::Layout = "(64,128):(128,1)".parse().unwrap();
+    let swizzle = cute_layout::Swizzle::new(3, 3, 3);
     for r in 0..64 {
         for c in 0..128 {
             let plain = layout
-                .checked_call(&cute_rs::layout::IntTuple::Tuple(vec![
-                    cute_rs::layout::IntTuple::Leaf(r),
-                    cute_rs::layout::IntTuple::Leaf(c),
+                .checked_call(&cute_layout::IntTuple::Tuple(vec![
+                    cute_layout::IntTuple::Leaf(r),
+                    cute_layout::IntTuple::Leaf(c),
                 ]))
                 .unwrap();
             assert_eq!(
@@ -191,11 +191,11 @@ fn shared_layout_offset_matches_independent_cute_layout_oracle() {
 fn static_composition_applies_nonzero_offset_before_negative_swizzle() {
     use cute_rs::static_layout::StaticLayout;
     type L = ComposedLayout<Swizzle<2, 1, -3>, 7, RowMajor<3, 5>>;
-    let inner: cute_rs::layout::Layout = "(3,5):(5,1)".parse().unwrap();
-    let swizzle = cute_rs::layout::Swizzle::new(2, 1, -3);
+    let inner: cute_layout::Layout = "(3,5):(5,1)".parse().unwrap();
+    let swizzle = cute_layout::Swizzle::new(2, 1, -3);
     for flat in 0..L::SIZE {
         let plain = inner
-            .checked_call(&cute_rs::layout::IntTuple::Leaf(flat as i64))
+            .checked_call(&cute_layout::IntTuple::Leaf(flat as i64))
             .unwrap();
         let expected = swizzle.apply(plain + 7) as usize;
         assert_eq!(L::crd2idx(flat), expected);

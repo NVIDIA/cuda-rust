@@ -133,7 +133,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ctm-rs"
+name = "cutlass-primitives"
 version = "0.3.0"
 dependencies = [
  "cuda-core",
@@ -262,7 +262,7 @@ checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 name = "fp16_gemm_256x352_ctm"
 version = "0.1.0"
 dependencies = [
- "ctm-rs",
+ "cutlass-primitives",
  "cuda-core",
  "cuda-device",
  "cuda-host",

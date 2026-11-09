@@ -2202,6 +2202,11 @@ run_cargo() {
         # Build at the instruction floor; the host check skips before module loading.
         args+=("--arch=sm_75")
     fi
+    if [[ "${ex}" == "scalar_math_sm75" ]]; then
+        # always build at the sm_75 floor, so newer GPUs run JIT-compiled
+        # sm_75 PTX and the build keeps proving the Turing floor
+        args+=("--arch=sm_75")
+    fi
     if [[ "${ex}" == "debug" ]]; then
         # Its code-shape gate checks LLVM/PTX source locations, which only
         # exist when the example is compiled with full device debug metadata.
@@ -2280,7 +2285,9 @@ run_cargo() {
         done
     fi
     if [[ ${CARGO_EC} -eq 0 && -f "${shape_check}" ]]; then
-        if ! bash "${shape_check}" >>"${log}" 2>&1; then
+        # the build log lets a check assert on compiler warnings as well as
+        # on artifacts; scripts that only read artifacts ignore it
+        if ! CUDA_OXIDE_BUILD_LOG="${log}" bash "${shape_check}" >>"${log}" 2>&1; then
             printf '%s failed its verify-code-shape.sh assertions\n' "${ex}" >>"${log}"
             CARGO_EC=1
         fi

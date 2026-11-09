@@ -465,7 +465,8 @@ pub fn cuda_module(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// Full `#[unroll]` preserves `break` paths and multiple exit targets. Partial
 /// `#[unroll(N)]` currently requires the loop condition to be the only exit. If
 /// the loop has a `break` or another extra exit, the compiler warns and skips
-/// partial unrolling for that loop.
+/// partial unrolling for that loop. A `match` in the body, such as
+/// `row.get(i).unwrap_or(0.0)`, is not an exit.
 ///
 /// Partial unrolling also requires a `<` or `<=` test, a limit that does not
 /// change inside the loop, and a counter that advances by the same positive

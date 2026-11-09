@@ -5,6 +5,8 @@
 //! Synthetic decoder checks with independent stage and complete-layer oracles.
 use crate::{
     attention_reference,
+    decoder::{AttentionWeights, DecoderWeights, FinalNorm, NormWeights},
+    ffn::{FfnWeights, ProjectionWeights},
     model::{Batch, DecoderCache, Runner, Trace},
     operator::{self, Result},
     reference::{self, LayerWeights, round, widen},
@@ -12,11 +14,7 @@ use crate::{
     rotary_reference,
 };
 use cuda_core::{CudaStream, DeviceBuffer};
-use cute_rs::{
-    BFloat16,
-    decoder::{AttentionWeights, DecoderWeights, FinalNorm, NormWeights},
-    ffn::{FfnWeights, ProjectionWeights},
-};
+use cute_rs::BFloat16;
 
 /// GPU allocations live outside their immutable, role-checked views.
 pub(crate) struct DeviceLayer {

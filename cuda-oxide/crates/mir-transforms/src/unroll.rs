@@ -29,7 +29,9 @@
 //! Several `continue` paths are supported: the pass joins their back-edges
 //! before unrolling. Full `#[unroll]` also preserves early `break` paths and
 //! multiple exit targets. Partial `#[unroll(N)]` warns and leaves the loop not
-//! unrolled when it has an extra exit. Partial unrolling currently requires a
+//! unrolled when it has an extra exit. A branch to a block that only reaches
+//! `mir.unreachable`, such as the arm rustc gives a `match` on an `Option`, is
+//! removed first and so is not an exit. Partial unrolling currently requires a
 //! `<` or `<=` test and a loop-invariant bound; the bound may be recomputed in
 //! the loop from fixed values, as `while i < n as usize` casts `n` on every
 //! iteration. Its counter may start at a
@@ -92,8 +94,8 @@ use std::path::PathBuf;
 use crate::analyses::induction::{self, ArgKind, CmpPred, RuntimeStep};
 use crate::analyses::loop_info::LoopInfo;
 use crate::canonicalize::{
-    CanonicalizeOutcome, close_header_liveouts, hoist_header_constants, merge_backedges,
-    thread_iterator_exit_test,
+    CanonicalizeOutcome, close_header_liveouts, fold_branches_to_unreachable,
+    hoist_header_constants, merge_backedges, thread_iterator_exit_test,
 };
 
 /// Hard safety limit on how many body copies one annotation may request.
@@ -396,6 +398,17 @@ pub fn unroll_annotated_loops(
                     warnings.push(not_unrolled_warning(&kind, &reason, location));
                     continue;
                 }
+            }
+
+            // A `match` on an enum in the body leaves a branch to a block that
+            // only reaches `mir.unreachable`, which reads as another exit. This
+            // runs after the range `for` rewrite, which matches that branch,
+            // and `continue` recomputes `LoopInfo` so the exit check below
+            // never sees the folded branch.
+            if fold_branches_to_unreachable(ctx, &info.loops()[loop_id].blocks) {
+                function_changed = true;
+                changed = true;
+                continue;
             }
 
             // A grouped main loop plus a remainder loop needs explicit merging

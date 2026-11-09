@@ -14,7 +14,7 @@ use crate::ast::{Module, SourceLocation, SpanBase};
 use crate::error::{JITError, SpannedJITError};
 use crate::generics::{GenericVars, TypeInstance};
 use crate::kernel_naming::KernelNaming;
-use crate::passes::name_resolution::NameResolver;
+use crate::passes::name_resolution::{DefId, DefKind, NameResolver};
 use crate::syn_utils::*;
 use quote::ToTokens;
 use std::collections::{HashMap, HashSet};
@@ -127,12 +127,6 @@ impl CUDATileModules {
         self.name_resolver.trait_impls()
     }
 
-    /// Flat map of all functions: name → (module, ItemFn).
-    /// Compatibility shim.
-    pub fn functions(&self) -> &HashMap<String, (String, ItemFn)> {
-        self.name_resolver.functions()
-    }
-
     /// Expand DSL-visible type aliases and const paths in a Rust type, with
     /// consts resolved from the kernel module's scope (see
     /// [`Self::normalize_type_aliases_in`]). Modules built with the legacy
@@ -149,6 +143,32 @@ impl CUDATileModules {
         ty: &Type,
         module: Option<&str>,
     ) -> Result<Type, JITError> {
+        self.normalize_type_aliases_in_scope(ty, module, None)
+    }
+
+    /// [`Self::normalize_type_aliases_in`] for a type spelled inside a
+    /// function, whose generic parameters are bound in `generic_vars`.
+    ///
+    /// A generic parameter shadows a module const of the same name, as in
+    /// Rust: in `fn f<const N: i32>(x: Tile<f32, { [N] }>)` the `N` is
+    /// `f`'s parameter even when the module, or the kernel's module, has a
+    /// `const N: i32 = 4`. `consts_visible_from` knows nothing of generic
+    /// parameters (and gives every module a const that only one module
+    /// defines), so a const of that name is left out here: the type keeps
+    /// the name, and `generic_vars` resolves it. Without this the const's
+    /// value replaces the parameter in the callee's types, and the call
+    /// fails with a misleading shape error ("parameter `A` expects
+    /// tile<1x16x16xf64>" for an 8x8 argument, or an incompatible reshape).
+    ///
+    /// `generic_vars` also holds the module consts themselves (see
+    /// `add_module_const_vars`); a name it binds to the const's own value is
+    /// not shadowed, and is still replaced as before.
+    pub fn normalize_type_aliases_in_scope(
+        &self,
+        ty: &Type,
+        module: Option<&str>,
+        generic_vars: Option<&GenericVars>,
+    ) -> Result<Type, JITError> {
         let normalize_error = |msg: String| {
             SourceLocation::unknown().jit_error(&format!(
                 "failed to normalize type `{}`: {msg}",
@@ -164,6 +184,22 @@ impl CUDATileModules {
                 &scoped
             }
             None => self.consts(),
+        };
+        let unshadowed;
+        let consts = match generic_vars {
+            Some(generic_vars)
+                if consts
+                    .iter()
+                    .any(|(name, item)| generic_shadows_const(generic_vars, name, item)) =>
+            {
+                unshadowed = consts
+                    .iter()
+                    .filter(|(name, item)| !generic_shadows_const(generic_vars, name, item))
+                    .map(|(name, item)| (name.clone(), item.clone()))
+                    .collect::<HashMap<_, _>>();
+                &unshadowed
+            }
+            _ => consts,
         };
         crate::type_aliases::normalize_const_paths_in_type(&normalized, consts)
             .map_err(normalize_error)
@@ -184,18 +220,49 @@ impl CUDATileModules {
     }
 }
 
+/// Whether `generic_vars` binds `name` to something other than the module
+/// const `item`: a generic parameter that shadows the const.
+fn generic_shadows_const(generic_vars: &GenericVars, name: &str, item: &ItemConst) -> bool {
+    if generic_vars.var_type(name).is_none() {
+        return false;
+    }
+    let same_i32 = generic_vars
+        .inst_i32
+        .get(name)
+        .is_some_and(|value| Some(*value) == crate::type_aliases::const_item_i32_value(item));
+    let same_bool = generic_vars
+        .inst_bool
+        .get(name)
+        .is_some_and(|value| Some(*value) == crate::type_aliases::const_item_bool_value(item));
+    !(same_i32 || same_bool)
+}
+
 // ---------------------------------------------------------------------------
 // Constructor
 // ---------------------------------------------------------------------------
 
 impl CUDATileModules {
+    /// Indexes `modules_vec`. A module is known by its short name, or by its
+    /// absolute path when another of the modules has the same short name.
     pub fn new(modules_vec: Vec<Module>) -> Result<Self, JITError> {
         // Collect module ASTs and span bases.
         let mut module_asts: Vec<(String, ItemMod)> = Vec::new();
         let mut span_bases: HashMap<String, SpanBase> = HashMap::new();
+        let mut module_paths: HashMap<String, String> = HashMap::new();
+        let mut paths_by_name: HashMap<&str, HashSet<&str>> = HashMap::new();
+        for module in &modules_vec {
+            paths_by_name
+                .entry(module.name())
+                .or_default()
+                .insert(module.absolute_path());
+        }
 
         for module in &modules_vec {
-            let module_name = module.name().to_string();
+            let module_name = match paths_by_name[module.name()].len() {
+                1 => module.name(),
+                _ => module.absolute_path(),
+            }
+            .to_string();
             let module_ast = module.ast();
 
             if module_ast.content.is_none() {
@@ -210,13 +277,14 @@ impl CUDATileModules {
             let span_base = module.span_base().clone();
             span_bases.insert(module_name.clone(), span_base.clone());
             let absolute_path = module.absolute_path();
+            module_paths.insert(module_name.clone(), absolute_path.to_string());
             if absolute_path != module_name {
                 span_bases.insert(absolute_path.to_string(), span_base);
             }
         }
 
         // Pass 1: Build the name resolver (indexes all items, processes imports).
-        let name_resolver = NameResolver::build(&module_asts)?;
+        let name_resolver = NameResolver::build_with_paths(&module_asts, module_paths)?;
 
         Ok(CUDATileModules {
             name_resolver,
@@ -298,7 +366,6 @@ impl CUDATileModules {
 
         let mut working_set: Vec<Module> = vec![kernel];
         let kernel_path = working_set[0].absolute_path().to_string();
-        let kernel_module = working_set[0].name().to_string();
         // `registry_visited` skips redundant work when the same registry
         // key is pulled in from multiple use statements. `module_visited`
         // dedupes by the built module's actual absolute_path so two
@@ -381,14 +448,33 @@ impl CUDATileModules {
 
         let mut modules = Self::new(working_set)?;
         modules.use_catalog = use_catalog;
-        modules.kernel_module = Some(kernel_module);
+        modules.kernel_module = modules
+            .name_resolver
+            .module_at(&kernel_path)
+            .map(|(module, _)| module);
         Ok(modules)
+    }
+
+    /// The name of the loaded module that a launcher's `module_name` (a
+    /// module's short name) means: the kernel module when it has that short
+    /// name, which may be shared with a module the kernel uses.
+    pub fn module_key<'a>(&'a self, module_name: &'a str) -> &'a str {
+        match &self.kernel_module {
+            Some(kernel)
+                if !self.name_resolver.has_module(module_name)
+                    && self.name_resolver.module_path(kernel).rsplit("::").next()
+                        == Some(module_name) =>
+            {
+                kernel
+            }
+            _ => module_name,
+        }
     }
 }
 
 /// Resolve leading `crate`, `self`, and `super` segments in a `use` path
 /// against the absolute path of the module containing that use.
-fn resolve_relative_use_path(use_path: &str, owning_module: &str) -> String {
+pub(crate) fn resolve_relative_use_path(use_path: &str, owning_module: &str) -> String {
     let mut path_segments = use_path.split("::");
     let Some(first) = path_segments.next() else {
         return use_path.to_string();
@@ -415,6 +501,23 @@ fn resolve_relative_use_path(use_path: &str, owning_module: &str) -> String {
         }
         _ => use_path.to_string(),
     }
+}
+
+/// A string tag's path from its defining module: `m::Name`, wherever and
+/// however it was written (`Name`, `lib::Name`, a re-export). A string tag
+/// is a struct with a `&str` associated const (`Lower::NAME`). Generic
+/// arguments carry types as text, so the tag keeps this spelling as it
+/// travels into other modules' generic parameters, and a foreign call reads
+/// `F::NAME` from exactly that struct.
+pub fn string_tag_path(def: &DefId) -> syn::Path {
+    // A module whose short name another loaded module shares is known by
+    // its absolute path (`a::b::m`).
+    let segments = def
+        .module
+        .split("::")
+        .chain([def.name.as_str()])
+        .map(|segment| syn::Ident::new(segment, proc_macro2::Span::call_site()));
+    syn::parse_quote!(#(#segments)::*)
 }
 
 fn join_segments<'a>(segments: impl Iterator<Item = &'a str>) -> String {
@@ -655,6 +758,19 @@ fn unify_trait_generic_arg(
     actual_arg: &GenericArgument,
     ctx: &mut TraitMatchCtx,
 ) -> bool {
+    // A const scalar parameter in a type argument, such as `R` in `K<R>`,
+    // parses as a type: bind it to the value (`K::<2>`; a caller's `K::<S>`
+    // reaches here as its value too), not compare its spelling.
+    if let (GenericArgument::Type(Type::Path(pattern_path)), GenericArgument::Const(actual)) =
+        (pattern_arg, actual_arg)
+    {
+        if let (Some(name), Some(actual)) = (pattern_path.path.get_ident(), expr_i32(actual)) {
+            let name = name.to_string();
+            if ctx.const_scalar_params.contains(&name) {
+                return *ctx.const_bindings.entry(name).or_insert(actual) == actual;
+            }
+        }
+    }
     match (pattern_arg, actual_arg) {
         (GenericArgument::Type(pattern_ty), GenericArgument::Type(actual_ty)) => {
             if let Some(param_name) = const_array_param_type_name(pattern_ty, ctx) {
@@ -841,6 +957,21 @@ fn expr_i32(expr: &Expr) -> Option<i32> {
 }
 
 impl CUDATileModules {
+    /// Whether a loaded module declares a `#[cutile::foreign]` function.
+    pub fn declares_foreign_functions(&self) -> bool {
+        fn declares(items: &[syn::Item]) -> bool {
+            items.iter().any(|item| match item {
+                syn::Item::Fn(f) => crate::foreign_decl::is_foreign_fn(f),
+                syn::Item::Mod(m) => m.content.as_ref().is_some_and(|(_, items)| declares(items)),
+                _ => false,
+            })
+        }
+        self.name_resolver
+            .all_modules()
+            .values()
+            .any(|m| m.content.as_ref().is_some_and(|(_, items)| declares(items)))
+    }
+
     pub fn get_primitives_attrs(
         &self,
         trait_name: &str,
@@ -854,24 +985,326 @@ impl CUDATileModules {
         self.name_resolver.get_type_attrs(ident)
     }
 
-    pub fn get_function_by_name(&self, function_name: &str) -> Option<&(String, ItemFn)> {
-        let canonical_name = KernelNaming::canonical_public_name(function_name);
-        self.name_resolver.functions().get(canonical_name.as_str())
-    }
-
-    pub fn get_cuda_tile_op_attrs(&self, ident: &str) -> Option<SingleMetaList> {
-        self.name_resolver.get_op_attrs(ident)
-    }
-
-    pub fn get_fn_item(
+    /// Resolve the function a call path names, in the scope of
+    /// `calling_module`: the module whose source holds the call (the
+    /// kernel's, or the callee's inside an inline expansion). Returns the
+    /// defining module and the function, `Ok(None)` when no loaded module
+    /// defines it, and `Err` with a message when the path names a module the
+    /// JIT does not know or one without that function, or when the name is
+    /// ambiguous (see [`Self::resolve_scoped`]).
+    pub fn resolve_function(
         &self,
-        module_name: &str,
-        function_name: &str,
-    ) -> Result<&(String, ItemFn), JITError> {
+        path: &syn::Path,
+        calling_module: &str,
+    ) -> Result<Option<(String, &ItemFn)>, String> {
+        let segments: Vec<String> = path.segments.iter().map(|s| s.ident.to_string()).collect();
+        let Some((last, qualifier)) = segments.split_last() else {
+            return Ok(None);
+        };
+        // The entry wrapper calls the kernel body by its internal name.
+        let name = KernelNaming::canonical_public_name(last);
+        let resolved = self.resolve_scoped(&name, qualifier, calling_module, DefKind::Fn);
+        let def = resolved.map_err(|msg| {
+            format!(
+                "cannot resolve the call to `{}`: {msg}",
+                segments.join("::")
+            )
+        })?;
+        Ok(def.and_then(|def| {
+            let function = self.name_resolver.get_fn(&def)?;
+            Some((def.module, function))
+        }))
+    }
+
+    /// Resolve the struct a type or unit-struct path names, following type
+    /// aliases in their declaring modules.
+    pub fn resolve_struct(
+        &self,
+        path: &syn::Path,
+        calling_module: &str,
+    ) -> Result<Option<DefId>, String> {
+        let mut path = path.clone();
+        let mut scope = calling_module.to_string();
+        let mut visited = HashSet::new();
+        loop {
+            let segments: Vec<String> = path.segments.iter().map(|s| s.ident.to_string()).collect();
+            let Some((name, qualifier)) = segments.split_last() else {
+                return Ok(None);
+            };
+            let Some(def) = self.resolve_scoped(name, qualifier, &scope, DefKind::Struct)? else {
+                return Ok(None);
+            };
+            let Some(alias) = self.name_resolver.get_type_alias(&def) else {
+                return Ok(Some(def));
+            };
+            if !visited.insert((def.clone(), path.to_token_stream().to_string())) {
+                return Err(format!(
+                    "recursive type alias `{}::{}`",
+                    def.module, def.name
+                ));
+            }
+            if visited.len() > 64 {
+                return Err("type alias expansion exceeded recursion limit".into());
+            }
+            // Arguments belong to the scope where the alias was written;
+            // its body belongs to the declaring module. Preserve tags
+            // across that boundary before substituting the arguments.
+            let mut arguments = path.segments.last().unwrap().arguments.clone();
+            if let syn::PathArguments::AngleBracketed(args) = &mut arguments {
+                for arg in &mut args.args {
+                    if let syn::GenericArgument::Type(ty) = arg {
+                        if let Some(marker) = self.string_tag_type(ty, &scope) {
+                            *ty = marker;
+                        }
+                    }
+                }
+            }
+            let ty = crate::type_aliases::instantiate_type_alias(alias, &arguments)?;
+            let Type::Path(expanded) = ty else {
+                return Ok(None);
+            };
+            if expanded.qself.is_some() {
+                return Ok(None);
+            }
+            path = expanded.path;
+            scope = def.module;
+        }
+    }
+
+    /// The item `name` of `kind` that `qualifier::name` names from
+    /// `calling_module`:
+    /// - `name`: the calling module's items and imports, then core, then the
+    ///   only loaded module that defines it;
+    /// - `crate::`, `self::` or `super::` paths, and paths of several
+    ///   segments: the loaded module at that absolute path, or the loaded
+    ///   module holding a `mod` there;
+    /// - otherwise the module the last segment names (see
+    ///   [`NameResolver::module_for_qualifier`]).
+    ///
+    /// A qualifier that names no loaded module is an error: the JIT has no
+    /// source for it, and another module's item is not the one meant.
+    fn resolve_scoped(
+        &self,
+        name: &str,
+        qualifier: &[String],
+        calling_module: &str,
+        kind: DefKind,
+    ) -> Result<Option<DefId>, String> {
+        if qualifier.is_empty() {
+            return self
+                .name_resolver
+                .resolve_unqualified_in_scope(name, calling_module, kind);
+        }
+        if qualifier[0] == "super" && self.name_resolver.super_in_nested_mod(calling_module) {
+            // The JIT does not know which `mod` a `super::` path is written
+            // in. Resolve it only when one loaded module defines the name.
+            return match self
+                .name_resolver
+                .modules_defining(name, Some(kind))
+                .as_slice()
+            {
+                [module] => self
+                    .name_resolver
+                    .defined_item(module, name, kind)
+                    .map(Some),
+                _ => Err(String::from(
+                    "`super::` paths are ambiguous in a cuTile module whose nested `mod`s \
+                     use `super::`; use a `crate::` path",
+                )),
+            };
+        }
+        let in_module = |module: &str| -> Result<Option<DefId>, String> {
+            match self
+                .name_resolver
+                .resolve_in_scope(name, module, Some(kind))?
+            {
+                Some(def) => Ok(Some(def)),
+                None => {
+                    let noun = match kind {
+                        DefKind::Fn => "function",
+                        DefKind::Struct => "struct",
+                        _ => "item",
+                    };
+                    Err(format!("module `{module}` has no {noun} `{name}`"))
+                }
+            }
+        };
+        match self
+            .name_resolver
+            .module_for_path(qualifier, calling_module)
+        {
+            Some(module) => in_module(&module),
+            None => Err(format!(
+                "module `{}` is not known to the cuTile JIT; `use` it from a \
+                 `#[cutile::module]`",
+                qualifier.join("::")
+            )),
+        }
+    }
+
+    /// The item of `kind` that `path` names from `calling_module` (see
+    /// [`Self::resolve_scoped`]).
+    pub(crate) fn resolve_item(
+        &self,
+        path: &syn::Path,
+        calling_module: &str,
+        kind: DefKind,
+    ) -> Result<Option<DefId>, String> {
+        let segments: Vec<String> = path.segments.iter().map(|s| s.ident.to_string()).collect();
+        let Some((name, qualifier)) = segments.split_last() else {
+            return Ok(None);
+        };
+        self.resolve_scoped(name, qualifier, calling_module, kind)
+    }
+
+    /// The `&str` associated consts of struct `def`, as `(name, value)`, from
+    /// every loaded impl (trait or inherent) whose self type resolves to
+    /// `def` in the impl's module, or only from its impls of trait
+    /// `of_trait`. Only consts whose value is a string literal count.
+    pub fn associated_str_consts(
+        &self,
+        def: &DefId,
+        of_trait: Option<&DefId>,
+    ) -> Vec<(String, String)> {
+        let trait_impls = self
+            .name_resolver
+            .trait_impls()
+            .iter()
+            .filter(|((_, self_name), _)| *self_name == def.name)
+            .flat_map(|(_, impls)| impls);
+        let inherent_impls = self
+            .name_resolver
+            .struct_impls()
+            .get(&def.name)
+            .into_iter()
+            .flatten();
+        let mut consts = Vec::new();
+        for (impl_module, item) in trait_impls.chain(inherent_impls) {
+            let Type::Path(self_ty) = item.self_ty.as_ref() else {
+                continue;
+            };
+            let resolved = self
+                .resolve_struct(&self_ty.path, impl_module)
+                .ok()
+                .flatten();
+            if resolved.as_ref() != Some(def) {
+                continue;
+            }
+            if let Some(of_trait) = of_trait {
+                let implemented = item.trait_.as_ref().and_then(|(_, path, _)| {
+                    self.resolve_item(path, impl_module, DefKind::Trait)
+                        .ok()
+                        .flatten()
+                });
+                if implemented.as_ref() != Some(of_trait) {
+                    continue;
+                }
+            }
+            for impl_item in &item.items {
+                let syn::ImplItem::Const(c) = impl_item else {
+                    continue;
+                };
+                if let syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(value),
+                    ..
+                }) = &c.expr
+                {
+                    consts.push((c.ident.to_string(), value.value()));
+                }
+            }
+        }
+        consts
+    }
+
+    /// The string tag struct (see [`string_tag_path`]) that `path` names
+    /// from `calling_module`, if it names one.
+    pub fn string_tag(&self, path: &syn::Path, calling_module: &str) -> Option<DefId> {
+        let def = self.resolve_struct(path, calling_module).ok()??;
+        self.name_resolver.get_struct(&def)?;
+        (!self.associated_str_consts(&def, None).is_empty()).then_some(def)
+    }
+
+    /// `ty` as the path of the string tag it names from `calling_module`
+    /// (see [`string_tag_path`]), or `None` when it names none.
+    pub fn string_tag_type(&self, ty: &Type, calling_module: &str) -> Option<Type> {
+        let Type::Path(type_path) = ty else {
+            return None;
+        };
+        if type_path.qself.is_some() {
+            return None;
+        }
+        let def = self.string_tag(&type_path.path, calling_module)?;
+        Some(Type::Path(syn::TypePath {
+            qself: None,
+            path: string_tag_path(&def),
+        }))
+    }
+
+    /// `ty` with every string tag in it, at any depth (`Fill`,
+    /// `Option<Fill>`, `(Fill, f32)`), respelled from its defining module
+    /// (see [`string_tag_path`]) as `calling_module` resolves it.
+    /// Names in `generic_params` are the callee's type parameters and are
+    /// left alone. Type text taken from a callee's signature is respelled in
+    /// the callee's module this way before it becomes a caller-side type, so
+    /// a bare tag name never travels into a scope where it means another
+    /// tag.
+    pub fn respell_string_tags(
+        &self,
+        ty: &Type,
+        calling_module: &str,
+        generic_params: &HashSet<String>,
+    ) -> Type {
+        struct Respell<'a> {
+            modules: &'a CUDATileModules,
+            calling_module: &'a str,
+            generic_params: &'a HashSet<String>,
+        }
+        impl syn::visit_mut::VisitMut for Respell<'_> {
+            fn visit_type_mut(&mut self, ty: &mut Type) {
+                if let Type::Path(type_path) = &*ty {
+                    let last = type_path.path.segments.last().map(|s| s.ident.to_string());
+                    let is_param = type_path.qself.is_none()
+                        && type_path.path.segments.len() == 1
+                        && last
+                            .as_ref()
+                            .is_some_and(|name| self.generic_params.contains(name));
+                    if !is_param {
+                        if let Some(marker) = self.modules.string_tag_type(ty, self.calling_module)
+                        {
+                            *ty = marker;
+                            return;
+                        }
+                    }
+                }
+                syn::visit_mut::visit_type_mut(self, ty);
+            }
+        }
+        let mut respelled = ty.clone();
+        syn::visit_mut::VisitMut::visit_type_mut(
+            &mut Respell {
+                modules: self,
+                calling_module,
+                generic_params,
+            },
+            &mut respelled,
+        );
+        respelled
+    }
+
+    /// The function `function_name` that `module_name` itself defines.
+    pub fn module_function(&self, module_name: &str, function_name: &str) -> Option<&ItemFn> {
+        self.name_resolver.get_fn(&DefId {
+            module: module_name.to_string(),
+            name: KernelNaming::canonical_public_name(function_name),
+        })
+    }
+
+    pub fn get_fn_item(&self, module_name: &str, function_name: &str) -> Result<&ItemFn, JITError> {
+        let module_name = self.module_key(module_name);
         if !self.name_resolver.has_module(module_name) {
             return JITError::generic(&format!("undefined module: `{module_name}`"));
         }
-        match self.get_function_by_name(function_name) {
+        match self.module_function(module_name, function_name) {
             Some(function) => Ok(function),
             None => JITError::generic(&format!("undefined function: `{function_name}`")),
         }
@@ -891,7 +1324,7 @@ impl CUDATileModules {
         function_name: &str,
         name: &str,
     ) -> Result<bool, JITError> {
-        let (_, fn_item) = self.get_fn_item(module_name, function_name)?;
+        let fn_item = self.get_fn_item(module_name, function_name)?;
         let entry_attrs = self.get_fn_entry_attrs(fn_item)?;
         Ok(entry_attrs.parse_bool(name).unwrap_or(false))
     }
@@ -902,7 +1335,7 @@ impl CUDATileModules {
         function_name: &str,
         name: &str,
     ) -> Result<Option<String>, JITError> {
-        let (_, fn_item) = self.get_fn_item(module_name, function_name)?;
+        let fn_item = self.get_fn_item(module_name, function_name)?;
         let entry_attrs = self.get_fn_entry_attrs(fn_item)?;
         Ok(entry_attrs.parse_string(name))
     }
@@ -941,9 +1374,11 @@ impl CUDATileModules {
         }
 
         let mut trait_candidates = Vec::new();
+        // A receiver that is not a tile-IR type, such as the tag `K::<2>`,
+        // does not instantiate; only a scalar takes `BroadcastScalar`.
         if matches!(
-            generic_vars.instantiate_type(receiver_rust_ty, self.primitives())?,
-            TypeInstance::ElementType(_)
+            generic_vars.instantiate_type(receiver_rust_ty, self.primitives()),
+            Ok(TypeInstance::ElementType(_))
         ) {
             if let Some(impls) = self
                 .name_resolver

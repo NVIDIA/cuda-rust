@@ -3,6 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 //! Checked BF16 feed-forward composition and intermediate numerical validation.
+/// Checked host arguments for BF16 projections and feed-forward compositions.
+#[allow(dead_code)]
+#[path = "../../common/ffn.rs"]
+pub(crate) mod ffn;
 /// BF16 matrix projections and tiled SiLU/product kernels.
 mod kernel;
 /// Checked synchronous FFN execution and owned intermediate storage.
@@ -11,10 +15,8 @@ mod operator;
 mod reference;
 
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer};
-use cute_rs::{
-    BFloat16,
-    ffn::{Down, FfnShape, FfnWeights, Gate, ProjectionWeights, RowMajorShape, Up},
-};
+use cute_rs::BFloat16;
+use ffn::{Down, FfnShape, FfnWeights, Gate, ProjectionWeights, RowMajorShape, Up};
 use operator::{GUARD, Result, Runner, Workspace};
 
 /// Asymmetric bounded dyadic values keep the projection reference well-conditioned.

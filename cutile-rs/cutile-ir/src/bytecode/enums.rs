@@ -137,6 +137,20 @@ pub enum AttributeTag {
     Bounded = 12,
 }
 
+/// Tags of the public-preview attributes (`0xD0 ..= 0xEF`), written as a
+/// varint before the attribute value. Only the constant-argument forms of
+/// `preview$call` are emitted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u16)]
+pub enum PreviewAttributeTag {
+    /// `index` constant: signed varint.
+    SymbolicExprInt = 0xD1,
+    /// `Datatype` constant: type index.
+    ConcreteType = 0xDB,
+    /// `string` constant: string index.
+    SymbolicExprConstStr = 0xE4,
+}
+
 // ---------------------------------------------------------------------------
 // Bytecode version
 // ---------------------------------------------------------------------------
@@ -168,9 +182,21 @@ impl BytecodeVersion {
         minor: 4,
         tag: 0,
     };
+    /// 13.5 also carries the public-preview operations (`preview$call`): a
+    /// module that uses one is written at 13.5 with the header preview bit.
+    pub const V13_5: Self = Self {
+        major: 13,
+        minor: 5,
+        tag: 0,
+    };
+
+    /// Header tag bit marking an image that contains public-preview
+    /// operations. `tileiras` accepts such an image only with the matching
+    /// `--preview=<feature>` flag.
+    pub const PREVIEW_TAG: u16 = 0x1;
 
     /// Newest version this writer can emit.
-    pub const CURRENT: Self = Self::V13_4;
+    pub const CURRENT: Self = Self::V13_5;
 
     /// Oldest version this writer can emit.
     ///
@@ -183,7 +209,30 @@ impl BytecodeVersion {
 
     /// All emittable versions, oldest to newest. Used to probe the installed
     /// `tileiras` for the newest bytecode version it accepts.
-    pub const SUPPORTED: [Self; 3] = [Self::V13_2, Self::V13_3, Self::V13_4];
+    pub const SUPPORTED: [Self; 4] = [Self::V13_2, Self::V13_3, Self::V13_4, Self::V13_5];
+
+    /// This version with the header preview bit set.
+    pub const fn with_preview(self) -> Self {
+        Self {
+            major: self.major,
+            minor: self.minor,
+            tag: self.tag | Self::PREVIEW_TAG,
+        }
+    }
+
+    /// This version with the header preview bit cleared.
+    pub const fn without_preview(self) -> Self {
+        Self {
+            major: self.major,
+            minor: self.minor,
+            tag: self.tag & !Self::PREVIEW_TAG,
+        }
+    }
+
+    /// Whether the header preview bit is set.
+    pub const fn is_preview(self) -> bool {
+        self.tag & Self::PREVIEW_TAG != 0
+    }
 }
 
 impl std::fmt::Display for BytecodeVersion {

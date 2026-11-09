@@ -10,7 +10,7 @@ description = "Checked BF16 feed-forward composition using typed tensor-core ope
 
 [dependencies]
 cute-rs = { path = "../../cute-rs", features = ["host"] }
-ctm-rs = { path = "../../ctm-rs" }
+cutlass-primitives = { path = "../../cutlass-primitives" }
 cuda-device = { path = "../../../crates/cuda-device" }
 cuda-host = { path = "../../../crates/cuda-host" }
 cuda-core = { path = "../../../../cuda-core" }

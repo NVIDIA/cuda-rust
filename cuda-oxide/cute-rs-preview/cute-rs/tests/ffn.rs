@@ -6,7 +6,11 @@
 //! Checked BF16 matrix extents and FFN dimensions require no device allocation.
 #![cfg(feature = "host")]
 
-use cute_rs::ffn::{FfnError, FfnShape, RowMajorShape};
+#[allow(dead_code)]
+#[path = "../../examples/common/ffn.rs"]
+mod ffn;
+
+use ffn::{FfnError, FfnShape, RowMajorShape};
 
 #[test]
 fn dense_and_padded_rows_preserve_logical_shape_and_minimum_span() {

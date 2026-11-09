@@ -194,6 +194,7 @@ impl Swizzle {
     /// y_mask = 0b11000
     /// offset & y_mask keeps only those two source bits
     /// ```
+    #[inline(always)]
     pub const fn y_mask(&self) -> i64 {
         debug_assert!(self.is_valid());
         let mask = (1i64 << self.num_bits) - 1;
@@ -210,6 +211,7 @@ impl Swizzle {
     /// These are the positions that may be toggled after the source field is
     /// shifted. For `S<2,0,3>`, the target is bits 1..0, so the result is
     /// `0b11`.
+    #[inline(always)]
     pub const fn z_mask(&self) -> i64 {
         debug_assert!(self.is_valid());
         let mask = (1i64 << self.num_bits) - 1;
@@ -224,6 +226,7 @@ impl Swizzle {
     /// bytes; if `x` counts elements, the result counts elements. Do not add
     /// an absolute pointer before calling this method: pointer-address bits
     /// covered by the source mask would change the XOR result.
+    #[inline(always)]
     pub const fn apply(&self, x: i64) -> i64 {
         debug_assert!(self.is_valid());
         if self.num_bits == 0 {

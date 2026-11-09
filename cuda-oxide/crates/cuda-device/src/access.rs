@@ -32,35 +32,35 @@
 //! # Scope
 //!
 //! This answers "what shape does this width need". It does not decide whether
-//! the width is *achievable*, which depends on the element type and, for loads,
-//! on how the value is used.
+//! the width is *achievable*, which depends on the element type the kernel
+//! reads through.
 //!
-//! Measured on sm_86, with the element type 16-byte aligned throughout:
+//! Measured on sm_86 and sm_120 with the default LLVM 23.1.1 `llc` and CUDA
+//! 13.2 `ptxas`:
 //!
 //! ```text
-//! how the element is used                     LDG          STG
-//! never decomposed                            LDG.E.128    STG.E.128
-//! lanes read, whole value assembled+stored    LDG.E x4     STG.E.128
-//! lanes read, scalar stored                   LDG.E x4     STG.E
+//! how the element is used                          LDG          STG
+//! 16-byte aligned quad, never decomposed           LDG.E.128    STG.E.128
+//! 16-byte aligned quad, lanes read, quad stored    LDG.E.128    STG.E.128
+//! 16-byte aligned quad, lanes read, scalar stored  LDG.E.128    STG.E
+//! four adjacent `f32` of a 4-byte aligned slice    LDG.E x4     STG.E
 //! ```
 //!
-//! So `align` is a necessary condition, and for loads not a sufficient one:
-//! touching individual lanes lets the optimiser split the local apart and load
-//! the lanes separately whatever the alignment. Stores have no such condition.
-//!
-//! That limit is specific to a *direct blocked* load, where the wide value
-//! itself feeds the per-element arithmetic. CUB's `BLOCK_LOAD_VECTORIZE`
-//! reaches the width for such kernels anyway, by splitting the layouts: load
-//! *striped* with wide loads (where nothing decomposes the value), then
-//! exchange through shared memory into the blocked arrangement the arithmetic
-//! wants. Decomposition still happens, but on registers that never came from
-//! a wide load. cuda-oxide has no striped/blocked exchange primitive yet, so
-//! a decomposing kernel currently cannot reach the width - the gap is the
-//! missing layout change, not anything about alignment.
+//! So `align` is a necessary condition for the load width. Reading all the
+//! lanes of an over-aligned element keeps the wide load; reading only some of
+//! them lets LLVM narrow it to those lanes (lanes 0 and 1 of a quad load as
+//! one 64-bit value, lanes 0 and 2 as two scalars). That means a direct
+//! blocked load, where the wide value feeds the per-element arithmetic,
+//! reaches the width once the tile is read through a type such as
+//! [`crate::vector::F32x4`]. The same tile read element by element out of a
+//! flat `&[f32]` does not: the plan says the shape allows 128-bit
+//! transactions, and the 4-byte element alignment still gives four scalar
+//! loads.
 //!
 //! A plan therefore describes the shape a width *needs*, not a width the kernel
-//! is guaranteed to get - the data has to move as whole elements as well.
-//! See the `vectorization` example for the alignment half.
+//! is guaranteed to get - the data has to be read through a suitably aligned
+//! element type as well. See [`crate::vector`] and the `vectorization` example
+//! for the alignment half.
 //!
 //! # Coalescing is the same kind of claim
 //!
@@ -70,9 +70,9 @@
 //! caveat, and it is worth stating rather than implying.
 //!
 //! **These are necessary-condition checkers.** They bound what the *layout*
-//! permits; they cannot report what codegen delivers. This module already
-//! contains the proof: it reports `TXN_128` for a tile shape whose measured SASS
-//! is four scalar `LDG.E`, because SROA splits any decomposed value. Likewise
+//! permits; they cannot report what codegen delivers. The *Scope* table above
+//! already shows one: a plan reports `TXN_128` for a tile of `f32` that, read
+//! out of a 4-byte aligned slice, compiles to four scalar `LDG.E`. Likewise
 //! `wasted_lines == 0` proves the pattern does not forbid a coalesced access; it
 //! never proves one happened. A green assertion that is read as a guarantee is
 //! worse than no assertion.
@@ -91,8 +91,9 @@ pub struct AccessPlan {
     pub txn_bytes: usize,
     /// Element type alignment required to reach `txn_bytes`.
     ///
-    /// Necessary, and for loads not sufficient - see the module's *Scope*
-    /// section.
+    /// Necessary, and not something the plan can check: the kernel has to
+    /// read through an element type with this alignment. See the module's
+    /// *Scope* section.
     pub align: usize,
     /// Elements each thread moves per instruction.
     pub elems_per_thread: usize,

@@ -13,6 +13,7 @@ on:
     # No workflow-level paths: filter; the changes job below gates the jobs.
     branches:
       - main
+      - "release/v0.5.x"
       - "pull-request/[0-9]+"
 
 # Each commit on main gets its own group, so it starts at once. Any other ref

@@ -233,6 +233,7 @@ check-guards:
     bash scripts/check-device-only-build.sh
     bash scripts/check-test-matrix-coverage.sh
     bash scripts/check-host-api-paths.sh
+    python3 scripts/check-doc-use-paths.py
     bash scripts/check-shared-crate-pin.sh
     bash scripts/check-oxide-artifacts-parity.sh
     bash scripts/check-cute-layout-algebra.sh

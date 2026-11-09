@@ -68,7 +68,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--start", type=int, default=0)
     parser.add_argument("--count", type=int, default=20)
-    parser.add_argument("--toolchain", default="nightly-2026-10-11")
+    parser.add_argument("--toolchain", default="1.99.1")
     parser.add_argument(
         "--artifacts",
         type=Path,

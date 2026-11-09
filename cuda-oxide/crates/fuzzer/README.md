@@ -247,7 +247,7 @@ Tree Borrows. Checking local-reference read permissions prevents the
 invalid reference from being selected. An isolated ablation reproduced
 both the original generated program and its Miri error.
 
-The sweep uses `nightly-2026-10-11`, enables `-Zmiri-tree-borrows`,
+The sweep uses `1.99.1`, enables `-Zmiri-tree-borrows`,
 and generates programs with `static_count = 8`.
 
 Failures preserve the generated Rust source and Miri diagnostics under

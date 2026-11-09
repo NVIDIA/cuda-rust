@@ -42,7 +42,7 @@ use cuda_oxide_codegen::__private::{
     PipelineTrace, append_to_module, compile_translated_module, verify_operation,
 };
 pub use cuda_oxide_codegen::__private::{
-    DeviceArchHint, DeviceExternAttrs, DeviceExternDecl, PipelineError,
+    DeviceArchHint, DeviceExternAttrs, DeviceExternDecl, HintLocation, HintWarning, PipelineError,
 };
 use llvm_export::export::DebugKind;
 pub use llvm_export::export::DeviceExternType;
@@ -181,6 +181,9 @@ pub struct CompilationResult {
     pub allow_fma_contraction: bool,
     /// Per-kernel source launch bounds preserved for post-link diagnostics.
     pub kernel_launch_bounds: BTreeMap<String, KernelLaunchBounds>,
+    /// Loop annotations that could not be honoured, for the frontend to report
+    /// as compiler warnings.
+    pub warnings: Vec<HintWarning>,
 }
 
 /// Configuration for the compilation pipeline.
@@ -254,7 +257,7 @@ pub struct PipelineConfig {
     ///
     /// Explicit fused operations, such as `f32::mul_add`, are unaffected.
     pub allow_fma_contraction: bool,
-    /// Stable per-compilation identity woven into counter-named module-scope
+    /// Stable per-compilation identity woven into generated module-scope
     /// symbols (`__shared_mem_*`, `__device_global_*`) and the dynamic
     /// shared-memory pool externs (`__dynamic_smem_*`) during MIR lowering.
     ///
@@ -321,6 +324,20 @@ pub fn build_debug_global_variable_info(
     identity: DebugGlobalVariableIdentity,
     ty: &Ty,
 ) -> Option<DebugGlobalVariableInfo> {
+    if matches!(
+        ty.kind(),
+        rustc_public::ty::TyKind::RigidTy(
+            rustc_public::ty::RigidTy::Ref(_, pointee, _)
+                | rustc_public::ty::RigidTy::RawPtr(pointee, _)
+        ) if matches!(
+            pointee.kind(),
+            rustc_public::ty::TyKind::RigidTy(
+                rustc_public::ty::RigidTy::Slice(_) | rustc_public::ty::RigidTy::Str
+            )
+        )
+    ) {
+        return None;
+    }
     let debug_ty = crate::translator::body::debug_type_for_ty(ty)?;
     let semantic_size_bits = ty.layout().ok()?.shape().size.bytes() as u64 * 8;
     if debug_ty.size_bits() != semantic_size_bits {
@@ -531,6 +548,10 @@ pub fn run_pipeline(
     let mut legaliser = Legaliser::default();
     let mut kernel_launch_bounds = BTreeMap::new();
     let mut expected_kernels = Vec::new();
+    let has_integer_redux_sync = cuda_oxide_codegen::__private::target_has_integer_redux_sync(
+        config.target_arch.as_deref(),
+        config.device_arch_hint.as_ref(),
+    );
 
     // Step 3: Translate all functions
     for func in functions {
@@ -550,13 +571,18 @@ pub fn run_pipeline(
             .instance
             .body()
             .ok_or_else(|| PipelineError::NoBody(func.export_name.clone()))?;
+        let mono_successors = crate::translator::body::narrow_target_predicate_switches(
+            &body,
+            &func.rustc_mono_successors,
+            has_integer_redux_sync,
+        );
 
         let func_op_ptr = crate::translator::body::translate_body(
             &mut ctx,
             &body,
             &func.instance,
             func.rustc_mir_block_count,
-            &func.rustc_mono_successors,
+            &mono_successors,
             func.is_kernel,
             func.inline,
             Some(&func.export_name),
@@ -646,6 +672,7 @@ pub fn run_pipeline(
                 config.allow_fma_contraction,
                 config.debug_kind,
             )?;
+            write_expected_kernels_sidecar(&config.output_dir, &config.output_name, functions)?;
             // Publish the target last: its version marker is the completion record
             // that says the sibling options file is required.
             write_nvvm_target_sidecar(&config.output_dir, &config.output_name, &generated.target)?;
@@ -657,6 +684,7 @@ pub fn run_pipeline(
                 target: generated.target,
                 allow_fma_contraction: config.allow_fma_contraction,
                 kernel_launch_bounds,
+                warnings: generated.warnings,
             })
         }
         ModuleArtifactKind::Ptx => Ok(CompilationResult {
@@ -667,6 +695,7 @@ pub fn run_pipeline(
             target: generated.target,
             allow_fma_contraction: config.allow_fma_contraction,
             kernel_launch_bounds,
+            warnings: generated.warnings,
         }),
         ModuleArtifactKind::Cubin => Ok(CompilationResult {
             artifact_path: cubin_path,
@@ -676,6 +705,7 @@ pub fn run_pipeline(
             target: generated.target,
             allow_fma_contraction: config.allow_fma_contraction,
             kernel_launch_bounds,
+            warnings: generated.warnings,
         }),
     }
 }
@@ -770,6 +800,29 @@ fn write_nvvm_compile_options_sidecar(
     })
 }
 
+/// Records, next to the emitted `.ll`, the kernels its finalized image must
+/// define, so that finalizing from files checks them as the embedded route
+/// does.
+fn write_expected_kernels_sidecar(
+    output_dir: &Path,
+    output_name: &str,
+    functions: &[CollectedFunction],
+) -> Result<(), PipelineError> {
+    let path = output_dir.join(format!("{output_name}.kernels"));
+    let text = cuda_artifact_finalizer::expected_kernels_sidecar_text(
+        functions
+            .iter()
+            .filter(|function| function.is_kernel)
+            .map(|function| function.export_name.as_str()),
+    );
+    std::fs::write(&path, text).map_err(|error| {
+        PipelineError::Export(format!(
+            "failed to record expected kernels in {}: {error}",
+            path.display()
+        ))
+    })
+}
+
 fn stale_compilation_artifact_paths(
     output_dir: &Path,
     output_name: &str,
@@ -781,6 +834,7 @@ fn stale_compilation_artifact_paths(
         "ptx",
         "target",
         "options",
+        "kernels",
         "ltoir",
         "cubin",
         "cubin.target",

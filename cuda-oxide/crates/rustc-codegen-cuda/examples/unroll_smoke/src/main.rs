@@ -20,18 +20,25 @@
 //! `const_generic_bound` is the same nest with every bound written `LANES / 16`
 //! for a const generic `LANES`.
 //! `isize_range_for` covers `a..b`, `(a..b).rev()`, and `#[unroll(4)]` on an
-//! `isize` counter.
+//! `isize` counter. `partial_block_stride` is `#[unroll(4)]` on a loop that
+//! starts at the thread index and steps by the block size. `partial_row_view`
+//! is `#[unroll(4)]` on `for i in 0..n { s += row.get(i).unwrap_or(0.0); }`
+//! over a `RowView32`, whose body matches an `Option`.
 //! All are semantics-preserving; the host checks the sums.
 //!
 //! `verify-code-shape.sh` asserts that `nested_lane_range`,
 //! `const_generic_bound`, and `isize_range_for` have no local memory in the
-//! generated PTX. GPU-less CI runs it through
+//! generated PTX, and that the unroller, not LLVM, split
+//! `partial_block_stride` and `partial_row_view` into a main and a remainder
+//! loop. Given the build log, it also asserts that the build printed no "not
+//! unrolled" warning for `partial_row_view`. GPU-less CI runs it through
 //! `scripts/smoketest.sh --compile-only`.
 //!
 //! Run: cargo oxide run unroll_smoke
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
+use cuda_device::view::MatrixView32;
 use cuda_device::{DisjointSlice, kernel, thread};
 use cuda_host::cuda_module;
 
@@ -684,6 +691,46 @@ mod kernels {
         *folded = weighted.wrapping_add(base);
         *partial = sum;
     }
+
+    /// `#[unroll(4)]` on a block-stride loop: the counter starts at the thread
+    /// index and steps by the block size, both only known at runtime. The
+    /// `usize` counter reads and casts `blockDim.x` again on every iteration.
+    /// `out[tid]` sums `input[tid]`, `input[tid + blockDim]`, ... below `n`.
+    #[kernel]
+    pub fn partial_block_stride(input: &[u32], mut out: DisjointSlice<u32>, n: u32) {
+        let Some(out_elem) = out.get_mut(thread::index_1d()) else {
+            return;
+        };
+        let mut sum = 0u32;
+        let mut i = thread::threadIdx_x() as usize;
+        #[unroll(4)]
+        while i < n as usize {
+            sum = sum.wrapping_add(input[i]);
+            i += thread::blockDim_x() as usize;
+        }
+        *out_elem = sum;
+    }
+
+    /// `#[unroll(4)]` on a runtime-bounded range loop over a row view, the
+    /// loop from issue #1690. rustc lowers `unwrap_or`'s `match` with an
+    /// `otherwise` arm that is `unreachable`, which the unroller must not count
+    /// as another loop exit. The result is the sum of the first `min(n, cols)`
+    /// elements of `x`, since reads at `cols..n` are 0, or 0 when `x` is too
+    /// short for a row of `cols`.
+    #[kernel]
+    pub fn partial_row_view(x: &[f32], mut out: DisjointSlice<f32>, cols: u32, n: u32) {
+        let Some(out_elem) = out.get_mut(thread::index_1d()) else {
+            return;
+        };
+        let mut s = 0.0f32;
+        if let Some(row) = MatrixView32::new(x, cols).row(0, cols) {
+            #[unroll(4)]
+            for i in 0..n {
+                s += row.get(i).unwrap_or(0.0);
+            }
+        }
+        *out_elem = s;
+    }
 }
 
 fn main() {
@@ -892,8 +939,60 @@ fn main() {
             "`0..=4` and `(0..10).step_by(3)`"
         );
 
+        // 9 full strides plus `range_trip` elements: every thread runs two
+        // 4-iteration groups, and the first `range_trip` threads run one more
+        // remainder iteration than the rest
+        let stride_input: Vec<u32> = (0..BLOCK * 10).map(|i| i * 7 + 1).collect();
+        let d_stride_input = DeviceBuffer::from_host(&stream, &stride_input).unwrap();
+        let stride_n = BLOCK * 9 + range_trip;
+        let mut d_stride = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
+        // SAFETY: each thread writes its own element; reads stay below `stride_n`.
+        unsafe {
+            module.partial_block_stride(
+                stream.as_ref(),
+                cfg,
+                &d_stride_input,
+                &mut d_stride,
+                stride_n,
+            )
+        }
+        .expect("launch partial_block_stride");
+        let want_stride: Vec<u32> = (0..N)
+            .map(|tid| {
+                stride_input[..stride_n as usize]
+                    .iter()
+                    .skip(tid)
+                    .step_by(BLOCK as usize)
+                    .fold(0u32, |sum, &x| sum.wrapping_add(x))
+            })
+            .collect();
+        assert_eq!(
+            d_stride.to_host_vec(&stream).unwrap(),
+            want_stride,
+            "block-stride `{stride_n}` elements"
+        );
+
         let signed_input: Vec<u32> = (0..64u32).map(|i| i * 7 + 1).collect();
         let d_signed_input = DeviceBuffer::from_host(&stream, &signed_input).unwrap();
+        // whole numbers keep every partial f32 sum exact, so unrolling cannot
+        // change the result through rounding
+        let row: Vec<f32> = (0..64u16).map(|i| f32::from(i * 3 + 1)).collect();
+        let d_row = DeviceBuffer::from_host(&stream, &row).unwrap();
+        let cols = 48u32;
+        // `range_trip = 16` reads past `cols`, so the `None` arm runs too
+        let row_trip = range_trip * 5;
+        let mut d_row_sum = DeviceBuffer::<f32>::zeroed(&stream, N).unwrap();
+        // SAFETY: each thread writes its own element; the row view bounds the reads.
+        unsafe {
+            module.partial_row_view(stream.as_ref(), cfg, &d_row, &mut d_row_sum, cols, row_trip)
+        }
+        .expect("launch partial_row_view");
+        let want_row_sum: f32 = row.iter().take(row_trip.min(cols) as usize).sum();
+        assert_eq!(
+            d_row_sum.to_host_vec(&stream).unwrap(),
+            vec![want_row_sum; N],
+            "partial `0..{row_trip}` over `row.get(i).unwrap_or(0.0)`"
+        );
         let mut d_signed = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
         let mut d_signed_part = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
         // SAFETY: each thread writes its own element of the buffer; the kernel

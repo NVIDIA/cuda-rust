@@ -8,7 +8,7 @@
 
 use crate::error::JITError;
 use crate::hints::CodegenMode;
-use cuda_core::{get_device_sm_name, Device};
+use cuda_core::{get_device_sm_name, Context};
 use cutile_ir::bytecode::{write_bytecode_version, BytecodeVersion};
 use std::collections::HashMap;
 use std::env;
@@ -57,7 +57,7 @@ impl ToolkitCapabilities {
         type Key = (String, Option<OsString>, String);
         static CACHE: OnceLock<Mutex<HashMap<Key, Arc<ToolkitCapabilities>>>> = OnceLock::new();
         let tileiras = tileiras_binary();
-        let device = Device::raw_device(device_id)
+        let device = Context::raw_device(device_id)
             .map_err(|e| JITError::Generic(format!("cannot query CUDA device {device_id}: {e}")))?;
         // SAFETY: the driver returned this device handle.
         let architecture = unsafe { get_device_sm_name(device) }
@@ -121,7 +121,7 @@ pub fn get_gpu_name(device_id: usize) -> String {
         [const { OnceLock::new() }; MAX_CACHED_DEVICES];
 
     let query = || -> String {
-        let dev = Device::raw_device(device_id).unwrap_or_else(|e| {
+        let dev = Context::raw_device(device_id).unwrap_or_else(|e| {
             panic!(
                 "failed to get CUDA device {device_id}: {e}\n\
                  Ensure an NVIDIA GPU is visible to the process and the CUDA driver is installed."
@@ -639,18 +639,23 @@ pub(crate) fn current_l2_key_for_module(
     Ok(current_l2_key_for_bytecode(&bytecode, bytecode_version, gpu_name, opts).0)
 }
 
+use crate::tile_library::TileLibrary;
+
 /// Flags forwarded to the `tileiras` invocation.
 ///
 /// These are the complete stage-2 inputs besides the bytecode, the target
 /// GPU, and the binary itself — so they participate in the L2 cache key and
 /// are validated in disk-cache entries. Two compiles that differ in any
 /// field can never share a cubin.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TileirasOptions {
     /// `--opt-level <N>`, plus `--device-debug` or `--lineinfo`.
     pub codegen: CodegenMode,
     /// `--sanitize=memcheck`: instrument memory accesses for the sanitizer.
     pub sanitize_memcheck: bool,
+    /// Tile libraries implementing the kernel's foreign calls: `-l <path>`
+    /// each, with `--preview=simt`.
+    pub tilelibs: Vec<TileLibrary>,
 }
 
 impl Default for TileirasOptions {
@@ -658,6 +663,7 @@ impl Default for TileirasOptions {
         Self {
             codegen: CodegenMode::RELEASE,
             sanitize_memcheck: false,
+            tilelibs: Vec::new(),
         }
     }
 }
@@ -668,7 +674,21 @@ impl TileirasOptions {
         Self {
             codegen: options.codegen,
             sanitize_memcheck: options.sanitize_memcheck,
+            tilelibs: Vec::new(),
         }
+    }
+
+    /// These options linking `tilelibs`.
+    pub fn with_tilelibs(mut self, tilelibs: Vec<TileLibrary>) -> Self {
+        self.tilelibs = tilelibs;
+        self
+    }
+
+    /// SHA-256 over the linked libraries (paths and digests), or `None`
+    /// without any. Folded into the disk-cache entry
+    /// fingerprint.
+    pub fn tilelib_digest(&self) -> Option<String> {
+        crate::tile_library::tile_libraries_digest(&self.tilelibs)
     }
 
     /// The boolean flags packed into one byte, for the cache-entry header
@@ -680,6 +700,34 @@ impl TileirasOptions {
         };
         codegen | ((self.sanitize_memcheck as u8) << 2)
     }
+}
+
+/// Explains a `tileiras` failure caused by a tile library whose code carries
+/// no debug locations, which some libraries cannot link with
+/// `--device-debug` or `--lineinfo`. `None` for any other failure.
+fn tilelib_debug_info_error(opts: &TileirasOptions, stderr: &str) -> Option<String> {
+    let flag = match opts.codegen {
+        CodegenMode::Debug => "--device-debug",
+        CodegenMode::Optimized { lineinfo: true, .. } => "--lineinfo",
+        CodegenMode::Optimized {
+            lineinfo: false, ..
+        } => return None,
+    };
+    if opts.tilelibs.is_empty() || !stderr.contains("must have a !dbg location") {
+        return None;
+    }
+    let libraries = opts
+        .tilelibs
+        .iter()
+        .map(|lib| lib.path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!(
+        "a tile library this kernel calls cannot be linked with `{flag}` (libraries: \
+         {libraries}). Compile the kernel without debug information: \
+         `CompileOptions::debug_info(DebugInfoLevel::None)`, or build with \
+         `CUDA_RUST_DEBUG=none`."
+    ))
 }
 
 /// Compiles Tile IR bytecode to a cubin image by spawning `tileiras`.
@@ -726,6 +774,18 @@ fn run_tileiras_at(
     if opts.sanitize_memcheck {
         args.push("--sanitize=memcheck");
     }
+    let tilelib_paths: Vec<String> = opts
+        .tilelibs
+        .iter()
+        .map(|lib| lib.path.to_string_lossy().into_owned())
+        .collect();
+    if !tilelib_paths.is_empty() {
+        // Tile libraries require the SIMT preview.
+        args.push("--preview=simt");
+        for path in &tilelib_paths {
+            args.extend(["-l", path.as_str()]);
+        }
+    }
     args.extend(["-o", &cubin_filename, &bc_filename]);
     let output = match Command::new(tileiras).args(&args).output() {
         Ok(output) => output,
@@ -741,8 +801,11 @@ fn run_tileiras_at(
         let stdout = String::from_utf8_lossy(&output.stdout);
         // The message points at the bytecode, so it has to outlive this call.
         bc_file.keep();
+        let cause = tilelib_debug_info_error(opts, &stderr)
+            .map(|cause| format!("{cause}\n\n"))
+            .unwrap_or_default();
         return Err(JITError::Generic(format!(
-            "{} failed while compiling Tile IR bytecode.\n\
+            "{cause}{} failed while compiling Tile IR bytecode.\n\
              status: {}\n\
              command: {}\n\
              target gpu: {gpu_name}\n\
@@ -844,12 +907,18 @@ fn compile_bytecode_cached_at(
     // with the bytes it sits next to (see #7).
     let tileiras_fp = fingerprint_of(tileiras);
     let key = jit_cache::l2_key(bytecode, bc_version, gpu_name, opts, tileiras_fp);
+    // Linked tile libraries are validated with the toolchain fingerprint, so
+    // the entry format is unchanged.
+    let entry_fp = match opts.tilelib_digest() {
+        Some(digest) => format!("{tileiras_fp}+tilelibs:{digest}"),
+        None => tileiras_fp.to_string(),
+    };
     let params = EntryParams {
         bc_sha256: Sha256::digest(bytecode).into(),
         gpu_name,
         opt_level: opts.codegen.opt_level(),
         flags: opts.flags_byte(),
-        tileiras_fp,
+        tileiras_fp: &entry_fp,
     };
 
     match store.get(&key) {
@@ -882,6 +951,15 @@ fn compile_bytecode_cached_at(
 
     jit_cache::STATS.misses.fetch_add(1, Ordering::Relaxed);
     let cubin = run_tileiras_at(tileiras, bytecode, gpu_name, opts)?;
+
+    // A tile library rebuilt since it was hashed may be the build tileiras
+    // linked, which `key` does not describe.
+    if !opts.tilelibs.iter().all(|lib| lib.stamps.unchanged()) {
+        crate::jit_cache::cache_log(format_args!(
+            "not caching {key}: a tile library changed while it was linked"
+        ));
+        return Ok((cubin, Stage2Source::Tileiras));
+    }
 
     match jit_cache::encode_entry(&params, &cubin) {
         Some(entry) => match store.put(&key, &entry) {
@@ -962,7 +1040,8 @@ fn recompile_after_disk_rejection_at(
 }
 
 /// Compiles a `cutile_ir::Module` to a cubin image via bytecode serialization and
-/// `tileiras`, consulting the disk cache when one is installed.
+/// `tileiras`, consulting the disk cache when one is installed. Foreign calls
+/// link the process-wide default tile libraries.
 ///
 /// Returns `Err` (not panic) on any failure so callers can propagate it and run
 /// their cache-cleanup paths; a panic would unwind past that and across FFI frames.
@@ -971,8 +1050,11 @@ pub fn compile_tile_ir_module(
     gpu_name: &str,
 ) -> Result<Vec<u8>, JITError> {
     let (bytecode, bc_version) = serialize_tile_ir_bytecode(module)?;
-    compile_bytecode_cached(&bytecode, bc_version, gpu_name, &TileirasOptions::default())
-        .map(|(cubin, _)| cubin)
+    let opts = TileirasOptions::default().with_tilelibs(crate::tile_library::link_tile_libraries(
+        module,
+        &crate::tile_library::default_tile_libraries(),
+    )?);
+    compile_bytecode_cached(&bytecode, bc_version, gpu_name, &opts).map(|(cubin, _)| cubin)
 }
 
 fn tileiras_launch_error(
@@ -1014,12 +1096,14 @@ fn default_cuda_toolkit_candidates() -> &'static [PathBuf] {
     CANDIDATES.get_or_init(|| {
         #[cfg(windows)]
         let candidates = [
+            r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.5",
             r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.4",
             r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3",
             r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.2",
         ];
         #[cfg(not(windows))]
         let candidates = [
+            "/usr/local/cuda-13.5",
             "/usr/local/cuda-13.4",
             "/usr/local/cuda-13.3",
             "/usr/local/cuda-13.2",
@@ -1181,13 +1265,189 @@ fn shell_display(value: &std::ffi::OsStr) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tile_library_without_debug_locations_is_explained() {
+        let stderr = "error: inlinable function call in a function with debug info must have a \
+                      !dbg location";
+        let lib = TileLibrary {
+            path: PathBuf::from("/opt/tilelibs/solver.tilelib"),
+            digest: [0; 32],
+            stamps: Default::default(),
+        };
+        let debug = TileirasOptions {
+            codegen: CodegenMode::Debug,
+            tilelibs: vec![lib.clone()],
+            ..TileirasOptions::default()
+        };
+        let cause = tilelib_debug_info_error(&debug, stderr).expect("explained");
+        assert!(cause.contains("`--device-debug`"), "{cause}");
+        assert!(cause.contains("/opt/tilelibs/solver.tilelib"), "{cause}");
+        assert!(cause.contains("CUDA_RUST_DEBUG=none"), "{cause}");
+        let line = TileirasOptions {
+            codegen: CodegenMode::Optimized {
+                level: DEFAULT_OPT_LEVEL,
+                lineinfo: true,
+            },
+            tilelibs: vec![lib.clone()],
+            ..TileirasOptions::default()
+        };
+        assert!(tilelib_debug_info_error(&line, stderr)
+            .is_some_and(|cause| cause.contains("`--lineinfo`")));
+        // Other failures, builds without debug info and kernels without tile
+        // libraries keep the plain tileiras error.
+        assert!(tilelib_debug_info_error(&debug, "error: some other failure").is_none());
+        let no_debug = TileirasOptions {
+            tilelibs: vec![lib],
+            ..TileirasOptions::default()
+        };
+        assert!(tilelib_debug_info_error(&no_debug, stderr).is_none());
+        let no_lib = TileirasOptions {
+            codegen: CodegenMode::Debug,
+            ..TileirasOptions::default()
+        };
+        assert!(tilelib_debug_info_error(&no_lib, stderr).is_none());
+    }
+    use crate::tile_library::resolve_tile_libraries;
     use cutile_ir::builder::{append_op, build_single_block_region, OpBuilder};
     use cutile_ir::bytecode::Opcode;
     use cutile_ir::ir::{Attribute, FuncType, Location, Module, Type};
     use std::fs;
     use std::sync::Mutex;
 
+    // Also isolates the process-global JIT store and backend compile counters.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Tile libraries reach `tileiras` as `--preview=simt -l <path>`, and only
+    /// when a kernel links one.
+    #[test]
+    #[cfg(unix)]
+    fn tile_libraries_are_passed_to_tileiras_with_the_simt_preview() {
+        let _env_guard = ENV_LOCK.lock().unwrap();
+        let dir = env::temp_dir().join(format!("cutile_tilelib_args_{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let tileiras = dir.join("tileiras");
+        let args_file = dir.join("args");
+        write_fake_tileiras_script(
+            &tileiras,
+            &format!(
+                "printf '%s\\n' \"$@\" > '{}'\n\
+                 while [ $# -gt 0 ]; do if [ \"$1\" = -o ]; then printf cubin > \"$2\"; fi; shift; done\n",
+                args_file.display()
+            ),
+        );
+        let lib_path = dir.join("lib.tilelib");
+        fs::write(&lib_path, b"tile library").unwrap();
+        let lib = resolve_tile_libraries([&crate::tile_library::TileLibrarySpec::new(&lib_path)])
+            .unwrap()
+            .remove(0);
+        assert_eq!(lib.path, fs::canonicalize(&lib_path).unwrap());
+        let read_args = || fs::read_to_string(&args_file).unwrap();
+
+        let plain = TileirasOptions::default();
+        assert_eq!(
+            run_tileiras_at(&tileiras, b"bc", "sm_80", &plain).unwrap(),
+            b"cubin"
+        );
+        assert!(!read_args().contains("--preview"), "{}", read_args());
+
+        let linked = TileirasOptions::default().with_tilelibs(vec![lib.clone()]);
+        assert_eq!(
+            run_tileiras_at(&tileiras, b"bc", "sm_80", &linked).unwrap(),
+            b"cubin"
+        );
+        let expected = format!("--preview=simt\n-l\n{}\n", lib.path.display());
+        assert!(read_args().contains(&expected), "{}", read_args());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// A library rewritten with the same size and its modification time set
+    /// back is hashed again.
+    #[test]
+    fn rewritten_tile_library_with_restored_mtime_is_rehashed() {
+        let dir = env::temp_dir().join(format!("cutile_tilelib_rehash_{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let lib_path = dir.join("lib.tilelib");
+        fs::write(&lib_path, b"tile library v1").unwrap();
+        let mtime = fs::metadata(&lib_path).unwrap().modified().unwrap();
+        let spec = crate::tile_library::TileLibrarySpec::new(&lib_path);
+        let first = resolve_tile_libraries([&spec]).unwrap().remove(0);
+
+        fs::write(&lib_path, b"tile library v2").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&lib_path)
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+        assert_eq!(fs::metadata(&lib_path).unwrap().modified().unwrap(), mtime);
+        let second = resolve_tile_libraries([&spec]).unwrap().remove(0);
+        assert_ne!(first.digest, second.digest);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// A tile library rebuilt while `tileiras` links it may be the build in
+    /// the cubin, which the disk-cache key, taken from the previous build,
+    /// does not describe: the cubin is returned but not stored. The next
+    /// compile resolves the new build and is stored.
+    #[test]
+    #[cfg(unix)]
+    fn a_tile_library_rebuilt_while_linked_is_not_stored() {
+        use crate::jit_cache::JitStore;
+        let _env_guard = ENV_LOCK.lock().unwrap();
+        let dir = env::temp_dir().join(format!("cutile_tilelib_relinked_{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let lib_path = dir.join("lib.tilelib");
+        fs::write(&lib_path, b"tile library v1").unwrap();
+        // Rebuilds the library during its first link.
+        let tileiras = dir.join("tileiras");
+        write_fake_tileiras_script(
+            &tileiras,
+            &format!(
+                "out=\"\"\n\
+                 while [ \"$#\" -gt 0 ]; do\n\
+                 if [ \"$1\" = -o ]; then shift; out=\"$1\"; fi\n\
+                 shift\n\
+                 done\n\
+                 if [ -z \"$out\" ]; then echo fake-tileiras; exit 0; fi\n\
+                 if [ ! -e '{rebuilt}' ]; then\n\
+                 printf 'tile library v2, rebuilt' > '{lib}.new'; mv '{lib}.new' '{lib}'; : > '{rebuilt}'\n\
+                 fi\n\
+                 printf cubin > \"$out\"\n",
+                rebuilt = dir.join("rebuilt").display(),
+                lib = lib_path.display(),
+            ),
+        );
+        let store = Arc::new(crate::jit_cache::FileSystemJitStore::new(dir.join("store")).unwrap());
+        crate::jit_cache::enable(store.clone());
+        let (bytecode, bc_version) = serialize_tile_ir_bytecode(&empty_kernel_module()).unwrap();
+        let spec = crate::tile_library::TileLibrarySpec::new(&lib_path);
+        let compile = || {
+            let opts =
+                TileirasOptions::default().with_tilelibs(resolve_tile_libraries([&spec]).unwrap());
+            let (cubin, _) =
+                compile_bytecode_cached_at(&tileiras, &bytecode, bc_version, "sm_80", &opts)
+                    .unwrap();
+            assert_eq!(cubin, b"cubin");
+            crate::jit_cache::l2_key(
+                &bytecode,
+                bc_version,
+                "sm_80",
+                &opts,
+                fingerprint_of(&tileiras),
+            )
+        };
+        let during_rebuild = compile();
+        let after_rebuild = compile();
+        crate::jit_cache::disable();
+        assert_ne!(during_rebuild, after_rebuild);
+        assert!(
+            !store.contains(&during_rebuild).unwrap(),
+            "the previous build's key must not name a cubin linked during the rebuild"
+        );
+        assert!(store.contains(&after_rebuild).unwrap());
+        let _ = fs::remove_dir_all(dir);
+    }
 
     /// A toolkit older than the Tile floor is an `Err` from the `Result`
     /// path, never a panic (the JIT callers own cache cleanup on failure).
@@ -1434,6 +1694,39 @@ mod tests {
                 BytecodeVersion::V13_3
             );
         }
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// A module with a foreign call is written at the negotiated version like
+    /// any other: a pin below 13.5 is an error, not raised to the 13.5 that
+    /// the assembler lists.
+    #[test]
+    #[cfg(unix)]
+    fn foreign_calls_are_written_at_the_negotiated_version() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = env::temp_dir().join(format!("cutile_foreign_version_{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let binary = dir.join("tileiras");
+        write_fake_tileiras_script(
+            &binary,
+            "case \"$1\" in --list-versions) printf '13.2\\n13.3\\n13.4\\n13.5\\n';; *) exit 1;; esac\n",
+        );
+        let _tileiras_guard = EnvVarGuard::set(TILEIRAS_PATH_ENV, &binary);
+        let module = foreign_call_module();
+        {
+            let _override_guard = EnvVarGuard::set(BYTECODE_VERSION_ENV, Path::new("13.4"));
+            let error = serialize_tile_ir_bytecode(&module).unwrap_err().to_string();
+            assert!(
+                error.contains(
+                    "preview$call requires bytecode version 13.5 or newer, requested 13.4"
+                ),
+                "{error}"
+            );
+        }
+        let _override_guard = EnvVarGuard::unset(BYTECODE_VERSION_ENV);
+        let (bytes, version) = serialize_tile_ir_bytecode(&module).unwrap();
+        assert_eq!(version, BytecodeVersion::V13_5);
+        assert_eq!(&bytes[8..12], &[13, 5, 1, 0], "13.5 with the preview bit");
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -1747,6 +2040,32 @@ mod tests {
         let (entry_id, _) = OpBuilder::new(Opcode::Entry, Location::Unknown)
             .attr("sym_name", Attribute::String("empty_kernel".into()))
             .attr("function_type", Attribute::Type(func_type))
+            .region(region_id)
+            .build(&mut module);
+        module.functions.push(entry_id);
+        module
+    }
+
+    /// An entry whose body is one foreign call (`preview$call @f`).
+    fn foreign_call_module() -> Module {
+        let mut module = Module::new("foreign_call_test");
+        let (region_id, block_id, _) = build_single_block_region(&mut module, &[]);
+        let (call_id, _) = OpBuilder::new(Opcode::PreviewCall, Location::Unknown)
+            .attr("callee", Attribute::String("f".into()))
+            .attr("const_args", Attribute::Array(vec![]))
+            .build(&mut module);
+        append_op(&mut module, block_id, call_id);
+        let (ret_id, _) = OpBuilder::new(Opcode::Return, Location::Unknown).build(&mut module);
+        append_op(&mut module, block_id, ret_id);
+        let (entry_id, _) = OpBuilder::new(Opcode::Entry, Location::Unknown)
+            .attr("sym_name", Attribute::String("foreign_kernel".into()))
+            .attr(
+                "function_type",
+                Attribute::Type(Type::Func(FuncType {
+                    inputs: vec![],
+                    results: vec![],
+                })),
+            )
             .region(region_id)
             .build(&mut module);
         module.functions.push(entry_id);

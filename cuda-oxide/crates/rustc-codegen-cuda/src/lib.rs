@@ -849,6 +849,7 @@ impl CodegenBackend for CudaCodegenBackend {
                         ));
                     }
                     Ok(Ok(result)) => {
+                        emit_hint_warnings(tcx, &result.warnings);
                         if self.config.verbose
                             && let Some(artifact) = result.artifact.as_ref()
                         {
@@ -1018,11 +1019,17 @@ fn write_device_artifact_object(
     materialization_request: Option<materialize::MaterializationRequest>,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let bundle_name = std::env::var("CARGO_PKG_NAME").unwrap_or_else(|_| output_name.to_string());
+    let expected_kernels = functions
+        .iter()
+        .filter(|function| function.is_kernel)
+        .map(|function| function.export_name.as_str())
+        .collect::<Vec<_>>();
     let materialized_artifact = materialize_artifact_for_embedding(
         materialization_request,
         &bundle_name,
         result,
         artifact,
+        &expected_kernels,
     )?;
     if let Some(materialized) = materialized_artifact.as_ref() {
         emit_launch_bounds_spill_warnings(tcx, result, functions, &materialized.resource_usage);
@@ -1155,6 +1162,7 @@ fn materialize_artifact_for_embedding(
     bundle_name: &str,
     result: &device_codegen::DeviceCodegenResult,
     artifact: &device_codegen::DeviceCodegenArtifact,
+    expected_kernels: &[&str],
 ) -> Result<Option<MaterializedDeviceArtifact>, Box<dyn std::error::Error>> {
     let Some(request) = request else {
         return Ok(None);
@@ -1174,6 +1182,7 @@ fn materialize_artifact_for_embedding(
             &result.target,
             result.allow_fma_contraction,
             debug_policy,
+            expected_kernels,
         )?,
         device_codegen::DeviceCodegenArtifactKind::Ltoir => materialize::ltoir_to_cubin(
             request,
@@ -1182,6 +1191,7 @@ fn materialize_artifact_for_embedding(
             &result.target,
             result.allow_fma_contraction,
             debug_policy,
+            expected_kernels,
         )?,
         device_codegen::DeviceCodegenArtifactKind::Ptx => {
             return Err(Box::new(materialize::MaterializeError::PtxInput));
@@ -1255,6 +1265,68 @@ fn emit_launch_bounds_spill_warnings(
     }
 }
 
+/// Report the loop annotations device codegen could not honour as compiler
+/// warnings, so cargo counts them and `--message-format=json` carries them.
+/// Each points at its annotation when that file is in this session's source
+/// map. Like the spill warnings above, these are diagnostics, not lints.
+fn emit_hint_warnings(tcx: TyCtxt<'_>, warnings: &[mir_importer::HintWarning]) {
+    for warning in warnings {
+        let span = warning
+            .location
+            .as_ref()
+            .and_then(|location| annotation_span(tcx, location));
+        match span {
+            Some(span) => tcx
+                .dcx()
+                .struct_span_warn(span, warning.message.clone())
+                .emit(),
+            None => {
+                let mut diagnostic = tcx.dcx().struct_warn(warning.message.clone());
+                if let Some(location) = &warning.location {
+                    diagnostic.note(format!("the annotation is at {location}"));
+                }
+                diagnostic.emit();
+            }
+        }
+    }
+}
+
+/// The span of the `#[...]` annotation starting at `location`: a file named as
+/// the source map names it, a 1-based line, and a 1-based character column.
+fn annotation_span(
+    tcx: TyCtxt<'_>,
+    location: &mir_importer::HintLocation,
+) -> Option<rustc_span::Span> {
+    use rustc_span::Pos;
+
+    let file = tcx
+        .sess
+        .source_map()
+        .files()
+        .iter()
+        .find(|file| {
+            Path::new(&file.name.prefer_local_unconditionally().to_string()) == location.file
+        })?
+        .clone();
+    let line = file.line_bounds(usize::try_from(location.line).ok()?.checked_sub(1)?);
+    let source = file.src.as_ref()?;
+    let line_text = source
+        .get((line.start - file.start_pos).to_usize()..(line.end - file.start_pos).to_usize())?;
+    let column = usize::try_from(location.column).ok()?.checked_sub(1)?;
+    let (start, _) = line_text.char_indices().nth(column)?;
+    let end = if line_text[start..].starts_with("#[") {
+        line_text[start..]
+            .find(']')
+            .map_or(start, |offset| start + offset + 1)
+    } else {
+        start
+    };
+    Some(rustc_span::Span::with_root_ctxt(
+        line.start + rustc_span::BytePos::from_usize(start),
+        line.start + rustc_span::BytePos::from_usize(end),
+    ))
+}
+
 fn write_filtered_artifact_anchor_object(
     output_dir: &Path,
     output_name: &str,
@@ -1286,7 +1358,16 @@ fn write_artifact_object(
         "{safe_output_name}.{}.{artifact_id}.{kind}.o",
         std::process::id(),
     ));
-    std::fs::write(&object_path, object)?;
+    // `SHF_GNU_RETAIN` sits in the ELF `SHF_MASKOS` range (`0x0ff00000`), which
+    // GNU ld on AArch64 only honors when `e_ident[EI_OSABI]` is `ELFOSABI_GNU`
+    // (`3`). Stamp `ELFOSABI_GNU` into the ELF header so `--gc-sections`
+    // retains `.oxart` on AArch64 even when linking against a pre-release
+    // `oxide-artifacts` build.
+    let mut patched = object.to_vec();
+    if patched.len() >= 16 && patched.starts_with(b"\x7fELF") && patched[7] == 0 {
+        patched[7] = 3;
+    }
+    std::fs::write(&object_path, &patched)?;
     Ok(object_path)
 }
 

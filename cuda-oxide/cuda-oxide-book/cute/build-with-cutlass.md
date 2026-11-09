@@ -36,20 +36,20 @@ CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir cargo oxide build fp16_gemm_256x352_cute 
 
 - Every CuTe kernel needs `CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir`. The native backend
   has no CuTe lowering and stops with a verification error.
-- Two targets: `sm_100a` and `sm_120a`. Anything else is rejected before compilation
-  and the error names the target. `tcgen05` operations need `sm_100a`; MXF4 register
-  MMA needs `sm_120a`.
+- Three targets: `sm_100a`, `sm_103a` and `sm_120a`. Anything else is rejected before
+  compilation and the error names the target. `tcgen05` operations need `sm_100a` or
+  `sm_103a`; MXF4 register MMA needs `sm_120a`.
 - `cargo oxide run` without `--arch` uses the detected GPU, so an RTX 5090 gets
   `sm_120a`. `cargo oxide build` needs `--arch`.
 - Each example README states its device and shape requirements. The
-  [support matrix](support-matrix.md) lists what the two targets cover.
+  [support matrix](support-matrix.md) lists what the targets cover.
 
 ## Options
 
 | Variable | Purpose |
 | --- | --- |
 | `CUDA_OXIDE_DEVICE_BACKEND` | `native` (default) or `cutlass-mlir`; other values fail |
-| `CUDA_OXIDE_MLIR_PROFILE` | `cutlass-full-cute-mlir22` (default) or `cutlass-primitives-mlir22` for kernels that use `ctm-rs` alone; part of the build fingerprint |
+| `CUDA_OXIDE_MLIR_PROFILE` | `cutlass-full-cute-mlir22` (default) or `cutlass-primitives-mlir22` for kernels that use `cutlass-primitives` alone; part of the build fingerprint |
 | `CUDA_OXIDE_CUTLASS_OPT_LEVEL` | `2` or `3` (default); the attention examples compare at `2`; part of the build fingerprint |
 | `CUDA_OXIDE_MLIR_OUTPUT` | Path for the prepared MLIR text, for example `$PWD/module.mlir` |
 | `CUDA_OXIDE_CUTLASS_COMPILER` | Absolute path to a `libCutlassCompiler.so` with the pinned digest |

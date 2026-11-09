@@ -191,6 +191,17 @@ fn compose_int(a: &Layout, b_shape: i64, b_stride: i64) -> Result<Layout> {
         let sign = if rest_stride < 0 { -1 } else { 1 };
         let next_shape = ceil_div(curr_shape, abs_rest_stride);
         let next_stride = ceil_div(abs_rest_stride, curr_shape) * sign;
+        // A smaller step that does not divide the mode has no digit boundary
+        // to continue from, so the whole walk must fit inside this mode.
+        if abs_rest_stride < curr_shape
+            && curr_shape % abs_rest_stride != 0
+            && rest_shape > next_shape
+        {
+            return Err(AlgebraError(format!(
+                "composition: {rest_shape} steps of stride {rest_stride} leave lhs mode of shape \
+                 {curr_shape}, which the stride does not divide (stride divisibility condition)"
+            )));
+        }
 
         if next_shape == 1 || rest_shape == 1 {
             rest_stride = next_stride;

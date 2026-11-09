@@ -1,0 +1,713 @@
+{
+  "schema": 6,
+  "backend_profile": "cuda-13.3-libnvvm-13.3.33",
+  "backend_kind": "lib_nvvm",
+  "llvm_revision": "not-applicable-libnvvm-ir-2.0",
+  "backend_version": "CUDA toolkit 13.3; nvcc/libNVVM release V13.3.33",
+  "backend_sha256": "b6a5db233133fb0ed693f8cb8aeb1d405254ce0ab10364478985292ec98cfcf0",
+  "artifact_path": "/usr/local/cuda-13.3/nvvm/lib64/libnvvm.so.4.0.0",
+  "build_id_prefix": "2330c0",
+  "nvvm_ir_version": "2.0",
+  "debug_ir_version": "3.2",
+  "defaults": {
+    "target_triple": "nvptx64-nvidia-cuda",
+    "gpu_target": "compute_80",
+    "ptx_feature": "PTX ISA 7.1 minimum; CUDA 13.3 emits PTX 9.3",
+    "status": "executed",
+    "runtime_validation": "executed"
+  },
+  "fixtures": [
+    {
+      "id": "ampere_float_all",
+      "coverage_count": 8,
+      "stages": [
+        {
+          "targets": [
+            "compute_80",
+            "ptx93"
+          ],
+          "representation": "eight convergent side-effecting standard-metadata sparse floating inline PTX calls",
+          "stage": "backend_codegen",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "detail": "CUDA 13.3 libNVVM /usr/local/cuda-13.3/nvvm/lib64/libnvvm.so.4.0.0 SHA-256 b6a5db233133fb0ed693f8cb8aeb1d405254ce0ab10364478985292ec98cfcf0 (build-id 2330c0a294e54b60289a15d6ac9270ffe49b25be) and nvJitLink /usr/local/cuda-13.3/lib64/libnvJitLink.so.13.3.33 SHA-256 3ba1e744347cd68617b862eccfd98b125482e882b7a6319f42abc9a768513db8. Terminal assembly is /usr/local/cuda-13.3/bin/ptxas SHA-256 7fdd01a4cf50e30746da98989c9272a907f491e6fd7fecfda14642e4375f88fb, CUDA 13.3 V13.3.33."
+        },
+        {
+          "targets": [
+            "sm_80",
+            "ptx93"
+          ],
+          "representation": "PTX containing all eight standard sparse floating MMA forms",
+          "stage": "ptx_assembly",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "CUDA 13.3 libNVVM /usr/local/cuda-13.3/nvvm/lib64/libnvvm.so.4.0.0 SHA-256 b6a5db233133fb0ed693f8cb8aeb1d405254ce0ab10364478985292ec98cfcf0 (build-id 2330c0a294e54b60289a15d6ac9270ffe49b25be) and nvJitLink /usr/local/cuda-13.3/lib64/libnvJitLink.so.13.3.33 SHA-256 3ba1e744347cd68617b862eccfd98b125482e882b7a6319f42abc9a768513db8. Terminal assembly is /usr/local/cuda-13.3/bin/ptxas SHA-256 7fdd01a4cf50e30746da98989c9272a907f491e6fd7fecfda14642e4375f88fb, CUDA 13.3 V13.3.33.",
+          "tool_path": "/usr/local/cuda-13.3/bin/ptxas",
+          "tool_version": "Cuda compilation tools, release 13.3, V13.3.33",
+          "tool_sha256": "7fdd01a4cf50e30746da98989c9272a907f491e6fd7fecfda14642e4375f88fb"
+        },
+        {
+          "targets": [
+            "sm_80",
+            "ptx93"
+          ],
+          "representation": "libNVVM output for all eight standard sparse floating MMA forms linked to one sm_80 cubin",
+          "stage": "device_link",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "artifact_kind": "cubin",
+          "detail": "CUDA 13.3 libNVVM /usr/local/cuda-13.3/nvvm/lib64/libnvvm.so.4.0.0 SHA-256 b6a5db233133fb0ed693f8cb8aeb1d405254ce0ab10364478985292ec98cfcf0 (build-id 2330c0a294e54b60289a15d6ac9270ffe49b25be) and nvJitLink /usr/local/cuda-13.3/lib64/libnvJitLink.so.13.3.33 SHA-256 3ba1e744347cd68617b862eccfd98b125482e882b7a6319f42abc9a768513db8. Terminal assembly is /usr/local/cuda-13.3/bin/ptxas SHA-256 7fdd01a4cf50e30746da98989c9272a907f491e6fd7fecfda14642e4375f88fb, CUDA 13.3 V13.3.33.",
+          "tool_path": "/usr/local/cuda-13.3/lib64/libnvJitLink.so.13.3.33",
+          "tool_version": "V13.3.33",
+          "tool_sha256": "3ba1e744347cd68617b862eccfd98b125482e882b7a6319f42abc9a768513db8"
+        },
+        {
+          "targets": [
+            "sm_120",
+            "ptx93"
+          ],
+          "representation": "all eight standard sparse floating MMA APIs, every legal selector, checked on all 32 lanes against a host GEMM",
+          "stage": "runtime",
+          "mechanism": "inline_ptx",
+          "outcome": "succeeded",
+          "detail": "Executed through libNVVM cubin materialization on an RTX 5090 with CUDA 13.3 V13.3.33. Command: cargo oxide run sparse_mma_standard_float --arch sm_120 --materialize-cubin. Result: exit code 0; SUCCESS: all 8 variants; 24 selector calls; all 32 lanes and 4 logical accumulators/lane match host GEMM. The same example without --materialize-cubin also exited 0. 16-bit metadata used 0x4, 0x6, 0x8, 0x9, 0xc, 0xd, and 0xe. tf32 used 0x4 and 0xe. Selectors 0-3 ran for the 2-register forms and 0-1 for the 4-register forms."
+        }
+      ]
+    }
+  ],
+  "matrices": [
+    {
+      "axes": [
+        {
+          "name": "variant",
+          "values": [
+            "mma_sp_m16n8k8_f32_tf32"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "ampere_float_all"
+      ],
+      "template": {
+        "id": "${variant}",
+        "source_record": "int_nvvm_mma_sp_m16n8k8_row_col_tf32",
+        "llvm_symbol": "llvm.nvvm.mma.sp.m16n8k8.row.col.tf32",
+        "expected_ptx": {
+          "mnemonic": "mma",
+          "modifiers": [
+            "sp",
+            "sync",
+            "aligned",
+            "m16n8k8",
+            "row",
+            "col",
+            "f32",
+            "tf32",
+            "tf32",
+            "f32"
+          ],
+          "operands": [
+            {
+              "kind": "register_list",
+              "length": 4
+            },
+            {
+              "kind": "register_list",
+              "length": 2
+            },
+            {
+              "kind": "register_list",
+              "length": 2
+            },
+            {
+              "kind": "register_list",
+              "length": 4
+            },
+            {
+              "kind": "register"
+            },
+            {
+              "kind": "immediate"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "f32",
+            "f32",
+            "f32",
+            "f32",
+            "i32",
+            "i32"
+          ],
+          "llvm_results": [
+            "f32",
+            "f32",
+            "f32",
+            "f32"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "variant",
+          "values": [
+            "mma_sp_m16n8k16_f32_tf32"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "ampere_float_all"
+      ],
+      "template": {
+        "id": "${variant}",
+        "source_record": "int_nvvm_mma_sp_m16n8k16_row_col_tf32",
+        "llvm_symbol": "llvm.nvvm.mma.sp.m16n8k16.row.col.tf32",
+        "expected_ptx": {
+          "mnemonic": "mma",
+          "modifiers": [
+            "sp",
+            "sync",
+            "aligned",
+            "m16n8k16",
+            "row",
+            "col",
+            "f32",
+            "tf32",
+            "tf32",
+            "f32"
+          ],
+          "operands": [
+            {
+              "kind": "register_list",
+              "length": 4
+            },
+            {
+              "kind": "register_list",
+              "length": 4
+            },
+            {
+              "kind": "register_list",
+              "length": 4
+            },
+            {
+              "kind": "register_list",
+              "length": 4
+            },
+            {
+              "kind": "register"
+            },
+            {
+              "kind": "immediate"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "f32",
+            "f32",
+            "f32",
+            "f32",
+            "i32",
+            "i32"
+          ],
+          "llvm_results": [
+            "f32",
+            "f32",
+            "f32",
+            "f32"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "variant",
+          "values": [
+            "mma_sp_m16n8k16_f32_bf16"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "ampere_float_all"
+      ],
+      "template": {
+        "id": "${variant}",
+        "source_record": "int_nvvm_mma_sp_m16n8k16_row_col_bf16",
+        "llvm_symbol": "llvm.nvvm.mma.sp.m16n8k16.row.col.bf16",
+        "expected_ptx": {
+          "mnemonic": "mma",
+          "modifiers": [
+            "sp",
+            "sync",
+            "aligned",
+            "m16n8k16",
+            "row",
+            "col",
+            "f32",
+            "bf16",
+            "bf16",
+            "f32"
+          ],
+          "operands": [
+            {
+              "kind": "register_list",
+              "length": 4
+            },
+            {
+              "kind": "register_list",
+              "length": 2
+            },
+            {
+              "kind": "register_list",
+              "length": 2
+            },
+            {
+              "kind": "register_list",
+              "length": 4
+            },
+            {
+              "kind": "register"
+            },
+            {
+              "kind": "immediate"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "f32",
+            "f32",
+            "f32",
+            "f32",
+            "i32",
+            "i32"
+          ],
+          "llvm_results": [
+            "f32",
+            "f32",
+            "f32",
+            "f32"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "variant",
+          "values": [
+            "mma_sp_m16n8k16_f16_f16"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "ampere_float_all"
+      ],
+      "template": {
+        "id": "${variant}",
+        "source_record": "int_nvvm_mma_sp_m16n8k16_row_col_f16_f16",
+        "llvm_symbol": "llvm.nvvm.mma.sp.m16n8k16.row.col.f16.f16",
+        "expected_ptx": {
+          "mnemonic": "mma",
+          "modifiers": [
+            "sp",
+            "sync",
+            "aligned",
+            "m16n8k16",
+            "row",
+            "col",
+            "f16",
+            "f16",
+            "f16",
+            "f16"
+          ],
+          "operands": [
+            {
+              "kind": "register_list",
+              "length": 2
+            },
+            {
+              "kind": "register_list",
+              "length": 2
+            },
+            {
+              "kind": "register_list",
+              "length": 2
+            },
+            {
+              "kind": "register_list",
+              "length": 2
+            },
+            {
+              "kind": "register"
+            },
+            {
+              "kind": "immediate"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "v2f16",
+            "v2f16",
+            "v2f16",
+            "v2f16",
+            "v2f16",
+            "v2f16",
+            "i32",
+            "i32"
+          ],
+          "llvm_results": [
+            "v2f16",
+            "v2f16"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "variant",
+          "values": [
+            "mma_sp_m16n8k16_f32_f16"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "ampere_float_all"
+      ],
+      "template": {
+        "id": "${variant}",
+        "source_record": "int_nvvm_mma_sp_m16n8k16_row_col_f32_f32",
+        "llvm_symbol": "llvm.nvvm.mma.sp.m16n8k16.row.col.f32.f32",
+        "expected_ptx": {
+          "mnemonic": "mma",
+          "modifiers": [
+            "sp",
+            "sync",
+            "aligned",
+            "m16n8k16",
+            "row",
+            "col",
+            "f32",
+            "f16",
+            "f16",
+            "f32"
+          ],
+          "operands": [
+            {
+              "kind": "register_list",
+              "length": 4
+            },
+            {
+              "kind": "register_list",
+              "length": 2
+            },
+            {
+              "kind": "register_list",
+              "length": 2
+            },
+            {
+              "kind": "register_list",
+              "length": 4
+            },
+            {
+              "kind": "register"
+            },
+            {
+              "kind": "immediate"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "v2f16",
+            "v2f16",
+            "v2f16",
+            "v2f16",
+            "f32",
+            "f32",
+            "f32",
+            "f32",
+            "i32",
+            "i32"
+          ],
+          "llvm_results": [
+            "f32",
+            "f32",
+            "f32",
+            "f32"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "variant",
+          "values": [
+            "mma_sp_m16n8k32_f32_bf16"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "ampere_float_all"
+      ],
+      "template": {
+        "id": "${variant}",
+        "source_record": "int_nvvm_mma_sp_m16n8k32_row_col_bf16",
+        "llvm_symbol": "llvm.nvvm.mma.sp.m16n8k32.row.col.bf16",
+        "expected_ptx": {
+          "mnemonic": "mma",
+          "modifiers": [
+            "sp",
+            "sync",
+            "aligned",
+            "m16n8k32",
+            "row",
+            "col",
+            "f32",
+            "bf16",
+            "bf16",
+            "f32"
+          ],
+          "operands": [
+            {
+              "kind": "register_list",
+              "length": 4
+            },
+            {
+              "kind": "register_list",
+              "length": 4
+            },
+            {
+              "kind": "register_list",
+              "length": 4
+            },
+            {
+              "kind": "register_list",
+              "length": 4
+            },
+            {
+              "kind": "register"
+            },
+            {
+              "kind": "immediate"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "i32",
+            "f32",
+            "f32",
+            "f32",
+            "f32",
+            "i32",
+            "i32"
+          ],
+          "llvm_results": [
+            "f32",
+            "f32",
+            "f32",
+            "f32"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "variant",
+          "values": [
+            "mma_sp_m16n8k32_f16_f16"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "ampere_float_all"
+      ],
+      "template": {
+        "id": "${variant}",
+        "source_record": "int_nvvm_mma_sp_m16n8k32_row_col_f16_f16",
+        "llvm_symbol": "llvm.nvvm.mma.sp.m16n8k32.row.col.f16.f16",
+        "expected_ptx": {
+          "mnemonic": "mma",
+          "modifiers": [
+            "sp",
+            "sync",
+            "aligned",
+            "m16n8k32",
+            "row",
+            "col",
+            "f16",
+            "f16",
+            "f16",
+            "f16"
+          ],
+          "operands": [
+            {
+              "kind": "register_list",
+              "length": 2
+            },
+            {
+              "kind": "register_list",
+              "length": 4
+            },
+            {
+              "kind": "register_list",
+              "length": 4
+            },
+            {
+              "kind": "register_list",
+              "length": 2
+            },
+            {
+              "kind": "register"
+            },
+            {
+              "kind": "immediate"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "v2f16",
+            "v2f16",
+            "v2f16",
+            "v2f16",
+            "v2f16",
+            "v2f16",
+            "v2f16",
+            "v2f16",
+            "v2f16",
+            "v2f16",
+            "i32",
+            "i32"
+          ],
+          "llvm_results": [
+            "v2f16",
+            "v2f16"
+          ]
+        }
+      }
+    },
+    {
+      "axes": [
+        {
+          "name": "variant",
+          "values": [
+            "mma_sp_m16n8k32_f32_f16"
+          ]
+        }
+      ],
+      "product_count": 1,
+      "fixtures": [
+        "ampere_float_all"
+      ],
+      "template": {
+        "id": "${variant}",
+        "source_record": "int_nvvm_mma_sp_m16n8k32_row_col_f32_f32",
+        "llvm_symbol": "llvm.nvvm.mma.sp.m16n8k32.row.col.f32.f32",
+        "expected_ptx": {
+          "mnemonic": "mma",
+          "modifiers": [
+            "sp",
+            "sync",
+            "aligned",
+            "m16n8k32",
+            "row",
+            "col",
+            "f32",
+            "f16",
+            "f16",
+            "f32"
+          ],
+          "operands": [
+            {
+              "kind": "register_list",
+              "length": 4
+            },
+            {
+              "kind": "register_list",
+              "length": 4
+            },
+            {
+              "kind": "register_list",
+              "length": 4
+            },
+            {
+              "kind": "register_list",
+              "length": 4
+            },
+            {
+              "kind": "register"
+            },
+            {
+              "kind": "immediate"
+            }
+          ]
+        },
+        "facts": {
+          "llvm_arguments": [
+            "v2f16",
+            "v2f16",
+            "v2f16",
+            "v2f16",
+            "v2f16",
+            "v2f16",
+            "v2f16",
+            "v2f16",
+            "f32",
+            "f32",
+            "f32",
+            "f32",
+            "i32",
+            "i32"
+          ],
+          "llvm_results": [
+            "f32",
+            "f32",
+            "f32",
+            "f32"
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -175,9 +175,9 @@ impl Index<usize> for SharedArray<T, N, ALIGN> { ... }
 impl IndexMut<usize> for SharedArray<T, N, ALIGN> { ... }
 ```
 
-Indexing is bounds-checked in debug builds. In release (and on the GPU),
-the bounds check is elided. If you index out of bounds, you get undefined
-behavior — the same rules as any `static mut` access in Rust.
+Indexing is bounds-checked like a Rust array: `TILE[i]` traps on the GPU if
+`i >= N`. `#[kernel(unchecked_indexing)]` (or `CUDA_OXIDE_UNCHECKED_INDEXING=1`)
+removes the check, and an out-of-bounds index then becomes undefined behavior.
 
 ---
 

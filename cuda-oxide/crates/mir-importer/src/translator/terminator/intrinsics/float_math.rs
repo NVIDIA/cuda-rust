@@ -263,6 +263,135 @@ pub fn emit_rust_float_math_intrinsic(
     )
 }
 
+/// Extract the leading instruction text from a `rustc_public` `InlineAsm`
+/// template string.
+///
+/// `rustc_public` serializes `&[InlineAsmTemplatePiece]` via `Debug`
+/// (`[String("frintn "), Placeholder { ... }, ...]`), so this helper unwraps
+/// the leading `String("...")` piece when present and falls back to the
+/// trimmed template slice for plain-text unit tests.
+fn inline_asm_leading_text(template: &str) -> &str {
+    let trimmed = template.trim_start();
+    if let Some(rest) = trimmed.strip_prefix("[String(\"")
+        && let Some((head, _)) = rest.split_once("\")")
+    {
+        return head.trim_start();
+    }
+    trimmed
+}
+
+/// Match an architecture-specific `libm` inline-assembly template (`aarch64`
+/// `frintn` / `fsqrt` / `fmadd` or `x86` `sqrtss` / `sqrtsd` / `vfmadd*`) that
+/// rustc MIR-inlined into a device function before call-site interception.
+pub fn libm_inline_asm_intrinsic(
+    template: &str,
+    arity: usize,
+    is_f64: bool,
+) -> Option<RustFloatMathIntrinsic> {
+    let trimmed = inline_asm_leading_text(template);
+    match arity {
+        1 if trimmed.starts_with("frintn ") => Some(if is_f64 {
+            RustFloatMathIntrinsic::RoundevenF64
+        } else {
+            RustFloatMathIntrinsic::RoundevenF32
+        }),
+        1 if trimmed.starts_with("fsqrt ") => Some(if is_f64 {
+            RustFloatMathIntrinsic::SqrtF64
+        } else {
+            RustFloatMathIntrinsic::SqrtF32
+        }),
+        1 if trimmed.starts_with("sqrtss ") && !is_f64 => Some(RustFloatMathIntrinsic::SqrtF32),
+        1 if trimmed.starts_with("sqrtsd ") && is_f64 => Some(RustFloatMathIntrinsic::SqrtF64),
+        3 if trimmed.starts_with("fmadd ") => Some(if is_f64 {
+            RustFloatMathIntrinsic::FmaF64
+        } else {
+            RustFloatMathIntrinsic::FmaF32
+        }),
+        3 if (trimmed.starts_with("vfmadd213ss ") || trimmed.starts_with("vfmaddss "))
+            && !is_f64 =>
+        {
+            Some(RustFloatMathIntrinsic::FmaF32)
+        }
+        3 if (trimmed.starts_with("vfmadd213sd ") || trimmed.starts_with("vfmaddsd "))
+            && is_f64 =>
+        {
+            Some(RustFloatMathIntrinsic::FmaF64)
+        }
+        _ => None,
+    }
+}
+
+/// Translate an inlined `libm` architecture-specific `InlineAsm` terminator into
+/// the corresponding `dialect-mir` float-math intrinsic call when recognized.
+#[allow(clippy::too_many_arguments)]
+pub fn try_translate_libm_inline_asm(
+    ctx: &mut Context,
+    body: &mir::Body,
+    template: &str,
+    operands: &[mir::InlineAsmOperand],
+    destination: &Option<usize>,
+    block_ptr: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    value_map: &mut ValueMap,
+    block_map: &[Ptr<BasicBlock>],
+    loc: Location,
+) -> TranslationResult<Option<Ptr<Operation>>> {
+    let Some(first) = operands.first() else {
+        return Ok(None);
+    };
+    let (Some(first_in), Some(out_place)) = (&first.in_value, &first.out_place) else {
+        return Ok(None);
+    };
+    let mut args = Vec::with_capacity(operands.len());
+    args.push(first_in.clone());
+    for operand in &operands[1..] {
+        if operand.out_place.is_some() {
+            return Ok(None);
+        }
+        let Some(in_value) = &operand.in_value else {
+            return Ok(None);
+        };
+        args.push(in_value.clone());
+    }
+
+    let out_ty = types::translate_destination_type(ctx, body, out_place, &loc)?;
+    let is_f64 = {
+        let ty_ref = out_ty.deref(ctx);
+        if ty_ref
+            .downcast_ref::<pliron::builtin::types::FP32Type>()
+            .is_some()
+        {
+            false
+        } else if ty_ref
+            .downcast_ref::<pliron::builtin::types::FP64Type>()
+            .is_some()
+        {
+            true
+        } else {
+            return Ok(None);
+        }
+    };
+
+    let Some(intrinsic) = libm_inline_asm_intrinsic(template, args.len(), is_f64) else {
+        return Ok(None);
+    };
+
+    emit_rust_float_math_intrinsic(
+        ctx,
+        body,
+        intrinsic,
+        &args,
+        out_place,
+        destination,
+        block_ptr,
+        prev_op,
+        value_map,
+        block_map,
+        loc,
+    )
+    .map(Some)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -727,6 +856,97 @@ mod tests {
         assert_eq!(
             RustFloatMathIntrinsic::MinNumNszF64.placeholder_callee(),
             rust_intrinsics::CALLEE_MINNUM_NSZ_F64
+        );
+    }
+
+    /// Verify that AArch64 and x86 `libm` inline-assembly templates map to the
+    /// exact float-math intrinsics and reject unrelated assembly templates.
+    #[test]
+    fn libm_inline_asm_templates_map_to_float_math_intrinsics() {
+        assert_eq!(
+            libm_inline_asm_intrinsic("frintn {x:s}, {x:s}", 1, false),
+            Some(RustFloatMathIntrinsic::RoundevenF32)
+        );
+        assert_eq!(
+            libm_inline_asm_intrinsic("frintn {x:d}, {x:d}", 1, true),
+            Some(RustFloatMathIntrinsic::RoundevenF64)
+        );
+        assert_eq!(
+            libm_inline_asm_intrinsic("fsqrt {x:s}, {x:s}", 1, false),
+            Some(RustFloatMathIntrinsic::SqrtF32)
+        );
+        assert_eq!(
+            libm_inline_asm_intrinsic("fsqrt {x:d}, {x:d}", 1, true),
+            Some(RustFloatMathIntrinsic::SqrtF64)
+        );
+        assert_eq!(
+            libm_inline_asm_intrinsic("sqrtss {x}, {x}", 1, false),
+            Some(RustFloatMathIntrinsic::SqrtF32)
+        );
+        assert_eq!(
+            libm_inline_asm_intrinsic("sqrtsd {x}, {x}", 1, true),
+            Some(RustFloatMathIntrinsic::SqrtF64)
+        );
+        assert_eq!(
+            libm_inline_asm_intrinsic("fmadd {x:s}, {x:s}, {y:s}, {z:s}", 3, false),
+            Some(RustFloatMathIntrinsic::FmaF32)
+        );
+        assert_eq!(
+            libm_inline_asm_intrinsic("fmadd {x:d}, {x:d}, {y:d}, {z:d}", 3, true),
+            Some(RustFloatMathIntrinsic::FmaF64)
+        );
+        assert_eq!(
+            libm_inline_asm_intrinsic(
+                "[String(\"frintn \"), Placeholder { operand_idx: 0, modifier: Some('d'), span: aarch64.rs:46:21: 46:26 (#0) }, String(\", \"), Placeholder { operand_idx: 0, modifier: Some('d'), span: aarch64.rs:46:28: 46:33 (#0) }]",
+                1,
+                true,
+            ),
+            Some(RustFloatMathIntrinsic::RoundevenF64)
+        );
+        assert_eq!(
+            libm_inline_asm_intrinsic(
+                "[String(\"frintn \"), Placeholder { operand_idx: 0, modifier: Some('s'), span: aarch64.rs:61:21: 61:26 (#0) }, String(\", \"), Placeholder { operand_idx: 0, modifier: Some('s'), span: aarch64.rs:61:28: 61:33 (#0) }]",
+                1,
+                false,
+            ),
+            Some(RustFloatMathIntrinsic::RoundevenF32)
+        );
+        assert_eq!(
+            libm_inline_asm_intrinsic(
+                "[String(\"fsqrt \"), Placeholder { operand_idx: 0, modifier: Some('d'), span: aarch64.rs:89:20: 89:25 (#0) }]",
+                1,
+                true,
+            ),
+            Some(RustFloatMathIntrinsic::SqrtF64)
+        );
+        assert_eq!(
+            libm_inline_asm_intrinsic(
+                "[String(\"sqrtss \"), Placeholder { operand_idx: 0, modifier: None, span: x86.rs:13:21: 13:24 (#0) }]",
+                1,
+                false,
+            ),
+            Some(RustFloatMathIntrinsic::SqrtF32)
+        );
+        assert_eq!(
+            libm_inline_asm_intrinsic(
+                "[String(\"sqrtsd \"), Placeholder { operand_idx: 0, modifier: None, span: x86.rs:26:21: 26:24 (#0) }]",
+                1,
+                true,
+            ),
+            Some(RustFloatMathIntrinsic::SqrtF64)
+        );
+        assert_eq!(
+            libm_inline_asm_intrinsic(
+                "[String(\"fmadd \"), Placeholder { operand_idx: 0, modifier: Some('s'), span: aarch64.rs:23:20: 23:25 (#0) }]",
+                3,
+                false,
+            ),
+            Some(RustFloatMathIntrinsic::FmaF32)
+        );
+        assert_eq!(libm_inline_asm_intrinsic("nop", 1, false), None);
+        assert_eq!(
+            libm_inline_asm_intrinsic("frintn {x:s}, {x:s}", 2, false),
+            None
         );
     }
 }

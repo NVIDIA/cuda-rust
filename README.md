@@ -67,6 +67,7 @@ cuda-rust/
 ├── cuda-bindings/      runtime — CUDA driver API bindings
 ├── cuda-core/          runtime — contexts, streams, memory, modules, events, launch
 ├── cuda-core-derive/   runtime — derive macros for cuda-core
+├── cuda-repr/          shared no_std host/device representation contracts
 ├── cuda-async/         runtime — lazy ops, futures, streams, graphs
 ├── cuda-oxide/         SIMT model — compiler, device crates, cuda-oxide-book
 └── cutile-rs/          Tile model — compiler, tile crates, cutile-book
@@ -78,6 +79,10 @@ Start with the [CUDA Rust docs](https://nvidia.github.io/cuda-rust/). cutile-rs
 and cuda-oxide each have a book with installation instructions, guides, and
 reference material. The runtime crates (cuda-bindings, cuda-core, cuda-async)
 are documented in the cutile-rs book.
+
+For reusable Tile kernels, including fused QKV and NVFP4 MoE, see the
+[`cutile-kernels` catalog](cutile-rs/cutile-kernels/README.md) and
+[runnable examples](cutile-rs/cutile-examples/README.md).
 
 ## Contributing
 
@@ -91,3 +96,5 @@ host crates. Every published crate declares `license = "Apache-2.0"`.
 
 Third-party attributions are listed in
 [`cuda-oxide/THIRD_PARTY_NOTICES`](./cuda-oxide/THIRD_PARTY_NOTICES).
+The TileGym-derived [fused QKV kernel](cutile-rs/cutile-kernels/src/experimental/qkv.rs)
+retains its MIT license and notice in the source.

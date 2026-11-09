@@ -37,7 +37,7 @@
 //! ```
 
 use cuda_core::CudaContext;
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_device::{cuda_module, kernel, thread};
 
 // =============================================================================

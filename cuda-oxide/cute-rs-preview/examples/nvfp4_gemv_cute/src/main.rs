@@ -19,13 +19,14 @@
 
 #![feature(f16)]
 
-use ctm_rs::memory::DisjointSlice;
-use ctm_rs::{cuda_module, kernel, thread};
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cute_rs::{
     BlockScaledTensor, Float4E2M1FN, Float8E8M0FNU, KMajor, Mkl, Nkl, Sm1xxBlockScaleKMajor,
 };
+use cutlass_primitives as prims;
+use prims::memory::DisjointSlice;
+use prims::{cuda_module, kernel, thread};
 
 /// Rows computed per CTA, with one output row per thread.
 const CTA_M: usize = 128;
@@ -101,8 +102,10 @@ mod kernels {
 
         // SAFETY: (batch, row) is unique for every live thread and the host
         // allocated L*M output elements.
+        let mut c_tile =
+            cute_rs::TensorMut::from_disjoint_slice(&mut c).local_tile::<1>(batch * m + row);
         unsafe {
-            c.as_mut_ptr().add(batch * m + row).write(acc as f16);
+            c_tile.store_at(batch * m + row, acc as f16);
         }
     }
 }
@@ -187,29 +190,6 @@ fn validate_problem_sizes(m: usize, k: usize, l: usize) {
     let _ = u32::try_from(l).expect("grid.z exceeds u32");
 }
 
-/// Decode an E2M1 nibble, including its sign bit.
-fn e2m1_to_f32(nibble: u8) -> f32 {
-    /// FP32 magnitudes for the eight unsigned E2M1 bit patterns.
-    const VALUES: [f32; 8] = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0];
-    let magnitude = VALUES[(nibble & 0x7) as usize];
-    if nibble & 0x8 != 0 {
-        -magnitude
-    } else {
-        magnitude
-    }
-}
-
-/// Decode a scale byte, including the smallest scale and the NaN encoding.
-fn ue8m0_to_f32(byte: u8) -> f32 {
-    if byte == 0 {
-        f32::from_bits(0x0040_0000)
-    } else if byte == 0xff {
-        f32::from_bits(0x7fff_ffff)
-    } else {
-        f32::from_bits((byte as u32) << 23)
-    }
-}
-
 /// Generate a deterministic matrix value from its batch, row, and K coordinate.
 fn a_nibble(batch: usize, row: usize, k: usize) -> u8 {
     (((batch % 16) * 5 + (row % 16) * 13 + (k % 16) * 7 + 3) % 16) as u8
@@ -289,16 +269,29 @@ fn make_scales(m: usize, k: usize, l: usize) -> (Vec<u8>, Vec<u8>) {
 
 /// Compute every GEMV result in FP32 and round once to FP16.
 fn reference(m: usize, k: usize, l: usize) -> Vec<f16> {
+    const E2M1_LUT: [f32; 8] = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0];
+    let decode_e2m1 = |nib: u8| -> f32 {
+        let mag = E2M1_LUT[(nib & 7) as usize];
+        if (nib & 8) != 0 { -mag } else { mag }
+    };
+    let decode_ue8m0 = |byte: u8| -> f32 {
+        match byte {
+            0 => f32::from_bits(0x0040_0000),
+            0xff => f32::from_bits(0x7fff_ffff),
+            exp => f32::from_bits((exp as u32) << 23),
+        }
+    };
     let mut expected = vec![0.0f16; checked_product("C", &[l, m])];
     for batch in 0..l {
         for row in 0..m {
             let mut acc = 0.0f32;
             for kk in 0..k {
                 let k_group = kk / SF_VEC;
-                acc += ((e2m1_to_f32(a_nibble(batch, row, kk))
-                    * ue8m0_to_f32(sfa_byte(batch, row, k_group)))
-                    * e2m1_to_f32(b_nibble(batch, kk)))
-                    * ue8m0_to_f32(sfb_byte(batch, k_group));
+                let a_val = decode_e2m1(a_nibble(batch, row, kk));
+                let b_val = decode_e2m1(b_nibble(batch, kk));
+                let sfa_val = decode_ue8m0(sfa_byte(batch, row, k_group));
+                let sfb_val = decode_ue8m0(sfb_byte(batch, k_group));
+                acc += ((a_val * sfa_val) * b_val) * sfb_val;
             }
             expected[batch * m + row] = acc as f16;
         }
@@ -405,28 +398,13 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
-    /// Check all signed E2M1 values, including positive and negative zero.
+    /// Check that the packed E2M1 and UE8M0 types preserve their exact bit representations.
     #[test]
-    fn e2m1_decode_covers_all_nibbles() {
-        let positives = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0];
-        for (nibble, expected) in positives.into_iter().enumerate() {
-            assert_eq!(e2m1_to_f32(nibble as u8), expected);
-            assert_eq!(e2m1_to_f32(nibble as u8 | 8), -expected);
+    fn packed_pairs_preserve_bits() {
+        for bits in 0u8..=u8::MAX {
+            assert_eq!(cute_rs::Float4E2M1FNx2::from_bits(bits).to_bits(), bits);
         }
-        assert_eq!(e2m1_to_f32(0).to_bits(), 0x0000_0000);
-        assert_eq!(e2m1_to_f32(8).to_bits(), 0x8000_0000);
-    }
-
-    /// Check scale-byte boundary values and the reserved NaN encoding.
-    #[test]
-    fn ue8m0_decode_covers_boundaries_and_nan() {
-        assert_eq!(ue8m0_to_f32(0).to_bits(), 0x0040_0000);
-        assert_eq!(ue8m0_to_f32(1).to_bits(), 0x0080_0000);
-        assert_eq!(ue8m0_to_f32(126), 0.5);
-        assert_eq!(ue8m0_to_f32(127), 1.0);
-        assert_eq!(ue8m0_to_f32(128), 2.0);
-        assert_eq!(ue8m0_to_f32(254).to_bits(), 0x7f00_0000);
-        assert!(ue8m0_to_f32(255).is_nan());
+        assert_eq!(cute_rs::UE8M0x2::from_bytes(0x7f, 0x80).to_bits(), 0x807f);
     }
 
     /// Check that logical scale coordinates map to distinct, allocated bytes.

@@ -560,6 +560,20 @@ mod type_inference_sanity_module {
         out.store(tile);
     }
 
+    /// Its generic `GLOBAL_DIM` shadows the module const of that name.
+    fn doubled_shadowing_dim<const GLOBAL_DIM: i32>(
+        x: Tile<f32, { [GLOBAL_DIM] }>,
+    ) -> Tile<f32, { [GLOBAL_DIM] }> {
+        let ones: Tile<f32, { [GLOBAL_DIM] }> = constant(1.0f32, const_shape![GLOBAL_DIM]);
+        x + ones
+    }
+
+    #[cutile::entry()]
+    fn generic_shadows_global_const_kernel(out: &mut Tensor<f32, { [8] }>) {
+        let tile: Tile<f32, { [8] }> = constant(1.0f32, shape![8]);
+        out.store(doubled_shadowing_dim(tile));
+    }
+
     #[cutile::entry()]
     fn global_bool_const_kernel(out: &mut Tensor<f32, { [4] }>) {
         if GLOBAL_FLAG {
@@ -1267,6 +1281,13 @@ fn same_module_type_alias_pointer_entry_compiles() {
 #[test]
 fn module_level_i32_const_works_in_tensor_type_and_const_shape() {
     assert_compiles_with_store("global_const_shape_kernel", &[("out", &[4])]);
+}
+
+/// A generic parameter of a helper shadows a module const of the same name,
+/// as in Rust: `doubled_shadowing_dim::<8>` must not become `<4>`.
+#[test]
+fn helper_generic_shadows_module_const() {
+    assert_compiles_with_store("generic_shadows_global_const_kernel", &[("out", &[1])]);
 }
 
 #[test]

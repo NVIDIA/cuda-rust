@@ -62,6 +62,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::{env, fs};
 
+use syn::spanned::Spanned;
 use syn::{
     parse_file, parse_macro_input, parse_quote, AngleBracketedGenericArguments, GenericArgument,
     GenericParam, ItemFn, ItemImpl, ItemMod, ItemStruct, ItemTrait, ItemType, Path,
@@ -253,6 +254,13 @@ fn process_items(
                 concrete_items.push(use_item.to_token_stream());
             }
             syn::Item::Fn(function_item) => {
+                if cutile_compiler::foreign_decl::is_foreign_fn(function_item) {
+                    return Err(Error::from(syn::Error::new(
+                        function_item.block.span(),
+                        "a `#[cutile::foreign]` function is a declaration of a tile-library \
+                         function: end its signature with `;` instead of giving it a body",
+                    )));
+                }
                 let entry_attrs = get_meta_list(
                     format!("{} :: entry", tile_rust_crate_root).as_str(),
                     &function_item.attrs,
@@ -274,6 +282,19 @@ fn process_items(
             syn::Item::Struct(struct_item) => {
                 let item_clone = struct_item.clone();
                 concrete_items.push(structure(item_clone)?.into());
+            }
+            syn::Item::Verbatim(tokens) => {
+                // A body-less function: a foreign tile-library declaration.
+                match cutile_compiler::foreign_decl::ForeignFnDecl::parse_verbatim(tokens)
+                    .map_err(Error::from)?
+                {
+                    Some(declaration) => {
+                        let stub = cutile_compiler::foreign_decl::rustc_stub(&declaration);
+                        concrete_items
+                            .push(instantiate_function_for_rank(&stub)?.to_token_stream());
+                    }
+                    None => return item.err("Unsupported item type in module."),
+                }
             }
             syn::Item::Trait(trait_item) => {
                 let item_clone = trait_item.clone();
@@ -403,7 +424,7 @@ fn module_inner(
                 use #tile_rust_crate_root::tile_kernel::{*};
                 use #tile_rust_crate_root::cuda_async::error::{*};
                 use #tile_rust_crate_root::cuda_async::scheduling_policies::SchedulingPolicy;
-                use #tile_rust_crate_root::cuda_core::{Device, Function, Module, Stream, DriverError, LaunchConfig};
+                use #tile_rust_crate_root::cuda_core::{DeviceCopy, Context, Function, Module, Stream, DriverError, LaunchConfig};
                 // use #tile_rust_crate_root::cutile_compiler::cuda_tile::ModuleOperation;
                 // use #tile_rust_crate_root::cutile_compiler::compiler::{CUDATileModules, CUDATileFunctionCompiler};
                 // Module asts and generated type data.

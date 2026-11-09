@@ -1203,7 +1203,9 @@ fn main() {
             commands::doctor(&ctx);
         }
         Commands::Setup => {
-            let ctx = commands::resolve_context();
+            // setup builds the backend itself; eager resolution would build
+            // it first, twice on a standalone project's cold cache (#1688)
+            let ctx = commands::resolve_setup_context();
             commands::setup(&ctx);
         }
         Commands::Update { force } => {
@@ -1253,7 +1255,7 @@ fn resolve_example_name(name: Option<String>, ctx: &commands::Context, subcomman
     eprintln!("Usage: cargo oxide {subcommand} <EXAMPLE>");
     eprintln!();
     eprintln!(
-        "Run `cargo oxide list`, or browse crates/rustc-codegen-cuda/examples/, cute-rs-preview/examples/, and cute-rs-preview/models/"
+        "Run `cargo oxide list`, or browse crates/rustc-codegen-cuda/examples/, examples/, models/, cute-rs-preview/examples/, and cute-rs-preview/models/"
     );
     std::process::exit(1);
 }

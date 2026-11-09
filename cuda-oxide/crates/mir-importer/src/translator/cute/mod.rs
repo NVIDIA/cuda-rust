@@ -14,7 +14,7 @@
 //!
 //! ```text
 //! public name:      cute_rs::load_tile
-//! definition path:  cute_rs::copy::vector::load_tile -> CUTE_FNS entry
+//! definition path:  cute_rs::atom::vector::load_tile -> CUTE_FNS entry
 //! ```
 //!
 //! There are three routes through this boundary:

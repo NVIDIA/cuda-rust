@@ -649,6 +649,7 @@ fn sub(file: &str, line: u32, name: &str, linkage: &str) -> DISubprogram {
         linkage_name: linkage.to_string(),
         compile_unit: DICompileUnit { file: f },
         scope_line: line,
+        is_declaration: false,
     }
 }
 

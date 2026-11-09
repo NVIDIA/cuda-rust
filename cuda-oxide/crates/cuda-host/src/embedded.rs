@@ -12,6 +12,7 @@ pub use cuda_core::embedded::{
     embedded_modules_from_current_exe,
 };
 use cuda_core::{CudaContext, CudaModule, DriverError};
+use oxide_artifacts::ArtifactEntryKind;
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -162,10 +163,12 @@ pub fn merge_ptx_bundles<'a>(
     let mut merged = String::new();
     let mut found_any = false;
 
-    // Keep each bundle's debug file indices distinct in the merged module.
+    // Keep each bundle's debug file indices and helper `.func` names distinct
+    // in the merged module.
     let mut file_index_offset = 0;
+    let mut seen_functions = std::collections::HashSet::new();
 
-    for bundle in bundles {
+    for (bundle_index, bundle) in bundles.into_iter().enumerate() {
         if let Some(ptx_bytes) = bundle.payload(ArtifactPayloadKind::Ptx) {
             let ptx_str = std::str::from_utf8(ptx_bytes)
                 .map_err(|_| EmbeddedModuleError::UnsupportedPayload {
@@ -174,13 +177,17 @@ pub fn merge_ptx_bundles<'a>(
                 .trim_end_matches('\0');
 
             let strip_headers = found_any;
-            let (body, max_file_index) =
-                prepare_bundle_body(ptx_str, strip_headers, file_index_offset).map_err(
-                    |reason| EmbeddedModuleError::InvalidPtx {
-                        name: bundle.name.clone(),
-                        reason,
-                    },
-                )?;
+            let (body, max_file_index) = prepare_bundle_body_with_functions(
+                ptx_str,
+                strip_headers,
+                file_index_offset,
+                bundle_index,
+                &mut seen_functions,
+            )
+            .map_err(|reason| EmbeddedModuleError::InvalidPtx {
+                name: bundle.name.clone(),
+                reason,
+            })?;
             file_index_offset = file_index_offset.max(max_file_index);
             merged.push_str(&body);
             if !body.ends_with('\n') {
@@ -196,16 +203,62 @@ pub fn merge_ptx_bundles<'a>(
     Ok(merged)
 }
 
-/// Strip repeated headers and shift debug indices past the previous bundles.
-/// Returns the rewritten text and its highest debug file index.
+/// Single-bundle test wrapper around [`prepare_bundle_body_with_functions`]
+/// that starts with an empty seen-function set at bundle index zero.
+#[cfg(test)]
 fn prepare_bundle_body(
     ptx: &str,
     strip_headers: bool,
     file_index_offset: u64,
 ) -> Result<(String, u64), String> {
+    let mut seen_functions = std::collections::HashSet::new();
+    prepare_bundle_body_with_functions(
+        ptx,
+        strip_headers,
+        file_index_offset,
+        0,
+        &mut seen_functions,
+    )
+}
+
+/// Strip repeated headers, disambiguate colliding helper `.func` symbols, and
+/// shift debug indices past the previous bundles. Returns the rewritten text
+/// and its highest debug file index.
+fn prepare_bundle_body_with_functions(
+    ptx: &str,
+    strip_headers: bool,
+    file_index_offset: u64,
+    bundle_index: usize,
+    seen_functions: &mut std::collections::HashSet<String>,
+) -> Result<(String, u64), String> {
     let document = ptx_parse::Document::parse(ptx).map_err(|error| error.to_string())?;
     let mut edits = ptx_parse::EditScript::new();
     let mut max_file_index = 0u64;
+
+    let mut bundle_functions = std::collections::HashSet::new();
+    let mut colliding_functions = std::collections::HashMap::new();
+    for callable in document.callables() {
+        if callable.kind() == ptx_parse::CallableKind::Function && !callable.is_extern() {
+            let name = callable.name();
+            bundle_functions.insert(name.to_string());
+            if seen_functions.contains(name) {
+                colliding_functions.insert(name, format!("{name}__bundle_{bundle_index}"));
+            }
+        }
+    }
+    seen_functions.extend(bundle_functions);
+
+    if !colliding_functions.is_empty() {
+        for token in document.tokens() {
+            if token.kind() == ptx_parse::TokenKind::Word
+                && let Some(renamed) = colliding_functions.get(token.text(ptx))
+            {
+                edits
+                    .replace(token.span(), renamed.clone())
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+    }
 
     for directive in document.directives() {
         match directive.name() {
@@ -305,6 +358,13 @@ fn load_bundle(
         return Ok(ctx.load_module_from_image(ptx)?);
     }
 
+    let expected_kernels = bundle
+        .entries
+        .iter()
+        .filter(|entry| entry.kind == ArtifactEntryKind::Kernel)
+        .map(|entry| entry.symbol.as_str())
+        .collect::<Vec<_>>();
+
     if let Some(nvvm_ir) = bundle.payload(ArtifactPayloadKind::NvvmIr) {
         let emitted = target_arch_for_bundle(bundle)?;
         let execution = ltoir::execution_arch_for_context(ctx)?;
@@ -314,12 +374,14 @@ fn load_bundle(
                 &bundle.name,
                 &emitted.sm(),
                 bundle.compile_options,
+                &expected_kernels,
             )?,
             ltoir::ExecutionRoute::PtxBridge => ltoir::build_ptx_from_nvvm_ir_with_compile_options(
                 nvvm_ir,
                 &bundle.name,
                 &emitted.sm(),
                 bundle.compile_options,
+                &expected_kernels,
             )?,
         };
         return Ok(ctx.load_module_from_image(&image)?);
@@ -334,12 +396,14 @@ fn load_bundle(
                 &bundle.name,
                 &emitted.sm(),
                 bundle.compile_options,
+                &expected_kernels,
             )?,
             ltoir::ExecutionRoute::PtxBridge => ltoir::link_ltoir_to_ptx_with_compile_options(
                 ltoir,
                 &bundle.name,
                 &emitted.sm(),
                 bundle.compile_options,
+                &expected_kernels,
             )?,
         };
         return Ok(ctx.load_module_from_image(&image)?);
@@ -553,6 +617,59 @@ mod tests {
             deduped.len(),
             "duplicate .file index: {declared:?}"
         );
+    }
+
+    #[test]
+    fn merged_bundles_disambiguate_colliding_helper_functions() {
+        let first = ptx_bundle(
+            "first",
+            "\
+.version 8.9
+.target sm_80, debug
+.address_size 64
+.visible .func (.param .b64 retval) shared_helper()
+{
+\tret;
+}
+.visible .entry a()
+{
+\tcall.uni (r0), shared_helper, ();
+\tret;
+}
+",
+        );
+        let second = ptx_bundle(
+            "second",
+            "\
+.version 8.9
+.target sm_80, debug
+.address_size 64
+.visible .func (.param .b64 retval) shared_helper()
+{
+\tret;
+}
+.visible .entry b()
+{
+\tcall.uni (r0), shared_helper, ();
+\tret;
+}
+",
+        );
+
+        let merged = merge_ptx_bundles([&first, &second]).unwrap();
+        assert_eq!(
+            merged
+                .matches(".visible .func (.param .b64 retval) shared_helper()")
+                .count(),
+            1
+        );
+        assert_eq!(
+            merged
+                .matches(".visible .func (.param .b64 retval) shared_helper__bundle_1()")
+                .count(),
+            1
+        );
+        assert!(merged.contains("call.uni (r0), shared_helper__bundle_1, ();"));
     }
 
     #[test]

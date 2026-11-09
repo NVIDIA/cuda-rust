@@ -191,10 +191,11 @@ dependencies = [
 
 [[package]]
 name = "cuda-artifact-finalizer"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "libnvvm-sys",
  "nvjitlink-sys",
+ "ptx-parse",
  "serde",
  "sha2",
  "thiserror",
@@ -202,7 +203,7 @@ dependencies = [
 
 [[package]]
 name = "cuda-oxide-codegen"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "cuda-oxide-mlir-export",
  "cuda-target-spec",
@@ -229,7 +230,7 @@ dependencies = [
 
 [[package]]
 name = "cuda-oxide-mlir-export"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "cute-layout",
  "dialect-cute",
@@ -248,15 +249,15 @@ dependencies = [
 
 [[package]]
 name = "cuda-target-spec"
-version = "0.1.0"
+version = "0.3.0"
 
 [[package]]
 name = "cute-layout"
-version = "0.1.0"
+version = "0.3.0"
 
 [[package]]
 name = "dialect-cute"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "combine",
  "cute-layout",
@@ -270,7 +271,7 @@ dependencies = [
 
 [[package]]
 name = "dialect-iket"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "combine",
  "dyn-clone",
@@ -282,7 +283,7 @@ dependencies = [
 
 [[package]]
 name = "dialect-mir"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "combine",
  "linkme",
@@ -294,7 +295,7 @@ dependencies = [
 
 [[package]]
 name = "dialect-nvvm"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "combine",
  "dialect-mir",
@@ -413,7 +414,7 @@ dependencies = [
 
 [[package]]
 name = "iket-lower"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "dialect-iket",
  "pliron",
@@ -463,7 +464,7 @@ dependencies = [
 
 [[package]]
 name = "libnvvm-sys"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "cuda-target-spec",
  "libloading",
@@ -498,7 +499,7 @@ checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
 name = "llvm-export"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "bitflags",
  "combine",
@@ -536,9 +537,10 @@ checksum = "f52b00d39961fc5b2736ea853c9cc86238e165017a493d1d5c8eac6bdc4cc273"
 
 [[package]]
 name = "mir-importer"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "combine",
+ "cuda-artifact-finalizer",
  "cuda-oxide-codegen",
  "cute-layout",
  "dialect-cute",
@@ -554,12 +556,13 @@ dependencies = [
  "pliron-derive",
  "reserved-oxide-symbols",
  "rustc-hash",
+ "sha2",
  "thiserror",
 ]
 
 [[package]]
 name = "mir-lower"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "dialect-mir",
@@ -575,7 +578,7 @@ dependencies = [
 
 [[package]]
 name = "mir-transforms"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "dialect-mir",
  "pliron",
@@ -586,7 +589,7 @@ dependencies = [
 
 [[package]]
 name = "nvjitlink-sys"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "libloading",
  "thiserror",
@@ -594,7 +597,7 @@ dependencies = [
 
 [[package]]
 name = "nvvm-transforms"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "llvm-export",
  "pliron",
@@ -635,7 +638,7 @@ dependencies = [
 
 [[package]]
 name = "oxide-tile-export"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -719,7 +722,7 @@ dependencies = [
 
 [[package]]
 name = "ptx-parse"
-version = "0.1.0"
+version = "0.3.0"
 
 [[package]]
 name = "quote"
@@ -773,7 +776,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "reserved-oxide-symbols"
-version = "0.2.1"
+version = "0.3.0"
 
 [[package]]
 name = "rustc-demangle"
@@ -799,7 +802,7 @@ dependencies = [
 
 [[package]]
 name = "rustc_codegen_cuda"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "combine",
  "cuda-artifact-finalizer",

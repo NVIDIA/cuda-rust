@@ -15,6 +15,7 @@ use super::static_global::{
 use super::statics::{
     GlobalInitializerData, GlobalInitializerRelocation, bytes_to_hex,
     encode_global_initializer_relocations, promoted_array_initializer,
+    refuse_stored_shared_memory_pointer,
 };
 use crate::error::{TranslationErr, TranslationResult};
 use crate::translator::types;
@@ -279,7 +280,7 @@ fn materialize_promoted_initializer_targets(
 /// every offset and the final size exactly. Layouts that neither representation
 /// can express remain on the fallback path. See
 /// [`struct_layout_matches_llvm_storage`].
-fn promotable_array_element(ctx: &Context, ty: TypeHandle) -> bool {
+pub(super) fn promotable_array_element(ctx: &Context, ty: TypeHandle) -> bool {
     use dialect_mir::types::{MirArrayType, MirEnumType, MirStructType, MirTupleType};
 
     let obj = ty.deref(ctx);
@@ -654,7 +655,7 @@ fn aggregate_natural_align(ctx: &Context, fields: &[TypeHandle]) -> Option<u64> 
 /// A zero answer is reported as `None`: the dialect uses `total_size() == 0` both
 /// for a genuine zero-sized type and for a size it does not know, and only the
 /// caller's own size comparison could tell them apart.
-fn dialect_stored_size(ctx: &Context, ty: TypeHandle) -> Option<u64> {
+pub(super) fn dialect_stored_size(ctx: &Context, ty: TypeHandle) -> Option<u64> {
     use dialect_mir::types::{MirArrayType, MirEnumType, MirPtrType, MirStructType, MirTupleType};
 
     let obj = ty.deref(ctx);
@@ -815,6 +816,12 @@ pub(crate) fn translate_array_constant_into_alloca(
     if dialect_stored_size(ctx, value_ty) != Some(expected_size as u64) {
         return Ok(None);
     }
+    // this copy bypasses operand translation, so it repeats the refusal there:
+    // a relocated table cannot hold shared-memory pointers
+    if constant_allocation(constant).is_some_and(|alloc| !alloc.provenance.ptrs.is_empty()) {
+        refuse_stored_shared_memory_pointer(&rust_ty, "a constant array", loc.clone())?;
+    }
+
     // Preserve both the evaluated byte image and any supported pointer
     // relocations. Unsupported relocation targets keep the existing element-wise
     // fallback rather than partially promoting the table.
@@ -928,9 +935,10 @@ fn promoted_constant_dedup_key_from_parts(
     alignment: u64,
     relocations: &str,
 ) -> String {
-    // This string is only an in-pass map key; it never becomes the emitted
-    // symbol name. Keep the full type, byte image, allocation alignment, and
-    // relocation encoding so constants with identical bytes but different
+    // This string is the deduplication key, and lowering names the global
+    // `__device_global_<hash>` after it, so it must depend only on the
+    // constant itself. Keep the full type, byte image, allocation alignment,
+    // and relocation encoding so constants with identical bytes but different
     // storage requirements or provenance targets cannot alias.
     let ty = ty.deref(ctx).disp(ctx).to_string();
     let bytes = bytes_to_hex(bytes);

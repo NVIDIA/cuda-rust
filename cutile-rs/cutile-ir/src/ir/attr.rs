@@ -124,6 +124,21 @@ pub struct OptimizationHints {
     pub entries: Vec<(String, Vec<(String, Attribute)>)>,
 }
 
+/// A compile-time constant argument of a `preview$call`, bound positionally
+/// to one constant parameter of the extern declaration.
+///
+/// The declaration's parameter kinds are `index`, `!cuda_tile<preview$string>`
+/// and `!cuda_tile<preview$Datatype>`; each takes the matching variant.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PreviewConstArg {
+    /// An `index` parameter.
+    Int(i64),
+    /// A `string` parameter.
+    Str(String),
+    /// A `Datatype` parameter, given as the element type.
+    Datatype(Type),
+}
+
 // ---------------------------------------------------------------------------
 // Unified attribute enum
 // ---------------------------------------------------------------------------
@@ -156,6 +171,8 @@ pub enum Attribute {
     Dictionary(Vec<(String, Attribute)>),
     OptimizationHints(OptimizationHints),
     Bounded(Bounded),
+    /// Constant argument of a `preview$call` (public-preview attribute).
+    PreviewConstArg(PreviewConstArg),
 }
 
 impl Attribute {

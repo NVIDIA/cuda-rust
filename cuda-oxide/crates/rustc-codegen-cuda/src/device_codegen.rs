@@ -325,6 +325,8 @@ pub struct DeviceCodegenResult {
     pub debug_kind: llvm_export::export::DebugKind,
     /// Source launch bounds for kernel entries, keyed by exported kernel name.
     pub kernel_launch_bounds: BTreeMap<String, mir_importer::KernelLaunchBounds>,
+    /// Loop annotations the device pipeline could not honour.
+    pub warnings: Vec<mir_importer::HintWarning>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1241,12 +1243,13 @@ pub fn generate_device_code<'tcx>(
         }
 
         // This crate's PTX bundle can be textually merged with other crates'
-        // bundles at load time (`load_all_ptx_bundles_merged`), so
-        // counter-named module-scope symbols (`__shared_mem_N`,
-        // `__device_global_N`) must be unique per compilation, not only per
-        // module. The stable crate id hashes the crate name and metadata:
-        // deterministic across rebuilds of one crate, distinct across the
-        // crates of one binary (#1277).
+        // bundles at load time (`load_all_ptx_bundles_merged`), so generated
+        // module-scope symbols (`__shared_mem_*`, `__device_global_*`) must
+        // be unique per compilation, not only per module: a static from a
+        // shared dependency hashes to the same name in every crate. The
+        // stable crate id hashes the crate name and metadata: deterministic
+        // across rebuilds of one crate, distinct across the crates of one
+        // binary (#1277).
         let module_disambiguator =
             Some(tcx.stable_crate_id(rustc_hir::def_id::LOCAL_CRATE).as_u64());
 
@@ -1334,6 +1337,7 @@ pub fn generate_device_code<'tcx>(
                     allow_fma_contraction: compilation_result.allow_fma_contraction,
                     debug_kind,
                     kernel_launch_bounds: compilation_result.kernel_launch_bounds,
+                    warnings: compilation_result.warnings,
                 })
             }
             Err(pipeline_err) => Err(DeviceCodegenError::PtxGeneration(format!(
@@ -1477,6 +1481,7 @@ mod tests {
             target: "sm_90".to_string(),
             allow_fma_contraction: false,
             kernel_launch_bounds: BTreeMap::new(),
+            warnings: Vec::new(),
         };
 
         let artifact = read_compilation_artifact(&result).unwrap().unwrap();
@@ -1504,6 +1509,7 @@ mod tests {
             target: "sm_90".to_string(),
             allow_fma_contraction: true,
             kernel_launch_bounds: BTreeMap::new(),
+            warnings: Vec::new(),
         };
 
         let artifact = read_compilation_artifact(&result).unwrap().unwrap();

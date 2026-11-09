@@ -276,7 +276,7 @@ Each `forward` call:
 
 ```rust
 fn main() -> Result<(), Error> {
-    let device = Device::new(0)?;
+    let device = Context::new(0)?;
     let stream = device.new_stream()?;
 
     let cfg = Config { d: 2048, n_layers: 22, block: 128, bn: 16, bk: 16, eps: 1e-5 };

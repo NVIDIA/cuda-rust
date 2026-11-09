@@ -13,18 +13,16 @@
 //! prefix only after all layers and the final norm succeed, poisoning the cache
 //! on a later failure. One/two-row projections use smaller decode CTAs while
 //! preserving the general MMA reduction and BF16 rounding boundaries.
+use crate::decoder::{
+    BiasWeights, DecoderShape, DecoderWeights, EmbeddingWeights, FinalNorm, NormRole, NormWeights,
+    TokenIds,
+};
+use crate::ffn::{ProjectionRole, ProjectionWeights, RowMajorShape};
 use crate::operator::Result;
 use crate::{element_kernel, ffn_kernel, norm_kernel, operator, rotary::HostTables};
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaStream, DeviceBuffer};
-use cute_rs::{
-    BFloat16,
-    decoder::{
-        BiasWeights, DecoderShape, DecoderWeights, EmbeddingWeights, FinalNorm, NormRole,
-        NormWeights, TokenIds,
-    },
-    ffn::{ProjectionRole, ProjectionWeights, RowMajorShape},
-};
+use cute_rs::BFloat16;
 use std::{marker::PhantomData, sync::Arc};
 
 /// Exact-size reuse of initialized allocations after asynchronous users finish.

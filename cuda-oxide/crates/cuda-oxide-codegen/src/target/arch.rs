@@ -4,7 +4,7 @@
  */
 
 use super::features::DetectedFeatures;
-use cuda_target_spec::{CudaArch, recorded_ptx_floor};
+use cuda_target_spec::{CudaArch, is_known_nvvm_target};
 
 /// Does `arch` (e.g. `"sm_120a"`, `"sm_90"`) support the kernel's detected
 /// features?
@@ -22,7 +22,7 @@ use cuda_target_spec::{CudaArch, recorded_ptx_floor};
 /// IR requires instead.
 pub fn arch_satisfies(arch: &CudaArch, features: DetectedFeatures) -> bool {
     let (capability, suffix) = (arch.capability(), arch.suffix());
-    if recorded_ptx_floor(arch).is_err() {
+    if !is_known_nvvm_target(arch) {
         return false;
     }
     features
@@ -74,25 +74,25 @@ fn supports_tcgen_target(capability: u32, suffix: Option<char>) -> bool {
     match suffix {
         // Architecture-specific targets are exact, not numerically forward
         // compatible. `sm_101a` is the PTX 8.x spelling later renamed to
-        // `sm_110a`; accept both spellings plus the distinct sm_103 target.
-        Some('a') => matches!(capability, 100 | 101 | 103 | 110),
-        Some('f') => matches!(capability, 100 | 101 | 103 | 110),
+        // `sm_110a`; accept both spellings plus the distinct sm_103/sm_107 targets.
+        Some('a') => matches!(capability, 100 | 101 | 103 | 107 | 110),
+        Some('f') => matches!(capability, 100 | 101 | 103 | 107 | 110),
         _ => false,
     }
 }
 
 fn supports_blackwell_accelerated_target(capability: u32, suffix: Option<char>) -> bool {
     match suffix {
-        Some('a') => matches!(capability, 100 | 101 | 103 | 110),
-        Some('f') => matches!(capability, 100 | 101 | 103 | 110),
+        Some('a') => matches!(capability, 100 | 101 | 103 | 107 | 110),
+        Some('f') => matches!(capability, 100 | 101 | 103 | 107 | 110),
         _ => false,
     }
 }
 
 fn supports_blackwell_family_target(capability: u32, suffix: Option<char>) -> bool {
     match suffix {
-        Some('a') => matches!(capability, 100 | 101 | 110 | 120),
-        Some('f') => matches!(capability, 100 | 101 | 103 | 110 | 120 | 121),
+        Some('a') => matches!(capability, 100 | 101 | 107 | 110 | 120),
+        Some('f') => matches!(capability, 100 | 101 | 103 | 107 | 110 | 120 | 121),
         _ => false,
     }
 }
@@ -100,28 +100,28 @@ fn supports_blackwell_family_target(capability: u32, suffix: Option<char>) -> bo
 fn supports_blackwell_matrix_target(capability: u32, suffix: Option<char>) -> bool {
     // LLVM's sm_101 aliases stop selecting these instructions at PTX 9.0.
     match suffix {
-        Some('a' | 'f') => matches!(capability, 100 | 103 | 110 | 120 | 121),
+        Some('a' | 'f') => matches!(capability, 100 | 103 | 107 | 110 | 120 | 121),
         _ => false,
     }
 }
 
-/// Floating-point `redux.sync` is scoped to the sm_100/sm_103 family.
+/// Floating-point `redux.sync` is scoped to the sm_100/sm_103/sm_107 family.
 fn supports_redux_f32_target(capability: u32, suffix: Option<char>) -> bool {
-    matches!(suffix, Some('a' | 'f')) && matches!(capability, 100 | 103)
+    matches!(suffix, Some('a' | 'f')) && matches!(capability, 100 | 103 | 107)
 }
 
 /// FP8 / f16-accumulator multimem forms span several Blackwell architecture
 /// targets, but consumer family (`f`) targets do not support the sm_120 line.
 fn supports_multimem_fp8_target(capability: u32, suffix: Option<char>) -> bool {
     match suffix {
-        Some('a') => matches!(capability, 100 | 101 | 103 | 110 | 120 | 121),
-        Some('f') => matches!(capability, 100 | 101 | 103 | 110),
+        Some('a') => matches!(capability, 100 | 101 | 103 | 107 | 110 | 120 | 121),
+        Some('f') => matches!(capability, 100 | 101 | 103 | 107 | 110),
         _ => false,
     }
 }
 
 fn is_known_blackwell_capability(capability: u32) -> bool {
-    matches!(capability, 100 | 101 | 103 | 110 | 120 | 121)
+    matches!(capability, 100 | 101 | 103 | 107 | 110 | 120 | 121)
 }
 
 /// Extract the compute-capability *major* version from an `sm_…` target string.

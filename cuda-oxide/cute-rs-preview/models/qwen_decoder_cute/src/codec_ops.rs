@@ -5,7 +5,7 @@
 //! Checked time-major waveform decoder operations.
 
 use crate::{codec_kernel, model::Batch, operator::Result};
-use cuda_core::{CudaStream, DeviceBuffer, LaunchConfig1D, simt::LaunchConfig};
+use cuda_core::{CudaStream, DeviceBuffer, LaunchConfig, LaunchConfig1D};
 use cute_rs::BFloat16;
 use std::sync::Arc;
 
@@ -266,7 +266,7 @@ impl Runner {
         denominator: &DeviceBuffer<BFloat16>,
         epsilon: f32,
     ) -> Result<Batch<C>> {
-        let shape = cute_rs::ffn::RowMajorShape::dense(rows, C)?;
+        let shape = crate::ffn::RowMajorShape::dense(rows, C)?;
         if input.len() != shape.required_len()
             || denominator.len() != rows
             || !epsilon.is_finite()
@@ -690,7 +690,7 @@ fn validate_elements(runner: &Runner) -> Result<()> {
 
 /// Check codec/language RMSNorm epsilon values, the language default and invalid inputs.
 fn validate_epsilon(runner: &Runner) -> Result<()> {
-    use cute_rs::decoder::{FinalNorm, NormWeights};
+    use crate::decoder::{FinalNorm, NormWeights};
     let values = [1e-4, -2e-4, 3e-4].map(crate::reference::round);
     let input = Batch::<3>::from_host(&runner.stream, 1, &values)?;
     let weights = DeviceBuffer::from_host(&runner.stream, &[BFloat16::from_f32(1.0); 3])?;

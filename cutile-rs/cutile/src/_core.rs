@@ -2126,6 +2126,42 @@ pub mod core {
         unreachable!()
     }
 
+    /// Advisory likelihood for scalar booleans and boolean tiles.
+    ///
+    /// Import this trait through `use cutile::core::*` in a kernel module.
+    /// The method preserves the receiver's type and value. An incorrect
+    /// prediction never changes correctness.
+    ///
+    /// Tile IR 13.5 discards these hints during bytecode emission: they have
+    /// no backend performance effect on that target.
+    pub trait Likely: Sized {
+        /// Annotate the expected value without changing the condition.
+        ///
+        /// Use `if condition.likely::<true>() { ... }` for scalar branches,
+        /// or `select(mask.likely::<false>(), a, b)` for boolean tiles.
+        /// Requires Tile IR 13.5. Copies and inline helpers preserve the IR
+        /// hint; boolean computations and control-flow joins may discard it.
+        fn likely<const EXPECTED: bool>(self) -> Self;
+    }
+
+    impl Likely for bool {
+        fn likely<const EXPECTED: bool>(self) -> bool {
+            annotate_likelihood::<EXPECTED, bool>(self)
+        }
+    }
+
+    #[cuda_tile::variadic_impl(N = 6)]
+    impl<const S: [i32; N]> Likely for Tile<bool, S> {
+        fn likely<const EXPECTED: bool>(self) -> Tile<bool, S> {
+            annotate_likelihood::<EXPECTED, _>(self)
+        }
+    }
+
+    #[cuda_tile::compiler_op(name = "likely")]
+    fn annotate_likelihood<const EXPECTED: bool, T>(condition: T) -> T {
+        unreachable!()
+    }
+
     /// `cond ? val_if_true : val_if_false` (element-wise).
     #[cuda_tile::op(name="cuda_tile.select", since="V13_2", params=["cond", "val_if_true", "val_if_false"])]
     #[cuda_tile::variadic_op(N = 6)]

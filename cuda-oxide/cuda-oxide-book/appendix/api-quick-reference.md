@@ -62,9 +62,10 @@ Other iterator loops are not yet recognized by the unroll pass. Nested loops
 and multiple `continue` paths are supported. Full `#[unroll]` preserves `break`
 paths and multiple exit targets.
 
-Partial `#[unroll(N)]` requires a positive step, a `<` or `<=` test, an
-unchanging limit, and no exit besides the normal header test. Other requests
-warn and are not unrolled.
+Partial `#[unroll(N)]` requires a `<` or `<=` test, an unchanging limit, a
+step that is a positive constant or a loop-invariant runtime value (such as
+`blockDim_x()` in a block-stride loop), and no exit besides the normal header
+test. Other requests warn and are not unrolled.
 
 One annotation may create at most 1,024 body copies, 8,192 cloned basic blocks,
 and 65,536 cloned operations. Larger requests warn and are not unrolled.
@@ -524,7 +525,7 @@ N_COLS must be a power of 2 in the range [32, 512].
 ### Typed Synchronous
 
 ```rust
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 
 let ctx = CudaContext::new(0).unwrap();
@@ -545,7 +546,7 @@ unsafe {
 ### Typed Async
 
 ```rust
-use cuda_async::simt::device_operation::DeviceOperation;
+use cuda_async::device_operation::DeviceOperation;
 
 let module = kernels::load_async(0)?;
 // SAFETY: this is 1D, buffers contain n elements, and module/scheduler share a context.

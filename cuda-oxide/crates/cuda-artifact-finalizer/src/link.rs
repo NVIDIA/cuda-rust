@@ -4,6 +4,7 @@
  */
 
 use crate::diagnostics::{KernelResourceUsage, parse_ptxas_resource_usage};
+use crate::entries::require_expected_kernels;
 use crate::nvvm::{loaded_tool_digest_with_expected, report_changed_tool};
 use crate::options::{FinalizationOptions, FinalizerOutput, NamedInput};
 use crate::provenance::{
@@ -80,14 +81,18 @@ impl LtoLinker {
             .map(|digest| linker_provenance_digest(&digest))
     }
 
-    /// Link one or more LTOIR modules in the exact supplied order.
+    /// Link one or more LTOIR modules in the exact supplied order. The output
+    /// must define every kernel in `expected_kernels` as an entry point.
     pub fn link_ltoir(
         &self,
         inputs: &[NamedInput<'_>],
         options: &FinalizationOptions,
         output: FinalizerOutput,
+        expected_kernels: &[&str],
     ) -> Result<Vec<u8>, FinalizerError> {
-        Ok(self.link_ltoir_impl(inputs, options, output, false)?.image)
+        Ok(self
+            .link_ltoir_impl(inputs, options, output, expected_kernels, false)?
+            .image)
     }
 
     /// Link LTOIR while collecting non-semantic ptxas resource diagnostics.
@@ -112,8 +117,9 @@ impl LtoLinker {
         inputs: &[NamedInput<'_>],
         options: &FinalizationOptions,
         output: FinalizerOutput,
+        expected_kernels: &[&str],
     ) -> Result<LinkReport, FinalizerError> {
-        self.link_ltoir_impl(inputs, options, output, true)
+        self.link_ltoir_impl(inputs, options, output, expected_kernels, true)
     }
 
     fn link_ltoir_impl(
@@ -121,6 +127,7 @@ impl LtoLinker {
         inputs: &[NamedInput<'_>],
         options: &FinalizationOptions,
         output: FinalizerOutput,
+        expected_kernels: &[&str],
         collect_resource_usage: bool,
     ) -> Result<LinkReport, FinalizerError> {
         validate_inputs(inputs)?;
@@ -129,15 +136,18 @@ impl LtoLinker {
             InputType::Ltoir,
             options,
             output,
+            expected_kernels,
             collect_resource_usage,
         )
     }
 
-    /// Compile and link one PTX module to a validated target-specific cubin.
+    /// Compile and link one PTX module to a validated target-specific cubin
+    /// that defines every kernel in `expected_kernels`.
     pub fn link_ptx_to_cubin(
         &self,
         input: NamedInput<'_>,
         options: &FinalizationOptions,
+        expected_kernels: &[&str],
     ) -> Result<Vec<u8>, FinalizerError> {
         validate_inputs(std::slice::from_ref(&input))?;
         // Enforce the PTX C-string rule up front so this route rejects
@@ -151,6 +161,7 @@ impl LtoLinker {
                 InputType::Ptx,
                 options,
                 FinalizerOutput::Cubin,
+                expected_kernels,
                 false,
             )?
             .image)
@@ -162,6 +173,7 @@ impl LtoLinker {
         input_type: InputType,
         options: &FinalizationOptions,
         output: FinalizerOutput,
+        expected_kernels: &[&str],
         collect_resource_usage: bool,
     ) -> Result<LinkReport, FinalizerError> {
         with_revalidated_tool_identity(
@@ -169,7 +181,14 @@ impl LtoLinker {
             self.tool.digest,
             || current_linker_tool_digest(&self.tool),
             || {
-                match self.run_link(inputs, input_type, options, output, collect_resource_usage) {
+                match self.run_link(
+                    inputs,
+                    input_type,
+                    options,
+                    output,
+                    expected_kernels,
+                    collect_resource_usage,
+                ) {
                     // Older nvJitLink versions reject the diagnostic-only
                     // reporting options with NVJITLINK_ERROR_UNRECOGNIZED_OPTION.
                     // The caller asked for the same program plus a best-effort
@@ -178,7 +197,7 @@ impl LtoLinker {
                     Err(FinalizerError::NvJitLink(error))
                         if collect_resource_usage && error.is_unrecognized_option() =>
                     {
-                        self.run_link(inputs, input_type, options, output, false)
+                        self.run_link(inputs, input_type, options, output, expected_kernels, false)
                     }
                     result => result,
                 }
@@ -192,6 +211,7 @@ impl LtoLinker {
         input_type: InputType,
         options: &FinalizationOptions,
         output: FinalizerOutput,
+        expected_kernels: &[&str],
         collect_resource_usage: bool,
     ) -> Result<LinkReport, FinalizerError> {
         let mut option_storage = if input_type == InputType::Ptx {
@@ -221,6 +241,7 @@ impl LtoLinker {
         if output == FinalizerOutput::Ptx && image.is_empty() {
             return Err(FinalizerError::EmptyPtx);
         }
+        require_expected_kernels(&image, output, expected_kernels)?;
 
         let resource_usage = if collect_resource_usage {
             info_log
@@ -550,6 +571,7 @@ mod live_tests {
             .link_ptx_to_cubin(
                 NamedInput::new("acquire-load.ptx", ACQUIRE_LOAD_PTX),
                 &options,
+                &["acquire_load"],
             )
             .unwrap();
         assert!(is_valid_cubin(&cubin));

@@ -38,24 +38,32 @@ use rustc_hash::FxHashSet;
 
 use crate::analyses::loop_info::LoopInfo;
 use crate::canonicalize::{CanonicalizeOutcome, merge_backedges};
-use crate::unroll::{collect_functions, hint_location};
+use crate::unroll::{HintWarning, collect_functions, hint_location};
+
+/// What [`resolve_nounroll_hints`] found.
+#[derive(Debug, Default)]
+pub struct ResolvedNoUnroll {
+    /// The latch branch of each marked loop: a `mir.goto` whose only successor
+    /// is its loop's header, and the only back-edge of that loop.
+    pub latches: Vec<Ptr<Operation>>,
+    /// One warning per hint that could not be applied.
+    pub warnings: Vec<HintWarning>,
+}
 
 /// Map every `mir.nounroll_hint` in `module` to its loop and return the latch
 /// branch of each marked loop.
 ///
-/// Each returned operation is a `mir.goto` whose only successor is its loop's
-/// header, and it is the only back-edge of that loop. Every hint is erased,
-/// including hints that could not be applied. Hints in unreachable blocks are
-/// dropped silently; the others that cannot be applied produce a warning on
-/// stderr, in the same form as the unroll pass's warnings.
+/// Every hint is erased, including hints that could not be applied. Hints in
+/// unreachable blocks are dropped silently; the others that cannot be applied
+/// are returned as warnings.
 ///
 /// Functions without hints are left untouched. In a function with hints, this
 /// may insert one forwarding latch block per marked loop.
 pub fn resolve_nounroll_hints(
     module: Ptr<Operation>,
     ctx: &mut Context,
-) -> Result<Vec<Ptr<Operation>>> {
-    let mut latches = Vec::new();
+) -> Result<ResolvedNoUnroll> {
+    let mut resolved = ResolvedNoUnroll::default();
     for func_op in collect_functions(module, ctx) {
         let region = func_op.deref(ctx).get_region(0);
 
@@ -80,11 +88,11 @@ pub fn resolve_nounroll_hints(
 
             let info = loop_info(module, ctx, region)?;
             let Some(loop_id) = info.innermost_loop(block) else {
-                warn_not_applied(
+                resolved.warnings.push(not_applied(
                     ctx,
                     hint,
                     "the annotation is not inside a recognizable loop",
-                );
+                ));
                 Operation::erase(hint, ctx);
                 continue;
             };
@@ -92,11 +100,11 @@ pub fn resolve_nounroll_hints(
             match merge_backedges(ctx, &info, loop_id) {
                 CanonicalizeOutcome::Changed => continue,
                 CanonicalizeOutcome::Unsupported(reason) => {
-                    warn_not_applied(
+                    resolved.warnings.push(not_applied(
                         ctx,
                         hint,
                         &format!("could not normalize its back-edges: {reason}"),
-                    );
+                    ));
                 }
                 CanonicalizeOutcome::Unchanged => {
                     // `Unchanged` means the loop has exactly one back-edge, a
@@ -107,7 +115,7 @@ pub fn resolve_nounroll_hints(
                             "a normalized loop latch has no terminator"
                         );
                     };
-                    latches.push(branch);
+                    resolved.latches.push(branch);
                 }
             }
 
@@ -120,7 +128,7 @@ pub fn resolve_nounroll_hints(
         }
     }
 
-    Ok(latches)
+    Ok(resolved)
 }
 
 /// The blocks of `region` reachable from its entry block.
@@ -156,22 +164,11 @@ fn collect_hints(ctx: &Context, region: Ptr<Region>) -> Vec<(Ptr<Operation>, Ptr
     out
 }
 
-/// Report a `#[nounroll]` that could not be applied, with the annotation's
-/// position on a `-->` line when the hint carries one.
-fn warn_not_applied(ctx: &Context, hint: Ptr<Operation>, reason: &str) {
-    eprintln!(
-        "{}",
-        not_applied_warning(reason, hint_location(ctx, hint).as_deref())
-    );
-}
-
-/// The full text of one "not applied" warning.
-fn not_applied_warning(reason: &str, location: Option<&str>) -> String {
-    let mut warning =
-        format!("warning: #[nounroll] requested but the loop may still be unrolled: {reason}");
-    if let Some(location) = location {
-        warning.push_str("\n  --> ");
-        warning.push_str(location);
+/// A `#[nounroll]` that could not be applied, pointing at the annotation when
+/// the hint carries a position.
+fn not_applied(ctx: &Context, hint: Ptr<Operation>, reason: &str) -> HintWarning {
+    HintWarning {
+        message: format!("#[nounroll] requested but the loop may still be unrolled: {reason}"),
+        location: hint_location(ctx, hint),
     }
-    warning
 }

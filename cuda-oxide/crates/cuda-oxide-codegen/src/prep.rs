@@ -32,9 +32,12 @@ use dialect_cute::smem_mma_ops::{
     CuteMmaPartitionBOp, CuteSmemTensorOverlayOp, CuteTiledGemmOp, CuteTiledMmaSliceOp,
 };
 use dialect_cute::tensor_ops::{
-    CuteTensorBaseOp, CuteTensorIsFullOp, CuteTensorLoadIntoOp, CuteTensorMakeOp,
-    CuteTensorSliceOp, CuteTensorStoreElementAbsOp, CuteTensorStoreFromOp,
-    CuteTensorZippedDivideOp,
+    CuteConvertE4m3ToF32Op, CuteConvertF32ToBf16Op, CuteConvertF32ToE4m3Op,
+    CuteConvertF32x8ToE2m1x8Op, CuteTensorBaseOp, CuteTensorIsFullOp, CuteTensorLoadIntoOp,
+    CuteTensorMakeOp, CuteTensorSliceOp, CuteTensorStoreElementAbsOp, CuteTensorStoreFromOp,
+    CuteTensorZippedDivideOp, CuteVectorBinaryOp, CuteVectorBitcastOp, CuteVectorBroadcastOp,
+    CuteVectorCastOp, CuteVectorConcatOp, CuteVectorReduceOp, CuteVectorScalarOp,
+    CuteVectorSliceOp, CuteVectorUnaryOp,
 };
 use dialect_mir::attributes::MirCastKindAttr;
 use dialect_mir::ops::{MirAllocaOp, MirCastOp};
@@ -74,7 +77,7 @@ pub fn prepare_mir_module(
     ctx: &mut Context,
     module: Ptr<Operation>,
     preparation: MirPreparation<'_>,
-) -> Result<(), PipelineError> {
+) -> Result<Vec<mir_transforms::unroll::HintWarning>, PipelineError> {
     verify_operation(ctx, module, "module")?;
     // Capture this before any optional preparation pass mutates the module.
     // The extra promotion pass belongs only to the high-level tensor slice;
@@ -95,7 +98,18 @@ pub fn prepare_mir_module(
                     .to_string(),
             ));
         }
-        return Ok(());
+        if has_wgmma_mma_operations(ctx, module) {
+            let mut analyses = pliron::pass::AnalysisManager::default();
+            pliron::opts::mem2reg::mem2reg(module, ctx, &mut analyses).map_err(|error| {
+                PipelineError::Verification {
+                    name: "mem2reg".to_string(),
+                    message: error.disp(ctx).to_string(),
+                    operation: None,
+                }
+            })?;
+            verify_operation(ctx, module, "module post-wgmma-debug-mem2reg")?;
+        }
+        return Ok(Vec::new());
     }
 
     // Validate every requested pass before any transformation runs. This keeps
@@ -167,6 +181,17 @@ pub fn prepare_mir_module(
         message: error.disp(ctx).to_string(),
         operation: None,
     })?;
+    mir_transforms::forward_compiler_result_bundles::forward_constant_projected_aggregates(
+        module,
+        ctx,
+        &mut analyses,
+        preparation.verbose,
+    )
+    .map_err(|error| PipelineError::Verification {
+        name: "post-mem2reg constant-projected aggregate forwarding".to_string(),
+        message: error.disp(ctx).to_string(),
+        operation: None,
+    })?;
     verify_operation(
         ctx,
         module,
@@ -218,14 +243,25 @@ pub fn prepare_mir_module(
         verify_operation(ctx, module, "module post-second-mem2reg")?;
     }
 
-    mir_transforms::unroll::unroll_annotated_loops(module, ctx, &mut analyses).map_err(
-        |error| PipelineError::Verification {
+    let warnings = mir_transforms::unroll::unroll_annotated_loops(module, ctx, &mut analyses)
+        .map_err(|error| PipelineError::Verification {
             name: "loop-unroll".to_string(),
             message: error.disp(ctx).to_string(),
             operation: None,
-        },
-    )?;
+        })?;
     verify_operation(ctx, module, "module post-unroll")?;
+    mir_transforms::forward_compiler_result_bundles::forward_constant_projected_aggregates(
+        module,
+        ctx,
+        &mut analyses,
+        preparation.verbose,
+    )
+    .map_err(|error| PipelineError::Verification {
+        name: "post-unroll constant-projected aggregate forwarding".to_string(),
+        message: error.disp(ctx).to_string(),
+        operation: None,
+    })?;
+    verify_operation(ctx, module, "module post-unroll-aggregate-forwarding")?;
 
     run_optional_mir_passes(
         ctx,
@@ -233,7 +269,34 @@ pub fn prepare_mir_module(
         &selected_passes,
         MirPassStage::PostPreparation,
         &mut analyses,
-    )
+    )?;
+    Ok(warnings)
+}
+
+/// Return whether `root` contains any pointer-form WGMMA MMA operation whose
+/// accumulator lifetime must be fused into register SSA values before lowering.
+fn has_wgmma_mma_operations(ctx: &Context, root: Ptr<Operation>) -> bool {
+    use dialect_nvvm::ops::{
+        WgmmaMmaM64N64K8F32Tf32Op, WgmmaMmaM64N64K16F32Bf16Op, WgmmaMmaM64N64K16F32F16Op,
+        WgmmaMmaM64N128K16F32Bf16Op,
+    };
+
+    let mut pending = vec![root];
+    while let Some(operation) = pending.pop() {
+        if Operation::is_op::<WgmmaMmaM64N64K16F32Bf16Op>(operation, ctx)
+            || Operation::is_op::<WgmmaMmaM64N64K16F32F16Op>(operation, ctx)
+            || Operation::is_op::<WgmmaMmaM64N64K8F32Tf32Op>(operation, ctx)
+            || Operation::is_op::<WgmmaMmaM64N128K16F32Bf16Op>(operation, ctx)
+        {
+            return true;
+        }
+        for region in operation.deref(ctx).regions() {
+            for block in region.deref(ctx).iter(ctx) {
+                pending.extend(block.deref(ctx).iter(ctx));
+            }
+        }
+    }
+    false
 }
 
 fn has_high_level_cute_operations(ctx: &Context, root: Ptr<Operation>) -> bool {
@@ -250,6 +313,21 @@ fn has_high_level_cute_operations(ctx: &Context, root: Ptr<Operation>) -> bool {
                 operation, ctx,
             )
             || Operation::is_op::<CuteTensorStoreElementAbsOp>(operation, ctx)
+            || Operation::is_op::<CuteConvertF32ToBf16Op>(operation, ctx)
+            || Operation::is_op::<CuteConvertF32ToE4m3Op>(operation, ctx)
+            || Operation::is_op::<CuteConvertE4m3ToF32Op>(operation, ctx)
+            || Operation::is_op::<CuteConvertF32x8ToE2m1x8Op>(operation, ctx)
+            || Operation::is_op::<CuteVectorBroadcastOp>(operation, ctx)
+            || Operation::is_op::<CuteVectorBinaryOp>(operation, ctx)
+            || Operation::is_op::<CuteVectorScalarOp>(operation, ctx)
+            || Operation::is_op::<CuteVectorUnaryOp>(operation, ctx)
+            || Operation::is_op::<CuteVectorReduceOp>(operation, ctx)
+            || Operation::is_op::<CuteVectorCastOp>(operation, ctx)
+            || Operation::is_op::<CuteVectorBitcastOp>(operation, ctx)
+            || Operation::is_op::<CuteVectorSliceOp>(operation, ctx)
+            || Operation::is_op::<CuteVectorConcatOp>(operation, ctx)
+            || Operation::is_op::<CuteSm100BlockScaledCopyOp>(operation, ctx)
+            || Operation::is_op::<CuteSm100BlockScaledGemmOp>(operation, ctx)
             || Operation::is_op::<CuteTensorMake2DOp>(operation, ctx)
             || Operation::is_op::<CuteScaledViewMakeOp>(operation, ctx)
             || Operation::is_op::<CuteScaledViewRowOp>(operation, ctx)

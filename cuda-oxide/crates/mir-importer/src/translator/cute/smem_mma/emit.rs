@@ -20,7 +20,8 @@ use dialect_cute::attributes::{
 };
 use dialect_cute::smem_mma_ops::{
     CuteFragmentFillOp, CuteFragmentSliceKOp, CuteMmaLoadAOp, CuteMmaLoadScalesOp,
-    CuteMmaPartitionBOp, CuteSmemTensorOverlayOp, CuteTiledGemmOp, CuteTiledMmaSliceOp,
+    CuteMmaPartitionBOp, CuteNvfp4MmaAtomOp, CuteSmemTensorOverlayOp, CuteTiledGemmOp,
+    CuteTiledMmaSliceOp,
 };
 use dialect_cute::types::{CuteSmemTensorType, CuteTensorViewType};
 use dialect_mir::attributes::{FieldIndexAttr, MirCastKindAttr};
@@ -333,6 +334,12 @@ fn smem_view_type(ctx: &mut Context, facts: &SharedTensorRust) -> (TypeHandle, T
             4,
             CuteTensorFormatAttr::UE8M0,
             CuteTensorLayoutAttr::BlockScaleKMajor(32),
+        ),
+        SharedTensorKind::ScaleE4m3 => (
+            IntegerType::get(ctx, 32, Signedness::Unsigned).into(),
+            4,
+            CuteTensorFormatAttr::E4M3,
+            CuteTensorLayoutAttr::BlockScaleKMajor(16),
         ),
     };
     let tensor: TypeHandle = CuteTensorViewType::get_with_facts(
@@ -1206,4 +1213,59 @@ pub(crate) fn emit_tiled_gemm(
     store.deref_mut(ctx).set_loc(loc.clone());
     insert(ctx, store, block, Some(op));
     finish(ctx, store, target, block_map, loc, "tiled_gemm")
+}
+
+/// Emit one 16x8x64 NVFP4 (`Float4E2M1FN` + `Float8E4M3FN`, `SF_VEC = 16`) warp MMA atom.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_nvfp4_mma_atom(
+    ctx: &mut Context,
+    body: &mir::Body,
+    args: &[mir::Operand],
+    destination: &mir::Place,
+    target: &Option<usize>,
+    block: Ptr<BasicBlock>,
+    prev: Option<Ptr<Operation>>,
+    value_map: &mut ValueMap,
+    block_map: &[Ptr<BasicBlock>],
+    loc: Location,
+) -> TranslationResult<Ptr<Operation>> {
+    if args.len() != 5 {
+        return input_err!(
+            loc,
+            TranslationErr::unsupported(
+                "nvfp4_mma_atom_call expects C, A, B, scale_a, and scale_b"
+            )
+        );
+    }
+    let (c, after) = translate_operand(ctx, body, &args[0], value_map, block, prev, loc.clone())?;
+    let (a, after) = translate_operand(
+        ctx,
+        body,
+        &args[1],
+        value_map,
+        block,
+        after.or(prev),
+        loc.clone(),
+    )?;
+    let (b, after) = translate_operand(ctx, body, &args[2], value_map, block, after, loc.clone())?;
+    let (scale_a, after) =
+        translate_operand(ctx, body, &args[3], value_map, block, after, loc.clone())?;
+    let (scale_b, after) =
+        translate_operand(ctx, body, &args[4], value_map, block, after, loc.clone())?;
+    let operation = CuteNvfp4MmaAtomOp::new(ctx, c, a, b, scale_a, scale_b);
+    let op = operation.get_operation();
+    op.deref_mut(ctx).set_loc(loc.clone());
+    insert(ctx, op, block, after);
+    finish_value(
+        ctx,
+        op,
+        operation.accumulator(ctx),
+        destination,
+        target,
+        block,
+        value_map,
+        block_map,
+        loc,
+        "nvfp4_mma_atom_call",
+    )
 }

@@ -5,7 +5,7 @@
 
 //! Conversion of `mir.shared_alloc` to static shared-memory globals.
 
-use super::common::{anyhow_to_pliron, counter_named_global};
+use super::common::{anyhow_to_pliron, counter_named_global, keyed_global_name};
 use crate::context::{
     SharedGlobalDeclaration, SharedGlobalKind, SharedGlobalRecord, SharedGlobalsMap,
 };
@@ -200,7 +200,8 @@ struct SharedAllocSpec<'a> {
 /// - Array type: `[size x element_type]`
 /// - Address space 3 (shared memory)
 /// - Optional alignment
-/// - Unique generated name (`__shared_mem_N`)
+/// - A generated name: `__shared_mem_<hash>` from `spec.alloc_key`, or
+///   `__shared_mem_N` from a module-local counter for a keyless allocation
 ///
 /// The global is inserted at the front of the module block. When
 /// `spec.alloc_key` is `Some`, the key is moved into `shared_globals` so that
@@ -215,10 +216,11 @@ struct SharedAllocSpec<'a> {
 /// the cache and never reaches this function — which is consistent because
 /// the key and the name are both derived from the same constant.
 ///
-/// `next_shared_mem_index` is scoped to one `MirToLlvmConversionDriver`
-/// instance (one module), not a process-global counter: `N` is a function of
-/// this module's own MIR walk order, not of how many other modules have
-/// lowered a shared allocation earlier in the process (#706).
+/// `next_shared_mem_index` only numbers keyless allocations. It is scoped to
+/// one `MirToLlvmConversionDriver` instance (one module), not a
+/// process-global counter: `N` is a function of this module's own MIR walk
+/// order, not of how many other modules have lowered a shared allocation
+/// earlier in the process (#706).
 fn create_shared_global(
     ctx: &mut Context,
     op: Ptr<Operation>,
@@ -229,11 +231,29 @@ fn create_shared_global(
     let llvm_elem_type = convert_type(ctx, spec.mir_elem_type).map_err(anyhow_to_pliron)?;
     let array_type = ArrayType::get(ctx, llvm_elem_type, spec.size);
 
-    let counter = *next_shared_mem_index;
-    *next_shared_mem_index += 1;
-    let name: pliron::identifier::Identifier = counter_named_global(ctx, "__shared_mem", counter)
-        .try_into()
-        .unwrap();
+    // a keyed allocation is named by its own identity, so other kernels'
+    // statics cannot shift it (#1477); a keyless one is never shared and
+    // falls back to the module-local counter
+    let name = match spec.alloc_key.as_deref() {
+        Some(key) => {
+            let name = keyed_global_name(ctx, "__shared_mem", key);
+            if let Some((other, _)) = shared_globals
+                .iter()
+                .find(|(_, record)| record.symbol.to_string() == name)
+            {
+                return Err(anyhow_to_pliron(anyhow::anyhow!(
+                    "shared alloc_keys {other:?} and {key:?} hash to the same symbol `{name}`"
+                )));
+            }
+            name
+        }
+        None => {
+            let counter = *next_shared_mem_index;
+            *next_shared_mem_index += 1;
+            counter_named_global(ctx, "__shared_mem", counter)
+        }
+    };
+    let name: pliron::identifier::Identifier = name.try_into().unwrap();
 
     let global_op = if spec.alignment > 0 {
         llvm::GlobalOp::new_with_alignment(ctx, name.clone(), array_type.into(), spec.alignment)

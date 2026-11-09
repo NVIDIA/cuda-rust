@@ -57,18 +57,19 @@
 //!   cargo oxide run blockscale_gemm_cute --arch sm_120a
 
 use core::{marker::PhantomData, mem::size_of};
-use ctm_rs::mbarrier::Barrier;
-use ctm_rs::memory::DynamicSharedArray;
-use ctm_rs::{cuda_module, kernel, launch_bounds, launch_contract, thread, warp};
 use cuda_core::{CudaContext, LaunchConfig1D};
-use cute_rs::copy::tma::{TmaEncodeOptions, create_tensor_map_tiled_with_options};
+use cute_rs::nvgpu::cpasync::{TmaEncodeOptions, create_tensor_map_tiled_with_options};
 use cute_rs::{
     C, ComposedLayout, Consumer, Layout, Mkl, Mxf4AccumulatorTile2x8, Mxf4E2M1, Mxf4TiledMma, Nkl,
     PipelineState, PipelineTmaAsync, PipelineTmaStore, Producer, RowMajor, SharedScaleAtom,
     SharedTensor, Sm1xxBlockScaleKMajor, Sm120Epilogue128x128, Sm120EpilogueHalfLayout,
     Sm120ScaleAtom, SmemTile, StaticPersistentTileScheduler, Swizzle, TensorMap, copy_tma_2d,
-    copy_tma_s2g_2d,
+    copy_tma_s2g_2d, size_in_bytes,
 };
+use cutlass_primitives as prims;
+use prims::mbarrier::Barrier;
+use prims::memory::DynamicSharedArray;
+use prims::{cuda_module, kernel, launch_bounds, launch_contract, thread, warp};
 
 /// Output row count for the fixed benchmark problem.
 const M: usize = 2048;
@@ -110,10 +111,10 @@ type SharedB = SharedTensor<Mxf4E2M1, f16, SmemP, Nkl>;
 
 /// Number of 128-element K tiles consumed for each output tile.
 const K_STAGES: usize = KB / 4;
-/// Byte footprint of one packed input-operand stage.
-const DATA_STAGE_BYTES: usize = BLOCK_M * 64;
-/// Byte footprint of one SM120 scale atom.
-const SCALE_STAGE_BYTES: usize = Sm120ScaleAtom::BYTES;
+/// Byte footprint of one packed input-operand stage, derived from [`ByteSmem`] via [`size_in_bytes`].
+const DATA_STAGE_BYTES: usize = size_in_bytes::<u8, ByteSmem>() as usize;
+/// Byte footprint of one SM120 scale atom, derived from [`ScaleTmaSmem`] via [`size_in_bytes`].
+const SCALE_STAGE_BYTES: usize = size_in_bytes::<u16, ScaleTmaSmem>() as usize;
 /// Total A/B value and scale bytes announced to each full-stage barrier.
 const TMA_TX_BYTES: u32 = (2 * DATA_STAGE_BYTES + 2 * SCALE_STAGE_BYTES) as u32;
 /// Number of shared slots overlapped by the load pipeline.
@@ -671,10 +672,10 @@ fn main() {
     let mut times_ms = Vec::with_capacity(SAMPLES);
     for _ in 0..SAMPLES {
         let start = ctx
-            .new_event(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))
+            .new_event_with_flags(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))
             .expect("create start event");
         let end = ctx
-            .new_event(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))
+            .new_event_with_flags(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))
             .expect("create end event");
 
         start.record(&stream).expect("record start event");

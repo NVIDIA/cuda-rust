@@ -33,26 +33,27 @@ use rustc_public::ty::{GenericArgs, RigidTy, Ty, TyKind};
 
 use super::tensor::{canonical_adt_path, const_arg, exact_schema, type_arg, unsigned_const};
 
-/// Exact defining path of `cute_rs::block_scaled::tensor::BlockScaledTensor`; public reexports do not change it.
-const BLOCK_SCALED_TENSOR: &str = "cute_rs::block_scaled::tensor::BlockScaledTensor";
-/// Exact defining path of `cute_rs::block_scaled::gemv::BlockScaledThreadRow`; public reexports do not change it.
-const BLOCK_SCALED_THREAD_ROW: &str = "cute_rs::block_scaled::gemv::BlockScaledThreadRow";
-/// Exact defining path of `cute_rs::block_scaled::gemv::BlockScaledTile64`; public reexports do not change it.
-const BLOCK_SCALED_TILE_64: &str = "cute_rs::block_scaled::gemv::BlockScaledTile64";
-/// Exact defining path of `cute_rs::block_scaled::gemv::LoadedBlockScaledTile64`; public reexports do not change it.
-const LOADED_BLOCK_SCALED_TILE_64: &str = "cute_rs::block_scaled::gemv::LoadedBlockScaledTile64";
-/// Exact defining path of `cute_rs::block_scaled::gemv::Nvfp4ThreadRow`; public reexports do not change it.
-const NVFP4_THREAD_ROW: &str = "cute_rs::block_scaled::gemv::Nvfp4ThreadRow";
-/// Exact defining path of `cute_rs::block_scaled::gemv::Nvfp4Tile64`; public reexports do not change it.
-const NVFP4_TILE_64: &str = "cute_rs::block_scaled::gemv::Nvfp4Tile64";
-/// Exact defining path of `cute_rs::block_scaled::gemv::LoadedNvfp4Tile64`; public reexports do not change it.
-const LOADED_NVFP4_TILE_64: &str = "cute_rs::block_scaled::gemv::LoadedNvfp4Tile64";
-/// Exact defining path of `cute_rs::block_scaled::layouts::KMajor`; public reexports do not change it.
-const K_MAJOR: &str = "cute_rs::block_scaled::layouts::KMajor";
-/// Exact defining path of `cute_rs::block_scaled::Mkl`; public reexports do not change it.
-const MKL: &str = "cute_rs::block_scaled::Mkl";
-/// Exact defining path of `cute_rs::block_scaled::Nkl`; public reexports do not change it.
-const NKL: &str = "cute_rs::block_scaled::Nkl";
+/// Exact defining path of `cute_rs::utils::blockscaled::tensor::BlockScaledTensor`; public reexports do not change it.
+const BLOCK_SCALED_TENSOR: &str = "cute_rs::utils::blockscaled::tensor::BlockScaledTensor";
+/// Exact defining path of `cute_rs::utils::blockscaled::gemv::BlockScaledThreadRow`; public reexports do not change it.
+const BLOCK_SCALED_THREAD_ROW: &str = "cute_rs::utils::blockscaled::gemv::BlockScaledThreadRow";
+/// Exact defining path of `cute_rs::utils::blockscaled::gemv::BlockScaledTile64`; public reexports do not change it.
+const BLOCK_SCALED_TILE_64: &str = "cute_rs::utils::blockscaled::gemv::BlockScaledTile64";
+/// Exact defining path of `cute_rs::utils::blockscaled::gemv::LoadedBlockScaledTile64`; public reexports do not change it.
+const LOADED_BLOCK_SCALED_TILE_64: &str =
+    "cute_rs::utils::blockscaled::gemv::LoadedBlockScaledTile64";
+/// Exact defining path of `cute_rs::utils::blockscaled::gemv::Nvfp4ThreadRow`; public reexports do not change it.
+const NVFP4_THREAD_ROW: &str = "cute_rs::utils::blockscaled::gemv::Nvfp4ThreadRow";
+/// Exact defining path of `cute_rs::utils::blockscaled::gemv::Nvfp4Tile64`; public reexports do not change it.
+const NVFP4_TILE_64: &str = "cute_rs::utils::blockscaled::gemv::Nvfp4Tile64";
+/// Exact defining path of `cute_rs::utils::blockscaled::gemv::LoadedNvfp4Tile64`; public reexports do not change it.
+const LOADED_NVFP4_TILE_64: &str = "cute_rs::utils::blockscaled::gemv::LoadedNvfp4Tile64";
+/// Exact defining path of `cute_rs::utils::blockscaled::layouts::KMajor`; public reexports do not change it.
+const K_MAJOR: &str = "cute_rs::utils::blockscaled::layouts::KMajor";
+/// Exact defining path of `cute_rs::utils::blockscaled::Mkl`; public reexports do not change it.
+const MKL: &str = "cute_rs::utils::blockscaled::Mkl";
+/// Exact defining path of `cute_rs::utils::blockscaled::Nkl`; public reexports do not change it.
+const NKL: &str = "cute_rs::utils::blockscaled::Nkl";
 /// Exact defining path of `cute_rs::numeric::Float4E2M1FN`; public reexports do not change it.
 const FLOAT4_E2M1FN: &str = "cute_rs::numeric::Float4E2M1FN";
 /// Exact defining path of `cute_rs::numeric::Float8E8M0FNU`; public reexports do not change it.

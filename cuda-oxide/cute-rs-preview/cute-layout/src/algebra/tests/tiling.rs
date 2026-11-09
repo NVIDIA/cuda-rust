@@ -6,6 +6,7 @@
 //! Contract tests for the tiling algebra family.
 
 use super::*;
+use crate::sm100_smem_crd2idx;
 
 /// Zipped division changes the coordinate structure, not the address. The
 /// inside-tile and tile-number coordinates are recombined mode by mode and
@@ -46,4 +47,70 @@ fn logical_product_repeats_the_block() {
     let mut seen: Vec<i64> = (0..r.size()).map(|i| r.call(&IntTuple::Leaf(i))).collect();
     seen.sort_unstable();
     assert_eq!(seen, (0..24).collect::<Vec<_>>());
+}
+
+/// `tile_to_shape` and `sm100_smem_layout` must match the canonical SM100 K-major and MN-major
+/// swizzled shared-memory layouts and agree element-for-element with `sm100_smem_crd2idx`.
+#[test]
+fn sm100_smem_layout_and_crd2idx_match_tile_to_shape() {
+    use alloc::string::ToString;
+    let k_major = sm100_smem_layout(128, 128, false).unwrap();
+    assert_eq!(
+        k_major.outer().to_string(),
+        "((8,16),(64,2)):((64,512),(1,8192))"
+    );
+    let mn_major = sm100_smem_layout(128, 128, true).unwrap();
+    assert_eq!(
+        mn_major.outer().to_string(),
+        "((64,2),(8,16)):((1,8192),(64,512))"
+    );
+
+    for r in 0..64u32 {
+        for c in 0..64u32 {
+            let coord = IntTuple::Tuple(vec![IntTuple::Leaf(r.into()), IntTuple::Leaf(c.into())]);
+            let expected = sm100_smem_layout(64, 64, false)
+                .unwrap()
+                .checked_call(&coord)
+                .unwrap() as usize;
+            assert_eq!(sm100_smem_crd2idx::<64, 64, false>(r, c), expected);
+        }
+    }
+    for r in 0..128u32 {
+        for c in 0..32u32 {
+            let coord = IntTuple::Tuple(vec![IntTuple::Leaf(r.into()), IntTuple::Leaf(c.into())]);
+            let expected = sm100_smem_layout(128, 32, true)
+                .unwrap()
+                .checked_call(&coord)
+                .unwrap() as usize;
+            assert_eq!(sm100_smem_crd2idx::<128, 32, true>(r, c), expected);
+        }
+    }
+}
+
+/// One-axis products whose block leaves gaps get a repetition with several
+/// modes (`complement(3:2, 12)` is `(2,2):(1,6)`). Both products must still
+/// pair that whole repetition with the block instead of reporting an error,
+/// and every cell must be the block offset plus the repeated copy's offset.
+#[test]
+fn one_axis_products_accept_a_multi_mode_repetition() {
+    let a = l("3:2");
+    let b = l("4:1");
+    let comp = complement(&a, a.size() * b.cosize()).unwrap();
+    assert_eq!(comp.to_string(), "(2,2):(1,6)");
+    let blocked = blocked_product(&a, &b).unwrap();
+    let raked = raked_product(&a, &b).unwrap();
+    assert_eq!(blocked.to_string(), "(3,2,2):(2,1,6)");
+    assert_eq!(raked.to_string(), "(2,2,3):(1,6,2)");
+    for k in 0..12 {
+        let (i, j) = (k % 3, k / 3);
+        let expect = a.call(&IntTuple::Leaf(i)) + comp.call(&IntTuple::Leaf(j));
+        assert_eq!(blocked.call(&IntTuple::Leaf(k)), expect, "blocked at {k}");
+        let (j, i) = (k % 4, k / 4);
+        let expect = a.call(&IntTuple::Leaf(i)) + comp.call(&IntTuple::Leaf(j));
+        assert_eq!(raked.call(&IntTuple::Leaf(k)), expect, "raked at {k}");
+    }
+    // The twelve cells cover offsets 0..12 exactly once.
+    let mut seen: Vec<i64> = (0..12).map(|k| blocked.call(&IntTuple::Leaf(k))).collect();
+    seen.sort_unstable();
+    assert_eq!(seen, (0..12).collect::<Vec<_>>());
 }

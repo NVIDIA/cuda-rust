@@ -7,12 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Refresh `cutile-kernels` from Grout with split-K prefill/merge, persistent
+  RMSNorm, and the remaining baseline and single-token variants. NVFP4 MoE
+  routing, quantization, FC1/FC2, and finalization kernels now live in the
+  reusable corpus and are shared by the example. Peak performance requires
+  the CUDA Toolkit 13.5 Tile IR assembler (#1746).
+- Add a reusable fused QKV projection, Q/K RMSNorm, FP8 conversion and paged
+  KV-scatter kernel, with a correctness example and opt-in CUDA graph benchmark
+  sweep. The initial schedule is not B200-tuned (#1746).
+
 ### Fixed
 
 - A kernel that imports from `cutile` while `cutile::core` is missing from the
   module registry fails with an error that names the cause, instead of a later
   "unable to resolve generic type" error. On `x86_64-pc-windows-gnu`, GNU ld's
   `--gc-sections` drops the registry entries (#1605).
+
+### Documentation
+
+- Link the Tile library provider catalog and CUDA Oxide export workflow;
+  refresh kernel/example discovery, workspace paths, CUDA 13.5 setup, and
+  bytecode-version negotiation instructions (#1746).
 
 ## [0.5.0] - 2026-11-04
 

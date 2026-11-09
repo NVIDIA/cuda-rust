@@ -12,16 +12,16 @@ under `cute-rs-preview/`, [`cute-rs-preview/AGENTS.md`](cute-rs-preview/AGENTS.m
 up or pass one off as the other:
 
 ```text
-┌─────────────────────────────────────┬──────────────────────────────────────────────┐
-│  1. Native SIMT (`cuda_device`)     │  2. CuTe in Rust (`cute-rs` + `ctm-rs`)      │
-├─────────────────────────────────────┼──────────────────────────────────────────────┤
-│  • Explicit per-thread / per-warp   │  • CUTLASS CuTe's layout algebra, partitions,│
-│    control (`thread`, `warp`,       │    TMA transfers, pipelines, and Tensor Core │
-│    `SharedArray`, `tcgen05_*`).     │    MMA ops encoded in Rust's type system.    │
-│  • Compiles via `dialect-mir` ──►   │  • Compiles via `dialect-cute` ──►           │
-│    LLVM / libNVVM ──► PTX.          │    `cutlass-mlir` (CUTLASS 4.7 compiler).    │
-│  • Lives in `models/*` & `examples` │  • Lives in `cute-rs-preview/`               │
-└─────────────────────────────────────┴──────────────────────────────────────────────┘
+┌─────────────────────────────────────┬────────────────────────────────────────────────────┐
+│  1. Native SIMT (`cuda_device`)     │  2. CuTe in Rust (`cute-rs` + `cutlass-primitives`)│
+├─────────────────────────────────────┼────────────────────────────────────────────────────┤
+│  • Explicit per-thread / per-warp   │  • CUTLASS CuTe's layout algebra, partitions,      │
+│    control (`thread`, `warp`,       │    TMA transfers, pipelines, and Tensor Core       │
+│    `SharedArray`, `tcgen05_*`).     │    MMA ops encoded in Rust's type system.          │
+│  • Compiles via `dialect-mir` ──►   │  • Compiles via `dialect-cute` ──►                 │
+│    LLVM / libNVVM ──► PTX.          │    `cutlass-mlir` (CUTLASS 4.7 compiler).          │
+│  • Lives in `models/*` & `examples` │  • Lives in `cute-rs-preview/`                     │
+└─────────────────────────────────────┴────────────────────────────────────────────────────┘
 ```
 
 * **Hard rule for `cute-rs` kernels (`cute-rs-preview/`):** CuTe’s layout
@@ -121,7 +121,7 @@ When adding or modifying compiler passes (`mir-importer`, `mir-transforms`,
 Real-world deployments (such as [speakrs](https://avencera.com/blog/writing-gpu-kernels-in-rust-speakrs-60x-faster-than-pyannote))
 and Blackwell SOTA benchmarks highlight four practical rules for agents:
 
-1. **Prefer typed `cuda_device` / `ctm_rs` / `cute_rs` operations over opaque `ptx_asm!`.**
+1. **Prefer typed `cuda_device` / `cutlass_primitives` / `cute_rs` operations over opaque `ptx_asm!`.**
    * Opaque `ptx_asm!` hides address arithmetic and memory effects from LLVM
      (causing Loop Strength Reduction to hoist base pointers and lose immediate
      offsets, or forcing overly conservative memory clobbers across

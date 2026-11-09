@@ -10,8 +10,9 @@
 mod kernel;
 mod physical;
 
-use ctm_rs::host::tma::{EncodeOptions, create_tensor_map_tiled};
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer, LaunchConfig1D, sys};
+use cutlass_primitives as prims;
+use prims::host::tma::{EncodeOptions, create_tensor_map_tiled};
 use serde_json::json;
 use std::{
     error::Error,
@@ -102,7 +103,7 @@ impl Args {
             match key.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "fp16_gemm_256x352_ctm [--mnk M,N,K] [--has-bias] [--clusters COUNT]\n  [--warmup 25] [--iters 100] [--timing-mode direct|graph] [--graph-launches 10]\n  [--json RESULT.json] [--input-dir DIR] [--output C.f16]\n  [--skip-cpu-check] (requires external input/output oracle)\nctm-rs GEMM with CPU verification. M must be a positive multiple\nof 256, N and K of 8. SM100 required. Graph timing is the default.\nDirect --warmup 0 --iters 1 launches exactly once."
+                        "fp16_gemm_256x352_ctm [--mnk M,N,K] [--has-bias] [--clusters COUNT]\n  [--warmup 25] [--iters 100] [--timing-mode direct|graph] [--graph-launches 10]\n  [--json RESULT.json] [--input-dir DIR] [--output C.f16]\n  [--skip-cpu-check] (requires external input/output oracle)\ncutlass-primitives GEMM with CPU verification. M must be a positive multiple\nof 256, N and K of 8. SM100 required. Graph timing is the default.\nDirect --warmup 0 --iters 1 launches exactly once."
                     );
                     std::process::exit(0);
                 }
@@ -581,7 +582,7 @@ fn main() -> Result<()> {
     } else {
         times[mid]
     };
-    let result = json!({"implementation": "ctm-rs", "mnk": [m,n,k], "has_bias": args.has_bias,
+    let result = json!({"implementation": "cutlass-primitives", "mnk": [m,n,k], "has_bias": args.has_bias,
         "metric_value": median, "metric_unit": "us", "tflops": 2.0*m as f64*n as f64*k as f64/(median*1.0e6),
         "verification": if args.skip_cpu_check { "external-oracle-required" } else { "cpu-pass" },
         "provenance": {"gpu": ctx.device_name()?, "compute_capability": [capability.0,capability.1],

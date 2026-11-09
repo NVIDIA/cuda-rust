@@ -28,6 +28,11 @@ pub const BLOCK_SCALED_MMA: Requirements = Requirements {
     feature: Feature::ScaledMma,
 };
 
+/// FP8 conversion/storage in the fused QKV example requires SM90 or newer.
+pub const FP8: Requirements = Requirements {
+    feature: Feature::Fp8,
+};
+
 /// Device GDC operations and the host-side PDL launch opt-in.
 pub const PDL: Requirements = Requirements {
     feature: Feature::ProgrammaticDependentLaunch,
@@ -91,6 +96,10 @@ mod tests {
             (BLOCK_SCALED_MMA, BytecodeVersion::V13_3, "sm_90", false),
             (BLOCK_SCALED_MMA, BytecodeVersion::V13_3, "sm_120", true),
             (BLOCK_SCALED_MMA, BytecodeVersion::V13_3, "sm_121", true),
+            (FP8, BytecodeVersion::V13_2, "sm_80", false),
+            (FP8, BytecodeVersion::V13_3, "sm_90", true),
+            (FP8, BytecodeVersion::V13_2, "sm_100", true),
+            (FP8, BytecodeVersion::V13_2, "sm_120", true),
             (PDL, BytecodeVersion::V13_3, "sm_120", false),
             (PDL, BytecodeVersion::V13_4, "sm_89", false),
             (PDL, BytecodeVersion::V13_4, "sm_90", true),
@@ -167,6 +176,7 @@ mod tests {
             let name = path.file_stem().unwrap().to_str().unwrap();
             let requirement = match name {
                 "nvfp4" | "nvfp4_moe" | "mxfp8" => "BLOCK_SCALED_MMA",
+                "fused_qkv" => "FP8",
                 "pdl" => "PDL",
                 _ => "BASELINE",
             };

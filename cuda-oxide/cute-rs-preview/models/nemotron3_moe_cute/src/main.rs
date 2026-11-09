@@ -69,8 +69,6 @@
 
 #![feature(f16)]
 
-use ctm_rs::memory::{DisjointSlice, DynamicSharedArray, SharedArray};
-use ctm_rs::{cuda_module, kernel, launch_bounds, launch_contract, thread};
 use cuda_core::{
     CudaContext, CudaStream, DeviceBuffer, IntoResult, LaunchConfig, LaunchConfig1D, sys,
 };
@@ -93,6 +91,9 @@ use cute_rs::{
     Swizzle, TensorMap, TensorSSA, copy_tma_2d, idx2crd_2d, idx2crd_col_major_2d, size_in_bytes,
     sm1xx_block_scale_crd2idx, sm100_noswizzle_burst_u64_crd2idx,
 };
+use cutlass_primitives as prims;
+use prims::memory::{DisjointSlice, DynamicSharedArray, SharedArray};
+use prims::{cuda_module, kernel, launch_bounds, launch_contract, thread};
 use std::mem::MaybeUninit;
 use std::sync::Arc;
 

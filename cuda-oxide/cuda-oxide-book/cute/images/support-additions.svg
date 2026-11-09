@@ -54,7 +54,7 @@
 <text x="40" y="286" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Inline PTX and cute.ffi</text>
 <circle cx="392" cy="282" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
 <circle cx="472" cy="282" r="7" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
-<text x="540" y="286" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">none on the CuTe path; hardware through ctm-rs and cuda-device</text>
+<text x="540" y="286" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">none on the CuTe path; hardware through cutlass-primitives and cuda-device</text>
 <rect x="32" y="294" width="1176" height="24" rx="3" style="fill: var(--panel)"/>
 <text x="40" y="310" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">printf, print_tensor, IR dumps</text>
 <circle cx="392" cy="306" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
@@ -117,7 +117,7 @@
 <text x="40" y="622" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Primitives API (4.7, experimental)</text>
 <circle cx="392" cy="618" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
 <circle cx="472" cy="618" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 472 611 A 7 7 0 0 1 472 625 Z" style="fill: var(--code)"/>
-<text x="540" y="622" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">ctm-rs covers the shipped kernels; no atomics, wgmma, libdevice</text>
+<text x="540" y="622" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">cutlass-primitives covers the shipped kernels; no atomics, wgmma, libdevice</text>
 <circle cx="47" cy="652" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
 <text x="62" y="656" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">available</text>
 <circle cx="160" cy="652" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 160 645 A 7 7 0 0 1 160 659 Z" style="fill: var(--code)"/>

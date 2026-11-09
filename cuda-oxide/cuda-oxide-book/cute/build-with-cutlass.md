@@ -49,7 +49,7 @@ CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir cargo oxide build fp16_gemm_256x352_cute 
 | Variable | Purpose |
 | --- | --- |
 | `CUDA_OXIDE_DEVICE_BACKEND` | `native` (default) or `cutlass-mlir`; other values fail |
-| `CUDA_OXIDE_MLIR_PROFILE` | `cutlass-full-cute-mlir22` (default) or `cutlass-primitives-mlir22` for kernels that use `ctm-rs` alone; part of the build fingerprint |
+| `CUDA_OXIDE_MLIR_PROFILE` | `cutlass-full-cute-mlir22` (default) or `cutlass-primitives-mlir22` for kernels that use `cutlass-primitives` alone; part of the build fingerprint |
 | `CUDA_OXIDE_CUTLASS_OPT_LEVEL` | `2` or `3` (default); the attention examples compare at `2`; part of the build fingerprint |
 | `CUDA_OXIDE_MLIR_OUTPUT` | Path for the prepared MLIR text, for example `$PWD/module.mlir` |
 | `CUDA_OXIDE_CUTLASS_COMPILER` | Absolute path to a `libCutlassCompiler.so` with the pinned digest |

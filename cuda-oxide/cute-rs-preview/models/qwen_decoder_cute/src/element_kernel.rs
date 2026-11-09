@@ -4,10 +4,11 @@
  */
 //! BF16 tensor operations for the checked Qwen decoder composition.
 
-use ctm_rs::memory::DisjointSlice;
-use ctm_rs::{cuda_module, kernel, thread};
 use cute_rs::BFloat16;
 use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
+use cutlass_primitives as prims;
+use prims::memory::DisjointSlice;
+use prims::{cuda_module, kernel, thread};
 
 /// Dense BF16 primitives; the host validates extents and keeps output disjoint.
 ///

@@ -1,0 +1,18 @@
+[package]
+name = "shared_ptr_projected_store"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+# Standalone crate (not part of the parent workspace).
+[workspace]
+
+# Regression example: a shared-memory pointer stored through a deref, field,
+# or array-element place whose declared type is a generic `*mut T`.
+# Build and run with:
+#   cargo oxide run shared_ptr_projected_store
+
+[dependencies]
+cuda-device = { path = "../../../cuda-device" }
+cuda-host = { path = "../../../cuda-host" }
+cuda-core = { path = "../../../../../cuda-core" }

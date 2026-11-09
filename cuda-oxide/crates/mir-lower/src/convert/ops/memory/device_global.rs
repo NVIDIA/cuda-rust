@@ -128,10 +128,13 @@ pub fn convert_global_alloc_dc(
 
     let global_name = if let Some(existing) = device_globals.get(&global_key) {
         if existing.declaration != declaration {
-            return Err(anyhow_to_pliron(anyhow::anyhow!(
-                "duplicate global_key {:?} has an incompatible declaration",
-                global_key
-            )));
+            if !existing.declaration.is_typed_view_of(&declaration) {
+                return Err(anyhow_to_pliron(anyhow::anyhow!(
+                    "duplicate global_key {:?} has an incompatible declaration",
+                    global_key
+                )));
+            }
+            validate_initialized_view(ctx, &declaration).map_err(anyhow_to_pliron)?;
         }
         existing.symbol.clone()
     } else {
@@ -195,17 +198,12 @@ fn create_device_global(
             )));
         }
         let storage_type = if let Some(encoded) = spec.initializer_relocations {
-            validate_relocated_initialized_global_layout(
-                ctx,
-                spec.mir_type,
-                byte_count,
-                spec.alignment,
-            )
-            .map_err(anyhow_to_pliron)?;
+            validate_initializer_layout(ctx, spec.mir_type, byte_count, spec.alignment, true)
+                .map_err(anyhow_to_pliron)?;
             relocated_initializer_storage_type(ctx, byte_count, spec.alignment, encoded)
                 .map_err(anyhow_to_pliron)?
         } else {
-            validate_initialized_global_layout(ctx, spec.mir_type, byte_count, spec.alignment)
+            validate_initializer_layout(ctx, spec.mir_type, byte_count, spec.alignment, false)
                 .map_err(anyhow_to_pliron)?;
             let i8_ty = IntegerType::get(ctx, 8, Signedness::Signless);
             ArrayType::get(ctx, i8_ty.into(), byte_count).into()
@@ -314,6 +312,46 @@ fn create_device_global(
     );
 
     Ok(name)
+}
+
+/// Check that `mir_type` reads rustc's initializer bytes at rustc's layout.
+///
+/// A relocated initializer has a segmented physical carrier, which admits the
+/// wider set of layouts in [`validate_relocated_initialized_global_layout`].
+fn validate_initializer_layout(
+    ctx: &mut Context,
+    mir_type: TypeHandle,
+    byte_count: u64,
+    alignment: u64,
+    relocated: bool,
+) -> std::result::Result<(), anyhow::Error> {
+    if relocated {
+        validate_relocated_initialized_global_layout(ctx, mir_type, byte_count, alignment)
+    } else {
+        validate_initialized_global_layout(ctx, mir_type, byte_count, alignment)
+    }
+}
+
+/// Validate one more typed view of an already-lowered initialized global.
+///
+/// The storage was emitted from the first declaration; this view shares its
+/// bytes, so it needs the same layout proof against them.
+fn validate_initialized_view(
+    ctx: &mut Context,
+    declaration: &DeviceGlobalDeclaration,
+) -> std::result::Result<(), anyhow::Error> {
+    let initializer_hex = declaration
+        .initializer_hex
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("typed view of a device global without an initializer"))?;
+    let byte_count = initializer_hex_byte_count(initializer_hex)?;
+    validate_initializer_layout(
+        ctx,
+        declaration.mir_type,
+        byte_count,
+        declaration.alignment,
+        declaration.initializer_relocations.is_some(),
+    )
 }
 
 pub(super) fn relocated_initializer_storage_type(

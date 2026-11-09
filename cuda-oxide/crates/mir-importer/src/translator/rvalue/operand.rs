@@ -11,16 +11,18 @@ use super::const_alloc::{
     translate_static_array_as_slice,
 };
 use super::const_bytes::{
-    constant_bytes, translate_array_value_constant, translate_constant_value_from_bytes,
-    translate_struct_constant, translate_tuple_constant, translate_zero_sized_constant_value,
+    constant_bytes, translate_array_value_constant, translate_struct_constant,
+    translate_tuple_constant, translate_zero_sized_constant_value,
 };
 use super::const_enum::{read_uint_from_bytes, translate_enum_constant};
 use super::const_union::translate_union_constant;
 use super::place_read::translate_place;
-use super::promoted::translate_ptr_to_array_constant;
+use super::promoted::{constant_allocation, translate_ptr_to_array_constant};
+use super::promoted_alloc::translate_reference_constant;
 use super::static_global::{get_static_pointer_info, translate_static_global_pointer};
 use super::statics::{
-    shared_static_source_identity, shared_static_source_name, static_target_from_constant,
+    refuse_stored_shared_memory_pointer, shared_static_source_identity, shared_static_source_name,
+    static_target_from_constant,
 };
 use crate::error::{TranslationErr, TranslationResult};
 use crate::translator::facts;
@@ -29,7 +31,6 @@ use crate::translator::values::ValueMap;
 use dialect_iket::{ops::IketSentinelTokenOp, types::IketRangeTokenType};
 use dialect_mir::attributes::MirFP16Attr;
 use dialect_mir::attributes::{MirCastKindAttr, MirPointerKindAuthorityAttr};
-use dialect_mir::ops::MirRefOp;
 use dialect_mir::types::MirFP16Type;
 use pliron::basic_block::BasicBlock;
 use pliron::builtin::types::{FP32Type, FP64Type, IntegerType};
@@ -553,10 +554,17 @@ pub fn translate_operand(
                 );
             }
 
-            // Debug repr kept for diagnostics only (CUDA_OXIDE_DEBUG_CONST and
-            // the unsupported-constant error at the bottom); constant VALUES
+            // Debug repr kept for diagnostics only (the unsupported-constant
+            // error at the bottom); constant VALUES
             // are read through typed rustc_public APIs, never parsed from it.
             let const_str = format!("{:?}", constant.const_);
+
+            // every route below can turn a relocation into a pointer to an
+            // initialized global, which a shared-memory pointer type cannot hold
+            if constant_allocation(constant).is_some_and(|alloc| !alloc.provenance.ptrs.is_empty())
+            {
+                refuse_stored_shared_memory_pointer(&rust_ty, "a constant", loc.clone())?;
+            }
 
             // Handle pointer-to-array constants (byte strings, typed arrays like [f64; 3], etc.)
             if is_ptr_to_array {
@@ -628,276 +636,36 @@ pub fn translate_operand(
                 .deref(ctx)
                 .is::<dialect_mir::types::MirPtrType>()
             {
-                // Pointer type constant - could be:
-                // 1. A raw pointer constant (like core::ptr::null()) - just bytes,
-                //    no provenance
-                // 2. A reference to a constant struct (like &(8..16)) - need
-                //    struct + mir.ref
-                // 3. A reference to any other promoted constant (like the `&77`
-                //    that -O const-folds out of `Option<&u32>::unwrap_or(&77)`,
-                //    issue #132) - follow the allocation provenance, materialize
-                //    the pointee constant, then mir.ref
+                // Pointer type constant - either:
+                // 1. A reference or raw pointer with provenance, such as
+                //    `const C: &T = &...`, a promoted `&(8..16)`, or the `&77`
+                //    that -O const-folds out of `Option<&u32>::unwrap_or(&77)`
+                //    (issue #132). The provenance entry names the allocation
+                //    the pointer points into
+                // 2. A raw pointer without provenance (`core::ptr::null()`,
+                //    `without_provenance(42)`), whose bytes are the address
                 //
-                // Only constants WITHOUT provenance may take the raw-pointer
-                // path; a provenance entry always names a real allocation, and
-                // ignoring it would lower the reference to `inttoptr 0` (a null
-                // pointer).
-
-                // Extract pointer type info before further borrows
-                let (pointee_ty, is_mutable, pointee_is_struct) = {
-                    let ty_ref = const_ty_ptr.deref(ctx);
-                    let ptr_ty = ty_ref
-                        .downcast_ref::<dialect_mir::types::MirPtrType>()
-                        .unwrap();
-                    let pointee = ptr_ty.pointee;
-                    let mutable = ptr_ty.is_mutable;
-                    let is_struct = pointee.deref(ctx).is::<dialect_mir::types::MirStructType>();
-                    (pointee, mutable, is_struct)
-                };
-
-                // Check if the constant has actual struct data (not all zeros)
-                // Handle both Allocated constants and promoted constants (Ty variant)
-                //
-                // Debug: print constant info for reference-to-struct types
-                if pointee_is_struct && std::env::var("CUDA_OXIDE_DEBUG_CONST").is_ok() {
-                    eprintln!(
-                        "[DEBUG] Ptr-to-struct constant: kind={:?}, str={:?}",
-                        constant.const_.kind(),
-                        const_str
-                    );
-                }
-
-                let has_struct_data = if pointee_is_struct {
-                    match constant.const_.kind() {
-                        ConstantKind::Allocated(alloc) => {
-                            // For promoted constants like &(8..16), the bytes are zeros
-                            // (pointer placeholder) but provenance indicates a real allocation.
-                            // Check for provenance OR non-zero bytes.
-                            let has_provenance = !alloc.provenance.ptrs.is_empty();
-                            let has_nonzero_bytes = alloc
-                                .raw_bytes()
-                                .ok()
-                                .map(|bytes| bytes.iter().any(|&b| b != 0))
-                                .unwrap_or(false);
-                            has_provenance || has_nonzero_bytes
-                        }
-                        ConstantKind::Ty(_) => {
-                            // Promoted constants (like &(8..16)) are Ty variants
-                            // These contain the actual struct data
-                            true
-                        }
-                        _ => false,
-                    }
-                } else {
-                    false
-                };
-
-                if has_struct_data {
-                    // This is a reference to a constant struct (like &(8..16))
-
-                    // Create the struct constant, then use mir.ref to get a pointer
-                    let (struct_val, last_op) = translate_struct_constant(
-                        ctx,
-                        constant,
-                        &rust_ty,
-                        pointee_ty,
-                        block_ptr,
-                        prev_op,
-                        loc.clone(),
-                    )?;
-
-                    // Now create mir.ref to get a pointer to the struct
-                    use dialect_mir::ops::MirRefOp;
-                    let ref_op = Operation::new(
-                        ctx,
-                        MirRefOp::get_concrete_op_info(),
-                        vec![const_ty_ptr], // Result is pointer to struct
-                        vec![struct_val],   // Operand is the struct value
-                        vec![],
-                        0,
-                    );
-                    ref_op.deref_mut(ctx).set_loc(loc);
-
-                    let mir_ref = MirRefOp::new(ref_op);
-
-                    mir_ref
-                        .set_attr_mutable(ctx, dialect_mir::attributes::MutabilityAttr(is_mutable));
-                    mir_ref.set_pointer_kind_authority(
-                        ctx,
-                        MirPointerKindAuthorityAttr::StaticAddress,
-                    );
-
-                    if let Some(prev) = last_op {
-                        mir_ref.get_operation().insert_after(ctx, prev);
-                    } else {
-                        mir_ref.get_operation().insert_at_front(block_ptr, ctx);
-                    }
-
-                    let ptr_val = mir_ref.get_operation().deref(ctx).get_result(0);
-                    return Ok((ptr_val, Some(mir_ref.get_operation())));
-                }
-
-                // Reference to a non-struct promoted constant (issue #132).
-                //
-                // Under -O, MIR const-folds e.g. the `None` arm of
-                // `Option<&u32>::unwrap_or(&77)` into a constant of type `&u32`
-                // whose data bytes are a pointer placeholder and whose
-                // provenance entry names the allocation holding the literal
-                // `77`. Struct pointees were already handled above; follow the
-                // provenance for every other pointee type too, materialize the
-                // pointee through the shared constant-from-bytes path, and take
-                // its address with mir.ref (mem2reg/lowering turn that into an
-                // alloca + store + address; sound because promoted constants
-                // are immutable).
-                let backing_alloc: Option<&rustc_public::ty::Allocation> =
-                    match constant.const_.kind() {
-                        ConstantKind::Allocated(alloc) => Some(alloc),
-                        ConstantKind::Ty(ty_const) => match ty_const.kind() {
-                            rustc_public::ty::TyConstKind::Value(_, alloc) => Some(alloc),
-                            _ => None,
-                        },
-                        _ => None,
-                    };
+                // A reference constant is `&'static`, so safe code can return
+                // it from the function that names it. Its pointee therefore
+                // lives in a module-level immutable global, one per rustc
+                // allocation keyed by its contents, never in this function's
+                // frame (issue #1724).
+                // Ignoring provenance instead would lower the reference to
+                // `inttoptr 0`, a null pointer.
+                let backing_alloc = constant_allocation(constant);
 
                 if let Some(alloc) = backing_alloc
-                    && let Some(&(prov_pos, prov)) = alloc.provenance.ptrs.first()
+                    && !alloc.provenance.ptrs.is_empty()
                 {
-                    use rustc_public::mir::alloc::GlobalAlloc;
-                    let alloc_id = prov.0;
-
-                    // The pointer's own data bytes encode the byte offset into
-                    // the target allocation (zero for plain promoted literals
-                    // like `&77`). The struct/array provenance branches assume
-                    // offset zero; here the slice below honors a non-zero
-                    // offset, and an unreadable offset is a hard error rather
-                    // than a silently wrong address.
-                    let ptr_width =
-                        rustc_public::target::MachineInfo::target_pointer_width().bytes();
-                    let target_offset = alloc
-                        .read_partial_uint(prov_pos..prov_pos + ptr_width)
-                        .map_err(|e| {
-                            input_error_noloc!(TranslationErr::unsupported(format!(
-                                "Failed to read pointer constant provenance offset: {:?}",
-                                e
-                            )))
-                        })? as usize;
-
-                    // The pointee is decoded from raw bytes below, with no
-                    // provenance map to resolve pointers nested inside it, so
-                    // a pointee that itself contains relocations must fail
-                    // loudly before its placeholder bytes decode as addresses.
-                    let reject_pointee_relocations = |relocations: usize| -> TranslationResult<()> {
-                        if relocations != 0 {
-                            return input_err!(
-                                loc.clone(),
-                                TranslationErr::unsupported(format!(
-                                    "Promoted constant's pointee contains {relocations} pointer \
-                                         relocation(s); cuda-oxide cannot yet preserve nested \
-                                         pointer provenance"
-                                ))
-                            );
-                        }
-                        Ok(())
-                    };
-                    let target_bytes: Vec<u8> = match GlobalAlloc::from(alloc_id) {
-                        GlobalAlloc::Memory(target_alloc) => {
-                            reject_pointee_relocations(target_alloc.provenance.ptrs.len())?;
-                            target_alloc.raw_bytes().ok().unwrap_or_else(|| {
-                                target_alloc
-                                    .bytes
-                                    .iter()
-                                    .map(|opt: &Option<u8>| opt.unwrap_or(0))
-                                    .collect::<Vec<u8>>()
-                            })
-                        }
-                        GlobalAlloc::Static(static_def) => {
-                            let target_alloc = static_def.eval_initializer().map_err(|e| {
-                                input_error_noloc!(TranslationErr::unsupported(format!(
-                                    "Failed to evaluate static initializer for pointer constant: {:?}",
-                                    e
-                                )))
-                            })?;
-                            reject_pointee_relocations(target_alloc.provenance.ptrs.len())?;
-                            target_alloc.raw_bytes().ok().unwrap_or_else(|| {
-                                target_alloc
-                                    .bytes
-                                    .iter()
-                                    .map(|opt: &Option<u8>| opt.unwrap_or(0))
-                                    .collect::<Vec<u8>>()
-                            })
-                        }
-                        other => {
-                            return input_err!(
-                                loc,
-                                TranslationErr::unsupported(format!(
-                                    "Pointer constant provenance points to non-memory allocation: {:?}",
-                                    other
-                                ))
-                            );
-                        }
-                    };
-
-                    if target_offset > target_bytes.len() {
-                        return input_err!(
-                            loc,
-                            TranslationErr::unsupported(format!(
-                                "Pointer constant provenance offset {} exceeds target allocation size {}",
-                                target_offset,
-                                target_bytes.len()
-                            ))
-                        );
-                    }
-
-                    // The shared materializer needs the pointee's Rust type for
-                    // enum-layout queries and ZST detection.
-                    let Some((pointee_rust_ty, _)) = get_static_pointer_info(&rust_ty) else {
-                        return input_err!(
-                            loc,
-                            TranslationErr::unsupported(format!(
-                                "Pointer constant with provenance has unsupported Rust type: {:?}",
-                                rust_ty
-                            ))
-                        );
-                    };
-
-                    let (pointee_val, last_op) = translate_constant_value_from_bytes(
+                    return translate_reference_constant(
                         ctx,
-                        &pointee_rust_ty,
-                        pointee_ty,
-                        &target_bytes[target_offset..],
+                        alloc,
+                        &rust_ty,
+                        const_ty_ptr,
                         block_ptr,
                         prev_op,
-                        loc.clone(),
-                    )?;
-
-                    // Take the address of the materialized value, exactly like
-                    // the struct branch above.
-                    let ref_op = Operation::new(
-                        ctx,
-                        MirRefOp::get_concrete_op_info(),
-                        vec![const_ty_ptr], // Result is pointer to the pointee
-                        vec![pointee_val],  // Operand is the materialized value
-                        vec![],
-                        0,
+                        loc,
                     );
-                    ref_op.deref_mut(ctx).set_loc(loc);
-
-                    let mir_ref = MirRefOp::new(ref_op);
-                    mir_ref
-                        .set_attr_mutable(ctx, dialect_mir::attributes::MutabilityAttr(is_mutable));
-                    mir_ref.set_pointer_kind_authority(
-                        ctx,
-                        MirPointerKindAuthorityAttr::StaticAddress,
-                    );
-
-                    if let Some(prev) = last_op {
-                        mir_ref.get_operation().insert_after(ctx, prev);
-                    } else {
-                        mir_ref.get_operation().insert_at_front(block_ptr, ctx);
-                    }
-
-                    let ptr_val = mir_ref.get_operation().deref(ctx).get_result(0);
-                    return Ok((ptr_val, Some(mir_ref.get_operation())));
                 }
 
                 // Raw pointer constant (like core::ptr::null()).

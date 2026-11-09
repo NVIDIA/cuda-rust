@@ -156,12 +156,34 @@ pub struct DeviceGlobalDeclaration {
     pub immutable: bool,
 }
 
+impl DeviceGlobalDeclaration {
+    /// Whether `other` declares the same immutable initialized storage as
+    /// `self`, viewed through a possibly different MIR type.
+    ///
+    /// An initializer fixes the lowered storage: it exports as rustc's byte
+    /// image whatever the MIR type, which then only selects the layout to
+    /// validate. One read-only rustc allocation reached through several
+    /// pointee types (`&Option<u32>` and `&u32` into its payload) must stay one
+    /// global so the pointers compare equal, so each such view is validated
+    /// against the shared bytes instead of being refused. Writable or
+    /// uninitialized storage keeps the exact-match rule.
+    pub fn is_typed_view_of(&self, other: &Self) -> bool {
+        self.immutable
+            && self.initializer_hex.is_some()
+            && Self {
+                mir_type: self.mir_type,
+                ..other.clone()
+            } == *self
+    }
+}
+
 /// Lowered symbol and declaration associated with one device-global key.
 #[derive(Clone)]
 pub struct DeviceGlobalRecord {
     /// LLVM symbol created for this allocation.
     pub symbol: Identifier,
-    /// Storage declaration that every reuse of the key must match.
+    /// Storage declaration that every reuse of the key must match, up to the
+    /// typed views [`DeviceGlobalDeclaration::is_typed_view_of`] admits.
     pub declaration: DeviceGlobalDeclaration,
 }
 

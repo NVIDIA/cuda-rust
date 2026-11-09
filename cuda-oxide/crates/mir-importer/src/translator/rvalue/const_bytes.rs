@@ -462,11 +462,12 @@ fn translate_array_value_constant_inner(
 
 /// ## How it works
 ///
-/// 1. Resolve the struct's own allocation (following by-ref provenance when the
-///    constant is a promoted `&Struct`)
+/// 1. Resolve the struct's own allocation
 /// 2. Decode each field at its rustc layout offset from that allocation
-/// 3. Thin pointer fields that relocate to device statics become
-///    [`MirGlobalAllocOp`](dialect_mir::ops::MirGlobalAllocOp) results; other fields use the byte decoder
+/// 3. Thin pointer fields that relocate to device statics or to anonymous
+///    constant memory become pointers into
+///    [`MirGlobalAllocOp`](dialect_mir::ops::MirGlobalAllocOp) results; other
+///    fields use the byte decoder
 /// 4. Create MirConstructStructOp with those operands
 ///
 /// Each field is read at the byte offset rustc's layout records for it, so
@@ -475,9 +476,9 @@ fn translate_array_value_constant_inner(
 /// nested inside another is sliced at its true width rather than at the sum of
 /// its fields.
 ///
-/// Aggregate **const** values with thin pointers to device statics are
-/// materialized per field; device-global initializers use a separate
-/// allocation-level relocation path instead of this value reconstruction.
+/// Aggregate **const** values with thin pointer fields are materialized per
+/// field; device-global initializers use a separate allocation-level
+/// relocation path instead of this value reconstruction.
 pub(super) fn translate_struct_constant(
     ctx: &mut Context,
     constant: &mir::ConstOperand,
@@ -501,87 +502,16 @@ pub(super) fn translate_struct_constant(
         }
     }
 
-    // The constant's Rust type decides how to read the allocation. A
-    // reference or raw pointer means stable_mir handed over a promoted
-    // constant indirectly (`&(8..16)`): the allocation is a thin pointer whose
-    // provenance names the allocation with the actual struct data, and the
-    // layout query must run on the pointee. An aggregate type means the
-    // allocation IS the struct's memory image. Deciding by "has provenance"
-    // conflated the two: a by-value struct with a pointer field would have had
-    // its own bytes silently replaced by the first pointee's.
-    let by_ref_pointee = match rust_ty.kind() {
-        rustc_public::ty::TyKind::RigidTy(rustc_public::ty::RigidTy::Ref(_, pointee, _))
-        | rustc_public::ty::TyKind::RigidTy(rustc_public::ty::RigidTy::RawPtr(pointee, _)) => {
-            Some(pointee)
-        }
-        _ => None,
-    };
-    let struct_rust_ty = by_ref_pointee.unwrap_or(*rust_ty);
-
+    // The allocation IS the struct's memory image, and any thin-pointer
+    // relocations inside it belong to the struct's own pointer fields. A
+    // reference to a struct constant never reaches here: it points into a
+    // module-level global instead (`promoted_alloc`).
     let alloc = match constant.const_.kind() {
-        ConstantKind::Allocated(alloc) => {
-            if by_ref_pointee.is_some() {
-                use rustc_public::mir::alloc::GlobalAlloc;
-                let Some(&(prov_pos, prov)) = alloc.provenance.ptrs.first() else {
-                    return input_err!(
-                        loc,
-                        TranslationErr::unsupported(
-                            "Reference-to-struct constant has no provenance to follow".to_string()
-                        )
-                    );
-                };
-                // The pointer's data bytes encode the byte offset into the
-                // target allocation. Field decoding below starts at byte zero
-                // of that target, so an interior reference must fail loudly.
-                let ptr_width = rustc_public::target::MachineInfo::target_pointer_width().bytes();
-                let ref_offset = alloc
-                    .read_partial_uint(prov_pos..prov_pos + ptr_width)
-                    .map_err(|e| {
-                        input_error_noloc!(TranslationErr::unsupported(format!(
-                            "Failed to read struct constant provenance offset: {:?}",
-                            e
-                        )))
-                    })?;
-                if ref_offset != 0 {
-                    return input_err!(
-                        loc,
-                        TranslationErr::unsupported(format!(
-                            "Reference-to-struct constant points at interior offset {ref_offset}; \
-                             cuda-oxide cannot yet decode interior references to constants"
-                        ))
-                    );
-                }
-                let alloc_id = prov.0;
-                match GlobalAlloc::from(alloc_id) {
-                    GlobalAlloc::Memory(target_alloc) => target_alloc,
-                    GlobalAlloc::Static(static_def) => {
-                        static_def.eval_initializer().map_err(|e| {
-                            input_error_noloc!(TranslationErr::unsupported(format!(
-                                "Failed to evaluate static initializer for struct constant: {:?}",
-                                e
-                            )))
-                        })?
-                    }
-                    other => {
-                        return input_err!(
-                            loc,
-                            TranslationErr::unsupported(format!(
-                                "Struct constant provenance points to non-memory allocation: {:?}",
-                                other
-                            ))
-                        );
-                    }
-                }
-            } else {
-                // The allocation is the struct's own memory image (may contain
-                // thin-pointer relocations to device statics).
-                alloc.clone()
-            }
-        }
+        ConstantKind::Allocated(alloc) => alloc,
         ConstantKind::ZeroSized => {
             return translate_struct_constant_from_bytes(
                 ctx,
-                &struct_rust_ty,
+                rust_ty,
                 const_ty_ptr,
                 &[],
                 block_ptr,
@@ -603,9 +533,9 @@ pub(super) fn translate_struct_constant(
 
     translate_struct_constant_from_alloc(
         ctx,
-        &alloc,
+        alloc,
         0,
-        &struct_rust_ty,
+        rust_ty,
         const_ty_ptr,
         block_ptr,
         prev_op,

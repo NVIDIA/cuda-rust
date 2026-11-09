@@ -162,6 +162,19 @@ jobs:
             exit 1
           fi
           grep -qE 'test result: ok\. [1-9][0-9]* passed' translator.log
+      # The assemble_* tests need a 13.5 assembler, not a GPU, so they are
+      # #[ignore]d and the default run skips them. They call the real tileiras
+      # and fail when it cannot assemble; run them where the newest lane has it.
+      - name: 13.5 assembler tests (ignored by default)
+        if: ${{ matrix.lane.newest }}
+        env:
+          CUTILE_BYTECODE_VERSION: "13.5"
+        run: |
+          cargo test -p cutile \
+            --test tile_ir_13_5 --test tile_ir_13_5_multicast --test tile_ir_13_5_comms \
+            assemble_ -- --ignored 2>&1 | tee assemble.log
+          # At least one assemble_ test in each of the three binaries must have run.
+          test "$(grep -cE '^test result: ok\. [1-9][0-9]* passed' assemble.log)" = 3
       - name: Standalone bytecode example
         if: ${{ !matrix.lane.newest }}
         run: cargo run -p cutile-ir --example build_basic

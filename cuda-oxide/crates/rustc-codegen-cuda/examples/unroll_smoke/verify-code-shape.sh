@@ -57,14 +57,14 @@ for name in names:
     print(f"{name}: no local memory PASS")
 
 # A partial `#[unroll(N)]` marks both its main and its remainder loop
-# `nounroll`. LLVM runtime-unrolls this loop by itself when the request is
-# declined, and then marks only its own remainder loop.
-name = "partial_row_view"
-pragmas = entry_body(name).count('.pragma "nounroll";')
-if pragmas != 2:
-    sys.exit(f"error: {name} has {pragmas} nounroll loops, expected the unroller's 2")
-print(f"{name}: main and remainder loop PASS")
+# `nounroll`.
+for name in ("partial_block_stride", "partial_row_view"):
+    pragmas = entry_body(name).count('.pragma "nounroll";')
+    if pragmas != 2:
+        sys.exit(f"error: {name} has {pragmas} nounroll loops, expected the unroller's 2")
+    print(f"{name}: main and remainder loop PASS")
 
+name = "partial_row_view"
 # The unroller prints each declined request as a `warning:` line, then a
 # `-->` line at the annotation. None may point into `partial_row_view`.
 if log_path:

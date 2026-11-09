@@ -380,13 +380,26 @@ unroll that loop. A `match` in the body, such as `row.get(i).unwrap_or(0.0)`,
 is not an exit: rustc gives it an arm that cannot be taken, and the compiler
 drops that arm before it looks at the loop's exits.
 
-Partial unrolling also requires a counted-up loop: the counter must have a
-positive step, use `<` or `<=`, and compare against a limit that does not change
-inside the loop. The compiler warns and does not unroll unsupported requests.
-Every warning about a loop that was not unrolled is an ordinary compiler warning
-that points at the `#[unroll]` attribute it refers to: rustc prints its
-`file:line:column` on a `-->` line and underlines it, so a kernel with several
-annotated loops shows which one was left alone.
+Partial unrolling also requires a counted-up loop: the test must use `<` or
+`<=` against a limit that does not change inside the loop, and the counter must
+advance by the same amount on every iteration. That amount can be a positive
+constant or a runtime value fixed for the whole loop, so a block-stride loop
+unrolls:
+
+```rust
+let mut i = thread::threadIdx_x();
+#[unroll(4)]
+while i < n {
+    sum += input[i as usize];
+    i += thread::blockDim_x();
+}
+```
+
+The compiler warns and does not unroll unsupported requests. Every warning
+about a loop that was not unrolled is an ordinary compiler warning that points
+at the `#[unroll]` attribute it refers to: rustc prints its `file:line:column`
+on a `-->` line and underlines it, so a kernel with several annotated loops
+shows which one was left alone.
 
 To keep generated code bounded, one annotation may create at most 1,024 body
 copies, 8,192 cloned basic blocks, and 65,536 cloned operations. A larger

@@ -192,8 +192,8 @@ impl<'a> ModuleExportState<'a> {
             ));
         }
 
-        // Lowering names every static shared allocation `__shared_mem_N`, so
-        // the emitted symbol carries no hint of which Rust `static` it came
+        // Lowering names every static shared allocation `__shared_mem_<hash>`,
+        // so the emitted symbol carries no hint of which Rust `static` it came
         // from. Anyone attributing a kernel's shared-memory footprint back to
         // source has only the exported IR to work from, so record the Rust
         // path as a comment on the line above the definition. It is a comment

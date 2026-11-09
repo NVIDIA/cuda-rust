@@ -162,6 +162,24 @@ jobs:
 
           cuda-oxide/scripts/smoketest.sh --compile-only --no-color
 
+      # Builds shared_static_names, then copies with added kernels, in
+      # release and full-debug, and requires the original kernels' PTX to be
+      # unchanged (#1477). Reuses the shared target dir, so it adds only the
+      # example's own device codegen.
+      - name: Adding a kernel keeps other kernels' PTX unchanged
+        timeout-minutes: 10
+        working-directory: cuda-oxide
+        env:
+          CUDA_OXIDE_LLC: /usr/bin/llc-23
+          CARGO_TARGET_DIR: ${{ runner.temp }}/examples-shared-target
+          CARGO_INCREMENTAL: "0"
+        run: |
+          set -euo pipefail
+          sysroot="$(rustc --print sysroot)"
+          export LIBRARY_PATH="${sysroot}/lib:${LIBRARY_PATH:-}"
+          export LD_LIBRARY_PATH="${sysroot}/lib:${LD_LIBRARY_PATH:-}"
+          bash scripts/check-shared-static-names.sh
+
       - name: Artifact modes keep shared Cargo dependencies fresh
         timeout-minutes: 10
         working-directory: cuda-oxide

@@ -101,15 +101,15 @@ pub struct BackendOptions {
     /// are defined by the cuda-oxide-owned optimization registry. Each entry
     /// declares whether it runs before or after standard MIR preparation.
     pub mir_pass_pipeline: Option<String>,
-    /// Stable per-compilation identity woven into counter-named module-scope
+    /// Stable per-compilation identity woven into generated module-scope
     /// symbols (`__shared_mem_*`, `__device_global_*`) and the dynamic
     /// shared-memory pool externs (`__dynamic_smem_*`) during MIR lowering.
     ///
     /// Required when the emitted PTX can be textually merged with other
-    /// crates' bundles (`load_all_ptx_bundles_merged`): without it every
-    /// module names its first shared allocation `__shared_mem_0` and the
-    /// merged module fails driver JIT compilation on the duplicate
-    /// definition (#1277). The rustc pipeline passes the crate's
+    /// crates' bundles (`load_all_ptx_bundles_merged`): without it a static
+    /// from a shared dependency gets the same key-hash name in every crate
+    /// that uses it, and the merged module fails driver JIT compilation on
+    /// the duplicate definition (#1277). The rustc pipeline passes the crate's
     /// `StableCrateId` hash; `None` keeps the undecorated historical names.
     pub module_disambiguator: Option<u64>,
 }

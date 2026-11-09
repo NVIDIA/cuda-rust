@@ -159,6 +159,10 @@ pipeline example:
 smoketest *args:
     scripts/smoketest.sh {{args}}
 
+# Check that adding a kernel leaves other kernels' shared and device-global names, and so their PTX, unchanged (compile-only; see scripts/check-shared-static-names.sh)
+check-shared-static-names:
+    bash scripts/check-shared-static-names.sh
+
 # Schedule-fuzz regression for gemm_sol's TILE_INFO mailbox handshake, gated on sm_100 (see scripts/regress-gemm-sol-schedule.sh --help)
 regress-gemm-sol *args:
     scripts/regress-gemm-sol-schedule.sh {{args}}

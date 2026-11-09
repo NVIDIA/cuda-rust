@@ -257,7 +257,7 @@ pub struct PipelineConfig {
     ///
     /// Explicit fused operations, such as `f32::mul_add`, are unaffected.
     pub allow_fma_contraction: bool,
-    /// Stable per-compilation identity woven into counter-named module-scope
+    /// Stable per-compilation identity woven into generated module-scope
     /// symbols (`__shared_mem_*`, `__device_global_*`) and the dynamic
     /// shared-memory pool externs (`__dynamic_smem_*`) during MIR lowering.
     ///

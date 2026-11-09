@@ -76,9 +76,10 @@ pub struct ValueMap {
     /// ordinary reachable MIR use and every debug transition is supported.
     statement_debug_spills: Vec<bool>,
     /// Whether this body is collecting full variable debug metadata.  Keeping
-    /// this on the existing per-body translation state lets shared-static
-    /// identity resolution stay entirely out of Off/LineTables builds without
-    /// threading another flag through every operand helper.
+    /// this on the existing per-body translation state lets full-debug-only
+    /// work, such as recording a shared static's `source_key` for the debug
+    /// variable table, stay out of Off/LineTables builds without threading
+    /// another flag through every operand helper.
     debug_variables: bool,
     /// Compiler-only SSA values that deliberately never enter an alloca.
     ///

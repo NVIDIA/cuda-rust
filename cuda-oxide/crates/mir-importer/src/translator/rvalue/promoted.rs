@@ -935,9 +935,10 @@ fn promoted_constant_dedup_key_from_parts(
     alignment: u64,
     relocations: &str,
 ) -> String {
-    // This string is only an in-pass map key; it never becomes the emitted
-    // symbol name. Keep the full type, byte image, allocation alignment, and
-    // relocation encoding so constants with identical bytes but different
+    // This string is the deduplication key, and lowering names the global
+    // `__device_global_<hash>` after it, so it must depend only on the
+    // constant itself. Keep the full type, byte image, allocation alignment,
+    // and relocation encoding so constants with identical bytes but different
     // storage requirements or provenance targets cannot alias.
     let ty = ty.deref(ctx).disp(ctx).to_string();
     let bytes = bytes_to_hex(bytes);

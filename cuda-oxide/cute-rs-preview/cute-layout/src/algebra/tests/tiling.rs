@@ -86,3 +86,31 @@ fn sm100_smem_layout_and_crd2idx_match_tile_to_shape() {
         }
     }
 }
+
+/// One-axis products whose block leaves gaps get a repetition with several
+/// modes (`complement(3:2, 12)` is `(2,2):(1,6)`). Both products must still
+/// pair that whole repetition with the block instead of reporting an error,
+/// and every cell must be the block offset plus the repeated copy's offset.
+#[test]
+fn one_axis_products_accept_a_multi_mode_repetition() {
+    let a = l("3:2");
+    let b = l("4:1");
+    let comp = complement(&a, a.size() * b.cosize()).unwrap();
+    assert_eq!(comp.to_string(), "(2,2):(1,6)");
+    let blocked = blocked_product(&a, &b).unwrap();
+    let raked = raked_product(&a, &b).unwrap();
+    assert_eq!(blocked.to_string(), "(3,2,2):(2,1,6)");
+    assert_eq!(raked.to_string(), "(2,2,3):(1,6,2)");
+    for k in 0..12 {
+        let (i, j) = (k % 3, k / 3);
+        let expect = a.call(&IntTuple::Leaf(i)) + comp.call(&IntTuple::Leaf(j));
+        assert_eq!(blocked.call(&IntTuple::Leaf(k)), expect, "blocked at {k}");
+        let (j, i) = (k % 4, k / 4);
+        let expect = a.call(&IntTuple::Leaf(i)) + comp.call(&IntTuple::Leaf(j));
+        assert_eq!(raked.call(&IntTuple::Leaf(k)), expect, "raked at {k}");
+    }
+    // The twelve cells cover offsets 0..12 exactly once.
+    let mut seen: Vec<i64> = (0..12).map(|k| blocked.call(&IntTuple::Leaf(k))).collect();
+    seen.sort_unstable();
+    assert_eq!(seen, (0..12).collect::<Vec<_>>());
+}

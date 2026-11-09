@@ -42,7 +42,7 @@ for kernel in dynamic_smem_closure static_smem_closure cp_async_closure; do
     # the pre-opt IR must still borrow the pointer local for an out-of-line
     # closure call; if rustc inlined the closure, this example would no longer
     # cover the by-reference capture
-    body="$(extract_llvm_function "@${kernel}\\(")"
+    body="$(extract_llvm_function "@${kernel}[(]")"
     test -n "${body}" || fail "${kernel}: kernel missing from ${ll}"
     grep -Eq "call void @[A-Za-z0-9_]*${kernel}0B[A-Za-z0-9_]*\\(" <<<"${body}" \
         || fail "${kernel}: closure call was inlined before codegen"
@@ -51,7 +51,7 @@ for kernel in dynamic_smem_closure static_smem_closure cp_async_closure; do
         <<<"${body}" || fail "${kernel}: shared pointer not cast to generic before capture"
 
     # after optimization the accesses through the capture are shared again
-    entry="$(extract_ptx_function "^\\.visible \\.entry ${kernel}\\(")"
+    entry="$(extract_ptx_function "^[.]visible [.]entry ${kernel}[(]")"
     test -n "${entry}" || fail "${kernel}: entry missing from ${ptx}"
     # a generic access has no state space after its optional qualifiers, with
     # or without a guard predicate
@@ -62,7 +62,7 @@ for kernel in dynamic_smem_closure static_smem_closure cp_async_closure; do
 done
 
 for kernel in dynamic_smem_closure static_smem_closure; do
-    entry="$(extract_ptx_function "^\\.visible \\.entry ${kernel}\\(")"
+    entry="$(extract_ptx_function "^[.]visible [.]entry ${kernel}[(]")"
     [[ "$(grep -Ec "${guard}st\\.shared\\.b16[[:space:]]" <<<"${entry}")" -eq 2 ]] \
         || fail "${kernel}: expected two st.shared.b16 stores from the closure"
     # the kernel's own neighbour reads go through the same pointer local
@@ -70,7 +70,7 @@ for kernel in dynamic_smem_closure static_smem_closure; do
         || fail "${kernel}: expected two ld.shared.b16 neighbour reads"
 done
 
-entry="$(extract_ptx_function '^\.visible \.entry cp_async_closure\(')"
+entry="$(extract_ptx_function '^[.]visible [.]entry cp_async_closure[(]')"
 [[ "$(grep -Ec "${guard}cp\\.async\\.cg\\.shared\\.global[[:space:]]" <<<"${entry}")" -eq 2 ]] \
     || fail "cp_async_closure: expected two cp.async.cg.shared.global copies from the closure"
 [[ "$(grep -Ec "${guard}ld\\.shared\\.b32[[:space:]]" <<<"${entry}")" -eq 2 ]] \

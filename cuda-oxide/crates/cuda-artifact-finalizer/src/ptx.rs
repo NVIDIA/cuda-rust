@@ -231,13 +231,32 @@ fn run_tolerating_busy_text_file(command: &mut Command) -> io::Result<Output> {
     for _ in 0..8 {
         match command.output() {
             Err(error) if error.kind() == io::ErrorKind::ExecutableFileBusy => {
-                thread::sleep(delay);
+                wait_before_busy_retry(delay);
                 delay = delay.saturating_mul(2);
             }
             result => return result,
         }
     }
     command.output()
+}
+
+#[cfg(test)]
+type BusyRetryWait = Box<dyn FnMut(Duration)>;
+
+#[cfg(test)]
+thread_local! {
+    /// Replaces the retry delay on this thread, so a test can act at the
+    /// moment a retry happens instead of guessing when it will.
+    static BUSY_RETRY_WAIT: std::cell::RefCell<Option<BusyRetryWait>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn wait_before_busy_retry(delay: Duration) {
+    #[cfg(test)]
+    if BUSY_RETRY_WAIT.with_borrow_mut(|wait| wait.as_mut().map(|wait| wait(delay)).is_some()) {
+        return;
+    }
+    thread::sleep(delay);
 }
 
 /// Driver-independent assembler for one already-linked PTX module.
@@ -471,9 +490,13 @@ mod tests {
     use std::collections::HashMap;
 
     #[cfg(unix)]
+    use std::cell::{Cell, RefCell};
+    #[cfg(unix)]
     use std::io::Write;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
+    use std::rc::Rc;
 
     fn options() -> FinalizationOptions {
         FinalizationOptions::new("sm_103a".parse().unwrap())
@@ -706,23 +729,73 @@ echo 'not a cubin' > "$output"
         ));
     }
 
-    /// Exec of the fake tool must survive a write descriptor that another
-    /// process (here: this test) still holds when the version probe runs.
-    /// Without the bounded ETXTBSY retry this fails immediately with
-    /// "Text file busy", which is the race CI hits when a concurrent
-    /// test's spawn inherits a freshly written script's descriptor.
+    /// Runs `body` with `wait` standing in for the ETXTBSY retry delay.
+    #[cfg(unix)]
+    fn with_busy_retry_wait<T>(
+        wait: impl FnMut(Duration) + 'static,
+        body: impl FnOnce() -> T,
+    ) -> T {
+        BUSY_RETRY_WAIT.set(Some(Box::new(wait)));
+        let result = body();
+        BUSY_RETRY_WAIT.set(None);
+        result
+    }
+
+    /// The version probe hits "Text file busy" while this test holds the fake
+    /// tool open for writing, and recovers once its first retry releases it.
+    /// This is the race CI hits when a concurrent test's spawn inherits a
+    /// freshly written script's descriptor.
     #[cfg(unix)]
     #[test]
-    fn version_probe_survives_a_briefly_held_write_descriptor() {
+    fn version_probe_retries_past_a_held_write_descriptor() {
         let (_directory, path) = fake_ptxas("exit 0", None);
-        let held = fs::OpenOptions::new().append(true).open(&path).unwrap();
-        let release = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(30));
-            drop(held);
-        });
-        let assembler = PtxAssembler::from_path(path);
-        release.join().unwrap();
+        let mut held = Some(fs::OpenOptions::new().append(true).open(&path).unwrap());
+        let waits = Rc::new(Cell::new(0));
+        let counted = Rc::clone(&waits);
+        let assembler = with_busy_retry_wait(
+            move |delay| {
+                held.take();
+                counted.set(counted.get() + 1);
+                // Another test's spawn can still collide; ride it out as
+                // production does.
+                thread::sleep(delay);
+            },
+            || PtxAssembler::from_path(path),
+        );
         assert!(assembler.is_ok());
+        assert!(
+            waits.get() >= 1,
+            "the probe never reported a busy text file"
+        );
+    }
+
+    /// A write descriptor that stays open still fails the probe, after eight
+    /// retries whose delays double from 2 ms.
+    #[cfg(unix)]
+    #[test]
+    fn version_probe_reports_a_write_descriptor_that_stays_open() {
+        let (_directory, path) = fake_ptxas("exit 0", None);
+        let _held = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        let delays = Rc::new(RefCell::new(Vec::new()));
+        let recorded = Rc::clone(&delays);
+        let error = with_busy_retry_wait(
+            move |delay| recorded.borrow_mut().push(delay),
+            || PtxAssembler::from_path(path),
+        )
+        .err()
+        .expect("a held write descriptor must fail the version probe");
+        assert!(
+            matches!(
+                &error,
+                FinalizerError::Io { source, .. }
+                    if source.kind() == io::ErrorKind::ExecutableFileBusy
+            ),
+            "{error}"
+        );
+        let expected = (0..8)
+            .map(|step| Duration::from_millis(2 << step))
+            .collect::<Vec<_>>();
+        assert_eq!(*delays.borrow(), expected);
     }
 
     #[cfg(unix)]

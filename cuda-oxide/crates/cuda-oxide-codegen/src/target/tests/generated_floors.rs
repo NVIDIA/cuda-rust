@@ -715,6 +715,77 @@ fn generated_packed_conversion_floors_require_ampere() {
 }
 
 #[test]
+fn generated_scalar_arithmetic_floors_admit_turing() {
+    use crate::generated_intrinsic_targets::{
+        GeneratedIntrinsicBackend, generated_intrinsic_target_by_marker,
+        generated_intrinsic_targets_by_op_name,
+    };
+
+    let targets =
+        generated_intrinsic_targets_by_op_name("nvvm.scalar_arithmetic").collect::<Vec<_>>();
+    assert_eq!(targets.len(), 64);
+    for backend in [
+        GeneratedIntrinsicBackend::LlvmNvptx,
+        GeneratedIntrinsicBackend::LibNvvm,
+    ] {
+        for target in &targets {
+            let generated =
+                GeneratedModuleRequirements::from_targets(vec![*target]).for_backend(backend);
+            assert_eq!(
+                generated_ptx_isa_requirement(&generated).unwrap(),
+                PtxIsaRequirement::new(70),
+                "{} {backend:?}",
+                target.id
+            );
+            assert!(
+                !generated_target_satisfied(&"sm_72".parse().unwrap(), &generated),
+                "{} {backend:?}",
+                target.id
+            );
+            for arch in ["sm_75", "sm_80"] {
+                assert!(
+                    generated_target_satisfied(&arch.parse().unwrap(), &generated),
+                    "{} {backend:?} {arch}",
+                    target.id
+                );
+            }
+        }
+
+        // a kernel that calls every scalar arithmetic form builds for sm_75
+        let generated =
+            GeneratedModuleRequirements::from_targets(targets.clone()).for_backend(backend);
+        validate_generated_target(&"sm_75".parse().unwrap(), &generated).unwrap();
+    }
+
+    // the #1462 repro: mul_rn_f32 and fma_rn_f32 with CUDA_OXIDE_TARGET=sm_75
+    let mul = generated_intrinsic_target_by_marker("v1:i0402").unwrap();
+    let fma = generated_intrinsic_target_by_marker("v1:i0418").unwrap();
+    assert_eq!(mul.id, "mul_rn_f32");
+    assert_eq!(fma.id, "fma_rn_f32");
+    let llvm = GeneratedModuleRequirements::from_targets(vec![mul, fma])
+        .for_backend(GeneratedIntrinsicBackend::LlvmNvptx);
+    assert_eq!(
+        resolve_ptx_target_with_generated(
+            Some("sm_75"),
+            "CUDA_OXIDE_TARGET",
+            None,
+            DetectedFeatures::Basic,
+            &llvm,
+        )
+        .unwrap(),
+        ("sm_75".parse().unwrap(), "CUDA_OXIDE_TARGET")
+    );
+    let libnvvm = GeneratedModuleRequirements::from_targets(vec![mul, fma])
+        .for_backend(GeneratedIntrinsicBackend::LibNvvm);
+    assert_eq!(
+        crate::export::resolve_nvvm_target_with_generated(Some("sm_75"), None, None, &libnvvm)
+            .unwrap()
+            .sm(),
+        "sm_75"
+    );
+}
+
+#[test]
 fn generated_cp_async_floors_require_ampere() {
     use crate::generated_intrinsic_targets::{
         GeneratedIntrinsicBackend, generated_intrinsic_target_by_marker,

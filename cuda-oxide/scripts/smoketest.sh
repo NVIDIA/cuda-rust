@@ -2285,7 +2285,9 @@ run_cargo() {
         done
     fi
     if [[ ${CARGO_EC} -eq 0 && -f "${shape_check}" ]]; then
-        if ! bash "${shape_check}" >>"${log}" 2>&1; then
+        # the build log lets a check assert on compiler warnings as well as
+        # on artifacts; scripts that only read artifacts ignore it
+        if ! CUDA_OXIDE_BUILD_LOG="${log}" bash "${shape_check}" >>"${log}" 2>&1; then
             printf '%s failed its verify-code-shape.sh assertions\n' "${ex}" >>"${log}"
             CARGO_EC=1
         fi

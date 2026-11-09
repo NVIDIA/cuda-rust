@@ -21,7 +21,7 @@
 //! Expected: the build FAILS with a diagnostic containing (pinned):
 //!
 //! ```text
-//! shared-memory types are only supported as the whole type of a static
+//! cannot nest `Barrier`; declare `Barrier` or `SharedArray` as the top-level static type
 //! ```
 
 use cuda_device::barrier::mbarrier_init;

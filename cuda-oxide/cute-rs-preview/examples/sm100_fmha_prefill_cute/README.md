@@ -8,7 +8,7 @@ The kernel uses `cute-rs` for typed layouts, structured MMA and TMA operations
 `PipelineTmaUmma` / `PipelineUmmaAsync` / `PipelineAsyncUmma` / `PipelineAsync`
 stage rings, `TmemAllocator<512, 1>`, `TmemFragment`, and `cute_rs::arch`
 forwarders (`add_packed_f32x2`, `mul_packed_f32x2`, `fma_packed_f32x2`,
-`cvt_f16x2_f32`, `fence_view_async_shared`, `NamedBarrier`), while `ctm-rs`
+`cvt_f16x2_f32`, `fence_view_async_shared`, `NamedBarrier`), while `cutlass-primitives`
 supplies kernel macros and shared-storage declarations.
 The manifest retains `cuda-device` because macro expansions still refer to
 that crate internally. CuTe operations retain their CuTe dialect lowering

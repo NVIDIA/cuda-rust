@@ -22,8 +22,6 @@
 //!                                        `TmaCopy::<OLayout, 1>::store` (Warp 14)
 //! ```
 
-use ctm_rs::memory::DynamicSharedArray;
-use ctm_rs::{cuda_module, kernel, launch_bounds, launch_contract, thread};
 use cute_rs::arch::{
     NamedBarrier, PackedF32x2, add_packed_f32x2, cp_async_bulk_commit_group,
     cp_async_bulk_wait_group_read, cvt_f16x2_f32, elect_one_sync, exp2_ftz_f32,
@@ -40,6 +38,9 @@ use cute_rs::utils::tmem_allocator::TmemAllocator;
 use cute_rs::{
     ColMajor, ComposedLayout, OperandA, OperandB, RowMajor, Swizzle, TensorMap, size_in_bytes,
 };
+use cutlass_primitives as prims;
+use prims::memory::DynamicSharedArray;
+use prims::{cuda_module, kernel, launch_bounds, launch_contract, thread};
 
 /// K-major shared layout for a 128 × 128 FP16 query tile.
 pub type QLayout = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<128, 128>>;

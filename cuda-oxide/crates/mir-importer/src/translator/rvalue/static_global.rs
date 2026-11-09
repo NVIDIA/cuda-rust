@@ -6,9 +6,11 @@
 //! Static global materialization state machine.
 
 use super::const_union::validate_device_static_union_initializer;
+use super::promoted_alloc::ensure_promoted_allocation_global;
 use super::statics::{
-    GlobalInitializerRelocation, bytes_to_hex, encode_global_initializer_relocations,
-    static_global_key, static_initializer_data,
+    GlobalInitializerRelocation, RelocationTarget, bytes_to_hex,
+    encode_global_initializer_relocations, require_initialized_static_storage, static_global_key,
+    static_initializer_data,
 };
 use crate::error::{TranslationErr, TranslationResult};
 use crate::translator::facts;
@@ -30,19 +32,38 @@ use rustc_public::CrateDef;
 use rustc_public::CrateDefType;
 use std::num::NonZeroUsize;
 
+/// One device global emitted for a Rust static or an anonymous rustc
+/// allocation, as seen by the function that materialized it.
 #[derive(Clone, Copy)]
 pub(super) struct MaterializedStaticGlobal {
-    base_ptr: Value,
-    global_op: Ptr<Operation>,
-    allocation_size: u64,
+    pub(super) base_ptr: Value,
+    pub(super) global_op: Ptr<Operation>,
+    pub(super) allocation_size: u64,
 }
 
+impl MaterializedStaticGlobal {
+    /// Record a newly emitted `mir.global_alloc` and its allocation size.
+    pub(super) fn new(global_op: Ptr<Operation>, base_ptr: Value, allocation_size: u64) -> Self {
+        Self {
+            base_ptr,
+            global_op,
+            allocation_size,
+        }
+    }
+}
+
+/// Globals already emitted for one constant operand, keyed by `global_key`.
+///
+/// Registering a global before walking its initializer's relocations keeps
+/// self-referential and mutually recursive allocation graphs finite. Lowering
+/// still deduplicates by key across the whole module.
 pub(super) struct StaticGlobalMaterializationState {
     pub(super) globals: std::collections::HashMap<String, MaterializedStaticGlobal>,
     pub(super) last_op: Option<Ptr<Operation>>,
 }
 
-/// Materialize one device static and every static reachable from its initializer.
+/// Materialize one device static and every allocation reachable from its
+/// initializer.
 ///
 /// The current global is registered before traversing its relocations. That
 /// makes self-references and mutually recursive static graphs finite while the
@@ -66,18 +87,18 @@ fn ensure_static_global_alloc(
         return input_err!(
             loc,
             TranslationErr::unsupported(format!(
-                "device static `{}` contains a `{shared_name}` inside another type; \
-                 shared-memory types are only supported as the whole type of a static",
+                "device static `{}` cannot nest `{shared_name}`; declare `{shared_name}` or `SharedArray` as the top-level static type",
                 static_def.name()
             ))
         );
     }
 
+    let address_space =
+        require_initialized_static_storage(static_def, "a constant pointer", loc.clone())?;
     let initializer = static_initializer_data(static_def, loc.clone())?;
     let allocation_size = initializer.bytes.len() as u64;
     let initializer_hex = bytes_to_hex(&initializer.bytes);
     let static_ty = static_def.ty();
-    let is_constant = is_constant_wrapper_type(&static_ty);
     let global_ty = types::translate_type(ctx, &static_ty)?;
 
     if let Some(union_name) = stored_type_union_name(static_ty, &mut Vec::new()) {
@@ -104,11 +125,8 @@ fn ensure_static_global_alloc(
             );
         }
     }
-    let global_ptr_ty: TypeHandle = if is_constant {
-        dialect_mir::types::MirPtrType::get_constant(ctx, global_ty, is_mutable).into()
-    } else {
-        dialect_mir::types::MirPtrType::get_global(ctx, global_ty, is_mutable).into()
-    };
+    let global_ptr_ty: TypeHandle =
+        dialect_mir::types::MirPtrType::get(ctx, global_ty, is_mutable, address_space).into();
 
     let global_op = Operation::new(
         ctx,
@@ -142,11 +160,11 @@ fn ensure_static_global_alloc(
     }
     state.last_op = Some(global_alloc.get_operation());
 
-    let materialized = MaterializedStaticGlobal {
-        base_ptr: global_alloc.get_operation().deref(ctx).get_result(0),
-        global_op: global_alloc.get_operation(),
+    let materialized = MaterializedStaticGlobal::new(
+        global_alloc.get_operation(),
+        global_alloc.get_operation().deref(ctx).get_result(0),
         allocation_size,
-    };
+    );
     state.globals.insert(global_key, materialized);
 
     let owner_description = format!("device static {}", static_def.name());
@@ -162,11 +180,12 @@ fn ensure_static_global_alloc(
     Ok(materialized)
 }
 
-/// Materialize and validate every static referenced by an initializer.
+/// Materialize and validate every allocation an initializer points into.
 ///
-/// The owner is already registered by [`ensure_static_global_alloc`] before
-/// recursion reaches this helper, so self-references and mutually recursive
-/// static graphs remain finite.
+/// Rust statics get their own globals; anonymous rustc allocations get the
+/// immutable per-allocation global from [`ensure_promoted_allocation_global`].
+/// The owner is already registered before recursion reaches this helper, so
+/// self-references and mutually recursive graphs remain finite.
 pub(super) fn ensure_initializer_relocation_targets(
     ctx: &mut Context,
     relocations: &[GlobalInitializerRelocation],
@@ -176,14 +195,19 @@ pub(super) fn ensure_initializer_relocation_targets(
     state: &mut StaticGlobalMaterializationState,
 ) -> TranslationResult<()> {
     for relocation in relocations {
-        let target = ensure_static_global_alloc(
-            ctx,
-            &relocation.target_static,
-            false,
-            block_ptr,
-            loc.clone(),
-            state,
-        )?;
+        let target = match relocation.target {
+            RelocationTarget::Static(static_def) => {
+                ensure_static_global_alloc(ctx, &static_def, false, block_ptr, loc.clone(), state)?
+            }
+            RelocationTarget::Memory(alloc_id) => ensure_promoted_allocation_global(
+                ctx,
+                alloc_id,
+                None,
+                block_ptr,
+                loc.clone(),
+                state,
+            )?,
+        };
         if relocation.target_addend > target.allocation_size {
             return input_err!(
                 loc,
@@ -191,7 +215,7 @@ pub(super) fn ensure_initializer_relocation_targets(
                     "{owner_description} relocation at byte {} points {} bytes into {}, but the target allocation is only {} bytes",
                     relocation.source_offset,
                     relocation.target_addend,
-                    relocation.target_static.name(),
+                    relocation.target.describe(),
                     target.allocation_size
                 ))
             );
@@ -224,6 +248,38 @@ pub(super) fn translate_static_global_pointer(
         &mut state,
     )?;
 
+    pointer_into_materialized_global(
+        ctx,
+        materialized,
+        state.last_op.unwrap_or(materialized.global_op),
+        &format!("device static {}", static_def.name()),
+        result_pointee_ty,
+        result_ptr_ty,
+        byte_offset,
+        loc,
+    )
+}
+
+/// Form the constant pointer `&global + byte_offset`, typed as the Rust operand.
+///
+/// `materialized` is a device global already emitted for a Rust static or an
+/// anonymous rustc allocation, and `insert_after` is the last op emitted for it
+/// (its relocation targets included). `description` names the allocation in
+/// diagnostics.
+///
+/// The address arithmetic keeps the global's own mutability, because a
+/// generic cast cannot change it; only the final retype establishes the
+/// operand's pointer kind (see [`retype_static_pointer_result`]).
+pub(super) fn pointer_into_materialized_global(
+    ctx: &mut Context,
+    materialized: MaterializedStaticGlobal,
+    insert_after: Ptr<Operation>,
+    description: &str,
+    result_pointee_ty: TypeHandle,
+    result_ptr_ty: TypeHandle,
+    byte_offset: u64,
+    loc: Location,
+) -> TranslationResult<(Value, Option<Ptr<Operation>>)> {
     // Rust const evaluation permits forming a pointer one past the end of
     // an allocation (offset == allocation size); only offsets strictly
     // beyond the allocation are impossible for rustc to have produced.
@@ -233,25 +289,26 @@ pub(super) fn translate_static_global_pointer(
         return input_err!(
             loc,
             TranslationErr::unsupported(format!(
-                "constant pointer to device static {} has byte offset {}, \
-                 but the static allocation is only {} bytes",
-                static_def.name(),
-                byte_offset,
+                "constant pointer to {description} has byte offset {byte_offset}, \
+                 but the allocation is only {} bytes",
                 materialized.allocation_size
             ))
         );
     }
 
     let base_ptr = materialized.base_ptr;
-    let insert_after = state.last_op.unwrap_or(materialized.global_op);
 
-    let (base_pointee_ty, address_space) = {
+    let (base_pointee_ty, address_space, is_mutable) = {
         let base_ty = base_ptr.get_type(ctx);
         let base_ty = base_ty.deref(ctx);
         let base_ptr_ty = base_ty
             .downcast_ref::<dialect_mir::types::MirPtrType>()
             .expect("MirGlobalAllocOp must return MirPtrType");
-        (base_ptr_ty.pointee, base_ptr_ty.address_space)
+        (
+            base_ptr_ty.pointee,
+            base_ptr_ty.address_space,
+            base_ptr_ty.is_mutable,
+        )
     };
 
     // Preserve the existing direct path. It avoids generating unnecessary
@@ -375,6 +432,12 @@ pub(super) fn translate_static_global_pointer(
 /// translated Rust type. Lowering turns this `PtrToPtr` cast into an
 /// `addrspacecast` when the address spaces differ, which
 /// `InferAddressSpaces` later folds back through for direct loads.
+///
+/// `StaticAddress` grants `*mut T` only over writable storage. A `*mut T` into
+/// read-only storage (`&42 as *const u32 as *mut u32`) is still a valid Rust
+/// value, formed by an `as` cast, so it is retyped as `*const T` first and then
+/// cast raw-to-raw under `RustCast`, the authority for that source cast. The
+/// storage stays read-only; only the pointer's kind changes.
 fn retype_static_pointer_result(
     ctx: &mut Context,
     value: Value,
@@ -384,6 +447,40 @@ fn retype_static_pointer_result(
 ) -> (Value, Ptr<Operation>) {
     if value.get_type(ctx) == result_ptr_ty {
         return (value, insert_after);
+    }
+
+    let value_is_mutable = value
+        .get_type(ctx)
+        .deref(ctx)
+        .downcast_ref::<dialect_mir::types::MirPtrType>()
+        .is_some_and(|pointer| pointer.is_mutable);
+    let read_only_raw_mut = result_ptr_ty
+        .deref(ctx)
+        .downcast_ref::<dialect_mir::types::MirPtrType>()
+        .filter(|pointer| pointer.kind == MirPointerKind::RawMut && !value_is_mutable)
+        .map(|pointer| (pointer.pointee, pointer.address_space));
+    if let Some((pointee, address_space)) = read_only_raw_mut {
+        let const_origin =
+            facts::pointer_origin_of_raw_mutability(rustc_public::mir::Mutability::Not);
+        let const_ptr_ty: TypeHandle =
+            facts::mint_ptr_type(ctx, pointee, address_space, const_origin).into();
+        let (const_ptr, after) =
+            retype_static_pointer_result(ctx, value, const_ptr_ty, insert_after, loc.clone());
+
+        let cast_op = Operation::new(
+            ctx,
+            MirCastOp::get_concrete_op_info(),
+            vec![result_ptr_ty],
+            vec![const_ptr],
+            vec![],
+            0,
+        );
+        cast_op.deref_mut(ctx).set_loc(loc);
+        let cast = MirCastOp::new(cast_op);
+        cast.set_attr_cast_kind(ctx, MirCastKindAttr::PtrToPtr);
+        cast.set_pointer_kind_authority(ctx, MirPointerKindAuthorityAttr::RustCast);
+        cast_op.insert_after(ctx, after);
+        return (cast_op.deref(ctx).get_result(0), cast_op);
     }
 
     let cast_op = Operation::new(
@@ -530,8 +627,6 @@ pub(super) fn set_global_initializer_relocations_attr(
 /// Returns `(pointee_ty, origin)` when the type can carry a static address.
 /// Keeping the origin here prevents constant materialization from collapsing
 /// `&T`/`&mut T` and raw pointers before they enter `dialect-mir`.
-use crate::translator::values::is_constant_wrapper_type;
-
 pub(super) fn get_static_pointer_info(
     ty: &rustc_public::ty::Ty,
 ) -> Option<(rustc_public::ty::Ty, facts::PointerOrigin)> {

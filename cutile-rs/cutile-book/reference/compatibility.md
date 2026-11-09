@@ -100,14 +100,15 @@ The driver/toolkit combination must meet
 [NVIDIA's CUDA compatibility rules](https://docs.nvidia.com/deploy/cuda-compatibility/minor-version-compatibility.html).
 We do not impose a blanket driver-version-at-least-toolkit-version check.
 
-## CUDA 13.5 development
+## CUDA 13.5 features
 
 The 13.5 surface includes unicast/multicast pointer classification,
 `multimem_load_reduce_view_tko`, `multimem_reduce_view_tko`,
 `multimem_store_view_tko`, atomic-view inbounds promises, TMA validity checking,
 minimum residency hints, and function argument attributes.
-Named preview APIs for SIMT linking and fragment interchange are separate from
-this surface and are not implemented here.
+The named `simt` preview is separate from this stable surface. cuTile Rust
+supports [foreign tile-library calls](../guide/tile-libraries.md) through that
+preview; see the guide for the supported operands and current limitations.
 
 The raw Rust APIs are exposed as unsafe functions in `cutile::tileir`, defined
 in `cutile/src/_tileir.rs`: `ptr_with_attr_unicast`, `ptr_with_attr_multicast`,
@@ -220,6 +221,8 @@ cargo run -p cutile-ir --example feature_matrix
 
 The `documented_matrices_match_the_registry` test checks both checked-in tables.
 CPU tests exercise the requirements without a driver; assembler CI covers
-13.2 and 13.3, with a 13.4 lane enabled when its image is configured.
+13.2, 13.3, and 13.4. See the
+[Tile workflow](https://github.com/NVIDIA/cuda-rust/blob/main/.github/workflows/cutile-rs.yml)
+for the current image pins and enabled jobs.
 Examples report unsupported prerequisites as `SKIP`; discovery, compilation,
 and execution errors remain failures.

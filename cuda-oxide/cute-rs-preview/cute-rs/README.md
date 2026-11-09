@@ -1,6 +1,6 @@
 # cute-rs
 
-CuTe-style tensor computation in Rust, organized 1-to-1 with Python **CuTeDSL 4.7** (`cutlass/cute`, `cutlass/pipeline`, `cutlass/utils`) and compiled through `dialect-cute` and the pinned CUTLASS 4.7 MLIR compiler (`0` `ctm-rs` dependencies).
+CuTe-style tensor computation in Rust, organized 1-to-1 with Python **CuTeDSL 4.7** (`cutlass/cute`, `cutlass/pipeline`, `cutlass/utils`) and compiled through `dialect-cute` and the pinned CUTLASS 4.7 MLIR compiler (`0` `cutlass-primitives` dependencies).
 
 ```text
 CuTeDSL (Python)                          cute-rs/src/ (1-to-1 Module Tree)

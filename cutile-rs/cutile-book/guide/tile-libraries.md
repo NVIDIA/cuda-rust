@@ -1,6 +1,6 @@
 # Tile Libraries
 
-A **tile library** (`.tilelib`) provides precompiled tile functions that a
+A **tile library** (`.tilelib`) packages device functions that a
 kernel calls like any other function: an FFT of a tile, the Cholesky
 factorization of a tile, and so on. Tile C++ calls them through
 `__experimental_foreign_decl__` declarations and cuTile Python through
@@ -11,6 +11,59 @@ factorization of a tile, and so on. Tile C++ calls them through
 Tile libraries are a public preview of Tile IR 13.5. They need a CUDA 13.5
 `tileiras`, and a tile library built for that same toolkit.
 ```
+
+## Finding tile libraries
+
+Start with NVIDIA's [Tile IR supported-library list](https://docs.nvidia.com/cuda/tile-ir/latest/sections/prog_model.html#supported-libraries).
+It links to providers as their packages become available. Tile libraries are
+released separately from the CUDA Toolkit; installing CUDA 13.5 alone does not
+install every provider's `.tilelib` files.
+
+Use the provider's installation instructions to obtain a `.tilelib` and its
+dependencies for your toolkit. Its interface determines the function names,
+constant arguments, shapes, types, and architectures you can use. Then declare
+the functions as below and pass the installed paths to
+[`TileLibrarySpec`](#configuring-tile-libraries). The provider list describes
+Tile IR support; cuTile Rust's [current operand limitations](#limitations)
+also apply, including the lack of pointer operands in foreign calls.
+
+The `solver.tilelib`, `fft_path`, and provider-library paths in this chapter
+are illustrative configuration examples. They are not bundled downloads or
+guaranteed package filenames. Replace them with the paths and declarations
+from the provider's package.
+
+### Rust SIMT functions from CUDA Oxide
+
+CUDA Oxide can also build tile libraries from Rust SIMT functions: mark them
+with `#[tile_export]`, then package them with `cargo oxide tilelib`. See the
+[`tilelib_relu` example](https://github.com/NVIDIA/cuda-rust/blob/main/cuda-oxide/crates/rustc-codegen-cuda/examples/tilelib_relu/README.md)
+for export definitions, build commands, and current export limitations.
+
+To call these exports from cuTile Rust, write matching
+[`#[cutile::foreign] unsafe fn` declarations](#declaring-a-foreign-function)
+and [configure the generated `.tilelib` on the host](#configuring-tile-libraries)
+with `TileLibrarySpec`. Match the exported function name, concrete tile shapes,
+element types, and input/output access modes. This is device-function interop:
+the SIMT function runs inside the Tile kernel.
+
+This uses the CUDA 13.5 preview and requires matching library, caller bytecode,
+and `tileiras` tooling; preview libraries are not portable across arbitrary
+toolkit versions. Oxide's current export restrictions apply in addition to
+the [cuTile Rust limitations](#limitations). The recorded Oxide execution
+validation used a Tile C++ caller; it does not establish an Oxide-to-cuTile Rust
+execution test.
+
+### Reusable Rust kernels
+
+For Rust implementations of attention, normalization, transformer utilities,
+fused QKV, and NVFP4 MoE, see the
+[`cutile-kernels` catalog](https://github.com/NVIDIA/cuda-rust/blob/main/cutile-rs/cutile-kernels/README.md)
+and the
+[`nvfp4_moe` example](https://github.com/NVIDIA/cuda-rust/blob/main/cutile-rs/cutile-examples/examples/nvfp4_moe.rs).
+The [fused QKV guide](https://github.com/NVIDIA/cuda-rust/blob/main/cutile-rs/cutile-examples/fused_qkv.md)
+describes its correctness example and opt-in benchmark.
+These are Rust source kernels launched from the host. A `.tilelib` supplies
+device functions called from inside a kernel through `#[cutile::foreign]`.
 
 ## Declaring a foreign function
 
@@ -160,6 +213,9 @@ Two modules can each declare a foreign function with the same Rust name;
 each call reaches the one it names.
 
 ## Configuring tile libraries
+
+Obtain a compatible provider package through
+[Finding tile libraries](#finding-tile-libraries) before configuring these paths.
 
 The host chooses the tile libraries that kernels link, so the same kernel
 source can link a debug or a release build of a library, or one built for

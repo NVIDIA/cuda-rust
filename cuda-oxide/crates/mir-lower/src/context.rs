@@ -52,19 +52,21 @@ pub(crate) fn lowering_options(ctx: &Context) -> LoweringOptions {
 /// Name for one generated module-scope global of a lowering-owned family
 /// (`__shared_mem`, `__device_global`, `__dynamic_smem`).
 ///
-/// `suffix` is what makes the name unique within one module: the per-module
-/// counter for the counter-named families, the owning function's symbol for
-/// the dynamic shared-memory pool. But every module starts its counters at
-/// zero and a helper shared across crates keeps its owner symbol, so two
-/// crates' PTX can define the same name — and `load_all_ptx_bundles_merged`
-/// textually concatenates the bundles, where the duplicate definition fails
-/// driver JIT compilation, or (for the dynamic pool's duplicate extern
-/// declarations) silently keeps whichever alignment came first (#1277).
+/// `suffix` is what makes the name unique within one module: the hash of the
+/// global's key (or, for a keyless shared allocation, a per-module counter),
+/// the owning function's symbol for the dynamic shared-memory pool. But a
+/// static from a shared dependency hashes the same in every crate, counters
+/// restart at zero, and a helper shared across crates keeps its owner symbol,
+/// so two crates' PTX can define the same name — and
+/// `load_all_ptx_bundles_merged` textually concatenates the bundles, where
+/// the duplicate definition fails driver JIT compilation, or (for the dynamic
+/// pool's duplicate extern declarations) silently keeps whichever alignment
+/// came first (#1277).
 ///
 /// When the lowering options carry a module disambiguator, it is woven
 /// between family and suffix so the name is unique across every compilation
-/// whose PTX can end up in one merged module; without one, the historical
-/// undecorated name is kept.
+/// whose PTX can end up in one merged module; without one, the family is
+/// directly followed by the suffix.
 pub(crate) fn module_namespaced_symbol(ctx: &Context, family: &str, suffix: &str) -> String {
     match lowering_options(ctx).module_disambiguator {
         Some(disambiguator) => format!("{family}_{disambiguator:016x}_{suffix}"),
@@ -154,12 +156,34 @@ pub struct DeviceGlobalDeclaration {
     pub immutable: bool,
 }
 
+impl DeviceGlobalDeclaration {
+    /// Whether `other` declares the same immutable initialized storage as
+    /// `self`, viewed through a possibly different MIR type.
+    ///
+    /// An initializer fixes the lowered storage: it exports as rustc's byte
+    /// image whatever the MIR type, which then only selects the layout to
+    /// validate. One read-only rustc allocation reached through several
+    /// pointee types (`&Option<u32>` and `&u32` into its payload) must stay one
+    /// global so the pointers compare equal, so each such view is validated
+    /// against the shared bytes instead of being refused. Writable or
+    /// uninitialized storage keeps the exact-match rule.
+    pub fn is_typed_view_of(&self, other: &Self) -> bool {
+        self.immutable
+            && self.initializer_hex.is_some()
+            && Self {
+                mir_type: self.mir_type,
+                ..other.clone()
+            } == *self
+    }
+}
+
 /// Lowered symbol and declaration associated with one device-global key.
 #[derive(Clone)]
 pub struct DeviceGlobalRecord {
     /// LLVM symbol created for this allocation.
     pub symbol: Identifier,
-    /// Storage declaration that every reuse of the key must match.
+    /// Storage declaration that every reuse of the key must match, up to the
+    /// typed views [`DeviceGlobalDeclaration::is_typed_view_of`] admits.
     pub declaration: DeviceGlobalDeclaration,
 }
 

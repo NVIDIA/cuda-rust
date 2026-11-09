@@ -124,7 +124,7 @@ print("\n".join(sorted(names)))
 #      fall behind what a workspace declares.
 #   5. cuda-oxide/crates/rustc-codegen-cuda/tests/fixtures/primitives_api_compile/Cargo.toml
 #      -- the isolated compile fixture for scripts/check-primitives-api-compile.py.
-#      Its own `[workspace]` keeps the instruction-level ctm-rs checks independent
+#      Its own `[workspace]` keeps the instruction-level cutlass-primitives checks independent
 #      of the backend workspace, so it needs a separate inventory pass too.
 FIRST_PARTY_WORKSPACE_ROOTS=(
     Cargo.toml

@@ -134,6 +134,7 @@ fn run() -> Fallible<Outcome> {
         ],
         &options,
         FinalizerOutput::Cubin,
+        &["caller"],
     )?;
     println!(
         "nvJitLink: {} bytes of cubin for {}",

@@ -144,6 +144,7 @@ version = "0.3.0"
 dependencies = [
  "libnvvm-sys",
  "nvjitlink-sys",
+ "ptx-parse",
  "serde",
  "sha2",
  "thiserror 2.0.18",

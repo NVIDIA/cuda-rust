@@ -138,6 +138,7 @@ version = "0.3.0"
 dependencies = [
  "libnvvm-sys",
  "nvjitlink-sys",
+ "ptx-parse",
  "serde",
  "sha2",
  "thiserror",
@@ -410,6 +411,10 @@ checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
 ]
+
+[[package]]
+name = "ptx-parse"
+version = "0.3.0"
 
 [[package]]
 name = "quote"

@@ -1019,11 +1019,17 @@ fn write_device_artifact_object(
     materialization_request: Option<materialize::MaterializationRequest>,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let bundle_name = std::env::var("CARGO_PKG_NAME").unwrap_or_else(|_| output_name.to_string());
+    let expected_kernels = functions
+        .iter()
+        .filter(|function| function.is_kernel)
+        .map(|function| function.export_name.as_str())
+        .collect::<Vec<_>>();
     let materialized_artifact = materialize_artifact_for_embedding(
         materialization_request,
         &bundle_name,
         result,
         artifact,
+        &expected_kernels,
     )?;
     if let Some(materialized) = materialized_artifact.as_ref() {
         emit_launch_bounds_spill_warnings(tcx, result, functions, &materialized.resource_usage);
@@ -1156,6 +1162,7 @@ fn materialize_artifact_for_embedding(
     bundle_name: &str,
     result: &device_codegen::DeviceCodegenResult,
     artifact: &device_codegen::DeviceCodegenArtifact,
+    expected_kernels: &[&str],
 ) -> Result<Option<MaterializedDeviceArtifact>, Box<dyn std::error::Error>> {
     let Some(request) = request else {
         return Ok(None);
@@ -1175,6 +1182,7 @@ fn materialize_artifact_for_embedding(
             &result.target,
             result.allow_fma_contraction,
             debug_policy,
+            expected_kernels,
         )?,
         device_codegen::DeviceCodegenArtifactKind::Ltoir => materialize::ltoir_to_cubin(
             request,
@@ -1183,6 +1191,7 @@ fn materialize_artifact_for_embedding(
             &result.target,
             result.allow_fma_contraction,
             debug_policy,
+            expected_kernels,
         )?,
         device_codegen::DeviceCodegenArtifactKind::Ptx => {
             return Err(Box::new(materialize::MaterializeError::PtxInput));

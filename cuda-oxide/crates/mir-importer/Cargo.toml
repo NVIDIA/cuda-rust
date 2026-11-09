@@ -20,6 +20,7 @@ dialect-nvvm = { workspace = true }
 dialect-cute = { workspace = true }
 cute-layout = { workspace = true }
 mir-lower = { workspace = true }
+cuda-artifact-finalizer = { workspace = true }
 oxide-artifacts = { workspace = true }
 cuda-oxide-codegen = { workspace = true }
 reserved-oxide-symbols = { workspace = true }

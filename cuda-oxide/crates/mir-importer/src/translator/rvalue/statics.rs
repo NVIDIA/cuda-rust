@@ -6,10 +6,12 @@
 //! Static identity and initializer plumbing.
 
 use crate::error::{TranslationErr, TranslationResult};
+use crate::translator::types::is_cuda_device_adt;
 use crate::translator::values::is_constant_wrapper_type;
 use pliron::location::Location;
 use pliron::{input_err, input_error_noloc};
 use rustc_public::CrateDef;
+use rustc_public::CrateDefType;
 use rustc_public::mir;
 use rustc_public::ty::ConstantKind;
 
@@ -159,7 +161,34 @@ pub(super) struct GlobalInitializerRelocation {
     target_address_space: u32,
     pub(super) target_addend: u64,
     target_key: String,
-    pub(super) target_static: rustc_public::mir::mono::StaticDef,
+    pub(super) target: RelocationTarget,
+}
+
+/// The rustc allocation a relocated pointer slot points into.
+///
+/// Both kinds become module-level device globals: a Rust static keeps its own
+/// global, and an anonymous allocation (a promoted constant, or memory a
+/// constant's pointer field refers to) gets one immutable global per
+/// allocation, keyed by its contents. Functions, vtables, and type ids have no
+/// device storage and stay rejected.
+#[derive(Clone, Copy)]
+pub(super) enum RelocationTarget {
+    /// A Rust `static`, whose global is typed as the static and keeps the
+    /// static's own mutability and address space.
+    Static(rustc_public::mir::mono::StaticDef),
+    /// An anonymous rustc allocation, whose global is its read-only byte image
+    /// (writable only if rustc interned the allocation as mutable).
+    Memory(rustc_public::mir::alloc::AllocId),
+}
+
+impl RelocationTarget {
+    /// Human-readable target name for diagnostics.
+    pub(super) fn describe(&self) -> String {
+        match self {
+            RelocationTarget::Static(static_def) => static_def.name(),
+            RelocationTarget::Memory(alloc_id) => format!("promoted constant {alloc_id:?}"),
+        }
+    }
 }
 
 /// The byte image, ABI alignment, and pointer relocations of a global initializer.
@@ -177,12 +206,150 @@ pub(super) fn static_global_key(static_def: &rustc_public::mir::mono::StaticDef)
     crate::device_static_global_key(static_def)
 }
 
-fn static_global_address_space(static_def: &rustc_public::mir::mono::StaticDef) -> u32 {
-    if is_constant_wrapper_type(&static_def.ty()) {
-        4
-    } else {
-        1
+/// The device storage a Rust static lives in.
+///
+/// Ordinary and `ConstantMemory` statics are initialized device globals, so
+/// another allocation can hold a relocation to them. `SharedArray` and
+/// `Barrier` statics are per-block shared memory with no initializer: their
+/// storage comes from `mir.shared_alloc`, which only a direct `&raw const` or
+/// `&raw mut` operand reaches. Classifying them here keeps every other route,
+/// such as a pointer stored inside a constant, from giving them a second,
+/// ordinary global in the wrong address space.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum StaticStorage {
+    /// An ordinary `static` / `static mut` in CUDA global memory.
+    Global,
+    /// A `ConstantMemory<T>` static in CUDA constant memory.
+    Constant,
+    /// A `SharedArray` or `Barrier` static in per-block shared memory.
+    Shared,
+}
+
+impl StaticStorage {
+    /// Classify `static_def` by its declared type.
+    pub(super) fn of(static_def: &rustc_public::mir::mono::StaticDef) -> Self {
+        use rustc_public::ty::{RigidTy, TyKind};
+
+        let ty = static_def.ty();
+        if is_constant_wrapper_type(&ty) {
+            return Self::Constant;
+        }
+        match ty.kind() {
+            TyKind::RigidTy(RigidTy::Adt(adt_def, _)) if is_shared_memory_adt(&adt_def) => {
+                Self::Shared
+            }
+            _ => Self::Global,
+        }
     }
+
+    /// LLVM address space of the static's initialized device global, or
+    /// `None` for shared memory, which has no initialized global to point at.
+    pub(super) fn initialized_address_space(self) -> Option<u32> {
+        match self {
+            Self::Global => Some(dialect_mir::types::address_space::GLOBAL),
+            Self::Constant => Some(dialect_mir::types::address_space::CONSTANT),
+            Self::Shared => None,
+        }
+    }
+}
+
+/// Refuse a static with no initialized device global as a pointer target.
+///
+/// `context` names the route that reached the static, for the diagnostic.
+pub(super) fn require_initialized_static_storage(
+    static_def: &rustc_public::mir::mono::StaticDef,
+    context: &str,
+    loc: Location,
+) -> TranslationResult<u32> {
+    match StaticStorage::of(static_def).initialized_address_space() {
+        Some(address_space) => Ok(address_space),
+        None => input_err!(
+            loc,
+            TranslationErr::unsupported(format!(
+                "{context} points at shared-memory static {}; a pointer to a SharedArray or \
+                 Barrier is supported only as a direct `&raw const` or `&raw mut` of the static, \
+                 not stored inside a constant or another static",
+                static_def.name()
+            ))
+        ),
+    }
+}
+
+/// `true` for the cuda-device types whose pointers the type translator places
+/// in the shared address space
+fn is_shared_memory_adt(adt_def: &rustc_public::ty::AdtDef) -> bool {
+    is_cuda_device_adt(adt_def, "SharedArray") || is_cuda_device_adt(adt_def, "Barrier")
+}
+
+/// Refuse a relocated value whose type stores a pointer to shared memory.
+///
+/// A `*const SharedArray` or `&Barrier` translates to an `addrspace(3)`
+/// pointer, but every relocation target an initializer can name is an
+/// initialized global in the global or constant address space: anonymous
+/// memory, an ordinary static, or an ordinary static that merely contains a
+/// `Barrier` field. Loading such a stored pointer would reinterpret a global
+/// address as a shared one, so refuse the type before any global is emitted.
+/// The walk follows fields, closure captures, elements, and pointees,
+/// because a nested allocation such as the inner `&Barrier` of `&&Barrier`
+/// is typed only through the outer constant's type. Callers run it only
+/// when the value carries a relocation; it does not match slots to
+/// relocations, so a null shared-memory pointer next to an unrelated
+/// relocated pointer is also refused. `context` names the value for the
+/// diagnostic.
+pub(super) fn refuse_stored_shared_memory_pointer(
+    ty: &rustc_public::ty::Ty,
+    context: &str,
+    loc: Location,
+) -> TranslationResult<()> {
+    use rustc_public::ty::{RigidTy, TyKind};
+
+    let mut pending = vec![*ty];
+    // recursive types such as `struct Node { next: Option<&'static Node> }`
+    // revisit themselves through a pointee
+    let mut visited = std::collections::HashSet::new();
+    while let Some(current) = pending.pop() {
+        if !visited.insert(current) {
+            continue;
+        }
+
+        let TyKind::RigidTy(rigid) = current.kind() else {
+            continue;
+        };
+        match rigid {
+            RigidTy::Ref(_, pointee, _) | RigidTy::RawPtr(pointee, _) => {
+                if let TyKind::RigidTy(RigidTy::Adt(adt_def, _)) = pointee.kind()
+                    && is_shared_memory_adt(&adt_def)
+                {
+                    return input_err!(
+                        loc,
+                        TranslationErr::unsupported(format!(
+                            "{context} stores a pointer to shared memory (`{current}`); a pointer \
+                             to a SharedArray or Barrier is supported only as a direct `&raw \
+                             const` or `&raw mut` of the static, not stored inside a constant or \
+                             another static"
+                        ))
+                    );
+                }
+                pending.push(pointee);
+            }
+            RigidTy::Array(element, _) | RigidTy::Slice(element) => pending.push(element),
+            RigidTy::Tuple(fields) => pending.extend(fields),
+            // a closure's captures are laid out as its fields
+            RigidTy::Closure(_, args) => pending
+                .extend(crate::translator::types::closure_upvar_tys(&args).unwrap_or_default()),
+            RigidTy::Adt(adt_def, args) => pending.extend(
+                adt_def
+                    .variants_iter()
+                    .flat_map(|variant| variant.fields())
+                    .map(|field| field.ty_with_args(&args)),
+            ),
+            // scalars, `str`, function pointers, and trait objects hold no
+            // typed shared-memory pointer
+            _ => {}
+        }
+    }
+
+    Ok(())
 }
 
 /// Encode initializer relocations using the versioned, length-prefixed format
@@ -216,9 +383,10 @@ pub(super) fn encode_global_initializer_relocations(
 /// Copy one evaluated allocation into a byte-exact global initializer.
 ///
 /// Undefined bytes are Rust padding and become deterministic zeros. Each
-/// provenance entry is preserved as a static-to-static pointer relocation.
-/// Anonymous memory, functions, vtables, and malformed source ranges remain
-/// diagnosed rather than being flattened to integer bytes.
+/// provenance entry is preserved as a pointer relocation, either to a Rust
+/// static's global or to the immutable global of an anonymous rustc
+/// allocation ([`RelocationTarget`]). Functions, vtables, and malformed source
+/// ranges remain diagnosed rather than being flattened to integer bytes.
 pub(super) fn allocation_initializer_data(
     alloc: &rustc_public::ty::Allocation,
     description: &str,
@@ -281,13 +449,27 @@ pub(super) fn allocation_initializer_data(
                 )))
             })? as u64;
 
-        let target_static = match GlobalAlloc::from(provenance.0) {
-            GlobalAlloc::Static(static_def) => static_def,
+        let (target, target_address_space, target_key) = match GlobalAlloc::from(provenance.0) {
+            GlobalAlloc::Static(static_def) => (
+                RelocationTarget::Static(static_def),
+                require_initialized_static_storage(
+                    &static_def,
+                    &format!("{description} pointer relocation {index}"),
+                    loc.clone(),
+                )?,
+                static_global_key(&static_def),
+            ),
+            // anonymous memory is emitted as an immutable addrspace(1) global
+            GlobalAlloc::Memory(_) => (
+                RelocationTarget::Memory(provenance.0),
+                1,
+                super::promoted_alloc::promoted_allocation_global_key(provenance.0, loc.clone())?,
+            ),
             other => {
                 return input_err!(
                     loc,
                     TranslationErr::unsupported(format!(
-                        "{description} pointer relocation {index} targets unsupported allocation {other:?}; only Rust statics in CUDA global or constant memory are supported"
+                        "{description} pointer relocation {index} targets unsupported allocation {other:?}; only Rust statics and constant memory allocations have device storage"
                     ))
                 );
             }
@@ -300,10 +482,10 @@ pub(super) fn allocation_initializer_data(
                 )))
             })?,
             width_bytes,
-            target_address_space: static_global_address_space(&target_static),
+            target_address_space,
             target_addend,
-            target_key: static_global_key(&target_static),
-            target_static,
+            target_key,
+            target,
         });
         previous_end = end;
     }
@@ -420,7 +602,7 @@ pub(super) fn promoted_array_initializer(
                 target_address_space: relocation.target_address_space,
                 target_addend: relocation.target_addend,
                 target_key: relocation.target_key,
-                target_static: relocation.target_static,
+                target: relocation.target,
             });
         }
 
@@ -550,7 +732,11 @@ pub(super) fn static_initializer_data(
             e
         )))
     })?;
-    allocation_initializer_data(&alloc, &format!("device static {}", static_def.name()), loc)
+    let description = format!("device static {}", static_def.name());
+    if !alloc.provenance.ptrs.is_empty() {
+        refuse_stored_shared_memory_pointer(&static_def.ty(), &description, loc.clone())?;
+    }
+    allocation_initializer_data(&alloc, &description, loc)
 }
 
 pub(super) fn bytes_to_hex(bytes: &[u8]) -> String {

@@ -1062,6 +1062,7 @@ dependencies = [
  "pliron-derive",
  "reserved-oxide-symbols",
  "rustc-hash",
+ "sha2",
  "thiserror 2.0.21",
 ]
 

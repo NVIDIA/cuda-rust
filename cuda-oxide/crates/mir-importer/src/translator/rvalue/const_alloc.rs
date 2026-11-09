@@ -12,6 +12,7 @@ use super::const_bytes::{
 };
 use super::const_enum::{read_uint_from_bytes, translate_enum_constant_from_alloc};
 use super::const_union::translate_union_constant_from_alloc;
+use super::promoted_alloc::translate_promoted_allocation_pointer;
 use super::static_global::{get_static_pointer_info, translate_static_global_pointer};
 use super::statics::static_target_from_allocation_at;
 use crate::error::{TranslationErr, TranslationResult};
@@ -505,11 +506,12 @@ fn decode_relocation_addend(
 
 /// Materialize a thin pointer field from an aggregate constant's allocation.
 ///
-/// Aggregate **const** values with thin pointers to device statics are
-/// materialized via [`MirGlobalAllocOp`](dialect_mir::ops::MirGlobalAllocOp) per field (addend taken from the
-/// relocation's stored bytes). This does **not** mean device-static
-/// *initializers* that themselves contain pointer relocations are supported —
-/// those remain rejected by [`allocation_initializer_data`](super::statics::allocation_initializer_data).
+/// The field's relocation names the allocation it points into, and its stored
+/// bytes are the addend. A device static target becomes that static's
+/// [`MirGlobalAllocOp`](dialect_mir::ops::MirGlobalAllocOp); an anonymous rustc
+/// allocation (`(&5u32, 1)` stores a pointer to a promoted `5`) becomes its
+/// immutable per-allocation global from
+/// [`translate_promoted_allocation_pointer`].
 ///
 /// When the field has no provenance entry, falls back to the existing
 /// inttoptr-of-bytes path (null / exposed provenance).
@@ -596,13 +598,20 @@ pub(super) fn translate_thin_pointer_at_alloc_offset(
                 );
             }
             GlobalAlloc::Memory(_) => {
-                return input_err!(
+                let byte_offset = u64::try_from(addend).map_err(|_| {
+                    input_error_noloc!(TranslationErr::unsupported(format!(
+                        "Promoted-constant pointer addend {addend} does not fit u64"
+                    )))
+                })?;
+                return translate_promoted_allocation_pointer(
+                    ctx,
+                    prov.0,
+                    byte_offset,
+                    None,
+                    result_ptr_ty,
+                    block_ptr,
+                    prev_op,
                     loc,
-                    TranslationErr::unsupported(format!(
-                        "Aggregate constant thin pointer at offset {pointer_offset} points at \
-                        an anonymous promoted allocation; promoted aggregate pointer constants \
-                        are not yet supported"
-                    ))
                 );
             }
             other => {

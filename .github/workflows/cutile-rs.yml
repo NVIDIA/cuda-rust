@@ -150,6 +150,18 @@ jobs:
           tileiras --list-versions | grep -qF '13.5'
       - name: CPU and assembler tests
         run: ./scripts/run_cpu_tests.sh
+      # cargo test hides the output of passing tests, and the translator test
+      # returns early (and passes) when no cuda-tile-translate accepts bytecode
+      # 13.5 next to tileiras. Run it with output shown and fail on that skip.
+      - name: Translator test runs against the 13.5 assembler
+        if: ${{ matrix.lane.newest }}
+        run: |
+          cargo test -p cutile-ir --test bytecode_13_5 official_translator -- --nocapture 2>&1 | tee translator.log
+          if grep -n 'skipped:' translator.log; then
+            echo "::error::the 13.5 translator test was skipped"
+            exit 1
+          fi
+          grep -qE 'test result: ok\. [1-9][0-9]* passed' translator.log
       - name: Standalone bytecode example
         if: ${{ !matrix.lane.newest }}
         run: cargo run -p cutile-ir --example build_basic

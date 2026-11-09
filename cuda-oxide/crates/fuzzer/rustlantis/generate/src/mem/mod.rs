@@ -109,6 +109,15 @@ impl Run {
         }
     }
 
+    pub fn unprotect(&mut self, offset: Size, len: Size, tag: Tag) {
+        for (_, stack) in self.ref_stack.iter_mut(offset, len) {
+            if let Some(i) = stack.iter().position(|b| b.tag == tag) {
+                assert!(stack[i].protected);
+                stack[i].protected = false;
+            }
+        }
+    }
+
     /// Returns a list of tags above a certain tag
     pub fn tags_above(&self, offset: Size, len: Size, tag: Tag) -> Vec<Tag> {
         let mut edges = BTreeSet::new();
@@ -352,6 +361,10 @@ pub struct BasicMemory {
     // a lookup table to aid removal from borrow stacks
     // a tag may cover multiple runs, e.g. &(u32, u32),
     pointers: HashMap<Tag, SmallVec<[RunPointer; 4]>>,
+
+    // Static-derived references can be protected by nested calls. Keep that
+    // accounting separate so the ordinary reference model remains unchanged.
+    static_protection_counts: HashMap<Tag, usize>,
 }
 
 impl BasicMemory {
@@ -361,6 +374,7 @@ impl BasicMemory {
         Self {
             allocations: IndexVec::new(),
             pointers: HashMap::new(),
+            static_protection_counts: HashMap::new(),
         }
     }
 
@@ -515,6 +529,75 @@ impl BasicMemory {
             run_ptr.size,
             tag,
         )
+    }
+
+    pub fn protect_tag(&mut self, tag: Tag) {
+        let old_count = self
+            .static_protection_counts
+            .get(&tag)
+            .copied()
+            .unwrap_or(0);
+        if old_count == 0 {
+            let run_ptrs = self
+                .pointers
+                .get(&tag)
+                .cloned()
+                .expect("tag has registered pointee ranges");
+            for run_ptr in run_ptrs {
+                self.allocations[run_ptr.alloc_id].runs[run_ptr.run()].protect(
+                    run_ptr.offset(),
+                    run_ptr.size,
+                    tag,
+                );
+            }
+        }
+        self.static_protection_counts.insert(tag, old_count + 1);
+    }
+
+    pub fn unprotect_tag(&mut self, tag: Tag) {
+        let should_unprotect = {
+            let count = self
+                .static_protection_counts
+                .get_mut(&tag)
+                .expect("tag is protected by a static-aware frame");
+            assert!(*count > 0);
+            *count -= 1;
+            *count == 0
+        };
+        if !should_unprotect {
+            return;
+        }
+        self.static_protection_counts.remove(&tag);
+
+        let run_ptrs = self
+            .pointers
+            .get(&tag)
+            .cloned()
+            .expect("tag has registered pointee ranges");
+        for run_ptr in run_ptrs {
+            self.allocations[run_ptr.alloc_id].runs[run_ptr.run()].unprotect(
+                run_ptr.offset(),
+                run_ptr.size,
+                tag,
+            );
+        }
+    }
+
+    pub fn tag_is_protected(&self, tag: Tag) -> bool {
+        self.static_protection_counts.contains_key(&tag)
+    }
+
+    pub fn remove_tag(&mut self, tag: Tag) {
+        let Some(run_ptrs) = self.pointers.remove(&tag) else {
+            return;
+        };
+        for run_ptr in run_ptrs {
+            self.allocations[run_ptr.alloc_id].runs[run_ptr.run()].remove_borrow(
+                run_ptr.offset(),
+                run_ptr.size,
+                tag,
+            );
+        }
     }
 
     pub fn can_read_with(&self, run_ptr: RunPointer, tag: Tag) -> bool {

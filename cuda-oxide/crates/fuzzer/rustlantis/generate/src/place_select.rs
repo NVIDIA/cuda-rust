@@ -33,6 +33,7 @@ pub struct PlaceSelector {
     refed: Vec<PlaceIndex>,
     size: Option<Size>,
     allow_uninit: bool,
+    pointee_write: bool,
     usage: PlaceUsage,
     tcx: Rc<TyCtxt>,
 }
@@ -64,6 +65,7 @@ impl PlaceSelector {
             usage: PlaceUsage::Operand,
             exclusions: vec![],
             allow_uninit: false,
+            pointee_write: false,
             tcx,
             moved: vec![],
             refed: vec![],
@@ -117,6 +119,14 @@ impl PlaceSelector {
         Self {
             usage: PlaceUsage::Offsetee,
             ..Self::for_operand(tcx)
+        }
+    }
+
+    pub fn requiring_pointee_write(self) -> Self {
+        assert_eq!(self.usage, PlaceUsage::Pointee);
+        Self {
+            pointee_write: true,
+            ..self
         }
     }
 
@@ -242,6 +252,11 @@ impl PlaceSelector {
             match self.usage {
                 // writes
                 PlaceUsage::LHS | PlaceUsage::SetDiscriminant | PlaceUsage::RET => {
+                    if !pt.can_write_through(ppath.source(), index) {
+                        return false;
+                    }
+                }
+                PlaceUsage::Pointee if self.pointee_write => {
                     if !pt.can_write_through(ppath.source(), index) {
                         return false;
                     }
@@ -374,7 +389,7 @@ mod tests {
 
     use config::TyConfig;
     use mir::{
-        syntax::{Local, LocalDecl, LocalDecls, Place},
+        syntax::{Local, LocalDecl, LocalDecls, Mutability, Place, ProjectionElem, Static, TyKind},
         tyctxt::TyCtxt,
     };
     use rand::{
@@ -407,6 +422,100 @@ mod tests {
             }
         }
         (pt, tcx, decls)
+    }
+
+    #[test]
+    fn invalidated_static_reference_is_not_an_argument_candidate() {
+        let mut tcx = TyCtxt::from_primitives(TyConfig::default());
+        let t_ptr = tcx.push(TyKind::RawPtr(TyCtxt::I32, Mutability::Mut));
+        let t_shared_ref = tcx.push(TyKind::Ref(TyCtxt::I32, Mutability::Not));
+        let tcx = Rc::new(tcx);
+        let mut pt = PlaceGraph::new(tcx.clone());
+
+        let static_id = Static::new(0);
+        let static_place =
+            pt.allocate_static(static_id, TyCtxt::I32, Mutability::Mut, 7_i32.into());
+
+        let root = Local::new(1);
+        let root_p = pt.allocate_local(root, t_ptr);
+        pt.mark_place_init(root_p);
+        pt.set_static_ref(root_p, static_id);
+
+        let alias = Local::new(2);
+        let alias_p = pt.allocate_local(alias, t_shared_ref);
+        pt.mark_place_init(alias_p);
+        pt.set_ref(alias_p, static_place, None);
+
+        let mut decls = LocalDecls::new();
+        decls.push(LocalDecl::new_mut(TyCtxt::UNIT));
+        decls.push(LocalDecl::new_mut(t_ptr));
+        decls.push(LocalDecl::new_mut(t_shared_ref));
+
+        let before: Vec<Place> = PlaceSelector::for_argument(tcx.clone())
+            .of_ty(t_shared_ref)
+            .into_iter_place(&pt, &decls)
+            .collect();
+        assert!(before.iter().any(|place| place.local() == alias));
+
+        let mut through_root = Place::from_local(root);
+        through_root
+            .project(ProjectionElem::Deref, &decls, &tcx)
+            .unwrap();
+        let root_tag = pt.accessing_tag(&through_root);
+        pt.place_written(&through_root, root_tag);
+
+        let after: Vec<Place> = PlaceSelector::for_argument(tcx.clone())
+            .of_ty(t_shared_ref)
+            .into_iter_place(&pt, &decls)
+            .collect();
+        assert!(!after.iter().any(|place| place.local() == alias));
+    }
+
+    #[test]
+    fn mutable_reference_pointee_requires_write_permission() {
+        let mut tcx = TyCtxt::from_primitives(TyConfig::default());
+        let t_ptr = tcx.push(TyKind::RawPtr(TyCtxt::I32, Mutability::Mut));
+        let t_shared_ref = tcx.push(TyKind::Ref(TyCtxt::I32, Mutability::Not));
+        let tcx = Rc::new(tcx);
+        let mut pt = PlaceGraph::new(tcx.clone());
+
+        let static_id = Static::new(0);
+        let static_place =
+            pt.allocate_static(static_id, TyCtxt::I32, Mutability::Mut, 7_i32.into());
+
+        let root = Local::new(1);
+        let root_p = pt.allocate_local(root, t_ptr);
+        pt.mark_place_init(root_p);
+        pt.set_static_ref(root_p, static_id);
+
+        let shared = Local::new(2);
+        let shared_p = pt.allocate_local(shared, t_shared_ref);
+        pt.mark_place_init(shared_p);
+        pt.set_ref(shared_p, static_place, None);
+
+        let mut decls = LocalDecls::new();
+        decls.push(LocalDecl::new_mut(TyCtxt::UNIT));
+        decls.push(LocalDecl::new_mut(t_ptr));
+        decls.push(LocalDecl::new_mut(t_shared_ref));
+
+        let readable: Vec<Place> = PlaceSelector::for_pointee(tcx.clone(), false)
+            .of_ty(TyCtxt::I32)
+            .into_iter_place(&pt, &decls)
+            .collect();
+        assert!(readable.iter().any(|place| {
+            place.local() == shared
+                && matches!(place.projection().first(), Some(ProjectionElem::Deref))
+        }));
+
+        let writable: Vec<Place> = PlaceSelector::for_pointee(tcx.clone(), false)
+            .requiring_pointee_write()
+            .of_ty(TyCtxt::I32)
+            .into_iter_place(&pt, &decls)
+            .collect();
+        assert!(!writable.iter().any(|place| {
+            place.local() == shared
+                && matches!(place.projection().first(), Some(ProjectionElem::Deref))
+        }));
     }
 
     #[bench]

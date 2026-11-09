@@ -46,7 +46,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Foreign functions take global-memory pointer operands: a `*const E` or
   `*mut E` parameter is a rank-0 `tile<ptr<E>>` operand. `block_tile_ptr` on a
   mutable tensor gives the address of the current tile block's tile, as
-  `load` and `store` see it (#1749).
+  `load` and `store` see it, with an `i64` offset. Unlike `load` and
+  `store`, a write through it is not masked to the tensor's bounds (#1749).
 
 ### Documentation
 

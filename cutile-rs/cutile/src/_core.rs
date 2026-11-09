@@ -4097,15 +4097,35 @@ pub mod core {
         new_token
     }
 
+    /// Sign-extends an `i32` to a rank-0 `i64` tile.
+    fn widen_to_i64(x: i32) -> Tile<i64, { [] }> {
+        let x: Tile<i32, { [] }> = scalar_to_tile(x);
+        let x: Tile<i64, { [] }> = exti(x);
+        x
+    }
+
+    /// The element offset of the current tile block's tile along one axis:
+    /// `block id × tile extent × stride`. Each factor is widened to `i64`
+    /// before the product, so a tensor of more than `i32::MAX` elements gets
+    /// its offset instead of a wrapped `i32` one.
+    fn block_tile_axis_offset(block_id: i32, extent: i32, stride: i32) -> Tile<i64, { [] }> {
+        widen_to_i64(block_id) * widen_to_i64(extent) * widen_to_i64(stride)
+    }
+
     /// The address of the first element of the current tile block's tile of
     /// `y`: the element `y.load()` returns first. Each axis adds
-    /// `block id × tile extent × stride` to the tensor's base.
+    /// `block id × tile extent × stride` to the tensor's base, computed in
+    /// `i64`.
     fn block_tile_ptr_1d<E: ElementType, const S: [i32; 1]>(y: &mut Tensor<E, S>) -> *mut E {
         let pid: (i32, i32, i32) = get_tile_block_id();
         let tile_shape: Shape<S> = Shape::<S> { dims: &[] };
-        let offset: i32 = pid.0 * get_static_extent(tile_shape, 0) * get_tensor_stride(y, 0);
+        let offset: Tile<i64, { [] }> = block_tile_axis_offset(
+            pid.0,
+            get_static_extent(tile_shape, 0),
+            get_tensor_stride(y, 0),
+        );
         let base: PointerTile<*mut E, { [] }> = get_tensor_base(y);
-        let tile: PointerTile<*mut E, { [] }> = base.offset(offset);
+        let tile: PointerTile<*mut E, { [] }> = base.offset_tile(offset);
         let ptr: *mut E = tile_to_pointer(tile);
         ptr
     }
@@ -4113,10 +4133,17 @@ pub mod core {
     fn block_tile_ptr_2d<E: ElementType, const S: [i32; 2]>(y: &mut Tensor<E, S>) -> *mut E {
         let pid: (i32, i32, i32) = get_tile_block_id();
         let tile_shape: Shape<S> = Shape::<S> { dims: &[] };
-        let offset: i32 = pid.0 * get_static_extent(tile_shape, 0) * get_tensor_stride(y, 0)
-            + pid.1 * get_static_extent(tile_shape, 1) * get_tensor_stride(y, 1);
+        let offset: Tile<i64, { [] }> = block_tile_axis_offset(
+            pid.0,
+            get_static_extent(tile_shape, 0),
+            get_tensor_stride(y, 0),
+        ) + block_tile_axis_offset(
+            pid.1,
+            get_static_extent(tile_shape, 1),
+            get_tensor_stride(y, 1),
+        );
         let base: PointerTile<*mut E, { [] }> = get_tensor_base(y);
-        let tile: PointerTile<*mut E, { [] }> = base.offset(offset);
+        let tile: PointerTile<*mut E, { [] }> = base.offset_tile(offset);
         let ptr: *mut E = tile_to_pointer(tile);
         ptr
     }
@@ -4124,11 +4151,21 @@ pub mod core {
     fn block_tile_ptr_3d<E: ElementType, const S: [i32; 3]>(y: &mut Tensor<E, S>) -> *mut E {
         let pid: (i32, i32, i32) = get_tile_block_id();
         let tile_shape: Shape<S> = Shape::<S> { dims: &[] };
-        let offset: i32 = pid.0 * get_static_extent(tile_shape, 0) * get_tensor_stride(y, 0)
-            + pid.1 * get_static_extent(tile_shape, 1) * get_tensor_stride(y, 1)
-            + pid.2 * get_static_extent(tile_shape, 2) * get_tensor_stride(y, 2);
+        let offset: Tile<i64, { [] }> = block_tile_axis_offset(
+            pid.0,
+            get_static_extent(tile_shape, 0),
+            get_tensor_stride(y, 0),
+        ) + block_tile_axis_offset(
+            pid.1,
+            get_static_extent(tile_shape, 1),
+            get_tensor_stride(y, 1),
+        ) + block_tile_axis_offset(
+            pid.2,
+            get_static_extent(tile_shape, 2),
+            get_tensor_stride(y, 2),
+        );
         let base: PointerTile<*mut E, { [] }> = get_tensor_base(y);
-        let tile: PointerTile<*mut E, { [] }> = base.offset(offset);
+        let tile: PointerTile<*mut E, { [] }> = base.offset_tile(offset);
         let ptr: *mut E = tile_to_pointer(tile);
         ptr
     }
@@ -4150,9 +4187,20 @@ pub mod core {
         /// borrowed while the address is derived, as for slices. Writing
         /// through it — a scatter store, or a foreign call that writes
         /// through a pointer operand — is `unsafe` and carries the safety
-        /// conditions at those sites. The tile is contiguous only when the
-        /// tensor's innermost stride is 1 and each outer stride spans the
-        /// inner extents.
+        /// conditions at those sites.
+        ///
+        /// The pointer carries no bounds. `load` and `store` mask the
+        /// elements of a partial tile that fall outside the tensor (the last
+        /// tile when an extent is not a multiple of the tile shape); an
+        /// access through this pointer is not masked. Before writing `n`
+        /// elements through it, the caller must check that this block's tile
+        /// holds them: a `[33]` tensor in `[32]` tiles leaves block 1 one
+        /// element, not 32. Nor is the tile contiguous in general: it is
+        /// only when the tensor's innermost stride is 1 and each outer stride
+        /// spans the inner extents of the tile.
+        ///
+        /// The offset is computed in `i64`, so tensors of more than
+        /// `i32::MAX` elements get the right address.
         fn block_tile_ptr(&mut self) -> Self::Ptr;
     }
 

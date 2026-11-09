@@ -180,6 +180,18 @@ mod kernels {
         x.store(back + out.load());
     }
 
+    /// A rank-2 block tile of a byte tensor with a dynamic row stride. For a
+    /// `[32769, 65536]` tensor, block 32768's offset is 2^31, past
+    /// `i32::MAX`; `gpu/block_tile_ptr.rs` runs that case.
+    #[cutile::entry()]
+    fn wide_block_tile_pointer(
+        y: &mut Tensor<u8, { [1, 32] }>,
+        scratch: &mut Tensor<u8, { [64] }>,
+    ) {
+        let t: Tile<u8, { [32] }> = y.load().reshape(shape![32]);
+        unsafe { write_to::<32, u8>(t, y.block_tile_ptr(), scratch.block_tile_ptr()) };
+    }
+
     /// A raw pointer kernel parameter is passed as is.
     #[cutile::entry()]
     unsafe fn raw_pointer_operand(y: &mut Tensor<f32, { [32] }>, src: *const f32) {
@@ -377,6 +389,41 @@ fn pointer_operands_are_rank_0_pointer_tiles() {
         artifacts
             .bytecode()
             .expect("valid pointer-operand bytecode");
+    });
+}
+
+#[test]
+fn block_tile_pointer_offsets_are_computed_in_i64() {
+    common::with_test_stack(|| {
+        // Dynamic row stride, unit column stride.
+        let artifacts = compile(
+            "wide_block_tile_pointer",
+            vec![],
+            &[("y", &[-1, 1]), ("scratch", &[1])],
+        );
+        let ir = artifacts.ir_text();
+        // Two block tiles (`y` and `scratch`), each offset by an `i64`.
+        let offsets: Vec<&str> = ir.lines().filter(|l| l.contains(" = offset ")).collect();
+        assert_eq!(offsets.len(), 2, "{ir}");
+        for offset in &offsets {
+            assert!(
+                offset.contains(": tile<ptr<i8>>, tile<i64> -> tile<ptr<i8>>"),
+                "{offset}"
+            );
+        }
+        // Block ids, extents and strides are sign-extended before any
+        // product or sum; nothing is multiplied or added in `i32`.
+        assert!(
+            ir.contains("exti") && ir.contains("signed : tile<i32> -> tile<i64>"),
+            "{ir}"
+        );
+        for line in ir
+            .lines()
+            .filter(|l| l.contains(" = muli ") || l.contains(" = addi "))
+        {
+            assert!(line.trim_end().ends_with(": tile<i64>"), "{line}\n{ir}");
+        }
+        artifacts.bytecode().expect("bytecode");
     });
 }
 

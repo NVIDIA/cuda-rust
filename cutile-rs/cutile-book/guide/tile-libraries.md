@@ -259,7 +259,8 @@ pub unsafe fn load_from(src: *const f32) -> Tile<f32, { [32] }>;
   - `y.block_tile_ptr()` (`*mut E`, needs `&mut`) is the address of the current
     tile block's tile of a mutable tensor: the element `y.load()` returns
     first. Like `load` and `store`, it is relative to the block, for ranks 1
-    to 3, and needs a static tile shape.
+    to 3, and needs a static tile shape. Unlike them, it does not mask the
+    out-of-bounds part of a partial tile (see below).
   - `x.as_ptr()` (`*const E`) is the base of the whole view; offset it
     with `PointerTile::offset` to reach a chunk:
 
@@ -279,23 +280,38 @@ pub unsafe fn load_from(src: *const f32) -> Tile<f32, { [32] }>;
   A block tile is contiguous memory only when the tensor's innermost stride
   is 1 and the tile spans whole rows of the outer axes; a library that takes
   a pointer to contiguous data needs that.
+- A pointer carries no bounds. `load` and `store` mask the elements of a
+  partial tile that fall outside the tensor; a library writing through
+  `block_tile_ptr()` does not. A `[33]` tensor in `[32]` tiles runs two
+  blocks, and block 1's tile holds one element: a library that writes 32
+  elements there writes 31 past the end of the tensor.
 - The call is ordered like a memory access (see above), so a load after the
   call reads what the library wrote through a pointer, and the library sees
   every store before the call.
 
-A safe wrapper is the usual Rust pattern: the declaration states the
-library's ABI with raw pointers, and the wrapper takes tensors whose types
-carry what the library needs, so it upholds the obligations for every input
-it accepts:
+A wrapper states the library's obligations once, so a kernel calls it with
+one `SAFETY` comment. Tensor types fix the tile shape and element type, but
+not the tensor's extent or strides, so a wrapper that writes through
+`block_tile_ptr()` stays `unsafe` and lists what its caller must check:
 
 ```rust
 /// Writes `x` to this block's 32-element tile of `y`.
-pub fn store_tile(x: Tile<f32, { [32] }>, y: &mut Tensor<f32, { [32] }>) {
+///
+/// # Safety
+///
+/// - This block's tile of `y` holds 32 elements: `y`'s extent is a multiple
+///   of 32, or this is not the last block.
+/// - `y`'s stride is 1, so the 32 elements are contiguous.
+pub unsafe fn store_tile(x: Tile<f32, { [32] }>, y: &mut Tensor<f32, { [32] }>) {
     // SAFETY: the tile is this block's own, so no other block touches it,
-    // and it holds the 32 elements the library writes.
+    // and the caller guarantees it holds 32 contiguous elements.
     unsafe { store_to(x, y.block_tile_ptr()) }
 }
 ```
+
+When a kernel cannot guarantee a whole tile, prefer a library function
+that returns the tile, and `y.store()` the result: the store masks the
+partial tile.
 
 ## Configuring tile libraries
 

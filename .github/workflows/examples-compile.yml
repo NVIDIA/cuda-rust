@@ -285,6 +285,19 @@ jobs:
             "${RUNNER_TEMP}/cross-crate-sm90-build.log" \
             '^(kernel-lib|cross_crate_kernel)$' kernel-lib cross_crate_kernel
 
+          # Scalar math has a Turing floor. Build every form at sm_75 through
+          # both LLVM (PTX) and libNVVM + nvJitLink (cubin), so a raised floor
+          # fails here instead of in a downstream sm_75 build.
+          cargo oxide build scalar_math_sm75 --arch sm_75 2>&1 \
+            | tee "${RUNNER_TEMP}/scalar-math-sm75-ptx-build.log"
+          assert_embedded_artifact \
+            "${CARGO_TARGET_DIR}/release/scalar_math_sm75" 1 256 sm_75
+
+          cargo oxide build scalar_math_sm75 --materialize-cubin --arch sm_75 2>&1 \
+            | tee "${RUNNER_TEMP}/scalar-math-sm75-cubin-build.log"
+          assert_embedded_artifact \
+            "${CARGO_TARGET_DIR}/release/scalar_math_sm75" 1 512 sm_75
+
       - name: Upload failure logs
         if: failure()
         uses: actions/upload-artifact@v4
@@ -301,5 +314,6 @@ jobs:
             ${{ runner.temp }}/vecadd-*-build.log
             ${{ runner.temp }}/iket-trace-*-build.log
             ${{ runner.temp }}/cross-crate-*-build.log
+            ${{ runner.temp }}/scalar-math-sm75-*-build.log
           if-no-files-found: ignore
           retention-days: 7

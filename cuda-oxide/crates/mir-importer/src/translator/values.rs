@@ -34,6 +34,14 @@
 //! answer is used by `body::emit_entry_allocas` via
 //! [`align_pointer_addr_space`] to pick an alloca pointee that matches what
 //! actually gets stored.
+//!
+//! A local whose own slot is borrowed (`&local`, `&raw local`) keeps its
+//! declared lowering. The borrow is typed by Rust as a pointer to that
+//! lowering, and code compiled separately, such as a non-`move` closure body,
+//! reads the slot through it. For an ordinary pointer the slot holds the
+//! generic form, and stores widen shared pointers into it; LLVM's
+//! address-space inference can still recover the concrete space after
+//! inlining.
 
 use super::facts;
 use super::facts::self_ty_is_shared_array;
@@ -617,6 +625,8 @@ impl SlotAddrSpaceMap {
     /// classifies the RHS, and merges observations into the destination
     /// local's state. Unclassified pointer writes contribute the pointer's
     /// declared lowering; only temporarily unresolved copy chains are skipped.
+    /// Locals whose slot is borrowed are pinned to their declared lowering,
+    /// because code that reads the slot through the borrow uses that type.
     ///
     /// Convergence: each local can transition at most
     /// `Uninit → Known(n) → Generic` (two steps). Propagation chains
@@ -646,6 +656,26 @@ impl SlotAddrSpaceMap {
             }
         }
 
+        // `&local` and `&raw local` hand out the slot itself, typed by Rust
+        // as a pointer to the declared lowering. Code compiled separately
+        // reads and writes through it with that type (a non-`move` closure
+        // capture is the common case), so the slot must hold exactly that
+        // lowering: a narrowed `addrspace(3)` slot is 4 bytes under
+        // `--nvptx-short-ptr` while `&*mut T` reads 8. For ordinary pointers
+        // the declared lowering is generic, and `store_local` widens shared
+        // writes with an `addrspacecast`. `SharedArray` and `Barrier`
+        // stand-ins declare `addrspace(3)`, so forcing them generic would
+        // break the same contract in the other direction. Pinned slots also
+        // ignore the scan below, which cannot see writes made through the
+        // borrow
+        let mut pinned = vec![false; num_locals];
+        for local in address_taken_locals(body, reachable) {
+            if let Some(Some(address_space)) = declared_addr_spaces.get(local) {
+                classes[local] = SlotAddrSpace::Known(*address_space);
+                pinned[local] = true;
+            }
+        }
+
         let cap = num_locals.saturating_add(2).max(2);
         for _ in 0..cap {
             let mut changed = false;
@@ -656,7 +686,7 @@ impl SlotAddrSpaceMap {
                     let mir::StatementKind::Assign(place, rvalue) = &stmt.kind else {
                         continue;
                     };
-                    if !place.projection.is_empty() {
+                    if !place.projection.is_empty() || pinned[place.local] {
                         continue;
                     }
                     let class = classify_rvalue(rvalue, &classes);
@@ -678,7 +708,7 @@ impl SlotAddrSpaceMap {
                 else {
                     continue;
                 };
-                if !destination.projection.is_empty() {
+                if !destination.projection.is_empty() || pinned[destination.local] {
                     continue;
                 }
                 let class = classify_call(func, args, &classes);
@@ -718,6 +748,33 @@ impl SlotAddrSpaceMap {
             SlotAddrSpace::Generic => address_space::GENERIC,
         }
     }
+}
+
+/// Locals whose own slot is borrowed by a reachable `&local` / `&raw local`.
+///
+/// A borrow whose place starts with `Deref` reborrows the pointee and leaves
+/// the slot private, so it does not count. Any other projection keeps the
+/// address inside the slot. On a thin-pointer local the only such
+/// projection is the type-only `OpaqueCast`, which still exposes the whole
+/// slot; `&agg.field` marks an aggregate, whose slot type is not a pointer
+/// and is never narrowed, so counting it is harmless.
+fn address_taken_locals(
+    body: &mir::Body,
+    reachable: &std::collections::BTreeSet<usize>,
+) -> std::collections::BTreeSet<mir::Local> {
+    reachable
+        .iter()
+        .flat_map(|&block_idx| &body.blocks[block_idx].statements)
+        .filter_map(|stmt| match &stmt.kind {
+            mir::StatementKind::Assign(
+                _,
+                mir::Rvalue::Ref(_, _, place) | mir::Rvalue::AddressOf(_, place),
+            ) if !matches!(place.projection.first(), Some(mir::ProjectionElem::Deref)) => {
+                Some(place.local)
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// Turn a [`WriteClass`] into a [`SlotAddrSpace`] observation. An unknown
@@ -1262,6 +1319,159 @@ mod tests {
             propagate_from_local(source, &[SlotAddrSpace::Generic]),
             WriteClass::Classified(space) if space == address_space::GENERIC
         ));
+    }
+
+    /// Compile `fixture` with rustc in-process and run `test` on the MIR body
+    /// of its `probe` function. MIR optimizations are off so each `let`
+    /// keeps its own local and the borrow of `borrowed` survives.
+    fn with_probe_body(fixture: &'static str, test: impl FnOnce(&mir::Body) + Send + 'static) {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "cuda_oxide_slot_addr_space_{}_{}",
+            std::process::id(),
+            unique
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let source = root.join("slot_addr_space_fixture.rs");
+        std::fs::write(&source, fixture).unwrap();
+
+        let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+        let sysroot_output = std::process::Command::new(rustc)
+            .args(["--print", "sysroot"])
+            .output()
+            .expect("query rustc sysroot");
+        assert!(sysroot_output.status.success(), "rustc --print sysroot");
+        let sysroot = String::from_utf8(sysroot_output.stdout)
+            .expect("sysroot path is UTF-8")
+            .trim()
+            .to_string();
+
+        let args = vec![
+            "rustc".to_string(),
+            "--edition=2024".to_string(),
+            "--crate-type=rlib".to_string(),
+            "--crate-name=slot_addr_space_fixture".to_string(),
+            "--emit=metadata".to_string(),
+            "-Zmir-opt-level=0".to_string(),
+            format!("--out-dir={}", root.display()),
+            format!("--sysroot={sysroot}"),
+            source.display().to_string(),
+        ];
+
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                rustc_public::run!(&args, || {
+                    let body = rustc_public::all_local_items()
+                        .into_iter()
+                        .find(|item| item.name().ends_with("::probe"))
+                        .and_then(|item| item.body())
+                        .expect("slot address-space fixture body");
+                    test(&body);
+                    std::ops::ControlFlow::<(), _>::Continue(())
+                })
+            })
+            .unwrap()
+            .join()
+            .unwrap()
+            .expect("in-process fixture compilation succeeds");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Find the MIR local that backs the source variable `name`.
+    ///
+    /// Only whole-local debug entries count, so a projected debug place
+    /// cannot stand in for the variable's own slot.
+    fn debug_local(body: &mir::Body, name: &str) -> mir::Local {
+        body.var_debug_info
+            .iter()
+            .find(|info| info.name == name)
+            .and_then(|info| match &info.value {
+                mir::VarDebugInfoContents::Place(place) if place.projection.is_empty() => {
+                    Some(place.local)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("whole debug local `{name}`"))
+    }
+
+    /// Run the analysis with every thin-pointer local declared `default`,
+    /// except the listed overrides, and return the effective slot address
+    /// space of `borrowed` and `private`.
+    fn analyze_probe(body: &mir::Body, default: u32, overrides: &[(&str, u32)]) -> (u32, u32) {
+        let mut declared: Vec<Option<u32>> = body
+            .locals()
+            .iter()
+            .map(|decl| {
+                matches!(
+                    decl.ty.kind(),
+                    TyKind::RigidTy(RigidTy::RawPtr(..) | RigidTy::Ref(..))
+                )
+                .then_some(default)
+            })
+            .collect();
+        for (name, address_space) in overrides {
+            declared[debug_local(body, name)] = Some(*address_space);
+        }
+
+        let reachable = (0..body.blocks.len()).collect();
+        let map = SlotAddrSpaceMap::analyze(body, &reachable, body.arg_locals().len(), &declared);
+        let effective = |name| {
+            let local = debug_local(body, name);
+            map.effective(local, declared[local].expect("pointer local"))
+        };
+        (effective("borrowed"), effective("private"))
+    }
+
+    /// Two copies of the same pointer argument: `borrowed` has its slot
+    /// handed to a callee by `&mut`, the shape a non-`move` closure capture
+    /// produces, while `private` is only ever read by value.
+    const BORROWED_COPY_FIXTURE: &str = r#"
+#[inline(never)]
+pub fn probe(shared: *mut u16) {
+    let mut borrowed = shared;
+    let private = shared;
+    core::hint::black_box(&mut borrowed);
+    core::hint::black_box(private);
+}
+"#;
+
+    /// A borrowed slot is read through `&*mut T` by code that knows only
+    /// the declared type, so a shared source must not narrow it, while a
+    /// private copy of the same source still narrows (issue #1689)
+    #[test]
+    fn borrowed_pointer_slot_keeps_generic_lowering() {
+        with_probe_body(BORROWED_COPY_FIXTURE, |body| {
+            let (borrowed, private) = analyze_probe(
+                body,
+                address_space::GENERIC,
+                &[("shared", address_space::SHARED)],
+            );
+
+            assert_eq!(borrowed, address_space::GENERIC);
+            assert_eq!(private, address_space::SHARED);
+        });
+    }
+
+    /// A stand-in such as `&mut SharedArray` declares `addrspace(3)`, and a
+    /// borrow of it is read as a 32-bit shared pointer under
+    /// `--nvptx-short-ptr`, so a generic write must not widen the slot
+    #[test]
+    fn borrowed_shared_stand_in_slot_keeps_declared_lowering() {
+        with_probe_body(BORROWED_COPY_FIXTURE, |body| {
+            let (borrowed, private) = analyze_probe(
+                body,
+                address_space::GENERIC,
+                &[("borrowed", address_space::SHARED)],
+            );
+
+            assert_eq!(borrowed, address_space::SHARED);
+            assert_eq!(private, address_space::GENERIC);
+        });
     }
 
     #[test]

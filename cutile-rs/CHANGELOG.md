@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   refresh kernel/example discovery, workspace paths, CUDA 13.5 setup, and
   bytecode-version negotiation instructions (#1746).
 
+### Fixed
+
+- Update the optional `cuda-tile-rs` bindings and `cuda-tile-translate` build
+  from CUDA Tile IR 13.2 to the public 13.5 release, including SIMT preview
+  support and translator round-trip tests.
+
 ## [0.5.0] - 2026-11-04
 
 CUDA 13.5 tile-library calls and GPU communication, a shared Tile/SIMT host

@@ -37,6 +37,7 @@ const CLEAR_CACHE_ENV: &str = "CUDA_TILE_RS_CLEAR_CACHE";
 const SHA_LEN: usize = 12;
 
 const CUDA_TILE_STATIC_LIBS: &[&str] = &[
+    "CudaTileBytecodeAnalysis",
     "CudaTileBytecodeCommon",
     "CudaTileBytecodeReader",
     "CudaTileBytecodeTranslation",
@@ -195,6 +196,11 @@ fn main() {
             install_prefix.display()
         )
     });
+    // Integration tests must exercise this build, not a translator found on PATH.
+    println!(
+        "cargo:rustc-env=CUDA_TILE_RS_TRANSLATE_BIN={}",
+        translate_bin.display()
+    );
     if let Ok(dir) = env::var(INSTALL_DIR_ENV) {
         let dest_dir = PathBuf::from(dir);
         assert!(

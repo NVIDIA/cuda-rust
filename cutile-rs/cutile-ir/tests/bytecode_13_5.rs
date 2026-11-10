@@ -7,9 +7,9 @@
 //! the public-preview `preview$call` (foreign tile-library calls) and the
 //! preview header bit.
 //!
-//! The toolkit checks run when the selected `tileiras` has a
-//! `cuda-tile-translate` next to it that accepts 13.5. They never need a
-//! GPU.
+//! The translator checks use `CUTILE_REFERENCE_TRANSLATE` when configured,
+//! otherwise a `cuda-tile-translate` next to the selected 13.5 `tileiras`.
+//! They never need a GPU.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -594,9 +594,13 @@ fn preview_call_operands_must_be_tiles_or_tokens() {
     assert!(message.contains("tiles or tokens"), "{message}");
 }
 
-/// `cuda-tile-translate` next to the selected `tileiras`, when it accepts
-/// 13.5 preview bytecode.
+/// Prefer an explicitly configured translator, including one built by
+/// cuda-tile-rs without a toolkit. Explicitly selected tools must pass the test;
+/// a missing or incompatible executable is an error rather than a skip.
 fn translator() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("CUTILE_REFERENCE_TRANSLATE") {
+        return Some(path.into());
+    }
     let tileiras = cutile_ir::toolchain::tileiras_from_env();
     let tileiras = if tileiras.components().count() == 1 {
         which(&tileiras)?

@@ -102,6 +102,32 @@ fn concrete_kernel_signature_is_generated_from_launcher_arguments() {
 }
 
 #[test]
+fn uncontracted_kernel_prepare_method_has_a_call_site_diagnostic() {
+    let module: ItemMod = parse_quote! {
+        mod kernels {
+            #[kernel]
+            pub fn block_sum() {}
+        }
+    };
+    let expanded = expand_to_compact_string(module);
+
+    assert!(
+        expanded.contains("pubtrait__cuda_oxide_prepare_contract_required_for_block_sum"),
+        "{expanded}"
+    );
+    assert!(
+        expanded.contains("kernel`block_sum`hasno`#[launch_contract]`,soithasno`prepare_*`method"),
+        "{expanded}"
+    );
+    assert!(
+        expanded.contains(
+            "pubfnprepare_block_sum<__CudaOxideConfig>(&self,__cuda_oxide_config:__CudaOxideConfig)->!where__CudaOxideConfig:__cuda_oxide_prepare_contract_required_for_block_sum"
+        ),
+        "{expanded}"
+    );
+}
+
+#[test]
 fn grid_constant_launch_safety_is_independent_of_source_safety_and_geometry() {
     let module: ItemMod = parse_quote! {
         mod kernels {

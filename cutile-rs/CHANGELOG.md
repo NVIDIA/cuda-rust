@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Add opt-in B200 profiles to the fused QKV and NVFP4 MoE examples. Add public
+  CTK 13.5 setup instructions, explicit large MoE fixture selection, focused
+  correctness runs and raw timing samples; retain the original default profiles.
 - Add optional cheap screening and budget-reserved paired confirmation to the
   preparation pipeline. Preparation stops before fresh incumbent comparisons;
   incomplete confirmation retains the incumbent and records raw samples and
@@ -52,6 +55,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Keep masked QKV tail-row slot pointers in bounds, retaining the original
+  M=67 fixture and numerical checks under compiler-instrumented memcheck.
 - Update the optional `cuda-tile-rs` bindings and `cuda-tile-translate` build
   from CUDA Tile IR 13.2 to the public 13.5 release, including SIMT preview
   support and translator round-trip tests.

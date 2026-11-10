@@ -4,18 +4,22 @@
  */
 
 //! Foreign tile-library calls executed on the GPU, against a static test
-//! tile library built from `gpu/tilelib/` with the toolkit's own tools:
+//! tile library built from the sources in `gpu/tilelib/`:
 //! `cuda-tile-translate` assembles the interface and the implementation
 //! catalog, `nvcc` compiles the SIMT code to LTO-IR, and `tileiras
-//! --preview-create-tile-lib` packages them. Skipped without a Tile IR 13.5
-//! `tileiras` or without `nvcc` next to it.
+//! --preview-create-tile-lib` packages them.
+//!
+//! `nvcc` and `tileiras` come from the toolkit. The public toolkit has no
+//! `cuda-tile-translate`: `CUTILE_TILE_TRANSLATE` names the executable, and
+//! without it the one next to `tileiras` is used. `cargo build --release -p
+//! cuda-tile-rs` builds one (see that crate's README).
+//!
+//! Skipped without a Tile IR 13.5 `tileiras`, without `nvcc` next to it, or
+//! without `cuda-tile-translate`. With `CUTILE_REQUIRE_TILELIB=1` a skip is a
+//! failure.
 //!
 //! A static tile library carries precompiled SIMT code and needs no
-//! implementation-provider shared library. When the toolkit has no
-//! `cuda-tile-translate`, `gpu/tilelib/prebuilt/` is used instead; after
-//! editing a `.mlir` file, regenerate it with
-//! `cuda-tile-translate <name>.mlir --mlir-to-cudatilebc --preview=simt
-//! --bytecode-version=13.5 -o prebuilt/<name>.tilebc`.
+//! implementation-provider shared library.
 
 use crate::common::supports_tile_ir as supports;
 use cutile::prelude::*;
@@ -29,6 +33,9 @@ use std::sync::OnceLock;
 
 /// The built `test_lib.tilelib`, once [`test_tilelib_available`] built it.
 static TILELIB: OnceLock<PathBuf> = OnceLock::new();
+
+/// The `cuda-tile-translate` that built it (see [`tile_translate`]).
+static TRANSLATE: OnceLock<PathBuf> = OnceLock::new();
 
 /// The test library, as the host configures it.
 fn tilelib() -> TileLibrarySpec {
@@ -245,35 +252,44 @@ fn tilelib_sources() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/gpu/tilelib")
 }
 
+/// The `cuda-tile-translate` that assembles the library's `.mlir` sources:
+/// `CUTILE_TILE_TRANSLATE` when it is set, otherwise the one next to
+/// `tileiras` in `bin`, if there is one.
+fn tile_translate(bin: &Path) -> Option<PathBuf> {
+    match std::env::var_os("CUTILE_TILE_TRANSLATE").filter(|path| !path.is_empty()) {
+        Some(path) => {
+            let path = PathBuf::from(path);
+            assert!(
+                path.is_file(),
+                "CUTILE_TILE_TRANSLATE names {path:?}, which is not a file"
+            );
+            Some(path)
+        }
+        None => Some(bin.join("cuda-tile-translate")).filter(|path| path.is_file()),
+    }
+}
+
 /// Builds `test_lib.tilelib` for the device's architecture into `dir`, with
-/// the SIMT implementation in `simt_source`. Intermediate files go to a
-/// per-process directory, and the library is renamed into place, so
-/// concurrent test processes never see a partial file.
-fn build_test_tilelib(bin: &Path, sm: &str, simt_source: &Path, dir: &Path) {
+/// the SIMT implementation in `simt_source`. `translate` assembles the
+/// `.mlir` sources; `nvcc` and `tileiras` are taken from `bin`. Intermediate
+/// files go to a per-process directory, and the library is renamed into
+/// place, so concurrent test processes never see a partial file.
+fn build_test_tilelib(translate: &Path, bin: &Path, sm: &str, simt_source: &Path, dir: &Path) {
     let src = tilelib_sources();
     let work = dir.join(format!("build-{}", std::process::id()));
     std::fs::create_dir_all(&work).expect("create the test tile-library directory");
-    let translate = bin.join("cuda-tile-translate");
     for name in ["interface", "implementation"] {
-        let out = work.join(format!("{name}.tilebc"));
-        if translate.is_file() {
-            run(
-                &translate,
-                &[
-                    src.join(format!("{name}.mlir")).as_os_str(),
-                    "--mlir-to-cudatilebc".as_ref(),
-                    "--preview=simt".as_ref(),
-                    "--bytecode-version=13.5".as_ref(),
-                    "-o".as_ref(),
-                    out.as_os_str(),
-                ],
-            );
-        } else {
-            // Some toolkits do not ship cuda-tile-translate; the prebuilt
-            // bytecode is assembled from the same .mlir files.
-            std::fs::copy(src.join(format!("prebuilt/{name}.tilebc")), &out)
-                .expect("copy prebuilt tile bytecode");
-        }
+        run(
+            translate,
+            &[
+                src.join(format!("{name}.mlir")).as_os_str(),
+                "--mlir-to-cudatilebc".as_ref(),
+                "--preview=simt".as_ref(),
+                "--bytecode-version=13.5".as_ref(),
+                "-o".as_ref(),
+                work.join(format!("{name}.tilebc")).as_os_str(),
+            ],
+        );
     }
     let arch = sm.trim_start_matches("sm_");
     let fatbin = work.join("test_lib.fatbin");
@@ -326,10 +342,11 @@ fn skip_tilelib(reason: &str) -> bool {
 }
 
 /// Builds the test library once per process (see [`tilelib`]). Returns
-/// false (skip) without Tile IR
-/// 13.5 foreign-call support or without `nvcc` next to `tileiras`; a tool
-/// that is present but fails is a test failure. With `CUTILE_REQUIRE_TILELIB=1`
-/// a skip is a failure too (see [`skip_tilelib`]).
+/// false (skip) without Tile IR 13.5 foreign-call support, without `nvcc`
+/// next to `tileiras`, or without `cuda-tile-translate` (see
+/// [`tile_translate`]); a tool that is present but fails is a test failure.
+/// With `CUTILE_REQUIRE_TILELIB=1` a skip is a failure too (see
+/// [`skip_tilelib`]).
 fn test_tilelib_available() -> bool {
     static BUILT: OnceLock<bool> = OnceLock::new();
     *BUILT.get_or_init(|| {
@@ -341,11 +358,24 @@ fn test_tilelib_available() -> bool {
         if !bin.join("nvcc").is_file() {
             return skip_tilelib(&format!("no nvcc next to {tileiras:?}"));
         }
+        let Some(translate) = tile_translate(&bin) else {
+            return skip_tilelib(&format!(
+                "no cuda-tile-translate: CUTILE_TILE_TRANSLATE is not set and none is next to \
+                 {tileiras:?}"
+            ));
+        };
         let sm = cutile_compiler::cuda_tile_runtime_utils::get_gpu_name(0);
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
             .join("cutile-test-tilelib")
             .join(&sm);
-        build_test_tilelib(&bin, &sm, &tilelib_sources().join("test_lib.cu"), &dir);
+        build_test_tilelib(
+            &translate,
+            &bin,
+            &sm,
+            &tilelib_sources().join("test_lib.cu"),
+            &dir,
+        );
+        TRANSLATE.set(translate).ok();
         TILELIB.set(dir.join("test_lib.tilelib")).ok();
         true
     })
@@ -587,7 +617,7 @@ fn a_rebuilt_library_recompiles_through_a_hot_launch_site() -> Result<(), Error>
         .map(PathBuf::from)
         .unwrap_or_default();
     let sm = cutile_compiler::cuda_tile_runtime_utils::get_gpu_name(0);
-    build_test_tilelib(&bin, &sm, &simt_source, &dir);
+    build_test_tilelib(TRANSLATE.get().unwrap(), &bin, &sm, &simt_source, &dir);
 
     assert_eq!(launch()?, plus(11.0), "the launch runs the rebuilt library");
     let key = kernels::rebuilt_library_kernel(api::meta::<f32>(&[32]).partition([32]))

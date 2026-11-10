@@ -6,6 +6,8 @@
 # Checkout does not init submodules. cuda-tile-rs is outside default-members,
 # and these CUDA images have no git until the setup action, so
 # `submodules: recursive` makes actions/checkout reject the REST API fallback.
+# Only the cuda-tile-translate job needs the cuda-tile submodule; it fetches it
+# itself.
 name: cutile-rs-pr
 
 on:
@@ -99,6 +101,11 @@ jobs:
   # that lists bytecode 13.5, which the Tile IR 13.5 gates in the compiler and
   # encoder depend on. The separate 13.0 lane only checks shared host crates.
   # The job names are tile-ir-cuda13-2 and tile-ir-cuda13-5.
+  #
+  # Tests that need the 13.5 toolkit skip, and pass, without it. The newest lane
+  # sets CUTILE_REQUIRE_TILELIB=1, and then such a skip is a failure: the
+  # cutile-ir test that reads a preview$call back with the toolkit's tileirdisasm
+  # must run there.
   tile-ir:
     name: ${{ matrix.lane.name }}
     needs: changes
@@ -113,6 +120,7 @@ jobs:
         DEBIAN_FRONTEND: noninteractive
     env:
       CUDA_TOOLKIT_PATH: /usr/local/cuda
+      CUTILE_REQUIRE_TILELIB: ${{ matrix.lane.newest && '1' || '' }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -141,39 +149,16 @@ jobs:
           /usr/local/cuda/bin/tileiras --version
           /usr/local/cuda/bin/tileiras --help | grep -q 'sm_120'
       # The dev image may ship the toolkit without the assembler package;
-      # install it when missing.
+      # install it when missing. The package also holds tileirdisasm.
       - name: Verify assembler version
         if: ${{ matrix.lane.newest }}
         run: |
           command -v tileiras || apt-get install -y -qq --no-install-recommends cuda-tileiras-13-5
           tileiras --version
           tileiras --list-versions | grep -qF '13.5'
+          "$(dirname "$(command -v tileiras)")/tileirdisasm" --version
       - name: CPU and assembler tests
         run: ./scripts/run_cpu_tests.sh
-      # cargo test hides the output of passing tests, and the translator test
-      # returns early (and passes) when no cuda-tile-translate accepting bytecode
-      # 13.5 sits next to tileiras. Run it with output shown, then check that what
-      # happened is what the lane's assembler allows: on the newest lane it must
-      # run, on the base lane (an old assembler) it must skip, which also shows
-      # that the base lane still has the old toolkit.
-      - name: Translator test
-        run: |
-          cargo test -p cutile-ir --test bytecode_13_5 official_translator -- --nocapture 2>&1 | tee translator.log
-          grep -qE 'test result: ok\. [1-9][0-9]* passed' translator.log
-      - name: Translator test ran against the 13.5 assembler
-        if: ${{ matrix.lane.newest }}
-        run: |
-          if grep -n 'skipped:' translator.log; then
-            echo "::error::the 13.5 translator test was skipped on the newest lane"
-            exit 1
-          fi
-      - name: Translator test skipped on the old assembler
-        if: ${{ !matrix.lane.newest }}
-        run: |
-          if ! grep -q 'skipped:' translator.log; then
-            echo "::error::the 13.5 translator test ran on the base lane; its assembler is no longer old"
-            exit 1
-          fi
       # The assemble_* tests need a 13.5 assembler, not a GPU, so they are
       # #[ignore]d and the default run skips them. They call the real tileiras
       # and fail when it cannot assemble; run them where the newest lane has it.
@@ -286,13 +271,97 @@ jobs:
           compression-level: 0 # The nested nextest archives are already compressed.
           retention-days: 1
 
+  # cuda-tile-translate assembles the .mlir sources of the test tile library
+  # (cutile/tests/gpu/tilelib) for the gpu-tests jobs. The toolkit does not ship
+  # it, so cuda-tile-rs builds it from the cuda-tile submodule. That build clones
+  # and compiles LLVM and MLIR first, so the executable is cached, keyed on the
+  # submodule commit and the build script; a run that finds it builds nothing.
+  cuda-tile-translate:
+    needs: changes
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.tile == 'true' ||
+      needs.changes.outputs.any_changed != 'true'
+    runs-on: linux-amd64-cpu16
+    container:
+      image: nvcr.io/nvidia/cuda:13.5.0-devel-ubuntu24.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
+    env:
+      CUDA_TOOLKIT_PATH: /usr/local/cuda
+    timeout-minutes: 90
+    steps:
+      # Before checkout, so that checkout finds git and makes a repository, which
+      # the submodule step needs. The Rust cache is off: the target directory of
+      # this job holds the LLVM build tree.
+      - uses: $/cutile-rs/.github/actions/setup
+        with:
+          cache: "false"
+      - uses: actions/checkout@v7
+
+      - name: Read the cuda-tile commit
+        id: cuda-tile
+        working-directory: ${{ github.workspace }}
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          echo "commit=$(git rev-parse HEAD:cutile-rs/cuda-tile-rs/cuda-tile)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore cuda-tile-translate
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/cuda-tile-translate
+          key: cuda-tile-translate-ubuntu24.04-${{ steps.cuda-tile.outputs.commit }}-${{ hashFiles('cutile-rs/cuda-tile-rs/build.rs') }}
+
+      # LLVM's configure step needs python3, which the image lacks. The crate's
+      # tests translate the tile library sources with the executable just built.
+      - name: Build cuda-tile-translate
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          apt-get install -y -qq --no-install-recommends python3
+          git -C "$GITHUB_WORKSPACE" submodule update --init cutile-rs/cuda-tile-rs/cuda-tile
+          mkdir -p "$RUNNER_TEMP/cuda-tile-translate"
+          CUDA_TILE_TRANSLATE_INSTALL_DIR="$RUNNER_TEMP/cuda-tile-translate" \
+            cargo test --release --locked -p cuda-tile-rs
+
+      # Runs on a cache hit too: the cached executable must assemble the current
+      # sources, and the toolkit's reader must accept what it writes.
+      - name: Assemble the test tile library sources
+        run: |
+          translate="$RUNNER_TEMP/cuda-tile-translate/cuda-tile-translate"
+          "$translate" --version
+          for name in interface implementation; do
+            "$translate" "cutile/tests/gpu/tilelib/$name.mlir" --mlir-to-cudatilebc \
+              --preview=simt --bytecode-version=13.5 -o "$RUNNER_TEMP/$name.tilebc"
+            /usr/local/cuda/bin/tileirdisasm --preview=simt "$RUNNER_TEMP/$name.tilebc"
+          done
+
+      # The other direction: the translator reads the Tile IR 13.5 bytecode that
+      # cutile-ir writes, preview calls included. No other job has a translator.
+      - name: Read cutile-ir bytecode with cuda-tile-translate
+        env:
+          CUTILE_REQUIRE_TILELIB: "1"
+        run: |
+          CUTILE_REFERENCE_TRANSLATE="$RUNNER_TEMP/cuda-tile-translate/cuda-tile-translate" \
+            cargo test --locked -p cutile-ir --test bytecode_13_5
+
+      - name: Upload cuda-tile-translate
+        uses: actions/upload-artifact@v4
+        with:
+          name: cuda-tile-translate
+          path: ${{ runner.temp }}/cuda-tile-translate/cuda-tile-translate
+          if-no-files-found: error
+          retention-days: 1
+
   # The test packages are built once (on CUDA 13.3) and run on a GPU under two
   # toolkits. The tile library tests (cutile gpu::static_tilelib) need Tile IR
-  # 13.5: on the 13.3 job they skip and report as passed, so the 13.5 job sets
-  # CUTILE_REQUIRE_TILELIB=1 to turn that skip into a failure.
+  # 13.5 and build their library from source with nvcc, tileiras and the
+  # cuda-tile-translate of the job above. On the 13.3 job they skip and report
+  # as passed, so the 13.5 job sets CUTILE_REQUIRE_TILELIB=1 to turn a skip into
+  # a failure.
   gpu-tests:
     name: gpu-tests${{ matrix.cuda.suffix }}
-    needs: build
+    needs: [build, cuda-tile-translate]
     runs-on: linux-amd64-gpu-rtxpro6000-latest-1
     timeout-minutes: 30
     strategy:
@@ -319,12 +388,21 @@ jobs:
           name: cutile-gpu-tests
           path: ${{ runner.temp }}/gpu-tests
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: cuda-tile-translate
+          path: ${{ runner.temp }}/cuda-tile-translate
+
       - name: Extract runtime test packages
         run: |
           tar -xf "$RUNNER_TEMP/gpu-tests/cutile-gpu-tests.tar" -C "$RUNNER_TEMP/gpu-tests"
           test "$(cat "$RUNNER_TEMP/gpu-tests/revision.txt")" = "$GITHUB_SHA"
           nvidia-smi
           "$CUTILE_TILEIRAS_PATH" --version
+          # An artifact does not keep the executable bit.
+          chmod +x "$RUNNER_TEMP/cuda-tile-translate/cuda-tile-translate"
+          "$RUNNER_TEMP/cuda-tile-translate/cuda-tile-translate" --version
+          echo "CUTILE_TILE_TRANSLATE=$RUNNER_TEMP/cuda-tile-translate/cuda-tile-translate" >> "$GITHUB_ENV"
 
       - name: GPU runtime tests
         run: ./scripts/run_gpu_tests.sh --archive-dir "$RUNNER_TEMP/gpu-tests"

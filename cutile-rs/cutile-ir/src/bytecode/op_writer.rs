@@ -541,12 +541,16 @@ pub(super) fn write_op_body(
             }
         }
         LoadViewTko => {
+            if op.attributes.iter().any(|(name, _)| name == "valid_check") {
+                return Err(Error::BytecodeWrite(
+                    "load_view_tko does not support the valid_check attribute".into(),
+                ));
+            }
             w.write_varint(op.result_types.len() as u64);
             write_result_types(op, w, ctx)?;
             let flags = flag_if_present(op, "memory_scope", 0)
                 | flag_if_present(op, "optimization_hints", 1)
-                | flag_if_operand_group(op, 2, 2)
-                | flag_if_bool_true(op, "valid_check", 3);
+                | flag_if_operand_group(op, 2, 2);
             w.write_varint(flags);
             write_inline_attr(op, "memory_ordering_semantics", w, ctx)?;
             if flags & (1 << 0) != 0 {
@@ -556,9 +560,6 @@ pub(super) fn write_op_body(
                 write_inline_attr(op, "optimization_hints", w, ctx)?;
             }
             write_inbounds(op, 1, w, ctx)?;
-            if flags & (1 << 3) != 0 {
-                w.write_byte(1);
-            }
             write_operand_group(op, w, ctx, 0, 1)?;
             write_variadic_operand_group(op, w, ctx, 1)?;
             if flags & (1 << 2) != 0 {

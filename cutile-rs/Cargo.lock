@@ -533,7 +533,7 @@ version = "0.5.0"
 
 [[package]]
 name = "cuda-tile-rs"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "bindgen 0.71.1",
  "cmake",
@@ -541,7 +541,7 @@ dependencies = [
 
 [[package]]
 name = "cutile"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "cuda-async",
@@ -566,7 +566,7 @@ dependencies = [
 
 [[package]]
 name = "cutile-benchmarks"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "criterion",
  "cuda-async",
@@ -579,7 +579,7 @@ dependencies = [
 
 [[package]]
 name = "cutile-compiler"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "cuda-async",
@@ -599,7 +599,7 @@ dependencies = [
 
 [[package]]
 name = "cutile-examples"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -615,7 +615,7 @@ dependencies = [
 
 [[package]]
 name = "cutile-ir"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "half",
  "indexmap",
@@ -625,7 +625,7 @@ dependencies = [
 
 [[package]]
 name = "cutile-kernels"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "cutile",
  "cutile-compiler",
@@ -634,7 +634,7 @@ dependencies = [
 
 [[package]]
 name = "cutile-macro"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "convert_case",
  "cutile-compiler",

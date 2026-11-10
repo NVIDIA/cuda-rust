@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Removed
+
+- Remove `cutile::tileir::load_view_tko_valid_check` and
+  `cutile_ir::requirements::Feature::ValidityCheck`: validity checking is
+  unsupported by the public CUDA 13.5 tooling. Low-level IR containing the
+  `valid_check` attribute now reports an error instead of emitting unsupported
+  bytecode. Callers that passed `false` can use `cutile::core::load_view_raw`
+  with the final boolean argument removed; there is no supported replacement
+  for `true`. The Tile workspace moves to 0.6.0 for this API removal; shared host
+  crates remain at 0.5.0. Remove the corresponding documentation claims below.
+
 ### Added
 
 - Refresh `cutile-kernels` from Grout with split-K prefill/merge, persistent
@@ -43,7 +54,7 @@ runtime, and stronger memory-safety contracts.
   branches, loops, and wrappers; cache keys include library contents and declared
   provider dependencies/settings. See the [tile-library guide](https://github.com/NVIDIA/cuda-rust/blob/9dc26c50a8c90026bcd0dfa7dc4b36f189126946/cutile-rs/cutile-book/guide/tile-libraries.md).
 - **Unsafe communication:** unicast/multicast pointer classification, multicast
-  load-reduce/reduce/store, atomic-view inbounds promises, and TMA validity checks
+  load-reduce/reduce/store and atomic-view inbounds promises
   in `cutile::tileir`. System-scope signaling and alias fences support explicit
   synchronization. The [communication reference](https://github.com/NVIDIA/cuda-rust/blob/9dc26c50a8c90026bcd0dfa7dc4b36f189126946/cutile-rs/cutile-book/reference/unsafe-comms.md)
   includes a runnable unicast/multicast example.
@@ -101,7 +112,7 @@ updated value while preserving the caller's original immutable tile.
 
 Unicast/multicast target `sm_100`, `sm_103`, and `sm_107`: unicast needs NVLink;
 multicast additionally needs NVLink SHARP-capable NVSwitch. Callers establish
-mappings and synchronization. TMA `valid_check=true` is `sm_107` only. See the
+mappings and synchronization. See the
 [compatibility matrix](https://github.com/NVIDIA/cuda-rust/blob/9dc26c50a8c90026bcd0dfa7dc4b36f189126946/cutile-rs/cutile-book/reference/compatibility.md).
 Rust 1.89+ is required; the library builds on 1.89, and runtime validation used 1.98.0.
 

@@ -47,6 +47,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   KV-scatter kernel, with a correctness example and opt-in CUDA graph benchmark
   sweep. The initial schedule is not B200-tuned (#1746).
 
+### Changed
+
+- The static tile-library GPU tests always assemble their library from its
+  `.mlir` sources; the checked-in bytecode is removed. They take
+  `cuda-tile-translate` from `CUTILE_TILE_TRANSLATE`, or from next to
+  `tileiras`.
+
 ### Documentation
 
 - Link the Tile library provider catalog and CUDA Oxide export workflow;

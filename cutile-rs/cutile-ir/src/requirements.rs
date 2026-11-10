@@ -123,7 +123,6 @@ features! {
     FabricPointer => ("unicast/multicast pointer", V13_5, OneOf(&[100, 103, 107])),
     Multimem => ("multimem view operations", V13_5, OneOf(&[100, 103, 107])),
     AtomicViewInbounds => ("atomic_red_view_tko.inbounds=true", V13_5, Any),
-    ValidityCheck => ("load_view_tko.valid_check", V13_5, Only(107)),
     ControlFlowHints => ("if/select optimization hints", V13_5, Any),
     MinCtasPerSm => ("min_ctas_per_sm", V13_5, Any),
     ArgumentAttributes => ("argument attributes", V13_5, Any),
@@ -186,7 +185,6 @@ pub const fn scalar_requirement(scalar: ScalarType) -> Requirement {
 
 pub fn attribute_feature(op: Opcode, name: &str, attr: &Attribute) -> Option<Feature> {
     match (name, attr) {
-        ("valid_check", Attribute::Bool(true)) => Some(Feature::ValidityCheck),
         ("arg_attrs", Attribute::Array(items))
             if items
                 .iter()

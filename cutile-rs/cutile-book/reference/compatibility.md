@@ -40,7 +40,6 @@ need the selected version to be 13.5.
 | unicast/multicast pointer | — | — | — | Yes | `sm_100` / `sm_103` / `sm_107` |
 | multimem view operations | — | — | — | Yes | `sm_100` / `sm_103` / `sm_107` |
 | atomic_red_view_tko.inbounds=true | — | — | — | Yes | Any supported target |
-| load_view_tko.valid_check | — | — | — | Yes | `sm_107` only |
 | if/select optimization hints | — | — | — | Yes | Any supported target |
 | min_ctas_per_sm | — | — | — | Yes | Any supported target |
 | argument attributes | — | — | — | Yes | Any supported target |
@@ -104,7 +103,7 @@ We do not impose a blanket driver-version-at-least-toolkit-version check.
 
 The 13.5 surface includes unicast/multicast pointer classification,
 `multimem_load_reduce_view_tko`, `multimem_reduce_view_tko`,
-`multimem_store_view_tko`, atomic-view inbounds promises, TMA validity checking,
+`multimem_store_view_tko`, atomic-view inbounds promises,
 minimum residency hints, and function argument attributes.
 The named `simt` preview is separate from this stable surface. cuTile Rust
 supports [foreign tile-library calls](../guide/tile-libraries.md) through that
@@ -112,8 +111,8 @@ preview; see the guide for the supported operands and current limitations.
 
 The raw Rust APIs are exposed as unsafe functions in `cutile::tileir`, defined
 in `cutile/src/_tileir.rs`: `ptr_with_attr_unicast`, `ptr_with_attr_multicast`,
-the three `multimem_*_view_tko` operations, `atomic_red_view_tko_with_inbounds`,
-and `load_view_tko_valid_check`. The `multimem` module provides Add, Min, Max, And,
+the three `multimem_*_view_tko` operations, and `atomic_red_view_tko_with_inbounds`.
+The `multimem` module provides Add, Min, Max, And,
 Or, Xor, Umin, and Umax reduction markers. These unsafe APIs require live,
 correctly classified mappings and an explicit memory-ordering protocol.
 A Tile IR token does not synchronize independent GPUs.
@@ -154,9 +153,8 @@ The named `simt` preview has its own feature gate and is not a versioned
 CTK 13.5 API; 13.6 MMA overflow attributes are also outside this versioned surface.
 
 Multicast operations require an NVLink SHARP-capable fabric and the supported
-`sm_100`, `sm_103`, or `sm_107` families. `valid_check=true` specifically needs
-`sm_107` with TMA enabled; B200 does not cover this feature. False validity
-checks and all-false atomic inbounds arrays retain their older version floor.
+`sm_100`, `sm_103`, or `sm_107` families. All-false atomic inbounds arrays retain
+their older version floor.
 
 ### Selecting the toolkit
 
@@ -187,8 +185,7 @@ CUTILE_REFERENCE_TRANSLATE=/path/to/cuda-tile-translate \
 ```
 
 With the shared 13.5 environment above, assemble the feature and multicast
-execution kernels without a GPU. The validity-check kernel targets `sm_107`;
-the other kernels target `sm_100`:
+execution kernels targeting `sm_100` without a GPU:
 
 ```bash
 cargo test -p cutile --test tile_ir_13_5 --test tile_ir_13_5_multicast \

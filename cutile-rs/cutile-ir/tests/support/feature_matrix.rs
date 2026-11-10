@@ -106,7 +106,6 @@ pub fn readme_matrix() -> String {
             "; NVLink SHARP-capable fabric",
         ),
         ("Atomic view `inbounds`", Feature::AtomicViewInbounds, ""),
-        ("TMA data-validity checks", Feature::ValidityCheck, ""),
         ("Condition likelihood hints", Feature::ControlFlowHints, ""),
         ("Minimum CTAs per SM", Feature::MinCtasPerSm, ""),
         ("`f8e5m3fnu`", Feature::F8E5M3FNU, ""),

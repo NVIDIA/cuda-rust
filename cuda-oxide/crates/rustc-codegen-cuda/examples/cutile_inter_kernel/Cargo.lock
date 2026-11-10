@@ -239,7 +239,7 @@ version = "0.5.0"
 
 [[package]]
 name = "cutile"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "cuda-async",
@@ -261,7 +261,7 @@ dependencies = [
 
 [[package]]
 name = "cutile-compiler"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "cuda-async",
@@ -281,7 +281,7 @@ dependencies = [
 
 [[package]]
 name = "cutile-ir"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "half",
  "indexmap",
@@ -291,7 +291,7 @@ dependencies = [
 
 [[package]]
 name = "cutile-macro"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "convert_case",
  "cutile-compiler",

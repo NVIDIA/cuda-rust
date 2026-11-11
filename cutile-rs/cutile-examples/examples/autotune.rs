@@ -18,7 +18,10 @@ use cutile::error::Error;
 use cutile::tensor::{PartitionMut, Tensor, ToHostVec};
 use cutile::tile_kernel::TileKernel;
 use cutile::tile_kernel::{contains_cuda_function, jit_compile_count};
-use cutile::tune::pipeline::{ConfirmationOptions, Failure, Pipeline, RandomOrder, WorkControl};
+use cutile::tune::pipeline::{
+    BayesianOptions, BayesianSearch, ConfirmationOptions, Failure, GridOrder, ParameterScale,
+    Pipeline, RandomOrder, Strategy, WorkControl,
+};
 use cutile::tune::{Config, ParamValue, Trial};
 use std::sync::Arc;
 use std::time::Duration;
@@ -172,9 +175,18 @@ fn main() -> Result<(), Error> {
     let mut overlap = true;
     let mut budget_ms = 30_000;
     let mut evidence_path = None;
+    let mut search = String::from("bayes");
+    let mut seed = 42;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--search" => {
+                search = args.next().ok_or_else(|| example_error("missing search method"))?;
+            }
+            "--seed" => {
+                seed = args.next().ok_or_else(|| example_error("missing seed"))?.parse()
+                    .map_err(|_| example_error("invalid seed"))?;
+            }
             "--workers" => {
                 workers = args
                     .next()
@@ -197,7 +209,7 @@ fn main() -> Result<(), Error> {
                 )
             }
             _ => return Err(example_error(
-                "usage: autotune [--workers N] [--budget-ms N] [--serial] [--evidence NEW_FILE]",
+                "usage: autotune [--search bayes|random|grid] [--seed N] [--workers N] [--budget-ms N] [--serial] [--evidence NEW_FILE]",
             )),
         }
     }
@@ -232,7 +244,23 @@ fn main() -> Result<(), Error> {
         eps,
         stream,
     };
-    let mut strategy = RandomOrder::new(42).with_initial([0]);
+    let bayesian_options = BayesianOptions {
+        seed,
+        scales: [("BLOCK_SIZE".into(), ParameterScale::Log2)].into(),
+        ..Default::default()
+    };
+    // All methods start at the shipping incumbent for a fair comparison.
+    // BayesianSearch itself has no preferred initial candidate.
+    let mut strategy: Box<dyn Strategy> = match search.as_str() {
+        "bayes" => Box::new(
+            BayesianSearch::new(&configs, bayesian_options.clone())
+                .and_then(|s| s.with_initial([0]))
+                .map_err(|e| example_error(&e.reason))?,
+        ),
+        "random" => Box::new(RandomOrder::new(seed).with_initial([0])),
+        "grid" => Box::new(GridOrder),
+        _ => return Err(example_error("search must be bayes, random or grid")),
+    };
     let confirmation = ConfirmationOptions::new(0);
     let output = Pipeline::default()
         .workers(workers)
@@ -317,7 +345,7 @@ fn main() -> Result<(), Error> {
         )
         .map_err(|error| example_error(&error.reason))?;
     println!(
-        "workers={workers} overlap={overlap} status={:?} elapsed_ms={:.3}",
+        "search={search} seed={seed} workers={workers} overlap={overlap} status={:?} elapsed_ms={:.3}",
         output.status,
         output.elapsed.as_secs_f64() * 1e3
     );
@@ -351,7 +379,15 @@ fn main() -> Result<(), Error> {
             .create_new(true)
             .open(path)
             .map_err(|e| example_error(&e.to_string()))?;
-        serde_json::to_writer_pretty(file, &output).map_err(|e| example_error(&e.to_string()))?;
+        let mut evidence =
+            serde_json::to_value(&output).map_err(|e| example_error(&e.to_string()))?;
+        evidence["strategy"] = serde_json::json!({
+            "name": search, "seed": seed, "bayesian_options": bayesian_options,
+            "workers": workers, "overlap": overlap, "budget_ms": budget_ms,
+        });
+        evidence["configs"] = serde_json::json!(configs);
+        evidence["workload"] = serde_json::json!({"kernel": "rms_norm", "rows": m, "columns": n});
+        serde_json::to_writer_pretty(file, &evidence).map_err(|e| example_error(&e.to_string()))?;
     }
     if let Some(failure) = output.failure {
         eprintln!("no replacement: {failure}");

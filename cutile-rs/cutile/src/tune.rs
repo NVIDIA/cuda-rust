@@ -20,7 +20,9 @@
 //!
 //! For bounded CPU preparation overlapped with serialized GPU evaluation, use
 //! [`pipeline`]. That API has separate interruption/infrastructure outcomes and
-//! returns provisional observations; it does not use the synchronous resume log.
+//! supports Bayesian, random or declared-order selection. Its `run` returns
+//! provisional observations; `run_confirmed` validates replacements with fresh
+//! paired measurements. It does not use the synchronous resume log.
 //!
 //! Principles, in order:
 //! - **Explicit opt-in, no magic.** Nothing tunes behind the programmer's

@@ -25,6 +25,9 @@ cargo run --release -p cutile-examples --example autotune --features experimenta
 # Compare more CPU workers with the same measurement protocol:
 cargo run --release -p cutile-examples --example autotune --features experimental-tune -- --workers 4 --budget-ms 30000
 cargo run --release -p cutile-examples --example autotune --features experimental-tune -- --serial
+# Compare selection with the same worker count, budget and confirmation:
+cargo run --release -p cutile-examples --example autotune --features experimental-tune -- --search random --seed 42
+cargo run --release -p cutile-examples --example autotune --features experimental-tune -- --search grid
 ```
 
 `tune::pipeline::Pipeline` owns scheduling. Its three callbacks have separate
@@ -68,7 +71,9 @@ comparison with the same callbacks.
 each outcome. `RandomOrder::new(seed).with_initial([baseline_index])` provides
 seeded sampling without replacement, exhausting the space when the budget
 allows. Create a fresh strategy per run. Initial indices are suggestions,
-not a guarantee of incumbent coverage.
+not a guarantee of incumbent coverage. `GridOrder` visits the declared order.
+The example defaults to the Bayesian selector described below; the synchronous
+`Autotuner` still defaults to `GridSearch`.
 
 The budget includes resolution, queueing, preparation, loading, correctness
 checks and measurement. `trial_limit` also starts before resolution, so waiting
@@ -100,6 +105,68 @@ and toolchain provenance if you need an audit record.
 Prepared artifacts are bounded by the pipeline, but installed modules retain
 the existing global cache lifetime. Automatic eviction is deliberately avoided:
 other streams may still be using a specialization. See cache management below.
+
+## Bayesian selection with a neutral starting point
+
+`BayesianSearch` fits a small Gaussian process to **current-run log latencies**
+and scores every unvisited configuration by expected improvement. It can spend
+a measurement on a promising uncertain region rather than simply trying the
+lowest predicted latency. This is intended for small finite spaces with costly
+evaluations, not millions of candidates. Fitting is cubic in the number of
+observations, and scoring the finite list adds work for each candidate. Model
+work is included in the budget and checks the deadline between fit rows and
+candidate scores.
+
+```rust
+use cutile::tune::pipeline::{BayesianOptions, BayesianSearch, ParameterScale};
+
+let options = BayesianOptions {
+    seed: 42,
+    scales: [("BLOCK_SIZE".into(), ParameterScale::Log2)].into(),
+    ..Default::default()
+};
+let mut strategy = BayesianSearch::new(&configs, options)?.with_initial([0])?;
+// Pass &mut strategy to Pipeline::run_confirmed as below.
+```
+
+Without `with_initial` or explicit prior offsets, every configuration has the
+same prior mean and marginal uncertainty; a seeded tie-break selects the first
+candidate. Integer axes default to linear normalization, positive tile sizes
+can opt into logarithmic scaling, and strings are categorical. Integer category
+IDs can also use `Categorical`. Every configuration must declare the same keys
+and parameter types. The Matérn 5/2 kernel, length scale and observation noise
+are fixed explicit settings in `BayesianOptions`, rather than hyperparameters
+fit from a handful of samples. These defaults are starting assumptions, not a
+claim that this model is best for every tuning space.
+
+Optional `prior_log_offsets` give weak preferences by configuration ID. For
+example, `-0.1` encodes an expected latency about 10% below the common baseline.
+Offsets are limited to magnitude `ln(2)`, leave initial uncertainty unchanged,
+and never add observations. Hardware-informed hints must be supplied explicitly;
+the tuner does not invent architecture rules, call an LLM, or train offline.
+The default remains neutral. If using previous tuning runs to construct hints
+or initial candidate suggestions, verify the kernel, parameter meanings,
+workload, GPU and compiler first. Do not insert old timings into current-run
+observations. Automatic history retrieval and cross-kernel transfer are not
+implemented, and resume provenance checks are unchanged.
+
+Pending configurations are temporarily conditioned at their predicted means,
+reducing redundant exploration while another candidate is compiling or being
+measured. They cannot improve the measured incumbent. Expected improvement uses
+the best posterior mean among valid measured points; this is a plug-in treatment
+of noise, not an integrated noisy-EI algorithm. Invalid, cancelled, timed-out
+and infrastructure-failed trials never become latency targets. Known rejected
+candidates are excluded; the first implementation does not predict the validity
+of unseen configurations. A numerical failure falls back to seeded random and
+increments `numerical_fallbacks()`.
+
+The implementation uses standard GP regression equations with Cholesky solves,
+checked against independent scikit-learn/SciPy fixtures. It adds no ML runtime
+dependency. Compare it with seeded random and grid under the **same elapsed-time
+budget**, including compilation, correctness checks and confirmation. Small
+spaces that fit the budget can be exhausted by any strategy; there is no claim
+that a model always wins. The existing `Strategy` interface also permits a
+different selector without changing compilation or measurement.
 
 ## Screening and confirming a replacement
 
@@ -156,11 +223,13 @@ the incumbent, the selected configuration and one of three statuses:
 Every shortlisted comparison must complete within the budget. A partial leader
 is never promoted after a timeout or failure. Neither previous screening times
 nor the strategy's predictions count as fresh confirmation evidence. This works
-with `RandomOrder`; no Bayesian model or new ML dependency is needed.
+with each selector; predictions never bypass the correctness gate or the paired
+confirmation rule.
 
 To save the example's observations and raw confirmation samples, pass
 `--evidence NEW_FILE`. It creates a new JSON file without overwriting an existing
-one. Record workload, source revision, GPU and toolkit alongside it; this example
+one. It includes the strategy settings and declared configurations. Record source
+revision, GPU and toolkit alongside it; this example
 file is evidence, not a provenance-checked resume log.
 
 ## Declaring a space and running the search

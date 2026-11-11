@@ -18,7 +18,9 @@ use std::collections::HashSet;
 use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
 
+mod bayesian;
 mod confirmation;
+pub use bayesian::{BayesianOptions, BayesianSearch, ParameterScale};
 pub use confirmation::{
     ConfirmationOptions, ConfirmationRound, ConfirmationStatus, ConfirmedOutput, PairedEvidence,
 };
@@ -134,9 +136,35 @@ pub struct SearchView<'a> {
 
 /// Ask/tell selection. The scheduler owns concurrency and pending state.
 pub trait Strategy {
+    /// Validate configuration-dependent state before starting workers.
+    fn validate(&self, _configs: &[Config]) -> Result<(), Failure> {
+        Ok(())
+    }
     /// None means no suggestion now. Called again after pending work completes.
     fn suggest(&mut self, view: &SearchView<'_>) -> Option<usize>;
     fn observe(&mut self, _observation: &Observation) {}
+}
+
+impl<T: Strategy + ?Sized> Strategy for Box<T> {
+    fn validate(&self, configs: &[Config]) -> Result<(), Failure> {
+        (**self).validate(configs)
+    }
+    fn suggest(&mut self, view: &SearchView<'_>) -> Option<usize> {
+        (**self).suggest(view)
+    }
+    fn observe(&mut self, observation: &Observation) {
+        (**self).observe(observation)
+    }
+}
+
+/// Declared-order enumeration for comparison with model-guided search.
+#[derive(Default)]
+pub struct GridOrder;
+impl Strategy for GridOrder {
+    fn suggest(&mut self, view: &SearchView<'_>) -> Option<usize> {
+        (0..view.configs.len())
+            .find(|i| !view.pending.contains(i) && !view.completed.iter().any(|o| o.trial_id == *i))
+    }
 }
 
 /// Reproducible random selection without replacement. Exhaustive when the
@@ -319,6 +347,7 @@ impl Pipeline {
         if ids.len() != configs.len() {
             return Err(Failure::infrastructure("duplicate configuration IDs"));
         }
+        strategy.validate(configs)?;
         let start = Instant::now();
         let control = match self.budget {
             Some(budget) => self.control.with_deadline(

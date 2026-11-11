@@ -3,16 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! Generate the linkage provider bindings from the Tile IR compiler's header.
+//! Generate or stage the linkage provider bindings (`src/bindings.rs`).
 //!
-//! The header is not part of this repository. The build reads it from the
-//! directory named by `TILEIR_LINKAGE_PROVIDER_INCLUDE_DIR`, which holds
-//! `tile_ir/linkage_provider/LinkageProviderAPI.h`, and checks the file's
-//! SHA-256 against `upstream.lock`. The pin exists because the ABI is a
-//! pre-release 0.x interface whose layout may change without a version bump;
-//! a provider built from a header the assembler was not built from fails at
-//! load time at best. `TILEIR_LINKAGE_PROVIDER_UNPINNED=1` turns the mismatch
-//! into a warning for local experiments against a newer header.
+//! When `TILEIR_LINKAGE_PROVIDER_INCLUDE_DIR` is set, the build reads
+//! `tile_ir/linkage_provider/LinkageProviderAPI.h` from that directory, checks
+//! its SHA-256 against `upstream.lock`, and runs `bindgen` with the pre-release
+//! warning banner injected via `.raw_line(...)`. When the variable is unset,
+//! the build uses the checked-in `src/bindings.rs` generated from the pinned
+//! header.
 
 use std::env;
 use std::fs;
@@ -23,51 +21,63 @@ use sha2::{Digest, Sha256};
 const INCLUDE_DIR_ENV: &str = "TILEIR_LINKAGE_PROVIDER_INCLUDE_DIR";
 const UNPINNED_ENV: &str = "TILEIR_LINKAGE_PROVIDER_UNPINNED";
 const HEADER_RELATIVE: &str = "tile_ir/linkage_provider/LinkageProviderAPI.h";
+const CHECKED_IN_BINDINGS: &str = "src/bindings.rs";
+
+const GENERATED_HEADER_BANNER: &str = "\
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+// WARNING: Experimental, undocumented, pre-release ABI (0.0.1).
+// This interface is not stabilized and carries no public compatibility guarantees;
+// record layouts and callback signatures may change without notice.";
 
 fn main() {
     println!("cargo:rerun-if-env-changed={INCLUDE_DIR_ENV}");
     println!("cargo:rerun-if-env-changed={UNPINNED_ENV}");
     println!("cargo:rerun-if-changed=upstream.lock");
+    println!("cargo:rerun-if-changed={CHECKED_IN_BINDINGS}");
     println!("cargo:rerun-if-changed=build.rs");
 
-    let header = locate_header();
-    println!("cargo:rerun-if-changed={}", header.display());
     let lock = Lock::read(Path::new("upstream.lock"));
-    check_pin(&header, &lock);
-
     let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR is set by cargo"));
-    let bindings = bindgen::Builder::default()
-        .header(header.to_string_lossy())
-        .allowlist_type("TileIR.*")
-        .allowlist_function("tileir_.*")
-        .allowlist_var("TILEIR_.*")
-        // Unknown enum values are protocol errors per the header, so every C
-        // enum becomes a newtype whose unknown values stay representable.
-        .newtype_enum(".*")
-        .derive_debug(true)
-        .derive_default(true)
-        .derive_copy(true)
-        .generate_comments(true)
-        .layout_tests(true)
-        .generate()
-        .expect("bindgen could not parse the linkage provider header");
-    bindings
-        .write_to_file(out.join("bindings.rs"))
-        .expect("could not write bindings.rs");
-    println!("cargo:include={}", header.parent().unwrap().display());
+    let out_bindings = out.join("bindings.rs");
+
+    if let Some(header) = locate_header() {
+        println!("cargo:rerun-if-changed={}", header.display());
+        check_pin(&header, &lock);
+
+        let bindings = bindgen::Builder::default()
+            .raw_line(GENERATED_HEADER_BANNER)
+            .header(header.to_string_lossy())
+            .allowlist_type("TileIR.*")
+            .allowlist_function("tileir_.*")
+            .allowlist_var("TILEIR_.*")
+            // Unknown enum values are protocol errors per the header, so every C
+            // enum becomes a newtype whose unknown values stay representable.
+            .newtype_enum(".*")
+            .derive_debug(true)
+            .derive_default(true)
+            .derive_copy(true)
+            .generate_comments(true)
+            .layout_tests(true)
+            .generate()
+            .expect("bindgen could not parse the linkage provider header");
+        bindings
+            .write_to_file(&out_bindings)
+            .expect("could not write bindings.rs");
+        println!("cargo:include={}", header.parent().unwrap().display());
+    } else {
+        fs::copy(CHECKED_IN_BINDINGS, &out_bindings)
+            .expect("could not copy checked-in src/bindings.rs to OUT_DIR");
+    }
     println!("cargo:abi_version={}", lock.abi_version);
 }
 
-/// The header to bind, from the include directory the environment names.
-fn locate_header() -> PathBuf {
-    let Some(dir) = env::var_os(INCLUDE_DIR_ENV).filter(|value| !value.is_empty()) else {
-        panic!(
-            "\n{INCLUDE_DIR_ENV} is not set. oxide-tile-provider-sys needs the Tile IR \
-             compiler's linkage provider header, `{HEADER_RELATIVE}`, which is not part of \
-             this repository (see README.md). Point the variable at the include directory \
-             that contains it.\n"
-        );
-    };
+/// The header to bind when `TILEIR_LINKAGE_PROVIDER_INCLUDE_DIR` is set.
+fn locate_header() -> Option<PathBuf> {
+    let dir = env::var_os(INCLUDE_DIR_ENV).filter(|value| !value.is_empty())?;
     let header = PathBuf::from(dir).join(HEADER_RELATIVE);
     if !header.is_file() {
         panic!(
@@ -82,7 +92,7 @@ fn locate_header() -> PathBuf {
                 .display()
         );
     }
-    header
+    Some(header)
 }
 
 /// The pin recorded in `upstream.lock`: the header's SHA-256 and ABI version.

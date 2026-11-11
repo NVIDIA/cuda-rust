@@ -34,10 +34,6 @@ use super::*;
 /// size follow it.
 pub(super) const PROVIDER_BUILT_MARKER: &str = "Tile library provider built:";
 
-/// The variable `oxide-tile-provider-sys` reads the Tile IR compiler's
-/// linkage provider header from. The header is not part of this repository.
-pub(super) const PROVIDER_INCLUDE_ENV: &str = "TILEIR_LINKAGE_PROVIDER_INCLUDE_DIR";
-
 /// Where the generated crate and its shared object ended up.
 pub(super) struct ProviderBuild {
     /// The generated `cdylib` crate.
@@ -110,13 +106,6 @@ pub(super) fn build_provider(
     version: BytecodeVersion,
     verbose: bool,
 ) -> Result<ProviderBuild, String> {
-    if std::env::var_os(PROVIDER_INCLUDE_ENV).is_none_or(|value| value.is_empty()) {
-        return Err(format!(
-            "the provider runtime binds the Tile IR compiler's linkage provider header, which is \
-             not part of this repository; point {PROVIDER_INCLUDE_ENV} at the include directory \
-             that holds tile_ir/linkage_provider/LinkageProviderAPI.h"
-        ));
-    }
     if !ctx.is_workspace {
         return Err(
             "the provider form needs the cuda-oxide workspace: the generated crate depends on \

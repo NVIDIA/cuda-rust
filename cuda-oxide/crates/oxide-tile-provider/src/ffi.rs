@@ -808,18 +808,21 @@ mod tests {
             hints: std::ptr::null(),
             num_hints: 0,
         };
-        let mut data: *const c_void = std::ptr::null();
-        let mut size = 0usize;
-        let mut error: *mut TileIRLPError = std::ptr::null_mut();
-        // SAFETY: all records are live locals.
+        // SAFETY: all records are live locals; the callbacks initialize their out-parameters.
         unsafe {
+            let mut data = std::mem::MaybeUninit::<*const c_void>::uninit();
+            let mut size = std::mem::MaybeUninit::<usize>::uninit();
+            let mut error = std::mem::MaybeUninit::<*mut TileIRLPError>::uninit();
             let result = instance.vtable.provide_impls.unwrap()(
                 instance.handle,
                 &request,
-                &mut data,
-                &mut size,
-                &mut error,
+                data.as_mut_ptr(),
+                size.as_mut_ptr(),
+                error.as_mut_ptr(),
             );
+            let data = data.assume_init();
+            let size = size.assume_init();
+            let error = error.assume_init();
             assert_eq!(result, TileIRLPResult::TILEIR_LP_SUCCESS);
             assert!(error.is_null());
             assert!(!data.is_null() && size > 12);
@@ -840,29 +843,40 @@ mod tests {
                 callsites: &site,
                 ..request
             };
+            let mut data = std::mem::MaybeUninit::<*const c_void>::uninit();
+            let mut size = std::mem::MaybeUninit::<usize>::uninit();
+            let mut error = std::mem::MaybeUninit::<*mut TileIRLPError>::uninit();
             let result = instance.vtable.provide_impls.unwrap()(
                 instance.handle,
                 &request,
-                &mut data,
-                &mut size,
-                &mut error,
+                data.as_mut_ptr(),
+                size.as_mut_ptr(),
+                error.as_mut_ptr(),
             );
             assert_eq!(result, TileIRLPResult::TILEIR_LP_SUCCESS);
-            assert!(data.is_null() && size == 0 && error.is_null());
+            assert!(
+                data.assume_init().is_null()
+                    && size.assume_init() == 0
+                    && error.assume_init().is_null()
+            );
 
             let request = TileIRLPProvideImplsRequest {
                 format_version: 2,
                 ..request
             };
+            let mut data = std::mem::MaybeUninit::<*const c_void>::uninit();
+            let mut size = std::mem::MaybeUninit::<usize>::uninit();
+            let mut error = std::mem::MaybeUninit::<*mut TileIRLPError>::uninit();
             let result = instance.vtable.provide_impls.unwrap()(
                 instance.handle,
                 &request,
-                &mut data,
-                &mut size,
-                &mut error,
+                data.as_mut_ptr(),
+                size.as_mut_ptr(),
+                error.as_mut_ptr(),
             );
+            let error = error.assume_init();
             assert_eq!(result, TileIRLPResult::TILEIR_LP_ERROR_INVALID_ARGUMENT);
-            assert!(text(&(*error).message).contains("request format 2"));
+            assert!(text(&error.as_ref().unwrap().message).contains("request format 2"));
             instance.vtable.free_error.unwrap()(error);
             instance.vtable.destroy.unwrap()(instance.handle);
         }
@@ -885,31 +899,29 @@ mod tests {
             arguments: types.as_ptr(),
             num_arguments: 1,
         };
-        let mut module: *mut TileIRForeignModule = std::ptr::null_mut();
-        let mut error: *mut TileIRLPError = std::ptr::null_mut();
-        // SAFETY: all records are live locals.
+        // SAFETY: all records are live locals; the callbacks initialize their out-parameters.
         unsafe {
             let calls = [call(&known, "sm_120a"), call(&known, "sm_120a")];
+            let mut module = std::mem::MaybeUninit::<*mut TileIRForeignModule>::uninit();
+            let mut error = std::mem::MaybeUninit::<*mut TileIRLPError>::uninit();
             let result = instance.vtable.instantiate.unwrap()(
                 instance.handle,
                 calls.as_ptr(),
                 calls.len(),
-                &mut module,
-                &mut error,
+                module.as_mut_ptr(),
+                error.as_mut_ptr(),
             );
-            assert_eq!(
-                result,
-                TileIRLPResult::TILEIR_LP_SUCCESS,
-                "{}",
-                text(&(*error).message)
-            );
-            let record = &*module;
+            let module = module.assume_init();
+            let error = error.assume_init();
+            assert_eq!(result, TileIRLPResult::TILEIR_LP_SUCCESS);
+            assert!(error.is_null());
+            let record = module.as_ref().unwrap();
             assert_eq!(record.num_code_buffers, 1);
             assert_eq!(record.num_call_symbols, 2);
-            let buffer = &*record.code_buffers;
+            let buffer = record.code_buffers.as_ref().unwrap();
             assert_eq!(buffer.output_type, TileIROutputType::TILEIR_OUTPUT_LTO_IR);
             assert_eq!(buffer.num_symbols, 1);
-            assert_eq!(text(&*buffer.symbols), "relu_impl");
+            assert_eq!(text(buffer.symbols.as_ref().unwrap()), "relu_impl");
             instance.vtable.free_module.unwrap()(module);
 
             // An unknown export and, for finished LTOIR, an instantiation.
@@ -918,16 +930,20 @@ mod tests {
                 call(&unknown, "sm_120"),
                 call(&instantiation, "sm_120"),
             ];
+            let mut module = std::mem::MaybeUninit::<*mut TileIRForeignModule>::uninit();
+            let mut error = std::mem::MaybeUninit::<*mut TileIRLPError>::uninit();
             let result = instance.vtable.instantiate.unwrap()(
                 instance.handle,
                 calls.as_ptr(),
                 calls.len(),
-                &mut module,
-                &mut error,
+                module.as_mut_ptr(),
+                error.as_mut_ptr(),
             );
+            let module = module.assume_init();
+            let error = error.assume_init();
             assert_eq!(result, TileIRLPResult::TILEIR_LP_ERROR_UNRESOLVED_CALLS);
             assert!(module.is_null());
-            let unresolved = (*error).__bindgen_anon_1.unresolved_calls;
+            let unresolved = error.as_ref().unwrap().__bindgen_anon_1.unresolved_calls;
             assert_eq!(unresolved.num_calls, 2);
             let entries = std::slice::from_raw_parts(unresolved.calls, unresolved.num_calls);
             assert_eq!(entries[0].call_index, 1);
@@ -937,26 +953,31 @@ mod tests {
             instance.vtable.free_error.unwrap()(error);
 
             let calls = [call(&known, "sm_100")];
+            let mut module = std::mem::MaybeUninit::<*mut TileIRForeignModule>::uninit();
+            let mut error = std::mem::MaybeUninit::<*mut TileIRLPError>::uninit();
             let result = instance.vtable.instantiate.unwrap()(
                 instance.handle,
                 calls.as_ptr(),
                 calls.len(),
-                &mut module,
-                &mut error,
+                module.as_mut_ptr(),
+                error.as_mut_ptr(),
             );
+            let error = error.assume_init();
             assert_eq!(result, TileIRLPResult::TILEIR_LP_ERROR);
-            assert!(text(&(*error).message).contains("compiled for sm_120"));
+            assert!(text(&error.as_ref().unwrap().message).contains("compiled for sm_120"));
             instance.vtable.free_error.unwrap()(error);
 
+            let mut module = std::mem::MaybeUninit::<*mut TileIRForeignModule>::uninit();
+            let mut error = std::mem::MaybeUninit::<*mut TileIRLPError>::uninit();
             let result = instance.vtable.instantiate.unwrap()(
                 instance.handle,
                 std::ptr::null(),
                 0,
-                &mut module,
-                &mut error,
+                module.as_mut_ptr(),
+                error.as_mut_ptr(),
             );
             assert_eq!(result, TileIRLPResult::TILEIR_LP_SUCCESS);
-            assert!(module.is_null());
+            assert!(module.assume_init().is_null());
             instance.vtable.destroy.unwrap()(instance.handle);
         }
     }
@@ -976,20 +997,21 @@ mod tests {
             arguments: types.as_ptr(),
             num_arguments: 1,
         };
-        let mut module: *mut TileIRForeignModule = std::ptr::null_mut();
-        let mut error: *mut TileIRLPError = std::ptr::null_mut();
-        // SAFETY: live locals.
+        // SAFETY: live locals; the callback initializes its out-parameters.
         unsafe {
             let calls = [call("sm_120a"), call("sm_100a")];
+            let mut module = std::mem::MaybeUninit::<*mut TileIRForeignModule>::uninit();
+            let mut error = std::mem::MaybeUninit::<*mut TileIRLPError>::uninit();
             let result = instance.vtable.instantiate.unwrap()(
                 instance.handle,
                 calls.as_ptr(),
                 calls.len(),
-                &mut module,
-                &mut error,
+                module.as_mut_ptr(),
+                error.as_mut_ptr(),
             );
+            let error = error.assume_init();
             assert_eq!(result, TileIRLPResult::TILEIR_LP_ERROR);
-            assert!(text(&(*error).message).contains("2 architectures"));
+            assert!(text(&error.as_ref().unwrap().message).contains("2 architectures"));
             instance.vtable.free_error.unwrap()(error);
             instance.vtable.destroy.unwrap()(instance.handle);
         }

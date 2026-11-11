@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Add an opt-in autotuning preparation pipeline under `experimental-tune`,
+  separating CPU CUBIN compilation from foreground loading, correctness checks
+  and measurement. It defaults to one candidate ahead, supports bounded workers
+  and cooperative deadlines, and reports invalidity separately from timeouts
+  and infrastructure failures. Results require independent finalist confirmation;
+  the existing synchronous tuner and resume-log format are unchanged.
 - Refresh `cutile-kernels` from Grout with split-K prefill/merge, persistent
   RMSNorm, and the remaining baseline and single-token variants. NVFP4 MoE
   routing, quantization, FC1/FC2, and finalization kernels now live in the

@@ -177,23 +177,55 @@ where
 
 /// Times `f` on `stream` with CUDA events. See the module docs for the
 /// protocol; `f` must enqueue its work on the stream it receives.
-pub fn do_bench<F>(
+pub fn do_bench<F>(stream: &Arc<Stream>, opts: &BenchOptions, f: F) -> Result<Measurement, Error>
+where
+    F: FnMut(&Arc<Stream>) -> Result<(), Error>,
+{
+    do_bench_inner(stream, opts, None, f)
+}
+
+/// Like [`do_bench`], but checks cancellation/deadline between warmup and timed
+/// repetitions. It cannot interrupt a callback or a CUDA synchronization already
+/// running. An incomplete measurement returns an error, never a partial score.
+pub fn do_bench_controlled<F>(
     stream: &Arc<Stream>,
     opts: &BenchOptions,
+    control: &cutile_compiler::compile_control::CompileControl,
+    f: F,
+) -> Result<Measurement, Error>
+where
+    F: FnMut(&Arc<Stream>) -> Result<(), Error>,
+{
+    do_bench_inner(stream, opts, Some(control), f)
+}
+
+fn do_bench_inner<F>(
+    stream: &Arc<Stream>,
+    opts: &BenchOptions,
+    control: Option<&cutile_compiler::compile_control::CompileControl>,
     mut f: F,
 ) -> Result<Measurement, Error>
 where
     F: FnMut(&Arc<Stream>) -> Result<(), Error>,
 {
+    let check = || -> Result<(), Error> {
+        if let Some(control) = control {
+            control.check().map_err(anyhow::Error::from)?
+        }
+        Ok(())
+    };
+    check()?;
     // Warmup: at least once, then until the budget is spent. Absorbs the
     // first-launch JIT so it never lands in a timed rep.
     let warmup_start = Instant::now();
     f(stream)?;
     while warmup_start.elapsed() < opts.warmup {
+        check()?;
         f(stream)?;
     }
 
     // Derive the rep count from one timed estimate.
+    check()?;
     let est_ms = time_one(stream, &mut f)?.max(1e-4);
     let target_ms = opts.rep.as_secs_f64() * 1e3;
     let reps = ((target_ms / est_ms as f64).round() as usize).clamp(opts.min_reps, opts.max_reps);
@@ -201,11 +233,13 @@ where
     let l2 = opts.clear_l2.then(|| L2Clear::new(stream)).transpose()?;
     let mut times_ms = Vec::with_capacity(reps);
     for _ in 0..reps {
+        check()?;
         if let Some(l2) = &l2 {
             l2.clear()?;
         }
         times_ms.push(time_one(stream, &mut f)?);
     }
+    check()?;
     Ok(Measurement { times_ms })
 }
 

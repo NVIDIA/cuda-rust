@@ -144,7 +144,7 @@ dependencies = [
 
 [[package]]
 name = "cuda-artifact-finalizer"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "libnvvm-sys",
  "nvjitlink-sys",
@@ -190,7 +190,7 @@ dependencies = [
 
 [[package]]
 name = "cuda-device"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bytemuck",
  "cuda-macros",
@@ -199,7 +199,7 @@ dependencies = [
 
 [[package]]
 name = "cuda-host"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cuda-artifact-finalizer",
  "cuda-core",
@@ -215,7 +215,7 @@ dependencies = [
 
 [[package]]
 name = "cuda-macros"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "oxide-tile-export",
  "proc-macro2",
@@ -230,7 +230,7 @@ version = "0.5.0"
 
 [[package]]
 name = "cuda-target-spec"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "digest"
@@ -355,7 +355,7 @@ dependencies = [
 
 [[package]]
 name = "libnvvm-sys"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cuda-target-spec",
  "libloading",
@@ -392,7 +392,7 @@ dependencies = [
 
 [[package]]
 name = "nvjitlink-sys"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "libloading",
  "thiserror",
@@ -421,7 +421,7 @@ dependencies = [
 
 [[package]]
 name = "oxide-tile-export"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -449,7 +449,7 @@ dependencies = [
 
 [[package]]
 name = "ptx-parse"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "quote"
@@ -491,7 +491,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "reserved-oxide-symbols"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "rustc-hash"

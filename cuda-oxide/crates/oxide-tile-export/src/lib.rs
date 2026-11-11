@@ -281,8 +281,11 @@ pub struct TileExportDesc {
     /// Implementation symbol: the `extern "C"` device function the call
     /// resolves to.
     pub symbol: String,
-    /// Static tile extents; one positive entry in version 1.
-    pub shape: Vec<i64>,
+    /// Static tile extents, one positive entry in version 1, or `None` for
+    /// an export whose tile extent the call supplies: a parametric
+    /// declaration, which only a linkage provider can ship.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape: Option<Vec<i64>>,
     /// Declaration arguments, in ABI order.
     pub params: Vec<TileParamDesc>,
     /// Synchronization the implementation requires.
@@ -496,12 +499,13 @@ impl TileExportDesc {
                 });
             }
         }
-        if self.shape.len() != 1 {
-            return Err(TileExportError::ShapeRank(self.shape.len()));
-        }
-        let extent = self.shape[0];
-        if extent <= 0 {
-            return Err(TileExportError::ShapeNotPositive(extent));
+        if let Some(shape) = &self.shape {
+            if shape.len() != 1 {
+                return Err(TileExportError::ShapeRank(shape.len()));
+            }
+            if shape[0] <= 0 {
+                return Err(TileExportError::ShapeNotPositive(shape[0]));
+            }
         }
         if self.params.is_empty() {
             return Err(TileExportError::NoParams);
@@ -582,7 +586,10 @@ impl TileExportDesc {
         }
         // A warp is one invocation of 32 lanes, each owning `footprint`
         // elements, so the tile must split into whole `32 * footprint` runs.
-        if self.sync == TileSync::Warp && extent % (32 * i64::from(footprint)) != 0 {
+        if let Some(extent) = self.static_extent()
+            && self.sync == TileSync::Warp
+            && extent % (32 * i64::from(footprint)) != 0
+        {
             return Err(if footprint == 1 {
                 TileExportError::WarpShape { shape: extent }
             } else {
@@ -596,6 +603,17 @@ impl TileExportDesc {
             return Err(TileExportError::EmptyArch);
         }
         Ok(())
+    }
+
+    /// The static tile extent, when the export names one.
+    pub fn static_extent(&self) -> Option<i64> {
+        self.shape.as_ref().and_then(|shape| shape.first().copied())
+    }
+
+    /// Whether the tile extent is left to the call: the export can only be
+    /// shipped through a linkage provider, as a parametric declaration.
+    pub fn is_parametric(&self) -> bool {
+        self.shape.is_none()
     }
 
     /// The implementation symbol's parameters, in order.
@@ -670,7 +688,7 @@ mod tests {
             version: CURRENT_VERSION,
             decl: "relu".into(),
             symbol: "relu_impl".into(),
-            shape: vec![128],
+            shape: Some(vec![128]),
             params: vec![
                 param("x", TileAccess::In, 1, true),
                 param("relu_out", TileAccess::Out, 1, false),
@@ -686,7 +704,7 @@ mod tests {
             version: CURRENT_VERSION,
             decl: "scale_in_place".into(),
             symbol: "scale_in_place_impl".into(),
-            shape: vec![128],
+            shape: Some(vec![128]),
             params: vec![
                 param("x", TileAccess::InOut, 1, false),
                 param("factor", TileAccess::In, 1, true),
@@ -756,13 +774,13 @@ mod tests {
     #[test]
     fn shape_is_one_positive_extent() {
         let mut desc = relu();
-        desc.shape = vec![128, 1];
+        desc.shape = Some(vec![128, 1]);
         assert_eq!(desc.validate(), Err(TileExportError::ShapeRank(2)));
-        desc.shape = Vec::new();
+        desc.shape = Some(Vec::new());
         assert_eq!(desc.validate(), Err(TileExportError::ShapeRank(0)));
-        desc.shape = vec![0];
+        desc.shape = Some(vec![0]);
         assert_eq!(desc.validate(), Err(TileExportError::ShapeNotPositive(0)));
-        desc.shape = vec![-4];
+        desc.shape = Some(vec![-4]);
         assert_eq!(desc.validate(), Err(TileExportError::ShapeNotPositive(-4)));
     }
 
@@ -897,16 +915,16 @@ mod tests {
     fn warp_sync_needs_whole_warps() {
         let mut desc = relu();
         desc.sync = TileSync::Warp;
-        desc.shape = vec![100];
+        desc.shape = Some(vec![100]);
         assert_eq!(
             desc.validate(),
             Err(TileExportError::WarpShape { shape: 100 })
         );
-        desc.shape = vec![32];
+        desc.shape = Some(vec![32]);
         desc.validate().unwrap();
         // `none` has no shape rule.
         desc.sync = TileSync::None;
-        desc.shape = vec![100];
+        desc.shape = Some(vec![100]);
         desc.validate().unwrap();
     }
 
@@ -921,7 +939,7 @@ mod tests {
             param.footprint = 4;
             param.by_value = false;
         }
-        desc.shape = vec![64];
+        desc.shape = Some(vec![64]);
         assert_eq!(
             desc.validate(),
             Err(TileExportError::WarpFootprintShape {
@@ -931,13 +949,13 @@ mod tests {
         );
         let message = desc.validate().unwrap_err().to_string();
         assert!(message.contains("multiple of 128"), "{message}");
-        desc.shape = vec![256];
+        desc.shape = Some(vec![256]);
         desc.validate().unwrap();
         // Footprint 1 keeps the plain multiple-of-32 rule and its message.
         for param in &mut desc.params {
             param.footprint = 1;
         }
-        desc.shape = vec![100];
+        desc.shape = Some(vec![100]);
         assert_eq!(
             desc.validate(),
             Err(TileExportError::WarpShape { shape: 100 })
@@ -947,7 +965,7 @@ mod tests {
         for param in &mut desc.params {
             param.footprint = 4;
         }
-        desc.shape = vec![64];
+        desc.shape = Some(vec![64]);
         desc.validate().unwrap();
     }
 

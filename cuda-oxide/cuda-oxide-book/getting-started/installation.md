@@ -358,6 +358,7 @@ The full set, as `cargo oxide --help` reports it:
 | `sanitize` | Build and run an example or project under NVIDIA Compute Sanitizer |
 | `build` | Build an example or project (compile only, don't run) |
 | `fuzz-schedule` | Find schedule-sensitive failures by perturbing an example's generated PTX |
+| `tilelib` | Package a crate's `#[tile_export]` functions as a cuTile tile library |
 | `test` | Run Cargo tests through the cuda-oxide backend |
 | `emit-ltoir` | Compile a crate's device code to a binary LTOIR artifact in one step |
 | `pipeline` | Show the full compilation pipeline (MIR -> PTX/NVVM IR) with verbose output |

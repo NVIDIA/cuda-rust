@@ -9,25 +9,36 @@
 
 use std::fmt::Write as _;
 
-use crate::model::{Declaration, FragmentType, Implementation, Layout, Library, TileType};
+use crate::model::{
+    ConstParam, Declaration, Expr, FragmentType, Implementation, Layout, Library, TileType,
+};
+
+fn exprs(values: &[Expr]) -> String {
+    values
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 fn layout(layout: &Layout) -> String {
-    let list = |values: &[i64]| {
-        values
-            .iter()
-            .map(|v| v.to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
     format!(
         "#cuda_tile.preview$layout<({}):({})>",
-        list(&layout.shapes),
-        list(&layout.strides)
+        exprs(&layout.shapes),
+        exprs(&layout.strides)
     )
 }
 
+/// `[N]` for an extent that is an expression, the literal otherwise.
+fn dim(dim: &Expr) -> String {
+    match dim.as_int() {
+        Some(value) => value.to_string(),
+        None => format!("[{}]", dim.to_string().replace(' ', "")),
+    }
+}
+
 fn tile(ty: &TileType) -> String {
-    let dims: Vec<String> = ty.shape.iter().map(|d| d.to_string()).collect();
+    let dims: Vec<String> = ty.shape.iter().map(dim).collect();
     format!("!cuda_tile.tile<{}x{}>", dims.join("x"), ty.element.name())
 }
 
@@ -50,6 +61,30 @@ fn access(access: crate::model::Access) -> String {
     )
 }
 
+/// `<[N: index, ?]>`, or nothing for a static symbol.
+fn const_params(params: &[ConstParam]) -> String {
+    if params.is_empty() {
+        return String::new();
+    }
+    let list: Vec<String> = params
+        .iter()
+        .map(|param| match param {
+            ConstParam::Index(name) => format!("{name}: index"),
+            ConstParam::Wildcard => "?".to_string(),
+        })
+        .collect();
+    format!("<[{}]>", list.join(", "))
+}
+
+/// `<[N]>`, or nothing for a static implementation.
+fn const_args(args: &[Expr]) -> String {
+    if args.is_empty() {
+        String::new()
+    } else {
+        format!("<[{}]>", exprs(args))
+    }
+}
+
 fn declaration(decl: &Declaration) -> String {
     let args: Vec<String> = decl
         .args
@@ -62,8 +97,9 @@ fn declaration(decl: &Declaration) -> String {
         _ => format!("({})", results.join(", ")),
     };
     format!(
-        "  cuda_tile.preview$func extern @{}({}) -> {}\n",
+        "  cuda_tile.preview$func extern @{}{}({}) -> {}\n",
         decl.name,
+        const_params(&decl.const_params),
         args.join(", "),
         results
     )
@@ -83,9 +119,11 @@ fn implementation(imp: &Implementation) -> String {
         })
         .collect();
     let mut text = format!(
-        "  cuda_tile.preview$extern_impl @{} implements @{}({})",
+        "  cuda_tile.preview$extern_impl @{}{} implements @{}{}({})",
         imp.symbol,
+        const_params(&imp.const_params),
         imp.implements,
+        const_args(&imp.const_args),
         args.join(", ")
     );
     if let Some(sync) = imp.synchronization {

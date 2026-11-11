@@ -61,6 +61,7 @@ cargo oxide update --force          # inside the workspace, run setup via update
 | `--tool <T>`                 | sanitize                         | Compute Sanitizer tool: `memcheck`, `racecheck`, `initcheck`, or `synccheck` |
 | `-o, --output <P>`           | emit-ltoir, tilelib              | Output path for the `.ltoir` or `.tilelib` artifact |
 | `--library-optional`         | tilelib                          | Succeed when the installed tileiras cannot build the `.tilelib`; the descriptions and LTOIR are still written |
+| `--provider`                 | tilelib                          | Build the library as a linkage provider shared object, which serves exports without `tile_shape` at any extent |
 | `--print`                    | tilelib                          | Print the readable form of the interface and implementation modules |
 | `--cargo-target-dir <PATH>`  | build/test passthrough           | Cargo target directory                          |
 | `--device-codegen-crate <LIST>` | build/test passthrough        | Comma-separated device owner crate filter       |

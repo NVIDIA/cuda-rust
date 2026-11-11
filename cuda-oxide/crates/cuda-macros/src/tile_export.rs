@@ -83,9 +83,8 @@ impl Parse for TileExportArgs {
                             return Err(syn::Error::new_spanned(
                                 other,
                                 "#[tile_export] `tile_shape` must be an integer literal such as \
-                                 `tile_shape = 128`; a static tile library cannot ship a \
-                                 parametric implementation, so a constant or expression is \
-                                 not accepted",
+                                 `tile_shape = 128`; a constant or expression is not accepted. \
+                                 Leave it out for an export whose tile extent the call supplies",
                             ));
                         }
                     };
@@ -374,7 +373,7 @@ fn check_symbol_literal(lit: &LitStr, what: &str) -> syn::Result<String> {
 fn validation_error(
     err: TileExportError,
     sig: &Signature,
-    shape_lit: &LitInt,
+    shape_lit: Option<&LitInt>,
     fn_ident: &Ident,
 ) -> syn::Error {
     let message = format!("#[tile_export]: {err}");
@@ -393,7 +392,10 @@ fn validation_error(
             }
         }
         TileExportError::WarpFootprintShape { .. } | TileExportError::WarpShape { .. } => {
-            syn::Error::new_spanned(shape_lit, message)
+            match shape_lit {
+                Some(lit) => syn::Error::new_spanned(lit, message),
+                None => syn::Error::new(fn_ident.span(), message),
+            }
         }
         _ => syn::Error::new(fn_ident.span(), message),
     }
@@ -411,8 +413,8 @@ pub(crate) fn expand_tile_export(args: TileExportArgs, input: ItemFn) -> syn::Re
         return Err(syn::Error::new_spanned(
             &sig.generics,
             "#[tile_export] functions cannot be generic: lifetime, type, and const \
-             parameters are not accepted because a static tile library needs one concrete \
-             symbol per export",
+             parameters are not accepted because a tile library implementation is one \
+             device symbol",
         ));
     }
     if let Some(asyncness) = &sig.asyncness {
@@ -428,20 +430,25 @@ pub(crate) fn expand_tile_export(args: TileExportArgs, input: ItemFn) -> syn::Re
         ));
     }
 
-    let Some(shape_lit) = args.tile_shape else {
-        return Err(syn::Error::new(
-            fn_ident.span(),
-            "#[tile_export] requires `tile_shape = N`, the 1-D tile extent; a static tile library \
-             cannot ship a parametric implementation, so every export names one extent",
-        ));
+    // `tile_shape = N` fixes the tile extent for a static library. Without
+    // it the export is parametric: the call supplies the extent, and only a
+    // linkage provider can ship the implementation.
+    let shape_lit = args.tile_shape.as_ref();
+    let shape: Option<i64> = match shape_lit {
+        Some(lit) => {
+            let shape: i64 = lit.base10_parse()?;
+            if shape <= 0 {
+                return Err(syn::Error::new_spanned(
+                    lit,
+                    format!(
+                        "#[tile_export] `tile_shape` must be a positive integer, found {shape}"
+                    ),
+                ));
+            }
+            Some(shape)
+        }
+        None => None,
     };
-    let shape: i64 = shape_lit.base10_parse()?;
-    if shape <= 0 {
-        return Err(syn::Error::new_spanned(
-            &shape_lit,
-            format!("#[tile_export] `tile_shape` must be a positive integer, found {shape}"),
-        ));
-    }
     let sync = match &args.sync {
         None => TileSync::None,
         Some(lit) => match lit.value().as_str() {
@@ -460,9 +467,11 @@ pub(crate) fn expand_tile_export(args: TileExportArgs, input: ItemFn) -> syn::Re
     // The footprint-1 form of the warp rule, reported before the parameters
     // are read so the message points at the shape. The footprint-aware form
     // comes from `validate` once the parameters are known.
-    if sync == TileSync::Warp && shape % 32 != 0 {
+    if let (TileSync::Warp, Some(lit), Some(shape)) = (sync, shape_lit, shape)
+        && shape % 32 != 0
+    {
         return Err(syn::Error::new_spanned(
-            &shape_lit,
+            lit,
             format!(
                 "#[tile_export] sync = \"warp\" needs a tile_shape that is a multiple of 32 so \
                  every invocation group fills whole warps, found {shape}"
@@ -576,13 +585,13 @@ pub(crate) fn expand_tile_export(args: TileExportArgs, input: ItemFn) -> syn::Re
         version: CURRENT_VERSION,
         decl,
         symbol,
-        shape: vec![shape],
+        shape: shape.map(|extent| vec![extent]),
         params,
         sync,
         arch,
     };
     desc.validate()
-        .map_err(|err| validation_error(err, sig, &shape_lit, &fn_ident))?;
+        .map_err(|err| validation_error(err, sig, shape_lit, &fn_ident))?;
 
     // The wrapper: pointer parameters are turned back into the references
     // the original function takes, the return value is stored through the

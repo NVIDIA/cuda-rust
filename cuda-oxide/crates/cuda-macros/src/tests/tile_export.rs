@@ -61,7 +61,7 @@ fn scalar_in_and_returned_out_follow_the_table() {
     desc.validate().unwrap();
     assert_eq!(desc.decl, "relu");
     assert_eq!(desc.symbol, "relu_impl");
-    assert_eq!(desc.shape, vec![128]);
+    assert_eq!(desc.shape, Some(vec![128]));
     assert_eq!(desc.sync, TileSync::None);
     assert!(desc.arch.is_empty());
     assert_eq!(desc.params.len(), 2);
@@ -258,9 +258,14 @@ fn generics_self_and_async_are_rejected() {
 }
 
 #[test]
-fn shape_is_required_positive_and_literal() {
+fn shape_is_optional_positive_and_literal() {
     let func: ItemFn = parse_quote! { pub fn relu(x: f32) -> f32 { x } };
-    assert!(expand_err(quote! {}, func.clone()).contains("requires `tile_shape = N`"));
+    // No tile_shape: a parametric export, which the description records as
+    // having no static extent.
+    let expanded = expand(quote! {}, func.clone()).unwrap();
+    let desc = embedded_desc(&expanded, "relu_impl");
+    assert_eq!(desc.shape, None);
+    assert!(desc.is_parametric());
     assert!(expand_err(quote! { tile_shape = 0 }, func.clone()).contains("positive integer"));
     let err = syn::parse2::<TileExportArgs>(quote! { tile_shape = N })
         .err()

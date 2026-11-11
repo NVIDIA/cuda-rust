@@ -10,6 +10,7 @@ use crate::provenance::{
 };
 use crate::{FinalizerError, validate_name};
 use libnvvm_sys::{LibNvvm, Program, find_libdevice};
+use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
 struct LoadedNvvmTool {
@@ -32,6 +33,31 @@ impl NvvmCompiler {
     /// Discover and pin libNVVM, then read the selected libdevice bytes.
     pub fn discover() -> Result<Self, FinalizerError> {
         Self::discover_with_expected(None)
+    }
+
+    /// libNVVM and libdevice from one toolkit root, bypassing both the
+    /// environment and the process-wide pin. For a host that lives inside a
+    /// toolkit (a Tile IR assembler loading a provider shared object) this
+    /// keeps the compiler on that toolkit. The tool has no digest, so the
+    /// cache provenance that pinned tools carry is not available.
+    pub fn discover_in_toolkit(root: &Path) -> Result<Self, FinalizerError> {
+        let path = libnvvm_sys::find_libdevice_in_root(root).map_err(
+            |libnvvm_sys::LibdeviceNotFound { tried }| FinalizerError::LibdeviceNotFound { tried },
+        )?;
+        let libdevice = std::fs::read(&path).map_err(|source| FinalizerError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        let libdevice_digest = digest_bytes(&libdevice);
+        let library = LibNvvm::load_from_root(root)?;
+        Ok(Self {
+            tool: Arc::new(LoadedNvvmTool {
+                library: Arc::new(library),
+                digest: None,
+            }),
+            libdevice: libdevice.into(),
+            libdevice_digest,
+        })
     }
 
     pub(crate) fn discover_with_expected(

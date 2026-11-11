@@ -216,7 +216,7 @@ checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
 name = "cargo-oxide"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "clap",
  "cuda-artifact-finalizer",
@@ -372,7 +372,7 @@ dependencies = [
 
 [[package]]
 name = "cuda-artifact-finalizer"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "libnvvm-sys",
  "nvjitlink-sys",
@@ -434,7 +434,7 @@ dependencies = [
 
 [[package]]
 name = "cuda-device"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bytemuck",
  "cuda-macros",
@@ -444,7 +444,7 @@ dependencies = [
 
 [[package]]
 name = "cuda-host"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cuda-artifact-finalizer",
  "cuda-async",
@@ -462,11 +462,11 @@ dependencies = [
 
 [[package]]
 name = "cuda-intrinsics"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "cuda-intrinsics-gen"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "cuda-target-spec",
@@ -479,7 +479,7 @@ dependencies = [
 
 [[package]]
 name = "cuda-macros"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cuda-core",
  "cuda-device",
@@ -495,7 +495,7 @@ dependencies = [
 
 [[package]]
 name = "cuda-oxide-codegen"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cuda-oxide-mlir-export",
  "cuda-target-spec",
@@ -522,7 +522,7 @@ dependencies = [
 
 [[package]]
 name = "cuda-oxide-mlir-export"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cute-layout",
  "dialect-cute",
@@ -545,15 +545,15 @@ version = "0.5.0"
 
 [[package]]
 name = "cuda-target-spec"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "cute-layout"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "cute-rs"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cuda-core",
  "cuda-device",
@@ -564,7 +564,7 @@ dependencies = [
 
 [[package]]
 name = "cutlass-primitives"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cuda-core",
  "cuda-device",
@@ -589,7 +589,7 @@ dependencies = [
 
 [[package]]
 name = "dialect-cute"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "combine",
  "cute-layout",
@@ -603,7 +603,7 @@ dependencies = [
 
 [[package]]
 name = "dialect-iket"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "combine",
  "dyn-clone",
@@ -615,7 +615,7 @@ dependencies = [
 
 [[package]]
 name = "dialect-mir"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "combine",
  "linkme",
@@ -627,7 +627,7 @@ dependencies = [
 
 [[package]]
 name = "dialect-nvvm"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "combine",
  "dialect-mir",
@@ -640,7 +640,7 @@ dependencies = [
 
 [[package]]
 name = "dialect-ptx"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "pliron",
  "pliron-derive",
@@ -815,7 +815,7 @@ dependencies = [
 
 [[package]]
 name = "fuzzer"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "generic-array"
@@ -899,7 +899,7 @@ dependencies = [
 
 [[package]]
 name = "iket-lower"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "dialect-iket",
  "pliron",
@@ -964,7 +964,7 @@ dependencies = [
 
 [[package]]
 name = "libnvvm-sys"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cuda-target-spec",
  "libloading",
@@ -999,7 +999,7 @@ checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
 name = "llvm-export"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bitflags",
  "combine",
@@ -1045,7 +1045,7 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
 name = "mir-importer"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "combine",
  "cuda-artifact-finalizer",
@@ -1070,7 +1070,7 @@ dependencies = [
 
 [[package]]
 name = "mir-lower"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "combine",
@@ -1087,7 +1087,7 @@ dependencies = [
 
 [[package]]
 name = "mir-transforms"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "dialect-mir",
  "pliron",
@@ -1108,7 +1108,7 @@ dependencies = [
 
 [[package]]
 name = "nvjitlink-sys"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "libloading",
  "thiserror 2.0.21",
@@ -1116,7 +1116,7 @@ dependencies = [
 
 [[package]]
 name = "nvvm-transforms"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "llvm-export",
  "pliron",
@@ -1170,7 +1170,7 @@ dependencies = [
 
 [[package]]
 name = "oxide-tile-export"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1178,9 +1178,30 @@ dependencies = [
 ]
 
 [[package]]
-name = "oxide-tilebc"
-version = "0.3.0"
+name = "oxide-tile-provider"
+version = "0.4.0"
 dependencies = [
+ "cuda-artifact-finalizer",
+ "oxide-tile-export",
+ "oxide-tile-provider-sys",
+ "oxide-tilebc",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "oxide-tile-provider-sys"
+version = "0.4.0"
+dependencies = [
+ "bindgen",
+ "sha2",
+]
+
+[[package]]
+name = "oxide-tilebc"
+version = "0.4.0"
+dependencies = [
+ "oxide-tile-export",
  "thiserror 2.0.21",
 ]
 
@@ -1290,11 +1311,11 @@ dependencies = [
 
 [[package]]
 name = "ptx-parse"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "ptx-schedule"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "clap",
  "dialect-ptx",
@@ -1366,7 +1387,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "reserved-oxide-symbols"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "rustc-demangle"

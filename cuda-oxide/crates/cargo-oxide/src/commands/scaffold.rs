@@ -22,6 +22,12 @@ const CARGO_CONFIG_TOML: &str = r#"[env]
 RUSTC_BOOTSTRAP = "1"
 "#;
 
+/// The toolchain pin `cargo oxide new` writes, for other generated crates
+/// (the tile library provider) to carry the same one.
+pub(super) fn scaffold_rust_toolchain() -> &'static str {
+    RUST_TOOLCHAIN_TOML
+}
+
 const SCAFFOLD_GITIGNORE_EXTRA: &[&str] = &[
     "/target/",
     "**/*.bc", // bitcode leftovers not in the clean suffix list

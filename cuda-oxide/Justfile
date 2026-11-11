@@ -66,6 +66,7 @@ test:
         -p dialect-mir -p dialect-nvvm -p mir-importer -p mir-lower \
         -p mir-transforms -p nvvm-transforms -p reserved-oxide-symbols \
         -p oxide-tile-export -p oxide-tilebc -p cuda-device -p libnvvm-sys -p nvjitlink-sys \
+        -p oxide-tile-provider-sys -p oxide-tile-provider \
         -p cuda-artifact-finalizer -p cargo-oxide \
         -p dialect-iket -p iket-lower -p ptx-parse -p dialect-ptx \
         -p ptx-schedule -p cute-layout -p dialect-cute \

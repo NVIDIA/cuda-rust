@@ -233,6 +233,17 @@ impl LibNvvm {
         Self::load_inner(true)
     }
 
+    /// Load `<root>/nvvm/lib64/libnvvm.so` from one CUDA toolkit root,
+    /// ignoring the environment. A process that is itself part of a
+    /// toolkit, or that was handed one, uses this to stay on that toolkit.
+    pub fn load_from_root(root: &Path) -> Result<Self, NvvmError> {
+        let path = root.join("nvvm/lib64/libnvvm.so");
+        let opened = open_library_path(&path, false).ok_or_else(|| NvvmError::LibraryNotFound {
+            tried: path.display().to_string(),
+        })?;
+        Self::from_opened(opened)
+    }
+
     fn load_inner(retain_exact_file: bool) -> Result<Self, NvvmError> {
         let mut tried = Vec::new();
         let opened = open_library(&mut tried, retain_exact_file).ok_or_else(|| {
@@ -240,6 +251,10 @@ impl LibNvvm {
                 tried: tried.join("\n  "),
             }
         })?;
+        Self::from_opened(opened)
+    }
+
+    fn from_opened(opened: OpenedLibrary) -> Result<Self, NvvmError> {
         let OpenedLibrary {
             library: lib,
             loaded_file,
@@ -671,6 +686,19 @@ fn cuda_roots_from_env(mut get_env: impl FnMut(&str) -> Option<String>) -> Vec<P
 /// nothing matches.
 pub fn find_libdevice() -> Result<PathBuf, LibdeviceNotFound> {
     find_libdevice_with(|var| std::env::var(var).ok(), |path| path.exists())
+}
+
+/// `<root>/nvvm/libdevice/libdevice.10.bc` of one toolkit root, ignoring
+/// the environment; the companion of [`LibNvvm::load_from_root`].
+pub fn find_libdevice_in_root(root: &Path) -> Result<PathBuf, LibdeviceNotFound> {
+    let candidate = root.join("nvvm/libdevice/libdevice.10.bc");
+    if candidate.is_file() {
+        Ok(candidate)
+    } else {
+        Err(LibdeviceNotFound {
+            tried: candidate.display().to_string(),
+        })
+    }
 }
 
 fn find_libdevice_with(

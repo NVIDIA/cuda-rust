@@ -958,15 +958,18 @@ pub fn device(_attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// | Argument                    | Meaning                                         | Default           |
 /// |-----------------------------|-------------------------------------------------|-------------------|
-/// | `tile_shape = N`            | 1-D tile extent (required)                      | none              |
+/// | `tile_shape = N`            | 1-D tile extent of a static library             | parametric        |
 /// | `name = "..."`              | declaration name the cuTile caller uses         | the function name |
 /// | `symbol = "..."`            | implementation symbol in the device artifact    | `<name>_impl`     |
 /// | `sync = "none"` / `"warp"`  | threads that must call the function together    | `"none"`          |
 /// | `arch = ["sm_120", ...]`    | compute capabilities the implementation supports| every architecture|
 ///
-/// `tile_shape` is required because this version ships concrete implementations:
-/// a parametric one would need one mangled symbol per specialization in the
-/// device artifact. `sync = "warp"` needs a tile shape that is a multiple of 32
+/// With `tile_shape` the export is one static declaration at that extent, which
+/// `cargo oxide tilelib` packs into a `.tilelib` ahead of time. Without it the
+/// export is parametric (`@name<[N: index]>`): the call supplies the extent,
+/// and only the provider form of the library (`cargo oxide tilelib
+/// --provider`) can ship it, because the Tile compiler asks for one
+/// implementation symbol per extent. `sync = "warp"` needs a tile shape that is a multiple of 32
 /// times the parameter footprint, so every invocation group fills whole
 /// warps. `arch` is normally omitted, which matches every target; when given,
 /// names are compared after stripping `_` and lowercasing, and a portable name

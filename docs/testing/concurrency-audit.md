@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # Concurrency-test audit
 
 This audit accompanies the fixes for [#1680](https://github.com/NVIDIA/cuda-rust/issues/1680).

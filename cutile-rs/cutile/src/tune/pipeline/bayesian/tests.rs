@@ -5,6 +5,8 @@
 
 use super::*;
 
+mod invariants;
+
 fn space(values: &[i64]) -> Vec<Config> {
     values
         .iter()

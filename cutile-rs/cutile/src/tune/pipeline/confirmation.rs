@@ -442,6 +442,81 @@ mod tests {
     }
 
     #[test]
+    fn fresh_paired_rounds_recover_the_stable_finalist_despite_drift() {
+        // Inspired by Helion's final-selection and rebenchmark regressions;
+        // see bayesian/TESTING.md. Our rule uses paired ratios, not its median
+        // of absolute round timings. No sleep or real-time correctness check.
+        let cs = configs();
+        let mut opts = options();
+        opts.rounds = 3;
+        let mut order = Vec::new();
+        let mut strategy = BayesianSearch::new(&cs, Default::default()).unwrap();
+        let result = Pipeline::default()
+            .budget(Duration::from_secs(60))
+            .run_confirmed(
+                &cs,
+                &mut strategy,
+                &opts,
+                |_| Ok(()),
+                |_, _| Ok(()),
+                |c, _, _, _| {
+                    let time = match c.int("x").unwrap() {
+                        1 => 0.1,
+                        2 => 0.5,
+                        _ => 1.0,
+                    };
+                    Ok(Trial::measured(&c.id, time, time, 20))
+                },
+                |_, candidate, _, _| {
+                    let index = candidate.int("x").unwrap();
+                    order.push(index);
+                    // Common clock drift between comparisons must not change
+                    // the winner. One lucky sample must not rescue the loser.
+                    let scale = 1.0 + order.len() as f32 * 0.1;
+                    let a = [scale; 4];
+                    let b = if index == 1 {
+                        [0.1, 1.1, 1.1, 1.1]
+                    } else {
+                        [0.8; 4]
+                    }
+                    .map(|v| v * scale);
+                    Ok(samples(&a, &b))
+                },
+            )
+            .unwrap();
+        assert_eq!(order, [1, 2, 2, 1, 1, 2]);
+        assert_eq!(result.search.best_observed.unwrap().id, cs[1].id);
+        assert_eq!(result.status, ConfirmationStatus::Improved);
+        assert_eq!(result.selected.id, cs[2].id);
+    }
+
+    #[test]
+    fn near_ties_keep_the_incumbent_despite_optimistic_screening() {
+        // Helion tests retaining a pinned seed within tolerance. Here the
+        // explicit incumbent remains unless the paired improvement clears 2%.
+        let cs = configs();
+        let result = Pipeline::default()
+            .budget(Duration::from_secs(60))
+            .run_confirmed(
+                &cs,
+                &mut RandomOrder::new(0),
+                &options(),
+                |_| Ok(()),
+                |_, _| Ok(()),
+                |c, _, _, _| Ok(score(c)),
+                |_, _, _, _| Ok(samples(&[1.0; 4], &[0.995; 4])),
+            )
+            .unwrap();
+        assert_eq!(result.status, ConfirmationStatus::NoImprovement);
+        assert_eq!(result.selected.id, cs[0].id);
+        assert_eq!(result.confirmations.len(), 4);
+        assert!(result
+            .confirmations
+            .iter()
+            .all(|r| !r.evidence.as_ref().unwrap().passes));
+    }
+
+    #[test]
     fn a_partial_confirmation_leader_never_wins_after_cancellation() {
         let cs = configs();
         let mut calls = 0;

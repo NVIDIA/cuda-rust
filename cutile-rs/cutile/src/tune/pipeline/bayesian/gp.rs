@@ -113,7 +113,9 @@ fn forward(lower: &[Vec<f64>], rhs: &[f64]) -> Vec<f64> {
 /// (absolute CDF error < 7.5e-8); tested independently against scipy.stats.norm.
 pub(super) fn expected_improvement(best: f64, mean: f64, variance: f64) -> f64 {
     let delta = best - mean;
-    if variance <= 1e-20 {
+    // A fixed positive cutoff breaks EI's scale equivariance: a small but
+    // representable standard deviation still carries expected improvement.
+    if variance <= 0.0 {
         return delta.max(0.0);
     }
     let sigma = variance.sqrt();

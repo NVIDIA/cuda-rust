@@ -40,6 +40,7 @@ cuda-oxide-codegen,0.1.0,Apache-2.0,Yes,local (workspace),1st Party (workspace),
 cuda-oxide-mlir-export,0.1.0,Apache-2.0,Yes,local (workspace),1st Party (workspace),https://github.com/NVIDIA/cuda-rust,CUDA Oxide mapping packs for the official CUTLASS MLIR consumer profile,
 cuda-repr,path,Apache-2.0,Yes,local (git root),1st Party (git root),https://github.com/NVIDIA/cuda-rust,Shared no_std representation contracts for CUDA host and device types,DeviceRepr permits owned-buffer relabeling without shared-reference conversions.
 cuda-target-spec,0.1.0,Apache-2.0,Yes,local (workspace),1st Party (workspace),https://github.com/NVIDIA/cuda-rust,Shared CUDA target parsing and recorded LLVM PTX-floor policy,
+cuda-toolkit-discovery,0.1.0,Apache-2.0,Yes,local (workspace),1st Party (workspace),https://github.com/NVIDIA/cuda-rust,Shared CUDA Toolkit discovery for compiler libraries and libdevice,
 cute-layout,0.1.0,Apache-2.0,Yes,local (workspace),1st Party (workspace),https://github.com/NVIDIA/cuda-rust,Coordinate-to-memory mapping and validation for CuTe-style GPU tiles,
 cute-rs,0.1.0,Apache-2.0,Yes,local (workspace),1st Party (workspace),https://github.com/NVIDIA/cuda-rust,"CuTe-style device library: Tensor, Layout types, partitioning, copy/mma atoms",
 cutlass-primitives,0.1.0,Apache-2.0,Yes,local (workspace),1st Party (workspace),https://github.com/NVIDIA/cuda-rust,"Typed instruction-level CUDA primitives for cuda-oxide kernels",

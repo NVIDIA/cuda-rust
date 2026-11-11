@@ -63,11 +63,18 @@ fn softmax_rows(input: &[f32], rows: usize, cols: usize) -> Vec<f32> {
 }
 
 fn main() -> Result<(), Error> {
-    tokio::runtime::Builder::new_current_thread()
+    let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .expect("failed to build tokio runtime")
-        .block_on(run())
+        .expect("failed to build tokio runtime");
+    match rt.block_on(run()) {
+        Ok(()) => Ok(()),
+        Err(error) if error.to_string().contains("failed to launch tileiras") => {
+            println!("skipping: tileiras not found in installed CUDA Toolkit ({error})");
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
 }
 
 async fn run() -> Result<(), Error> {

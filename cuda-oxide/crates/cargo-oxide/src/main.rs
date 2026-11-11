@@ -40,6 +40,7 @@ mod backend;
 mod backend_source;
 mod commands;
 mod cutlass_toolchain;
+mod platform;
 
 /// Top-level CLI structure parsed by clap.
 ///

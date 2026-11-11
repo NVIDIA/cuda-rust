@@ -548,6 +548,10 @@ name = "cuda-target-spec"
 version = "0.4.0"
 
 [[package]]
+name = "cuda-toolkit-discovery"
+version = "0.1.0"
+
+[[package]]
 name = "cute-layout"
 version = "0.4.0"
 
@@ -967,6 +971,7 @@ name = "libnvvm-sys"
 version = "0.4.0"
 dependencies = [
  "cuda-target-spec",
+ "cuda-toolkit-discovery",
  "libloading",
  "thiserror 2.0.21",
 ]
@@ -1110,6 +1115,7 @@ dependencies = [
 name = "nvjitlink-sys"
 version = "0.4.0"
 dependencies = [
+ "cuda-toolkit-discovery",
  "libloading",
  "thiserror 2.0.21",
 ]

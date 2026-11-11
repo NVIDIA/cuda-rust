@@ -348,7 +348,7 @@ fi
 # ---- Preflight -----------------------------------------------------------
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd "${script_dir}/.." && pwd)"
+repo_root="$(cd "${script_dir}/.." && (pwd -W 2>/dev/null || pwd))"
 cd "${repo_root}"
 
 if [[ ! -f "${repo_root}/../Cargo.toml" ]] || [[ ! -d "crates/rustc-codegen-cuda/examples" ]]; then
@@ -527,7 +527,11 @@ ptxas_verify() {
         PTXAS_NOTE="ptxas gate skipped: no .target line in ${ptx}"
         return 0
     fi
-    if stderr_out="$("${PTXAS_BIN}" -arch="${arch}" "${ptx}" -o /dev/null 2>&1)"; then
+    local ptxas_null="/dev/null"
+    case "${OSTYPE:-}" in
+        msys*|cygwin*|win32*) ptxas_null="NUL" ;;
+    esac
+    if stderr_out="$("${PTXAS_BIN}" -arch="${arch}" "${ptx}" -o "${ptxas_null}" 2>&1)"; then
         PTXAS_NOTE="ptxas ${arch} ok"
         return 0
     fi
@@ -2516,8 +2520,11 @@ fi
 # discovery rather than failing.
 if [[ -z "${CUDA_OXIDE_BACKEND:-}" ]]; then
     host_triple="$(rustc -vV 2>/dev/null | sed -n 's/^host: //p')"
-    for backend_name in librustc_codegen_cuda.so librustc_codegen_cuda.dylib; do
-        backend_so="${repo_root}/crates/rustc-codegen-cuda/target/${host_triple}/debug/${backend_name}"
+    for backend_rel in \
+        "debug/librustc_codegen_cuda.so" \
+        "debug/librustc_codegen_cuda.dylib" \
+        "release/rustc_codegen_cuda.dll"; do
+        backend_so="${repo_root}/crates/rustc-codegen-cuda/target/${host_triple}/${backend_rel}"
         if [[ -n "${host_triple}" && -f "${backend_so}" ]]; then
             export CUDA_OXIDE_BACKEND="${backend_so}"
             printf "Backend for this run: %s\n" "${CUDA_OXIDE_BACKEND}"

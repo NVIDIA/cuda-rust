@@ -15,6 +15,11 @@ crate-type = ["dylib"]
 # Keep out of workspace - links against rustc_private (rustc-dev)
 [workspace]
 
+[patch.crates-io]
+# The Windows backend needs the in-tree COFF writer. Patch the backend
+# graph so its finalizer and writer use one oxide-artifacts crate identity.
+oxide-artifacts = { path = "../oxide-artifacts" }
+
 [dependencies]
 # cuda-oxide pipeline (reuse existing infrastructure)
 # Use path dependencies since we're isolated from workspace

@@ -401,9 +401,14 @@ entry:
             file: crate::provenance::ToolFileIdentity::capture(&expected_file).unwrap(),
         };
 
+        let matching_digest = if expected.file.has_unix_identity() {
+            [7; 32]
+        } else {
+            digest_bytes(b"expected tool bytes")
+        };
         assert_eq!(
             loaded_tool_digest_with_expected("test", Some(&expected_file), Some(&expected)),
-            Some([7; 32])
+            Some(matching_digest)
         );
         assert_eq!(
             loaded_tool_digest_with_expected("test", Some(&other_file), Some(&expected)),

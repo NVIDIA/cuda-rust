@@ -147,13 +147,15 @@ cargo oxide update
 
 ## Setup
 
+For native Windows (`x86_64-pc-windows-msvc`), see the [Windows Setup guide](cuda-oxide-book/getting-started/windows.md) for Visual Studio Build Tools, CUDA Toolkit, `libclang`, `vcpkg` (`libffi`), and PowerShell instructions.
+
 ### Requirements
 
 - **cargo-oxide** — cargo subcommand that drives the build pipeline (`cargo oxide run`, `build`, `sanitize`, `debug`, etc.)
 - **Rust 1.99.1 (stable)** with `rust-src`, `rustc-dev`, and `llvm-tools` components (pinned in `rust-toolchain.toml`)
 - **CUDA Toolkit** (13.0+, including the cuRAND headers; `libcurand-dev` on Ubuntu). The shared `cuda-bindings` crate loads `libcuda` at run time and needs a CUDA 13.x driver (R580+)
 - **Clang + libclang dev headers** (`clang-21` / `libclang-common-21-dev`) — needed by `bindgen` when building the host `cuda-bindings` crate
-- **Linux** (tested on Ubuntu 24.04)
+- **Linux** (tested on Ubuntu 24.04) or **Windows x86_64 MSVC** (Windows 10 22H2 / Windows 11)
 
 ### Install
 
@@ -345,6 +347,7 @@ cargo oxide run gemm_sol_final
 | `cargo-oxide`             | Cargo subcommand (`cargo oxide run`, etc.)                     |
 | `cuda-intrinsics-gen`     | Extractor and deterministic source generator for the intrinsics |
 | `cuda-artifact-finalizer` | Driver-independent NVVM IR, LTOIR, and PTX finalization         |
+| `cuda-toolkit-discovery`  | Workspace-private CUDA Toolkit discovery for Linux and Windows |
 | `oxide-artifacts`         | Architecture-neutral embedded device artifact metadata         |
 | `oxide-tile-export`       | Export descriptions shared by `cuda-macros`, the backend and `cargo-oxide`; part of the Tile IR interop work, not released yet |
 | `oxide-tilebc`            | Tile IR bytecode writer for those export descriptions |

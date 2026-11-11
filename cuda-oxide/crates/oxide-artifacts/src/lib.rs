@@ -715,8 +715,11 @@ pub fn build_host_object_for_target(
             section_data,
             target,
             &[(anchor_symbol, false)],
+            &[],
         ),
-        None => build_host_object_with_section(ARTIFACT_SECTION_NAME, section_data, target, &[]),
+        None => {
+            build_host_object_with_section(ARTIFACT_SECTION_NAME, section_data, target, &[], &[])
+        }
     }
 }
 
@@ -740,7 +743,45 @@ pub fn build_host_object_for_target_with_legacy_anchor(
         section_data,
         target,
         &[(anchor_symbol, false), (legacy_anchor_symbol, true)],
+        &[],
     )
+}
+
+/// Wrap an artifact blob with anchor symbols and COFF `/alternatename` fallback
+/// directives for device-only `extern "C"` declarations.
+///
+/// On Windows COFF (`link.exe` / `lld-link.exe`), the host linker resolves
+/// undefined symbols in all compiled `.rcgu.o` objects before `/OPT:REF`
+/// dead-stripping. Emitting `/alternatename:<sym>=<anchor>` in `.drectve`
+/// satisfies host-side references from unused kernel bodies while still
+/// allowing strong host definitions to win if linked.
+#[cfg(feature = "object-write")]
+pub fn build_host_object_for_target_with_fallbacks(
+    section_data: &[u8],
+    target: &str,
+    anchor_symbol: &str,
+    legacy_anchor_symbol: Option<&str>,
+    fallback_symbols: &[String],
+) -> Result<Vec<u8>, ArtifactError> {
+    if section_data.is_empty() {
+        return Err(ArtifactError::EmptyPayload);
+    }
+    match legacy_anchor_symbol {
+        Some(legacy_anchor_symbol) => build_host_object_with_section(
+            ARTIFACT_SECTION_NAME,
+            section_data,
+            target,
+            &[(anchor_symbol, false), (legacy_anchor_symbol, true)],
+            fallback_symbols,
+        ),
+        None => build_host_object_with_section(
+            ARTIFACT_SECTION_NAME,
+            section_data,
+            target,
+            &[(anchor_symbol, false)],
+            fallback_symbols,
+        ),
+    }
 }
 
 /// Build a host object that only defines an artifact link-anchor symbol.
@@ -767,6 +808,7 @@ pub fn build_host_anchor_object_for_target(
         &[0],
         target,
         &[(anchor_symbol, true)],
+        &[],
     )
 }
 
@@ -776,17 +818,20 @@ fn build_host_object_with_section(
     section_data: &[u8],
     target: &str,
     anchor_symbols: &[(&str, bool)],
+    fallback_symbols: &[String],
 ) -> Result<Vec<u8>, ArtifactError> {
     use object::write::{Object, Symbol, SymbolSection};
-    use object::{FileFlags, SectionFlags, SectionKind, SymbolFlags, SymbolKind, SymbolScope};
+    use object::{FileFlags, SectionKind, SymbolFlags, SymbolKind, SymbolScope};
 
     let target = HostObjectTarget::parse(target)?;
     let mut object = Object::new(target.format, target.architecture, target.endianness);
-    object.flags = FileFlags::Elf {
-        os_abi: elf::ELFOSABI_GNU,
-        abi_version: 0,
-        e_flags: 0,
-    };
+    if target.format == object::BinaryFormat::Elf {
+        object.flags = FileFlags::Elf {
+            os_abi: elf::ELFOSABI_GNU,
+            abi_version: 0,
+            e_flags: 0,
+        };
+    }
     let section_id = object.add_section(
         Vec::new(),
         section_name.as_bytes().to_vec(),
@@ -794,9 +839,7 @@ fn build_host_object_with_section(
     );
     let section = object.section_mut(section_id);
     section.set_data(section_data.to_vec(), 8);
-    section.flags = SectionFlags::Elf {
-        sh_flags: elf::SHF_ALLOC | elf::SHF_GNU_RETAIN,
-    };
+    section.flags = target.section_flags();
 
     for (anchor_symbol, weak) in anchor_symbols {
         // Global binding so the symbol can satisfy undefined references
@@ -813,6 +856,22 @@ fn build_host_object_with_section(
             section: SymbolSection::Section(section_id),
             flags: SymbolFlags::None,
         });
+    }
+
+    if target.format == object::BinaryFormat::Coff
+        && !fallback_symbols.is_empty()
+        && let Some((anchor_symbol, _)) = anchor_symbols.first()
+    {
+        let mut directives = String::new();
+        for sym in fallback_symbols {
+            directives.push_str(" /alternatename:");
+            directives.push_str(sym);
+            directives.push('=');
+            directives.push_str(anchor_symbol);
+        }
+        let drectve_id = object.add_section(Vec::new(), b".drectve".to_vec(), SectionKind::Linker);
+        let drectve = object.section_mut(drectve_id);
+        drectve.set_data(directives.into_bytes(), 1);
     }
 
     object
@@ -845,6 +904,8 @@ impl HostObjectTarget {
 
         let format = if target.contains("linux") {
             object::BinaryFormat::Elf
+        } else if target.contains("windows-msvc") {
+            object::BinaryFormat::Coff
         } else {
             return Err(ArtifactError::UnsupportedHostTarget(target));
         };
@@ -854,6 +915,20 @@ impl HostObjectTarget {
             architecture,
             endianness,
         })
+    }
+
+    /// Returns the object section flags that keep `.oxart` retained and readable on `self.format`.
+    fn section_flags(self) -> object::SectionFlags {
+        match self.format {
+            object::BinaryFormat::Elf => object::SectionFlags::Elf {
+                sh_flags: elf::SHF_ALLOC | elf::SHF_GNU_RETAIN,
+            },
+            object::BinaryFormat::Coff => object::SectionFlags::Coff {
+                characteristics: object::pe::IMAGE_SCN_CNT_INITIALIZED_DATA
+                    | object::pe::IMAGE_SCN_MEM_READ,
+            },
+            _ => object::SectionFlags::None,
+        }
     }
 }
 
@@ -1229,13 +1304,20 @@ mod tests {
         )
         .unwrap();
 
-        for target in ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"] {
+        for target in [
+            "x86_64-unknown-linux-gnu",
+            "aarch64-unknown-linux-gnu",
+            "x86_64-pc-windows-msvc",
+            "aarch64-pc-windows-msvc",
+        ] {
             let object = build_host_object_for_target(&blob, target, None).unwrap();
-            assert_eq!(
-                object.get(7).copied(),
-                Some(elf::ELFOSABI_GNU),
-                "{target} ELF header must set EI_OSABI to ELFOSABI_GNU for SHF_GNU_RETAIN"
-            );
+            if target.contains("linux") {
+                assert_eq!(
+                    object.get(7).copied(),
+                    Some(elf::ELFOSABI_GNU),
+                    "{target} ELF header must set EI_OSABI to ELFOSABI_GNU for SHF_GNU_RETAIN"
+                );
+            }
             let bundles = read_artifact_bundles_from_object_bytes(&object).unwrap();
             assert_eq!(bundles.len(), 1);
             assert_eq!(
@@ -1435,7 +1517,11 @@ mod tests {
     fn host_object_rejects_non_cuda_host_targets() {
         let blob = sample_blob();
 
-        for target in ["powerpc64le-unknown-linux-gnu", "x86_64-apple-darwin"] {
+        for target in [
+            "powerpc64le-unknown-linux-gnu",
+            "x86_64-apple-darwin",
+            "x86_64-pc-windows-gnu",
+        ] {
             assert!(matches!(
                 build_host_object_for_target(&blob, target, None),
                 Err(ArtifactError::UnsupportedHostTarget(_))

@@ -138,6 +138,42 @@ or search space differs from the running workspace. It also recomputes each
 entry's cache key to check the kernel's dependencies and toolchain. Changes
 that affect only timing produce warnings.
 
+## Running recorded winners in an application
+
+The `autotune` example demonstrates the entire path with RMSNorm. From the
+`cutile-rs` workspace, run offline tuning and application dispatch separately:
+
+```sh
+cargo run -p cutile-examples --example autotune --features experimental-tune -- tune /tmp/rms_norm.json
+cargo run -p cutile-examples --example autotune --features experimental-tune -- run /tmp/rms_norm.json
+```
+
+Use a writable record path on your platform. `tune` overwrites that file with
+winners for two exact shape buckets (`m=64,n=1024` and `m=512,n=1024`). Each
+candidate must agree with a CPU reference before timing. The entries contain
+the chosen configuration, its measured median/sample count, and its real,
+tagged L2 key. The two shapes can legitimately choose the same configuration.
+
+`run` builds the **current** `Workspace` from the kernel module's source hash,
+the detected architecture and assembler fingerprint, and the declared search
+space. It loads with `Record::load_verified`, recomputes the keys through the
+same kernel builder used for execution, then uses `Record::get` to dispatch
+an eligible configuration for each input shape. It never starts a tuning run.
+Record verification belongs at startup, not in every request's hot path.
+
+A missing, malformed or incompatible record uses the fixed `BLOCK_SIZE=128`
+fallback. A valid record with no matching bucket also uses that fallback: the
+example executes `m=256,n=1024` to demonstrate this case. All dispatched results
+are checked against the CPU reference. Errors during execution remain errors,
+not cache misses. For simplicity, this example also falls back on **any**
+verification warning; that is an application policy, stricter than the library's
+accept-with-warning behavior for timing/toolchain drift. Refresh such records
+by tuning offline; do not overwrite their provenance fields to force a match.
+
+With no arguments, the example tunes, saves a temporary record, reloads it,
+executes both recorded buckets and the fallback bucket, and removes the
+temporary record. Neither mode commits generated records to the repository.
+
 ## Warming and managing the kernel cache during sweeps
 
 Call `.compile()` on the same builder used for `.execute` or `.sync_on` to

@@ -9,5 +9,6 @@ description = "Runtime (dlopen) bindings to NVIDIA nvJitLink (ships with the CUD
 readme = "README.md"
 
 [dependencies]
+cuda-toolkit-discovery = { workspace = true }
 libloading = { workspace = true }
 thiserror = { workspace = true }

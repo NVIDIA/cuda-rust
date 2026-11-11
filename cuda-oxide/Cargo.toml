@@ -8,6 +8,7 @@ members = [
     "cute-rs-preview/dialect-cute",
     # Core crates
     "crates/cuda-target-spec",
+    "crates/cuda-toolkit-discovery",
     "crates/cuda-intrinsics",
     "crates/cuda-intrinsics-gen",
     "crates/ptx-parse",
@@ -72,6 +73,7 @@ pliron-llvm = { version = "=0.20.0", default-features = false, features = [
 
 # Internal crates
 cuda-target-spec = { path = "crates/cuda-target-spec" }
+cuda-toolkit-discovery = { path = "crates/cuda-toolkit-discovery" }
 llvm-export = { path = "crates/llvm-export" }
 # Published printer; version-specific compatibility stays in the export adapter.
 pliron-mlir-interop = { version = "=0.1.0" }

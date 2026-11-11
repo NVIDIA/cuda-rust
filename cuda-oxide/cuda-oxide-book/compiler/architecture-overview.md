@@ -150,6 +150,7 @@ cuda-oxide is split into focused crates. Here is every one and its role:
 | `cuda-intrinsics`    | Generated low-level CUDA intrinsic declarations                                        |
 | `cuda-intrinsics-gen`| Extractor and deterministic source generator for the intrinsics                        |
 | `cuda-artifact-finalizer` | Driver-independent NVVM IR, LTOIR, and PTX finalization                           |
+| `cuda-toolkit-discovery` | Workspace-private CUDA Toolkit path discovery                                      |
 | `oxide-artifacts`    | Architecture-neutral embedded device artifact metadata                                 |
 | `oxide-tile-export`  | Export descriptions shared by `cuda-macros`, the backend and `cargo-oxide`; part of the Tile IR interop work, not released yet |
 | `oxide-tilebc`       | Tile IR bytecode writer for those export descriptions |

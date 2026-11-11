@@ -294,13 +294,15 @@ fn read_regular_file_exact(path: &Path, expected_length: u64) -> io::Result<Vec<
         // prevent an aarch64 cache read from following a symlink.
         options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     let file = options.open(path).map_err(|error| {
-        #[cfg(any(target_os = "linux", target_os = "android"))]
         if error.raw_os_error() == Some(libc::ELOOP) {
             return io::Error::new(io::ErrorKind::InvalidData, "cache artifact is a symlink");
         }
         error
     })?;
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    let file = options.open(path)?;
     let metadata = file.metadata()?;
     if !metadata.is_file() || metadata.len() != expected_length {
         return Err(io::Error::new(
@@ -506,8 +508,15 @@ fn write_synced_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     file.sync_all()
 }
 
+#[cfg(unix)]
 fn sync_directory(path: &Path) -> io::Result<()> {
     File::open(path)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_directory(path: &Path) -> io::Result<()> {
+    let _ = fs::metadata(path)?;
+    Ok(())
 }
 
 fn remove_cache_path_if_present(path: &Path) -> io::Result<()> {

@@ -943,7 +943,8 @@ fn remove_stranded_backend_temporaries(cache_dir: &Path) {
 }
 
 fn clear_cache_contents(cache_dir: &Path) {
-    let _ = std::fs::remove_file(cache_dir.join(backend_filename_for_target(&active_host_target())));
+    let _ =
+        std::fs::remove_file(cache_dir.join(backend_filename_for_target(&active_host_target())));
     let _ = std::fs::remove_file(cache_dir.join("librustc_codegen_cuda.so"));
     let _ = std::fs::remove_dir_all(cache_dir.join("src"));
     // The record describes the `.so` just removed; without it, `doctor` would
@@ -1030,9 +1031,11 @@ pub fn build_backend_from_source_in(codegen_crate: &Path, target_dir: Option<&Pa
 
     let host_target = active_host_target();
     let rustc_sysroot = get_rustc_sysroot();
-    let lib_path = rustc_sysroot
-        .as_ref()
-        .map(|s| rustc_sysroot_loader_dir(s, &host_target).to_string_lossy().into_owned());
+    let lib_path = rustc_sysroot.as_ref().map(|s| {
+        rustc_sysroot_loader_dir(s, &host_target)
+            .to_string_lossy()
+            .into_owned()
+    });
 
     let mut cmd = backend_build_command_in(codegen_crate, target_dir, lib_path.as_deref());
     let output = cmd.output().unwrap_or_else(|error| {

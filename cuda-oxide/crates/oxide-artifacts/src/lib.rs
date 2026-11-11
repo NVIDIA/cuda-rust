@@ -715,8 +715,11 @@ pub fn build_host_object_for_target(
             section_data,
             target,
             &[(anchor_symbol, false)],
+            &[],
         ),
-        None => build_host_object_with_section(ARTIFACT_SECTION_NAME, section_data, target, &[]),
+        None => {
+            build_host_object_with_section(ARTIFACT_SECTION_NAME, section_data, target, &[], &[])
+        }
     }
 }
 
@@ -740,7 +743,45 @@ pub fn build_host_object_for_target_with_legacy_anchor(
         section_data,
         target,
         &[(anchor_symbol, false), (legacy_anchor_symbol, true)],
+        &[],
     )
+}
+
+/// Wrap an artifact blob with anchor symbols and COFF `/alternatename` fallback
+/// directives for device-only `extern "C"` declarations.
+///
+/// On Windows COFF (`link.exe` / `lld-link.exe`), the host linker resolves
+/// undefined symbols in all compiled `.rcgu.o` objects before `/OPT:REF`
+/// dead-stripping. Emitting `/alternatename:<sym>=<anchor>` in `.drectve`
+/// satisfies host-side references from unused kernel bodies while still
+/// allowing strong host definitions to win if linked.
+#[cfg(feature = "object-write")]
+pub fn build_host_object_for_target_with_fallbacks(
+    section_data: &[u8],
+    target: &str,
+    anchor_symbol: &str,
+    legacy_anchor_symbol: Option<&str>,
+    fallback_symbols: &[String],
+) -> Result<Vec<u8>, ArtifactError> {
+    if section_data.is_empty() {
+        return Err(ArtifactError::EmptyPayload);
+    }
+    match legacy_anchor_symbol {
+        Some(legacy_anchor_symbol) => build_host_object_with_section(
+            ARTIFACT_SECTION_NAME,
+            section_data,
+            target,
+            &[(anchor_symbol, false), (legacy_anchor_symbol, true)],
+            fallback_symbols,
+        ),
+        None => build_host_object_with_section(
+            ARTIFACT_SECTION_NAME,
+            section_data,
+            target,
+            &[(anchor_symbol, false)],
+            fallback_symbols,
+        ),
+    }
 }
 
 /// Build a host object that only defines an artifact link-anchor symbol.
@@ -767,6 +808,7 @@ pub fn build_host_anchor_object_for_target(
         &[0],
         target,
         &[(anchor_symbol, true)],
+        &[],
     )
 }
 
@@ -776,6 +818,7 @@ fn build_host_object_with_section(
     section_data: &[u8],
     target: &str,
     anchor_symbols: &[(&str, bool)],
+    fallback_symbols: &[String],
 ) -> Result<Vec<u8>, ArtifactError> {
     use object::write::{Object, Symbol, SymbolSection};
     use object::{FileFlags, SectionKind, SymbolFlags, SymbolKind, SymbolScope};
@@ -813,6 +856,22 @@ fn build_host_object_with_section(
             section: SymbolSection::Section(section_id),
             flags: SymbolFlags::None,
         });
+    }
+
+    if target.format == object::BinaryFormat::Coff
+        && !fallback_symbols.is_empty()
+        && let Some((anchor_symbol, _)) = anchor_symbols.first()
+    {
+        let mut directives = String::new();
+        for sym in fallback_symbols {
+            directives.push_str(" /alternatename:");
+            directives.push_str(sym);
+            directives.push('=');
+            directives.push_str(anchor_symbol);
+        }
+        let drectve_id = object.add_section(Vec::new(), b".drectve".to_vec(), SectionKind::Linker);
+        let drectve = object.section_mut(drectve_id);
+        drectve.set_data(directives.into_bytes(), 1);
     }
 
     object

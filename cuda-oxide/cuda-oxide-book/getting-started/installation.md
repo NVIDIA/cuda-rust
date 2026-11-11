@@ -23,7 +23,7 @@ major version is older than the toolkit's (a 12.x driver with a 13.x build)
 fails the same way with a "driver too old" message.
 
 :::{note}
-cuda-oxide currently targets **Linux only**. Windows is not supported.
+This page covers **Linux** setup. For native **Windows (`x86_64-pc-windows-msvc`)** setup, see [Windows Setup](windows.md).
 :::
 
 ---

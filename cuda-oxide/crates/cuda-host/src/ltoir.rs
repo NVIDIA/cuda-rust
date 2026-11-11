@@ -262,6 +262,62 @@ pub fn build_cubin_from_ll(ll_path: &Path, arch: &str) -> Result<PathBuf, LtoirE
     Ok(build_cubin_from_ll_file(ll_path, &arch)?.path)
 }
 
+/// Compile NVVM IR at `ll_path` to an LTOIR file at `ltoir_path`, honoring any
+/// sibling `.options` sidecar next to `ll_path`.
+pub fn compile_ll_file_to_ltoir(
+    ll_path: &Path,
+    arch: &str,
+    ltoir_path: &Path,
+) -> Result<(), LtoirError> {
+    let arch: CudaArch = arch.parse()?;
+    let ll_bytes = std::fs::read(ll_path).map_err(|source| LtoirError::Io {
+        path: ll_path.to_path_buf(),
+        source,
+    })?;
+    let compile_options = read_compile_options(ll_path)?;
+    let options = finalization_options(&arch, compile_options);
+    let compiler = cuda_artifact_finalizer::NvvmCompiler::discover()?;
+    let ltoir =
+        compiler.compile_nvvm_ir_to_ltoir(&ll_path.display().to_string(), &ll_bytes, &options)?;
+    std::fs::write(ltoir_path, ltoir).map_err(|source| LtoirError::Io {
+        path: ltoir_path.to_path_buf(),
+        source,
+    })
+}
+
+/// Link multiple LTOIR files into a cubin file at `cubin_path`, honoring any
+/// sibling `.options` sidecar next to the first LTOIR file.
+pub fn link_ltoir_files_to_cubin(
+    ltoir_paths: &[&Path],
+    arch: &str,
+    cubin_path: &Path,
+) -> Result<(), LtoirError> {
+    let arch: CudaArch = arch.parse()?;
+    let compile_options = match ltoir_paths.first() {
+        Some(first) => read_compile_options(first)?,
+        None => ArtifactCompileOptions::new(),
+    };
+    let options = finalization_options(&arch, compile_options);
+    let mut owned = Vec::with_capacity(ltoir_paths.len());
+    for path in ltoir_paths {
+        let bytes = std::fs::read(path).map_err(|source| LtoirError::Io {
+            path: (*path).to_path_buf(),
+            source,
+        })?;
+        owned.push((path.display().to_string(), bytes));
+    }
+    let inputs = owned
+        .iter()
+        .map(|(name, bytes)| NamedInput::new(name, bytes))
+        .collect::<Vec<_>>();
+    let linker = LtoLinker::discover()?;
+    let cubin = linker.link_ltoir(&inputs, &options, FinalizerOutput::Cubin, &[])?;
+    std::fs::write(cubin_path, cubin).map_err(|source| LtoirError::Io {
+        path: cubin_path.to_path_buf(),
+        source,
+    })
+}
+
 struct FileCubin {
     path: PathBuf,
     image: Vec<u8>,

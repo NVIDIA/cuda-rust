@@ -1098,6 +1098,7 @@ fn write_device_artifact_object(
     let package_version = std::env::var("CARGO_PKG_VERSION").unwrap_or_default();
     let legacy_anchor =
         reserved_oxide_symbols::artifact_anchor_symbol(&bundle_name, &package_version);
+    let fallback_symbols = local_foreign_fn_link_symbols(tcx);
     let object = if use_target_specific_anchor {
         let binary_name = std::env::var("CARGO_BIN_NAME").ok();
         let target_anchor = reserved_oxide_symbols::artifact_anchor_symbol_v2(
@@ -1106,16 +1107,46 @@ fn write_device_artifact_object(
             output_name,
             binary_name.as_deref(),
         );
-        oxide_artifacts::build_host_object_for_target_with_legacy_anchor(
+        oxide_artifacts::build_host_object_for_target_with_fallbacks(
             &blob,
             host_target,
             &target_anchor,
-            &legacy_anchor,
+            Some(&legacy_anchor),
+            &fallback_symbols,
         )?
     } else {
-        oxide_artifacts::build_host_object_for_target(&blob, host_target, Some(&legacy_anchor))?
+        oxide_artifacts::build_host_object_for_target_with_fallbacks(
+            &blob,
+            host_target,
+            &legacy_anchor,
+            None,
+            &fallback_symbols,
+        )?
     };
     write_artifact_object(output_dir, output_name, host_target, &object, "embed")
+}
+
+/// Collects the link symbol names of `extern "C"` functions declared in this
+/// crate so Windows COFF artifact objects can emit `/alternatename` fallbacks
+/// for device-only extern declarations (both `#[device] extern "C"` and bare
+/// `extern "C"` libdevice/LTOIR functions).
+fn local_foreign_fn_link_symbols(tcx: TyCtxt<'_>) -> Vec<String> {
+    let mut symbols = std::collections::BTreeSet::new();
+    for id in tcx.hir_crate_items(()).foreign_items() {
+        let def_id = id.owner_id.to_def_id();
+        if matches!(tcx.def_kind(def_id), rustc_hir::def::DefKind::Fn) {
+            let instance = rustc_middle::ty::Instance::mono(tcx, def_id);
+            let name = tcx.symbol_name(instance).name;
+            if !name.is_empty()
+                && name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'$' | b'.' | b'@'))
+            {
+                symbols.insert(name.to_string());
+            }
+        }
+    }
+    symbols.into_iter().collect()
 }
 
 fn embedded_compile_options(

@@ -91,16 +91,77 @@ separate stage durations; an unvisited stage is `None`, and overlapping stage
 times must not be summed as elapsed wall time. Evaluation time includes loading,
 checks and measurement, rather than pretending those costs were measured separately.
 
-**`best_observed` is provisional.** This pipeline does not yet reserve time for
-screening or paired finalist confirmation. Re-measure finalists and the incumbent
-without background compilation before applying a result. An incomplete run has
-no best result. The synchronous resume-log schema is unchanged; the pipeline does
-not read or write it. Store observations with workload, source and toolchain
-provenance if you need an audit record.
+**`run().best_observed` is provisional.** Use `run_confirmed` below, or independently
+compare finalists with your incumbent before applying a result. An incomplete
+search has no best observed result. The synchronous resume-log schema is unchanged;
+the pipeline does not read or write it. Store observations with workload, source
+and toolchain provenance if you need an audit record.
 
 Prepared artifacts are bounded by the pipeline, but installed modules retain
 the existing global cache lifetime. Automatic eviction is deliberately avoided:
 other streams may still be using a specialization. See cache management below.
+
+## Screening and confirming a replacement
+
+The RMSNorm example uses `Pipeline::run_confirmed` with
+`ConfirmationOptions::new(incumbent_index)`. It requires a total `budget` and
+adds a fourth, foreground callback to the preparation pipeline:
+
+```rust
+let policy = ConfirmationOptions::new(0);
+let result = pipeline.run_confirmed(
+    &configs, &mut strategy, &policy,
+    resolve, prepare,
+    |config, prepared, bench_options, control| { /* check, screen -> Trial */ },
+    |incumbent, candidate, bench_options, control| {
+        // Independently check both outputs, then return aligned measurements
+        // from bench::do_bench_paired_controlled(...).
+    },
+)?;
+```
+
+The default policy screens with at most 50 timed repetitions and reserves 25% of the
+total budget for confirmation. Screening may finish sooner if the declared space
+is exhausted. After **all preparation workers have joined and queued artifacts
+have been dropped**, it compares the four best measured alternatives with the
+incumbent in three fresh rounds. The incumbent is compared even if it was never
+screened. Both arms must pass fresh correctness checks in the callback, and a
+known invalid incumbent is not used. No background preparation runs during these
+comparisons; callers must also keep unrelated GPU work away from the device.
+
+`do_bench_paired_controlled` alternates A/B then B/A ordering, with aligned raw
+samples and cancellation/deadline checks between arms. A comparison cannot return
+an unmatched pair as a successful measurement. The pipeline's `trial_limit`
+applies to each paired comparison, including its correctness checks. Confirmation
+uses the original overall deadline, not a new budget. As with screening, an
+uninterruptible callback or GPU operation can still overrun it.
+
+For each pair the improvement is `1 - candidate_time / incumbent_time`. By
+default, the lower quartile of those improvements must exceed 2% in **every**
+round. Among qualifying candidates, the result selects the largest worst-round
+median improvement. This is a conservative, configurable repeatability heuristic,
+not a confidence interval or a universal 2% noise threshold. Calibrate the margin,
+repetitions and round count for your kernels and hardware; the defaults do not
+guarantee an optimal choice. Finalist order reverses on alternate rounds.
+
+`ConfirmedOutput` includes screening observations, raw paired samples, failures,
+the incumbent, the selected configuration and one of three statuses:
+
+- `Improved`: a replacement passed the configured confirmation rule.
+- `NoImprovement`: comparisons completed, but no alternative passed.
+- `NotConfirmed`: insufficient valid candidates, failed checks, cancellation or
+  insufficient time. The selected configuration remains the supplied incumbent;
+  this status does **not** certify that the incumbent passed validation.
+
+Every shortlisted comparison must complete within the budget. A partial leader
+is never promoted after a timeout or failure. Neither previous screening times
+nor the strategy's predictions count as fresh confirmation evidence. This works
+with `RandomOrder`; no Bayesian model or new ML dependency is needed.
+
+To save the example's observations and raw confirmation samples, pass
+`--evidence NEW_FILE`. It creates a new JSON file without overwriting an existing
+one. Record workload, source revision, GPU and toolkit alongside it; this example
+file is evidence, not a provenance-checked resume log.
 
 ## Declaring a space and running the search
 

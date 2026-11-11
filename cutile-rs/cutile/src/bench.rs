@@ -17,10 +17,15 @@
 //! [`do_bench_paired`] measures two closures in strict A/B/A/B alternation.
 //! Use it whenever two configurations are *compared*: back-to-back sequential
 //! runs let clock and thermal drift masquerade as multi-percent differences.
+//! [`do_bench_paired_controlled`] also checks deadlines and reverses which arm
+//! goes first on alternate pairs. It is used for pipeline confirmation.
 //!
 //! The closure must enqueue its GPU work on the stream it is given — for
 //! cutile ops, `op.sync_on(stream)`. Work sent to other streams is not
 //! covered by the timing events.
+//! Events bracket the whole callback, so host enqueue gaps can be included in
+//! the interval. For short kernels, a graph-replay callback can measure the
+//! execution path used by the application without repeated launch setup.
 
 use crate::error::Error;
 use cuda_core::Stream;
@@ -163,7 +168,7 @@ impl Drop for L2Clear {
 /// One event-timed execution of `f` on `stream`.
 fn time_one<F>(stream: &Arc<Stream>, f: &mut F) -> Result<f32, Error>
 where
-    F: FnMut(&Arc<Stream>) -> Result<(), Error>,
+    F: FnMut(&Arc<Stream>) -> Result<(), Error> + ?Sized,
 {
     let device = stream.context();
     let start = device.new_event()?;
@@ -282,6 +287,74 @@ where
             l2.clear()?;
         }
         times_b.push(time_one(stream, &mut b)?);
+    }
+    Ok((
+        Measurement { times_ms: times_a },
+        Measurement { times_ms: times_b },
+    ))
+}
+
+/// Fresh paired measurements with cooperative cancellation. The first arm
+/// alternates each round (A/B, B/A) to reduce consistent ordering bias. A deadline
+/// between arms discards the incomplete measurement instead of returning an
+/// unmatched pair. Callers must quiesce preparation workers before confirmation.
+pub fn do_bench_paired_controlled<A, B>(
+    stream: &Arc<Stream>,
+    opts: &BenchOptions,
+    control: &cutile_compiler::compile_control::CompileControl,
+    mut a: A,
+    mut b: B,
+) -> Result<(Measurement, Measurement), Error>
+where
+    A: FnMut(&Arc<Stream>) -> Result<(), Error>,
+    B: FnMut(&Arc<Stream>) -> Result<(), Error>,
+{
+    let check = || {
+        control
+            .check()
+            .map_err(anyhow::Error::from)
+            .map_err(Error::from)
+    };
+    check()?;
+    if opts.min_reps == 0 || opts.max_reps < opts.min_reps {
+        return Err(anyhow::anyhow!("invalid paired benchmark repetition bounds").into());
+    }
+    let warmup_start = Instant::now();
+    loop {
+        check()?;
+        a(stream)?;
+        check()?;
+        b(stream)?;
+        if warmup_start.elapsed() >= opts.warmup {
+            break;
+        }
+    }
+    check()?;
+    let a_ms = time_one(stream, &mut a)?.max(1e-4);
+    check()?;
+    let b_ms = time_one(stream, &mut b)?.max(1e-4);
+    check()?;
+    let reps = ((opts.rep.as_secs_f64() * 1e3 / f64::from(a_ms + b_ms)).round() as usize)
+        .clamp(opts.min_reps, opts.max_reps);
+    let l2 = opts.clear_l2.then(|| L2Clear::new(stream)).transpose()?;
+    let (mut times_a, mut times_b) = (Vec::with_capacity(reps), Vec::with_capacity(reps));
+    let timed = |f: &mut dyn FnMut(&Arc<Stream>) -> Result<(), Error>| -> Result<f32, Error> {
+        check()?;
+        if let Some(l2) = &l2 {
+            l2.clear()?;
+        }
+        time_one(stream, f)
+    };
+    for i in 0..reps {
+        let (a_ms, b_ms) = if i % 2 == 0 {
+            (timed(&mut a)?, timed(&mut b)?)
+        } else {
+            let b_ms = timed(&mut b)?;
+            (timed(&mut a)?, b_ms)
+        };
+        check()?;
+        times_a.push(a_ms);
+        times_b.push(b_ms);
     }
     Ok((
         Measurement { times_ms: times_a },

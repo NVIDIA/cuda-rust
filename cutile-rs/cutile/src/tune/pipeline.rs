@@ -6,9 +6,9 @@
 //! Bounded CPU preparation with serialized foreground evaluation.
 //!
 //! This opt-in scheduler is separate from the existing synchronous `Objective`
-//! API and resume-log schema. It returns observations, not a confirmed winner:
-//! callers must independently compare finalists with their incumbent before
-//! applying a result. GPU work belongs only in `resolve` and `evaluate`.
+//! API and resume-log schema. `run` returns provisional observations;
+//! `run_confirmed` reserves time for fresh paired comparisons with an incumbent
+//! after all preparation workers stop. GPU work belongs on the foreground lane.
 
 use super::{Config, Trial, TrialState};
 use crate::error::Error;
@@ -17,6 +17,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
+
+mod confirmation;
+pub use confirmation::{
+    ConfirmationOptions, ConfirmationRound, ConfirmationStatus, ConfirmedOutput, PairedEvidence,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FailureKind {

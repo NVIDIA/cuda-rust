@@ -138,8 +138,12 @@ Only explicit `Failure::invalid` outcomes mark a candidate invalid. Return a
 measured `Trial` on success: legacy invalid trials also represent non-finite
 timings, so the pipeline treats them as infrastructure errors. Timeouts and
 cancellations are unscored; infrastructure errors stop
-the run. Generic compiler/driver errors default to infrastructure errors because
-they may reflect the environment rather than the candidate. The caller can
+the run. If a callback fails after interruption, the failure kind stays
+`TimedOut` or `Cancelled`, and `Failure::reason` also retains the callback's
+original kind and diagnostic. This applies during screening, worker draining
+and confirmation; a late failure never becomes a usable measurement. Generic
+compiler/driver errors default to infrastructure errors because they may reflect
+the environment rather than the candidate. The caller can
 classify a known candidate-specific rejection explicitly. Observations include
 separate stage durations; an unvisited stage is `None`, and overlapping stage
 times must not be summed as elapsed wall time. Evaluation time includes loading,

@@ -289,7 +289,7 @@ impl Pipeline {
                     Err(failure) => (None, Some(failure)),
                 };
                 if let Err(error) = control.check() {
-                    failure = Some(error.into());
+                    failure = Some(Failure::interrupted(error, failure));
                 }
                 if let Some(evidence) = &evidence {
                     eligible[position] &= evidence.passes;
@@ -353,6 +353,41 @@ mod tests {
     }
     fn score(c: &Config) -> Trial {
         Trial::measured(&c.id, 3.0 - c.int("x").unwrap() as f32, 1.0, 5)
+    }
+
+    #[test]
+    fn interrupted_confirmation_preserves_its_callback_failure() {
+        for original in [
+            Failure::invalid("pair failed correctness"),
+            Failure::infrastructure("GPU disconnected"),
+        ] {
+            let cs = configs();
+            let result = Pipeline::default()
+                .budget(Duration::from_secs(30))
+                .run_confirmed(
+                    &cs,
+                    &mut super::super::GridOrder,
+                    &options(),
+                    |_| Ok(()),
+                    |_, _| Ok(()),
+                    |c, _, _, _| Ok(score(c)),
+                    |_, _, _, control| {
+                        control.cancel();
+                        Err(original.clone())
+                    },
+                )
+                .unwrap();
+            assert_eq!(result.status, ConfirmationStatus::NotConfirmed);
+            assert_eq!(result.selected.id, cs[0].id);
+            let failure = result.failure.as_ref().unwrap();
+            assert_eq!(failure.kind, FailureKind::Cancelled);
+            assert!(failure.reason.contains("work cancelled"));
+            assert!(failure.reason.contains(&original.to_string()));
+            assert_eq!(
+                result.confirmations[0].failure.as_ref().unwrap().reason,
+                failure.reason
+            );
+        }
     }
 
     #[test]

@@ -400,6 +400,13 @@ require_pointer_local null_ptr '*const i32' i32
     && "${slots[1]}" != "${slots[2]}" ]] \
     || fail "pointer locals unexpectedly share one debug slot"
 
+# NVBug 7039104: deeply nested composite types (`Deep8` -> `L8` -> ... -> `L1`)
+# past depth 8 must retain all inner struct levels down to `L1`.
+for level in Deep8 L8 L7 L6 L5 L4 L3 L2 L1; do
+    grep -Eq "^![0-9]+ = !DICompositeType\\(tag: DW_TAG_structure_type, name: \"${level}\"," "${llvm_ir}" \
+        || fail "nested struct ${level} DICompositeType was dropped from LLVM IR"
+done
+
 # Verify with complete, version-matched LLVM tool pairs. LLVM 18 can return
 # success while diagnosing and stripping newer debug metadata, so accepting an
 # arbitrary unsuffixed llvm-as would turn this gate into a false assurance.

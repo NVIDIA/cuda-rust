@@ -1122,9 +1122,10 @@ fn local_memory_provenance(local_idx: usize, name: &str, ty: &Ty) -> LocalMemory
 }
 
 /// Maximum nesting depth for composite debug types. Guards against deeply
-/// nested or (via generics) pathological value-type trees; beyond this we omit
-/// the inner detail rather than recurse without bound.
-const MAX_DEBUG_TYPE_DEPTH: usize = 8;
+/// nested or (via generics) pathological value-type trees while allowing
+/// realistic Rust iterator adapter chains; beyond this we omit the inner
+/// detail rather than recurse without bound.
+const MAX_DEBUG_TYPE_DEPTH: usize = 32;
 
 pub(crate) fn debug_type_for_ty(ty: &Ty) -> Option<DebugLocalTypeKind> {
     debug_type_for_ty_at(ty, 0)
@@ -1296,6 +1297,7 @@ fn debug_type_for_ty_at(ty: &Ty, depth: usize) -> Option<DebugLocalTypeKind> {
                 rustc_public::ty::AdtKind::Union => None,
             }
         }
+        TyKind::RigidTy(RigidTy::Pat(base_ty, _)) => debug_type_for_ty_at(&base_ty, depth),
         TyKind::RigidTy(RigidTy::Array(elem_ty, len_const)) if depth < MAX_DEBUG_TYPE_DEPTH => {
             let count = array_len_const(&len_const)?;
             let element = debug_type_for_ty_at(&elem_ty, depth + 1)?;
@@ -1557,6 +1559,7 @@ fn debug_pointer_pointee_type(ty: &Ty, depth: usize) -> Option<DebugLocalTypeKin
         TyKind::RigidTy(RigidTy::Ref(_, pointee, mutability)) => {
             debug_typed_pointer_type(ty, &pointee, DebugPointerKind::Reference(mutability), depth)
         }
+        TyKind::RigidTy(RigidTy::Pat(base_ty, _)) => debug_pointer_pointee_type(&base_ty, depth),
         TyKind::RigidTy(RigidTy::Array(element, len)) if depth < MAX_DEBUG_TYPE_DEPTH => {
             let count = array_len_const(&len)?;
             let element_debug = debug_pointer_pointee_type(&element, depth + 1)?;
@@ -1584,19 +1587,21 @@ fn debug_struct_type(
     fields: impl Iterator<Item = (String, Ty)>,
     depth: usize,
 ) -> Option<DebugLocalTypeKind> {
+    let fields: Vec<(String, Ty)> = fields.collect();
     let layout = ty.layout().ok()?;
     let shape = layout.shape();
     let offsets: Vec<u64> = match &shape.fields {
         rustc_public::abi::FieldsShape::Arbitrary { offsets } => {
             offsets.iter().map(|off| off.bytes() as u64).collect()
         }
+        rustc_public::abi::FieldsShape::Primitive => vec![0; fields.len()],
         _ => return None,
     };
     let mut size_bits = shape.size.bytes() as u64 * 8;
 
     let mut members = Vec::new();
     let mut has_shrunk_shared_pointer_member = false;
-    for (idx, (field_name, field_ty)) in fields.enumerate() {
+    for (idx, (field_name, field_ty)) in fields.into_iter().enumerate() {
         let offset_bytes = *offsets.get(idx)?;
         let Some(member_ty) = debug_type_for_ty_at(&field_ty, depth + 1) else {
             continue;
@@ -3768,6 +3773,209 @@ pub fn pointer_debug_types(
         assert_opaque_pointer(&debug_types[9], "*const _");
         assert_opaque_pointer(&debug_types[10], "*const _");
         assert_opaque_pointer(&debug_types[11], "*const _");
+    }
+
+    /// Deeply nested composite types (such as chained iterator adapters past
+    /// depth 8, NVBug 7039104) must preserve their inner leaf fields.
+    #[test]
+    fn deep_composite_nesting_preserves_inner_fields() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "cuda_oxide_deep_debug_{}_{}",
+            std::process::id(),
+            unique
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let fixture = root.join("deep_debug_fixture.rs");
+        std::fs::write(
+            &fixture,
+            r#"
+pub struct L10 { pub leaf: u64 }
+pub struct L9 { pub inner: L10 }
+pub struct L8 { pub inner: L9 }
+pub struct L7 { pub inner: L8 }
+pub struct L6 { pub inner: L7 }
+pub struct L5 { pub inner: L6 }
+pub struct L4 { pub inner: L5 }
+pub struct L3 { pub inner: L4 }
+pub struct L2 { pub inner: L3 }
+pub struct L1 { pub inner: L2 }
+pub struct L0 { pub inner: L1 }
+
+pub fn deep_and_iter(
+    _deep: L0,
+    a: &[f32],
+    b: &[f32],
+) -> f32 {
+    let mut it = a
+        .iter()
+        .flat_map(|x| b.iter().map(move |y| *x * *y))
+        .scan(0.0f32, |s, v| {
+            *s += v;
+            Some(*s)
+        })
+        .fuse()
+        .zip(0u32..)
+        .take_while(|(v, _)| *v < 1000.0);
+    match it.next() {
+        Some((v, k)) => v + k as f32,
+        None => 0.0,
+    }
+}
+"#,
+        )
+        .unwrap();
+
+        let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+        let sysroot_output = std::process::Command::new(rustc)
+            .args(["--print", "sysroot"])
+            .output()
+            .expect("query rustc sysroot");
+        assert!(sysroot_output.status.success(), "rustc --print sysroot");
+        let sysroot = String::from_utf8(sysroot_output.stdout)
+            .expect("sysroot path is UTF-8")
+            .trim()
+            .to_string();
+
+        let args = vec![
+            "rustc".to_string(),
+            "--edition=2024".to_string(),
+            "--crate-type=rlib".to_string(),
+            "--crate-name=deep_debug_fixture".to_string(),
+            "--emit=metadata".to_string(),
+            "-Zmir-opt-level=0".to_string(),
+            format!("--out-dir={}", root.display()),
+            format!("--sysroot={sysroot}"),
+            fixture.display().to_string(),
+        ];
+
+        let (deep_debug_ty, iter_debug_ty) = std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                rustc_public::run!(&args, || {
+                    let body = rustc_public::all_local_items()
+                        .into_iter()
+                        .find_map(|item| {
+                            (item.kind() == rustc_public::ItemKind::Fn
+                                && item.trimmed_name() == "deep_and_iter")
+                            .then(|| item.body())
+                            .flatten()
+                        })
+                        .expect("fixture function has a body");
+                    let deep_ty = debug_type_for_ty(&body.locals()[1].ty);
+                    let iter_ty = body
+                        .locals()
+                        .iter()
+                        .map(|decl| &decl.ty)
+                        .find_map(|ty| {
+                            let dbg = debug_type_for_ty(ty)?;
+                            matches!(&dbg, DebugLocalTypeKind::Struct { name, .. } if name == "TakeWhile")
+                                .then_some(dbg)
+                        })
+                        .expect("TakeWhile iterator local must be present");
+                    std::ops::ControlFlow::<(), _>::Continue((deep_ty, iter_ty))
+                })
+            })
+            .unwrap()
+            .join()
+            .unwrap()
+            .expect("in-process fixture compilation succeeds");
+
+        std::fs::remove_dir_all(&root).ok();
+
+        let mut cursor = deep_debug_ty
+            .as_ref()
+            .expect("L0 must produce a debug type");
+        for expected_level in 0..=9 {
+            let DebugLocalTypeKind::Struct { name, members, .. } = cursor else {
+                panic!("expected struct at level {expected_level}, got {cursor:?}");
+            };
+            assert_eq!(name, &format!("L{expected_level}"));
+            assert_eq!(members.len(), 1);
+            assert_eq!(members[0].name, "inner");
+            cursor = &members[0].ty;
+        }
+        let DebugLocalTypeKind::Struct { name, members, .. } = cursor else {
+            panic!("expected L10 struct at depth 10, got {cursor:?}");
+        };
+        assert_eq!(name, "L10");
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].name, "leaf");
+        assert!(matches!(
+            &members[0].ty,
+            DebugLocalTypeKind::Basic {
+                name,
+                size_bits: 64,
+                encoding: "DW_ATE_unsigned",
+            } if name == "u64"
+        ));
+
+        fn find_struct<'a>(
+            ty: &'a DebugLocalTypeKind,
+            target: &str,
+        ) -> Option<&'a [DebugTypeMember]> {
+            match ty {
+                DebugLocalTypeKind::Struct { name, members, .. } if name == target => {
+                    Some(members.as_slice())
+                }
+                DebugLocalTypeKind::Struct { members, .. } => members
+                    .iter()
+                    .find_map(|member| find_struct(&member.ty, target)),
+                DebugLocalTypeKind::Enum { variants, .. } => variants
+                    .iter()
+                    .flat_map(|variant| &variant.members)
+                    .find_map(|member| find_struct(&member.ty, target)),
+                DebugLocalTypeKind::TypedPointer { pointee, .. }
+                | DebugLocalTypeKind::Array {
+                    element: pointee, ..
+                } => find_struct(pointee, target),
+                _ => None,
+            }
+        }
+
+        let scan_members =
+            find_struct(&iter_debug_ty, "Scan").expect("Scan must be present inside TakeWhile");
+        for field in ["iter", "state"] {
+            assert!(
+                scan_members.iter().any(|m| m.name == field),
+                "Scan is missing `{field}`: {scan_members:?}"
+            );
+        }
+
+        let flatten_members = find_struct(&iter_debug_ty, "FlattenCompat")
+            .expect("FlattenCompat must be present inside Scan");
+        for field in ["iter", "frontiter", "backiter"] {
+            assert!(
+                flatten_members.iter().any(|m| m.name == field),
+                "FlattenCompat is missing `{field}`: {flatten_members:?}"
+            );
+        }
+        let frontiter = flatten_members
+            .iter()
+            .find(|m| m.name == "frontiter")
+            .unwrap();
+        let DebugLocalTypeKind::Enum { variants, .. } = &frontiter.ty else {
+            panic!("frontiter must be an Option enum, got {:?}", frontiter.ty);
+        };
+        let some_variant = variants
+            .iter()
+            .find(|v| v.name == "Some")
+            .expect("Option::Some variant must exist");
+        assert!(
+            !some_variant.members.is_empty(),
+            "FlattenCompat.frontiter Option::Some must retain its inner Map payload"
+        );
+        let iter_members = find_struct(&iter_debug_ty, "Iter")
+            .expect("inner slice Iter must be present inside Map");
+        for field in ["ptr", "end_or_len"] {
+            assert!(
+                iter_members.iter().any(|m| m.name == field),
+                "slice Iter is missing `{field}`: {iter_members:?}"
+            );
+        }
     }
 
     /// Closure environments must be described as composite debug types with

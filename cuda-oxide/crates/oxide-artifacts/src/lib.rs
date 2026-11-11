@@ -778,15 +778,17 @@ fn build_host_object_with_section(
     anchor_symbols: &[(&str, bool)],
 ) -> Result<Vec<u8>, ArtifactError> {
     use object::write::{Object, Symbol, SymbolSection};
-    use object::{FileFlags, SectionFlags, SectionKind, SymbolFlags, SymbolKind, SymbolScope};
+    use object::{FileFlags, SectionKind, SymbolFlags, SymbolKind, SymbolScope};
 
     let target = HostObjectTarget::parse(target)?;
     let mut object = Object::new(target.format, target.architecture, target.endianness);
-    object.flags = FileFlags::Elf {
-        os_abi: elf::ELFOSABI_GNU,
-        abi_version: 0,
-        e_flags: 0,
-    };
+    if target.format == object::BinaryFormat::Elf {
+        object.flags = FileFlags::Elf {
+            os_abi: elf::ELFOSABI_GNU,
+            abi_version: 0,
+            e_flags: 0,
+        };
+    }
     let section_id = object.add_section(
         Vec::new(),
         section_name.as_bytes().to_vec(),
@@ -794,9 +796,7 @@ fn build_host_object_with_section(
     );
     let section = object.section_mut(section_id);
     section.set_data(section_data.to_vec(), 8);
-    section.flags = SectionFlags::Elf {
-        sh_flags: elf::SHF_ALLOC | elf::SHF_GNU_RETAIN,
-    };
+    section.flags = target.section_flags();
 
     for (anchor_symbol, weak) in anchor_symbols {
         // Global binding so the symbol can satisfy undefined references
@@ -845,6 +845,8 @@ impl HostObjectTarget {
 
         let format = if target.contains("linux") {
             object::BinaryFormat::Elf
+        } else if target.contains("windows-msvc") {
+            object::BinaryFormat::Coff
         } else {
             return Err(ArtifactError::UnsupportedHostTarget(target));
         };
@@ -854,6 +856,20 @@ impl HostObjectTarget {
             architecture,
             endianness,
         })
+    }
+
+    /// Returns the object section flags that keep `.oxart` retained and readable on `self.format`.
+    fn section_flags(self) -> object::SectionFlags {
+        match self.format {
+            object::BinaryFormat::Elf => object::SectionFlags::Elf {
+                sh_flags: elf::SHF_ALLOC | elf::SHF_GNU_RETAIN,
+            },
+            object::BinaryFormat::Coff => object::SectionFlags::Coff {
+                characteristics: object::pe::IMAGE_SCN_CNT_INITIALIZED_DATA
+                    | object::pe::IMAGE_SCN_MEM_READ,
+            },
+            _ => object::SectionFlags::None,
+        }
     }
 }
 
@@ -1229,13 +1245,20 @@ mod tests {
         )
         .unwrap();
 
-        for target in ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"] {
+        for target in [
+            "x86_64-unknown-linux-gnu",
+            "aarch64-unknown-linux-gnu",
+            "x86_64-pc-windows-msvc",
+            "aarch64-pc-windows-msvc",
+        ] {
             let object = build_host_object_for_target(&blob, target, None).unwrap();
-            assert_eq!(
-                object.get(7).copied(),
-                Some(elf::ELFOSABI_GNU),
-                "{target} ELF header must set EI_OSABI to ELFOSABI_GNU for SHF_GNU_RETAIN"
-            );
+            if target.contains("linux") {
+                assert_eq!(
+                    object.get(7).copied(),
+                    Some(elf::ELFOSABI_GNU),
+                    "{target} ELF header must set EI_OSABI to ELFOSABI_GNU for SHF_GNU_RETAIN"
+                );
+            }
             let bundles = read_artifact_bundles_from_object_bytes(&object).unwrap();
             assert_eq!(bundles.len(), 1);
             assert_eq!(
@@ -1435,7 +1458,11 @@ mod tests {
     fn host_object_rejects_non_cuda_host_targets() {
         let blob = sample_blob();
 
-        for target in ["powerpc64le-unknown-linux-gnu", "x86_64-apple-darwin"] {
+        for target in [
+            "powerpc64le-unknown-linux-gnu",
+            "x86_64-apple-darwin",
+            "x86_64-pc-windows-gnu",
+        ] {
             assert!(matches!(
                 build_host_object_for_target(&blob, target, None),
                 Err(ArtifactError::UnsupportedHostTarget(_))

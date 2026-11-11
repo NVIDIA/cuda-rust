@@ -1354,8 +1354,9 @@ fn write_artifact_object(
         .join(&safe_output_name)
         .join(sanitize_path_component(host_target));
     std::fs::create_dir_all(&object_dir)?;
+    let object_extension = embedded_object_extension(host_target);
     let object_path = object_dir.join(format!(
-        "{safe_output_name}.{}.{artifact_id}.{kind}.o",
+        "{safe_output_name}.{}.{artifact_id}.{kind}.{object_extension}",
         std::process::id(),
     ));
     // `SHF_GNU_RETAIN` sits in the ELF `SHF_MASKOS` range (`0x0ff00000`), which
@@ -1369,6 +1370,16 @@ fn write_artifact_object(
     }
     std::fs::write(&object_path, &patched)?;
     Ok(object_path)
+}
+
+/// Returns the relocatable object file extension (`"obj"` on Windows, `"o"` elsewhere)
+/// expected by the host linker for embedded device-artifact objects.
+fn embedded_object_extension(host_target: &str) -> &'static str {
+    if host_target.to_ascii_lowercase().contains("windows") {
+        "obj"
+    } else {
+        "o"
+    }
 }
 
 fn sanitize_path_component(name: &str) -> String {

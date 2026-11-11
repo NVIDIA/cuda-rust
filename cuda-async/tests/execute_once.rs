@@ -18,7 +18,6 @@ use cuda_async::zip;
 use std::future::IntoFuture;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
-use std::time::Duration;
 
 /// Run `f` on a fresh thread so thread-local `DEVICE_CONTEXTS` starts clean.
 fn on_fresh_thread<F: FnOnce() + Send + 'static>(f: F) {
@@ -31,19 +30,6 @@ fn counted_op<T: Send + 'static>(counter: &Arc<AtomicUsize>, val: T) -> BoxedDev
     value(())
         .then(move |()| {
             c.fetch_add(1, Ordering::SeqCst);
-            value(val)
-        })
-        .boxed()
-}
-
-/// Like [`counted_op`], but the execution takes a while, so a second executor
-/// on another thread is guaranteed to arrive while the first is still running.
-fn slow_counted_op<T: Send + 'static>(counter: &Arc<AtomicUsize>, val: T) -> BoxedDeviceOp<T> {
-    let c = counter.clone();
-    value(())
-        .then(move |()| {
-            c.fetch_add(1, Ordering::SeqCst);
-            std::thread::sleep(Duration::from_millis(150));
             value(val)
         })
         .boxed()
@@ -144,7 +130,8 @@ fn shared_pre_computed() {
     });
 }
 
-/// Two threads execute clones at the same time. Each thread has its own
+/// Two threads start executing clones at a barrier. This is a stress test,
+/// not proof that a particular thread reached the internal wait state. Each thread has its own
 /// device context and therefore its own streams, so the second consumer also
 /// exercises the cross-stream wait on the producer's completion event. The
 /// op runs exactly once and both threads get the same `Arc`.
@@ -154,7 +141,7 @@ fn shared_concurrent_executors_run_once_and_share_the_value() {
         init_device_contexts(0, 1).expect("init failed (requires GPU)");
 
         let counter = Arc::new(AtomicUsize::new(0));
-        let shared = slow_counted_op(&counter, 7u64).shared();
+        let shared = counted_op(&counter, 7u64).shared();
         let barrier = Arc::new(Barrier::new(2));
 
         let workers: Vec<_> = (0..2)
@@ -257,7 +244,7 @@ fn shared_reentrant_execution_is_an_error_not_a_deadlock() {
 // unzip (2-tuple)
 // ---------------------------------------------------------------------------
 
-/// The two halves are executed at the same time on two threads: the input
+/// The two halves start from a common barrier on two threads: the input
 /// runs once and each half receives its side.
 #[test]
 fn unzip2_concurrent_halves_run_input_once() {
@@ -265,7 +252,7 @@ fn unzip2_concurrent_halves_run_input_once() {
         init_device_contexts(0, 1).expect("init failed (requires GPU)");
 
         let counter = Arc::new(AtomicUsize::new(0));
-        let (left, right) = slow_counted_op(&counter, (1u64, 2u64)).unzip();
+        let (left, right) = counted_op(&counter, (1u64, 2u64)).unzip();
         let barrier = Arc::new(Barrier::new(2));
 
         let left_thread = {

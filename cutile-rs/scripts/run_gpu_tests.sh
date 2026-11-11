@@ -258,8 +258,16 @@ do
 done
 
 run_gpu_step \
+    "cuda-core driver fence unit tests" \
+    gpu_test host cuda-core lib --filter gpu_fence_tests --ignored
+
+run_gpu_step \
     "cuda-async unit tests (with live driver)" \
     gpu_test host cuda-async lib
+
+run_gpu_step \
+    "cuda-async execute-once contention unit test" \
+    gpu_test host cuda-async lib --filter execute_once_wait_tests --ignored
 
 # Include the GPU-requiring `cuda_tests` module that the CPU path skips.
 # The bindgen regression runs in run_cpu_tests.sh: it invokes libclang, which

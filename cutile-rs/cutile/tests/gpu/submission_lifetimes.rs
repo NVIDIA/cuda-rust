@@ -70,6 +70,7 @@ const GATE_BOUND: Duration = Duration::from_secs(60);
 
 struct Gate {
     release: mpsc::Sender<()>,
+    completed: mpsc::Receiver<bool>,
     /// Set by the callback when it hit `GATE_BOUND`: this gate's stream drained
     /// on its own, so a `Ready` first poll is a harness stall, not an ordering
     /// bug. Per gate, because the process-wide counters below also see other
@@ -80,6 +81,7 @@ struct Gate {
 impl Gate {
     fn arm(stream: &Arc<cuda_core::Stream>) -> Self {
         let (sender, receiver) = mpsc::channel();
+        let (done, completed) = mpsc::channel();
         let expired = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let expired_flag = expired.clone();
         GATES_ARMED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -98,11 +100,13 @@ impl Gate {
                         .unwrap()
                         .push(format!("{outcome:?}"));
                     GATES_FINISHED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let _ = done.send(outcome.is_ok());
                 })
                 .unwrap();
         }
         Self {
             release: sender,
+            completed,
             expired,
         }
     }
@@ -115,6 +119,13 @@ impl Gate {
 impl Drop for Gate {
     fn drop(&mut self) {
         let _ = self.release.send(());
+        let completed = self.completed.recv_timeout(GATE_BOUND);
+        if !std::thread::panicking() {
+            assert!(
+                matches!(completed, Ok(true)),
+                "GPU gate did not acknowledge explicit release: {completed:?}"
+            );
+        }
     }
 }
 
@@ -179,14 +190,15 @@ fn on_gpu(f: impl FnOnce(Arc<cuda_core::Stream>, Arc<cuda_core::Stream>) + Send 
         let _ = api::dup(&src).sync_on(&stream).unwrap();
         api::memcpy(&mut dst, &src).sync_on(&stream).unwrap();
         // Initialize the completion backend before placing any work behind a gate.
-        stream
-            .launch_host_function(|| std::thread::sleep(Duration::from_millis(10)))
-            .unwrap();
-        block_on(DeviceFuture::scheduled(
-            value(()),
-            ExecutionContext::new(stream.clone()),
-        ))
-        .unwrap();
+        let gate = Gate::arm(&stream);
+        let mut warmup = DeviceFuture::scheduled(value(()), ExecutionContext::new(stream.clone()));
+        assert_gated_pending(
+            Pin::new(&mut warmup).poll(&mut Context::from_waker(&noop_waker())),
+            &stream,
+            &gate,
+        );
+        drop(gate);
+        block_on(warmup).unwrap();
         f(stream, other);
     });
 }
@@ -331,7 +343,6 @@ fn async_on_leaves_lifetimes_to_caller(fail: bool) {
         let (src, src_owner) = tracked(&stream);
         let (dst, dst_owner) = tracked(&stream);
         let gate = Gate::arm(&stream);
-        let start = std::time::Instant::now();
         // SAFETY: the rescue owners keep both allocations alive until the
         // explicit synchronization below, even when the combinator discards
         // the tensors or returns an error. No conflicting accesses are made.
@@ -347,7 +358,6 @@ fn async_on_leaves_lifetimes_to_caller(fail: bool) {
                     .async_on(&stream)
             }
         };
-        let elapsed = start.elapsed();
         let caller_is_only_owner =
             Arc::strong_count(&src_owner) == 1 && Arc::strong_count(&dst_owner) == 1;
         let still_pending = matches!(stream.query(), Ok(false));
@@ -361,7 +371,6 @@ fn async_on_leaves_lifetimes_to_caller(fail: bool) {
             !expired && still_pending,
             "async_on waited for GPU completion"
         );
-        assert!(elapsed < Duration::from_secs(1));
         assert!(
             caller_is_only_owner,
             "async_on retained resources after returning to the unsafe caller"
@@ -393,11 +402,11 @@ fn partial_submission_error_retains_discarded_resources() {
         let result = Pin::new(&mut future).poll(&mut Context::from_waker(&waker));
         assert!(matches!(result, std::task::Poll::Ready(Err(_))));
         assert!(Arc::strong_count(&owner) > 1);
-        let start = std::time::Instant::now();
         drop(future);
+        assert!(!gate.expired(), "drop waited on a gated stream");
         assert!(
-            start.elapsed() < Duration::from_secs(1),
-            "drop waited on a gated stream"
+            !stream.query().unwrap(),
+            "gated work completed before release"
         );
         assert!(
             Arc::strong_count(&owner) > 1,
@@ -433,11 +442,11 @@ fn partial_submission_panic_retains_discarded_resources() {
         }));
         assert!(panic.is_err());
         assert!(Arc::strong_count(&owner) > 1);
-        let start = std::time::Instant::now();
         drop(future);
+        assert!(!gate.expired(), "drop waited on a gated stream");
         assert!(
-            start.elapsed() < Duration::from_secs(1),
-            "drop waited on a gated stream"
+            !stream.query().unwrap(),
+            "gated work completed before release"
         );
         assert!(
             Arc::strong_count(&owner) > 1,

@@ -1226,3 +1226,51 @@ mod chunk_cast_tests {
         assert_eq!(chunk_cast_len(0, 0x1000, 16, 16), Some(0));
     }
 }
+
+#[cfg(test)]
+mod gpu_fence_tests {
+    use super::*;
+    use crate::cudarc_shim::fence_trace::{self, Call};
+
+    #[test]
+    #[ignore = "requires a CUDA GPU; run by run_gpu_tests.sh"]
+    fn zeroed_records_a_completion_fence() {
+        let context = Context::new(0).unwrap();
+        let stream = context.new_stream().unwrap();
+        fence_trace::start();
+        let buffer = DeviceBuffer::<u8>::zeroed(&stream, 4096).unwrap();
+        assert!(fence_trace::finish().contains(&Call::Synchronize(stream.cu_stream() as usize)));
+        assert!(stream.query().unwrap());
+        assert_eq!(buffer.to_host_vec(&stream).unwrap(), vec![0; 4096]);
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA GPU; run by run_gpu_tests.sh"]
+    fn drop_async_joins_the_allocation_stream() {
+        let context = Context::new(0).unwrap();
+        let allocation = context.new_stream().unwrap();
+        let free = context.new_stream().unwrap();
+        // SAFETY: no reads; drop_async orders the free after this allocation.
+        let buffer = unsafe { DeviceBuffer::<u8>::uninitialized_async(&allocation, 4096) }.unwrap();
+        // Keep the negative control safe even if the join is deliberately removed.
+        allocation.synchronize().unwrap();
+        fence_trace::start();
+        unsafe { buffer.drop_async(&free) }.unwrap();
+        let calls = fence_trace::finish();
+        let joined = calls.iter().enumerate().any(|(index, call)| {
+            let Call::Record { stream, event } = call else {
+                return false;
+            };
+            *stream == allocation.cu_stream() as usize
+                && calls[index + 1..].contains(&Call::Wait {
+                    stream: free.cu_stream() as usize,
+                    event: *event,
+                })
+        });
+        assert!(
+            joined,
+            "free must wait on an event recorded on the allocation stream: {calls:?}"
+        );
+        free.synchronize().unwrap();
+    }
+}

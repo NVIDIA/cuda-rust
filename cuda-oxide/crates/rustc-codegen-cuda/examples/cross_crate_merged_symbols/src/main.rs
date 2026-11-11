@@ -158,6 +158,28 @@ fn assert_merged_namespace(label: &str, ptx: &str) {
         "{label}: expected the shared pool helper's symbols to stay distinct \
          across crates, got {pool_symbols:?}"
     );
+
+    // When full device debug sections are present, each DWARF section must be
+    // coalesced into a single `.section` block and no label may be defined
+    // twice across the merged module.
+    let mut seen_sections = std::collections::BTreeSet::new();
+    let mut seen_labels = std::collections::BTreeSet::new();
+    for line in ptx.lines().map(str::trim) {
+        if let Some(rest) = line.strip_prefix(".section") {
+            let name = rest.split_whitespace().next().unwrap_or("");
+            assert!(
+                seen_sections.insert(name.to_string()),
+                "{label}: duplicate DWARF section {name} in merged PTX"
+            );
+        } else if line.starts_with('$')
+            && let Some(label_name) = line.strip_suffix(':')
+        {
+            assert!(
+                seen_labels.insert(label_name.to_string()),
+                "{label}: duplicate PTX label {label_name} in merged PTX"
+            );
+        }
+    }
 }
 
 /// Launch a single-thread-block kernel writing one `$ty` and return it.

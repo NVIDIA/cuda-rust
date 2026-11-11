@@ -24,6 +24,11 @@ mod kernels {
         out.store(value + value);
     }
     #[cutile::entry]
+    fn triple<const N: i32>(out: &mut Tensor<f32, { [N] }>, x: &Tensor<f32, { [-1] }>) {
+        let value = load_tile_like(x, out);
+        out.store(value + value + value);
+    }
+    #[cutile::entry]
     fn checked_walk<const B: i32>(
         z: &mut Tensor<f32, { [B, B] }>,
         x: &Tensor<f32, { [-1, -1] }>,
@@ -37,6 +42,120 @@ mod kernels {
         }
         z.store(acc);
     }
+}
+
+#[test]
+fn concurrent_preparations_and_normal_launch_share_one_backend_compile() {
+    use cutile::jit_cache::{self, JitStore};
+    use std::sync::{mpsc, Mutex};
+    use std::time::Duration;
+    struct GatedStore {
+        started: mpsc::Sender<()>,
+        release: Mutex<mpsc::Receiver<()>>,
+    }
+    impl JitStore for GatedStore {
+        fn get(&self, _: &str) -> std::io::Result<Option<Vec<u8>>> {
+            self.started.send(()).unwrap();
+            self.release
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(30))
+                .expect("deadlock watchdog");
+            Ok(None)
+        }
+        fn put(&self, _: &str, _: &[u8]) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn delete(&self, _: &str) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn clear(&self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    struct DisableStore;
+    impl Drop for DisableStore {
+        fn drop(&mut self) {
+            jit_cache::disable();
+        }
+    }
+    let _lock = common::cache_test_lock();
+    let context = Context::new(0).unwrap();
+    let stream = context.new_stream().unwrap();
+    let x: Arc<Tensor<f32>> = api::ones(&[64]).sync_on(&stream).unwrap().into();
+    let mut out_a = api::zeros::<f32>(&[64]).sync_on(&stream).unwrap();
+    let mut out_b = api::zeros::<f32>(&[64]).sync_on(&stream).unwrap();
+    let job_a = kernels::triple((&mut out_a).partition([16]), x.clone())
+        .specialize_on(&stream)
+        .unwrap()
+        .into_compile_job()
+        .unwrap();
+    let job_b = kernels::triple((&mut out_b).partition([16]), x.clone())
+        .specialize_on(&stream)
+        .unwrap()
+        .into_compile_job()
+        .unwrap();
+    assert_eq!(job_a.key(), job_b.key());
+    assert!(!contains_cuda_function(job_a.key()));
+    let before = jit_cache::jit_backend_compile_count();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    jit_cache::enable(Arc::new(GatedStore {
+        started: started_tx,
+        release: Mutex::new(release_rx),
+    }));
+    let _disable = DisableStore;
+    std::thread::scope(|scope| {
+        let a = std::thread::Builder::new()
+            .stack_size(common::TEST_STACK_SIZE)
+            .spawn_scoped(scope, move || {
+                job_a.compile(&CompileControl::default()).unwrap()
+            })
+            .unwrap();
+        // This acknowledgement proves a CPU flight exists before the ordinary
+        // launch. Keep its artifact alive in the join handle until both finish.
+        started_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("deadlock watchdog");
+        let b = std::thread::Builder::new()
+            .stack_size(common::TEST_STACK_SIZE)
+            .spawn_scoped(scope, move || {
+                release_tx.send(()).unwrap();
+                job_b.compile(&CompileControl::default()).unwrap()
+            })
+            .unwrap();
+        kernels::triple((&mut out_a).partition([16]), x)
+            .sync_on(&stream)
+            .unwrap();
+        let prepared_a = a.join().unwrap();
+        let prepared_b = b.join().unwrap();
+        assert_eq!(jit_cache::jit_backend_compile_count(), before + 1);
+        assert!(prepared_a.install(&CompileControl::default()).unwrap());
+        assert!(prepared_b.install(&CompileControl::default()).unwrap());
+    });
+    assert_eq!(out_a.to_host_vec().sync_on(&stream).unwrap(), vec![3.0; 64]);
+}
+
+#[test]
+fn normal_launch_loads_a_retained_prepared_binary_without_install() {
+    let _lock = common::cache_test_lock();
+    let stream = Context::new(0).unwrap().new_stream().unwrap();
+    let x: Arc<Tensor<f32>> = api::ones(&[128]).sync_on(&stream).unwrap().into();
+    let mut out = api::zeros::<f32>(&[128]).sync_on(&stream).unwrap();
+    let job = kernels::triple((&mut out).partition([64]), x.clone())
+        .specialize_on(&stream)
+        .unwrap()
+        .into_compile_job()
+        .unwrap();
+    let before = cutile::jit_cache::jit_backend_compile_count();
+    let prepared = prepare_on_cpu(job);
+    assert!(!contains_cuda_function(prepared.key()));
+    kernels::triple((&mut out).partition([64]), x)
+        .sync_on(&stream)
+        .unwrap();
+    assert_eq!(cutile::jit_cache::jit_backend_compile_count(), before + 1);
+    assert!(prepared.install(&CompileControl::default()).unwrap());
+    assert_eq!(out.to_host_vec().sync_on(&stream).unwrap(), vec![3.0; 128]);
 }
 
 fn prepare_on_cpu(job: KernelCompileJob) -> PreparedKernel {

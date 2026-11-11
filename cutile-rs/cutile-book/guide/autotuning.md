@@ -41,6 +41,21 @@ roles:
    the artifact's key against the actual launch, call `prepared.install(control)`,
    run a correctness check, then measure with `bench::do_bench_controlled`.
 
+Explicit installation is optional: an ordinary launch of the same specialization
+joins an in-progress CPU compilation and loads the resulting binary itself.
+Keep the `PreparedKernel` handle alive until that launch if compilation has
+already finished. The example installs explicitly so it can separately check
+that the subsequent launch leaves the installation counter unchanged.
+
+Preparation and ordinary cache-miss launches share the same CPU compilation
+registry. Whichever begins compilation first produces the binary; other callers
+wait without compiling it again. Loading still occurs on a foreground caller.
+Cancelling a waiter does not cancel another caller's compilation. If the owner
+is cancelled or panics, a waiting caller with a live budget can retry; compiler
+errors are reported and later attempts remain retryable. Registry entries and
+CPU artifacts disappear when their last caller releases them. This deduplicates
+overlapping work; it does not add a permanent CPU binary cache.
+
 One worker is the default: while A is evaluated, B compiles; after observing
 A, the strategy selects C while B is evaluated. With `workers(k)`, at most k
 candidates are preparing or ready in addition to the current evaluation.

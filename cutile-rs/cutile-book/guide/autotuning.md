@@ -14,6 +14,55 @@ measure a whole request. These synchronous interfaces and their resume logs
 remain supported. The opt-in preparation pipeline below overlaps CPU
 compilation with foreground GPU evaluation.
 
+## Finding a good configuration under a time budget
+
+Use Bayesian optimization (BO) with lookahead compilation when a full sweep
+would take too long. BO uses measurements from this run to choose useful next
+experiments; lookahead compiles future candidates while the GPU evaluates the
+current one. With a budget shorter than a full sweep, this explores only part
+of the declared space. The result is a tested candidate, not proof of the global
+optimum. A small space may still be exhausted within the budget.
+
+From `cutile-rs/`, try the RMSNorm example with a 30-second tuning budget and
+one preparation worker (the default lookahead):
+
+```sh
+cargo run --release -p cutile-examples --example autotune --features experimental-tune -- --search bayes --workers 1 --budget-ms 30000 --seed 42
+```
+
+To try more parallel compilation, change `--workers 1` to `--workers 4`.
+This bounds the number of preparing or ready candidates, not concurrent GPU
+measurements. More lookahead can hide slow compilation, but those candidates
+are chosen before the latest results arrive and some may never be measured.
+Compare with `--serial` and with `--search random` under the same budget.
+
+For your own workload, configure the pipeline and selector together:
+
+```rust
+use std::time::Duration;
+use cutile::tune::pipeline::{BayesianOptions, BayesianSearch, Pipeline};
+
+let mut strategy = BayesianSearch::new(&configs, BayesianOptions::default())?;
+let pipeline = Pipeline::default()
+    .workers(1)
+    .budget(Duration::from_secs(30))
+    .trial_limit(Duration::from_secs(10));
+// Supply resolve/prepare/evaluate and paired-confirmation callbacks to
+// pipeline.run_confirmed(...), as described below and in the example.
+```
+
+With one worker, B compiles while A is evaluated. A's result then informs the
+choice of C, which compiles while B is evaluated. The strategy accounts for
+pending candidates so it does not suggest the same experiment twice.
+
+Use `run_confirmed` to compare finalists with a known incumbent; its default
+reserves 25% of the same budget for fresh paired measurements. If confirmation
+cannot finish, `NotConfirmed` keeps the incumbent selection and does not
+certify a replacement. Budgeting is cooperative: it stops new work and bounds
+controlled stages, but an already-running GPU operation or user callback can
+overrun. Application build time and the example's fixture setup are outside
+the tuning budget.
+
 ## Preparing candidates in parallel
 
 The `autotune` example checks RMSNorm outputs against a CPU reference and

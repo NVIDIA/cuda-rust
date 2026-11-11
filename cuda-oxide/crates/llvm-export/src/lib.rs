@@ -411,14 +411,13 @@ pub mod ops {
     /// Stable rustc-side identity of the static represented by a `GlobalOp`.
     ///
     /// The emitted LLVM symbol is not sufficient for relocation lookup because
-    /// ordinary device globals receive generated `__device_global_<hash>`
-    /// names.
+    /// ordinary device globals receive generated `__device_global_N` names.
     const GLOBAL_SOURCE_KEY: &str = "cuda_oxide_global_source_key";
     /// Versioned, length-prefixed pointer-relocation metadata for an initialized
     /// Rust static.
     const GLOBAL_INITIALIZER_RELOCATIONS_KEY: &str = "cuda_oxide_global_initializer_relocations";
-    /// Rust path of the shared-memory `static` a generated
-    /// `__shared_mem_<hash>` global came from.
+    /// Rust path of the shared-memory `static` a generated `__shared_mem_N`
+    /// global came from.
     ///
     /// Distinct from [`GLOBAL_SOURCE_KEY`], which is a *relocation identity*:
     /// the exporter indexes it, requires it to be unique across globals, and
@@ -678,22 +677,24 @@ pub mod ops {
 
         /// Whether this type belongs to the acyclic subset accepted beneath a
         /// [`DebugLocalTypeKind::TypedPointer`].
+        /// Whether `self` is allowed inside the pointee tree of a
+        /// [`DebugLocalTypeKind::TypedPointer`].
         ///
-        /// Opaque pointers and source composites are excluded recursively so a
-        /// typed pointer can never hide a null-base descendant or smuggle a
-        /// recursive type graph into this tree-shaped representation.
+        /// Direct opaque pointers and empty composites are excluded so a typed
+        /// pointer always resolves to a concrete scalar, array, or non-empty
+        /// composite DIE.
         pub(crate) fn is_valid_typed_pointer_pointee(&self) -> bool {
             match self {
                 DebugLocalTypeKind::Basic { .. } => true,
                 DebugLocalTypeKind::TypedPointer { pointee, .. } => {
                     pointee.is_valid_typed_pointer_pointee()
                 }
-                DebugLocalTypeKind::Array { element, .. } => {
-                    element.is_valid_typed_pointer_pointee()
+                DebugLocalTypeKind::Array { element, count, .. } => {
+                    *count > 0 && element.is_valid_typed_pointer_pointee()
                 }
-                DebugLocalTypeKind::Pointer { .. }
-                | DebugLocalTypeKind::Struct { .. }
-                | DebugLocalTypeKind::Enum { .. } => false,
+                DebugLocalTypeKind::Struct { members, .. } => !members.is_empty(),
+                DebugLocalTypeKind::Enum { variants, .. } => !variants.is_empty(),
+                DebugLocalTypeKind::Pointer { .. } => false,
             }
         }
     }
@@ -899,7 +900,7 @@ pub mod ops {
             b't' => {
                 let size_bits = take_u64(bytes, pos)?;
                 let name = take_str(bytes, pos)?;
-                let pointee = Box::new(deserialize_debug_type(bytes, pos)?);
+                let pointee = Box::new(deserialize_debug_type_at(bytes, pos, depth + 1, entries)?);
                 if !pointee.is_valid_typed_pointer_pointee() {
                     return None;
                 }
@@ -2914,17 +2915,50 @@ pub mod ops {
         }
 
         #[test]
+        fn round_trips_composite_pointer_pointees() {
+            let ty = DebugLocalTypeKind::TypedPointer {
+                name: "&Params".to_string(),
+                size_bits: 64,
+                pointee: Box::new(DebugLocalTypeKind::Struct {
+                    name: "Params".to_string(),
+                    size_bits: 64,
+                    members: vec![
+                        DebugTypeMember {
+                            name: "scale".to_string(),
+                            offset_bits: 0,
+                            ty: DebugLocalTypeKind::Basic {
+                                name: "f32".to_string(),
+                                size_bits: 32,
+                                encoding: "DW_ATE_float",
+                            },
+                        },
+                        DebugTypeMember {
+                            name: "offset".to_string(),
+                            offset_bits: 32,
+                            ty: DebugLocalTypeKind::Basic {
+                                name: "f32".to_string(),
+                                size_bits: 32,
+                                encoding: "DW_ATE_float",
+                            },
+                        },
+                    ],
+                }),
+            };
+            assert_eq!(round_trip(&ty), ty);
+        }
+
+        #[test]
         fn decoder_rejects_typed_pointer_with_forbidden_descendants() {
             let invalid = [
                 // Direct legacy opaque pointer descendant.
                 "t64 8 *const _p64 8 *mut i32",
                 // The opaque pointer is hidden beneath a fixed array.
                 "t64 8 *const _a64 8 [ptr; 1]1 p64 8 *mut i32",
-                // Source composites are outside the acyclic typed subset.
+                // Empty composites cannot be pointees.
                 "t64 8 *const _s64 3 Foo0 ",
                 "t64 8 *const _e64 3 Foo0 0 ",
-                // Composite descendants cannot be hidden below an otherwise
-                // accepted array or typed-pointer node either.
+                // Empty composite descendants cannot be hidden below an array
+                // or typed-pointer node either.
                 "t64 8 *const _a64 8 [Foo; 1]1 s64 3 Foo0 ",
                 "t64 15 *const *const _t64 8 *const _e64 3 Foo0 0 ",
             ];

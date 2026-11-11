@@ -1128,7 +1128,8 @@ fn local_memory_provenance(local_idx: usize, name: &str, ty: &Ty) -> LocalMemory
 const MAX_DEBUG_TYPE_DEPTH: usize = 32;
 
 pub(crate) fn debug_type_for_ty(ty: &Ty) -> Option<DebugLocalTypeKind> {
-    debug_type_for_ty_at(ty, 0)
+    let mut active_pointees = Vec::new();
+    debug_type_for_ty_at(ty, 0, &mut active_pointees)
 }
 
 /// Describe the compiler-materialized backing array for a shared-memory marker.
@@ -1141,7 +1142,8 @@ pub(crate) fn debug_shared_array_type(element_ty: &Ty, count: u64) -> Option<Deb
     if count == 0 {
         return None;
     }
-    let element = debug_type_for_ty_at(element_ty, 1)?;
+    let mut active_pointees = Vec::new();
+    let element = debug_type_for_ty_at(element_ty, 1, &mut active_pointees)?;
     if !debug_type_graph_supported_for_shared(&element) {
         return None;
     }
@@ -1192,7 +1194,11 @@ fn debug_type_graph_supported_for_shared(ty: &DebugLocalTypeKind) -> bool {
     }
 }
 
-fn debug_type_for_ty_at(ty: &Ty, depth: usize) -> Option<DebugLocalTypeKind> {
+fn debug_type_for_ty_at(
+    ty: &Ty,
+    depth: usize,
+    active_pointees: &mut Vec<Ty>,
+) -> Option<DebugLocalTypeKind> {
     match ty.kind() {
         TyKind::RigidTy(RigidTy::Bool) => Some(DebugLocalTypeKind::Basic {
             name: "bool".to_string(),
@@ -1214,55 +1220,71 @@ fn debug_type_for_ty_at(ty: &Ty, depth: usize) -> Option<DebugLocalTypeKind> {
             size_bits: float_size_bits(float_ty),
             encoding: "DW_ATE_float",
         }),
-        TyKind::RigidTy(RigidTy::RawPtr(pointee, mutability)) => {
-            debug_typed_pointer_type(ty, &pointee, DebugPointerKind::Raw(mutability), depth)
-                .or_else(|| {
-                    debug_slice_fat_pointer_type(
-                        ty,
-                        &pointee,
-                        DebugPointerKind::Raw(mutability),
-                        depth,
-                    )
-                })
-                .or_else(|| {
-                    Some(DebugLocalTypeKind::Pointer {
-                        name: raw_pointer_name(pointee, mutability),
-                        size_bits: if is_declared_shared_pointer_stand_in(&pointee) {
-                            32
-                        } else {
-                            64
-                        },
-                    })
-                })
-        }
-        TyKind::RigidTy(RigidTy::Ref(_, pointee, mutability)) => {
-            debug_typed_pointer_type(ty, &pointee, DebugPointerKind::Reference(mutability), depth)
-                .or_else(|| {
-                    debug_slice_fat_pointer_type(
-                        ty,
-                        &pointee,
-                        DebugPointerKind::Reference(mutability),
-                        depth,
-                    )
-                })
-                .or_else(|| {
-                    Some(DebugLocalTypeKind::Pointer {
-                        name: reference_name(pointee, mutability),
-                        size_bits: if is_declared_shared_pointer_stand_in(&pointee) {
-                            32
-                        } else {
-                            64
-                        },
-                    })
-                })
-        }
+        TyKind::RigidTy(RigidTy::RawPtr(pointee, mutability)) => debug_typed_pointer_type(
+            ty,
+            &pointee,
+            DebugPointerKind::Raw(mutability),
+            depth,
+            active_pointees,
+        )
+        .or_else(|| {
+            debug_slice_fat_pointer_type(
+                ty,
+                &pointee,
+                DebugPointerKind::Raw(mutability),
+                depth,
+                active_pointees,
+            )
+        })
+        .or_else(|| {
+            Some(DebugLocalTypeKind::Pointer {
+                name: raw_pointer_name(pointee, mutability),
+                size_bits: if is_declared_shared_pointer_stand_in(&pointee) {
+                    32
+                } else {
+                    64
+                },
+            })
+        }),
+        TyKind::RigidTy(RigidTy::Ref(_, pointee, mutability)) => debug_typed_pointer_type(
+            ty,
+            &pointee,
+            DebugPointerKind::Reference(mutability),
+            depth,
+            active_pointees,
+        )
+        .or_else(|| {
+            debug_slice_fat_pointer_type(
+                ty,
+                &pointee,
+                DebugPointerKind::Reference(mutability),
+                depth,
+                active_pointees,
+            )
+        })
+        .or_else(|| {
+            Some(DebugLocalTypeKind::Pointer {
+                name: reference_name(pointee, mutability),
+                size_bits: if is_declared_shared_pointer_stand_in(&pointee) {
+                    32
+                } else {
+                    64
+                },
+            })
+        }),
         TyKind::RigidTy(RigidTy::Closure(closure_def, substs)) if depth < MAX_DEBUG_TYPE_DEPTH => {
             let upvar_tys = types::closure_upvar_tys(&substs)?;
             let fields = upvar_tys
                 .into_iter()
                 .enumerate()
                 .map(|(idx, upvar_ty)| (format!("capture_{idx}"), upvar_ty));
-            debug_struct_type(ty, format!("{:?}", closure_def.def_id()), fields, depth)
+            debug_struct_type(
+                ty,
+                format!("{:?}", closure_def.def_id()),
+                fields,
+                depth,
+                active_pointees,
+            )
         }
         TyKind::RigidTy(RigidTy::Tuple(subtypes)) if depth < MAX_DEBUG_TYPE_DEPTH => {
             let name = format!(
@@ -1277,7 +1299,7 @@ fn debug_type_for_ty_at(ty: &Ty, depth: usize) -> Option<DebugLocalTypeKind> {
                 .iter()
                 .enumerate()
                 .map(|(idx, sub)| (format!("__{idx}"), *sub));
-            debug_struct_type(ty, name, fields, depth)
+            debug_struct_type(ty, name, fields, depth, active_pointees)
         }
         TyKind::RigidTy(RigidTy::Adt(adt_def, substs)) if depth < MAX_DEBUG_TYPE_DEPTH => {
             match adt_def.kind() {
@@ -1291,16 +1313,18 @@ fn debug_type_for_ty_at(ty: &Ty, depth: usize) -> Option<DebugLocalTypeKind> {
                         .fields()
                         .into_iter()
                         .map(|field| (field.name.to_string(), field.ty_with_args(&substs)));
-                    debug_struct_type(ty, name, fields, depth)
+                    debug_struct_type(ty, name, fields, depth, active_pointees)
                 }
-                rustc_public::ty::AdtKind::Enum => debug_enum_type(ty, depth),
+                rustc_public::ty::AdtKind::Enum => debug_enum_type(ty, depth, active_pointees),
                 rustc_public::ty::AdtKind::Union => None,
             }
         }
-        TyKind::RigidTy(RigidTy::Pat(base_ty, _)) => debug_type_for_ty_at(&base_ty, depth),
+        TyKind::RigidTy(RigidTy::Pat(base_ty, _)) => {
+            debug_type_for_ty_at(&base_ty, depth, active_pointees)
+        }
         TyKind::RigidTy(RigidTy::Array(elem_ty, len_const)) if depth < MAX_DEBUG_TYPE_DEPTH => {
             let count = array_len_const(&len_const)?;
-            let element = debug_type_for_ty_at(&elem_ty, depth + 1)?;
+            let element = debug_type_for_ty_at(&elem_ty, depth + 1, active_pointees)?;
             let size_bits = element.size_bits().checked_mul(count)?;
             Some(DebugLocalTypeKind::Array {
                 name: format!("[{}; {count}]", short_ty_name(&elem_ty)),
@@ -1326,7 +1350,11 @@ fn is_declared_shared_pointer_stand_in(pointee: &Ty) -> bool {
 
 /// Resolve a `SharedArray<T, N>` or `Barrier` pointee stand-in to the physical
 /// element debug type stored in shared memory.
-fn debug_declared_shared_pointee_type(pointee: &Ty, depth: usize) -> Option<DebugLocalTypeKind> {
+fn debug_declared_shared_pointee_type(
+    pointee: &Ty,
+    depth: usize,
+    active_pointees: &mut Vec<Ty>,
+) -> Option<DebugLocalTypeKind> {
     let TyKind::RigidTy(RigidTy::Adt(adt_def, substs)) = pointee.kind() else {
         return None;
     };
@@ -1335,7 +1363,7 @@ fn debug_declared_shared_pointee_type(pointee: &Ty, depth: usize) -> Option<Debu
             rustc_public::ty::GenericArgKind::Type(t) => Some(t),
             _ => None,
         })?;
-        return debug_pointer_pointee_type(elem_ty, depth);
+        return debug_pointer_pointee_type(elem_ty, depth, active_pointees);
     }
     if types::is_cuda_device_adt(&adt_def, "Barrier") {
         return Some(DebugLocalTypeKind::Basic {
@@ -1367,16 +1395,14 @@ fn narrow_debug_type_to_shared_addr_space(ty: &DebugLocalTypeKind) -> DebugLocal
     }
 }
 
-/// Describe a one-word pointer/reference and its safely bounded pointee.
+/// Describe a one-word pointer/reference and its cycle-safe pointee.
 ///
 /// Rust references and raw pointers to dynamically-sized types are fat
 /// pointers. Encoding those as a typed `DW_TAG_pointer_type` would discard
-/// their metadata word, so this helper declines them and lets the caller retain
-/// the legacy opaque pointer metadata. The same fallback applies when a pointee
-/// is unsupported or exceeds the recursion bound. Composite pointees are
-/// deliberately excluded here: `DebugLocalTypeKind` is currently a tree, so
-/// following an ADT such as `Node { next: *const Node }` would recursively
-/// unroll the same type instead of representing the cyclic DWARF graph.
+/// their metadata word, so this helper declines them and lets the caller use
+/// the fat-pointer struct or legacy opaque pointer metadata. Recursive pointee
+/// cycles (such as `Node { next: *const Node }`) are detected via
+/// `active_pointees` and broken at the recursive back-edge.
 #[derive(Clone, Copy)]
 enum DebugPointerKind {
     Raw(mir::Mutability),
@@ -1388,6 +1414,7 @@ fn debug_typed_pointer_type(
     pointee: &Ty,
     kind: DebugPointerKind,
     depth: usize,
+    active_pointees: &mut Vec<Ty>,
 ) -> Option<DebugLocalTypeKind> {
     if depth >= MAX_DEBUG_TYPE_DEPTH {
         return None;
@@ -1407,9 +1434,9 @@ fn debug_typed_pointer_type(
     // name is then derived from that accepted tree, so rejected pathological
     // source types cannot recurse or grow a name before the depth gate fires.
     let pointee = if is_shared_stand_in {
-        debug_declared_shared_pointee_type(pointee, depth + 1)?
+        debug_declared_shared_pointee_type(pointee, depth + 1, active_pointees)?
     } else {
-        debug_pointer_pointee_type(pointee, depth + 1)?
+        debug_pointer_pointee_type(pointee, depth + 1, active_pointees)?
     };
     let name = debug_pointer_name(kind, &pointee);
     Some(DebugLocalTypeKind::TypedPointer {
@@ -1427,6 +1454,7 @@ fn debug_slice_fat_pointer_type(
     pointee: &Ty,
     kind: DebugPointerKind,
     depth: usize,
+    active_pointees: &mut Vec<Ty>,
 ) -> Option<DebugLocalTypeKind> {
     if depth >= MAX_DEBUG_TYPE_DEPTH {
         return None;
@@ -1440,9 +1468,10 @@ fn debug_slice_fat_pointer_type(
     }
 
     let (element_debug, is_str) = match pointee.kind() {
-        TyKind::RigidTy(RigidTy::Slice(elem_ty)) => {
-            (debug_pointer_pointee_type(&elem_ty, depth + 1)?, false)
-        }
+        TyKind::RigidTy(RigidTy::Slice(elem_ty)) => (
+            debug_pointer_pointee_type(&elem_ty, depth + 1, active_pointees)?,
+            false,
+        ),
         TyKind::RigidTy(RigidTy::Str) => (
             DebugLocalTypeKind::Basic {
                 name: "u8".to_string(),
@@ -1514,24 +1543,31 @@ fn typed_pointer_pointee_display_name(ty: &DebugLocalTypeKind) -> &str {
     match ty {
         DebugLocalTypeKind::Basic { name, .. }
         | DebugLocalTypeKind::TypedPointer { name, .. }
-        | DebugLocalTypeKind::Array { name, .. } => name,
-        DebugLocalTypeKind::Pointer { .. }
-        | DebugLocalTypeKind::Struct { .. }
-        | DebugLocalTypeKind::Enum { .. } => {
-            unreachable!("typed pointer pointees use only the bounded typed subset")
+        | DebugLocalTypeKind::Array { name, .. }
+        | DebugLocalTypeKind::Struct { name, .. }
+        | DebugLocalTypeKind::Enum { name, .. } => name,
+        DebugLocalTypeKind::Pointer { .. } => {
+            unreachable!("typed pointer pointees never wrap a direct opaque pointer")
         }
     }
 }
 
-/// Build the finite subset that is safe to embed beneath a pointer node.
+/// Build the cycle-safe pointee type beneath a pointer or slice reference.
 ///
-/// Primitive leaves, fixed arrays whose elements stay inside this subset, and
-/// nested thin pointers/references form an acyclic tree. Tuples, ADTs, enums,
-/// closures, and every other composite are rejected even when the general
-/// local-variable debug path can describe part of them. `char` and unit are
-/// also rejected until `DebugLocalTypeKind` has an accurate encoding for them;
-/// treating either as an integer or null-base pointer would be misleading.
-fn debug_pointer_pointee_type(ty: &Ty, depth: usize) -> Option<DebugLocalTypeKind> {
+/// Primitive leaves, fixed arrays, nested thin pointers/references, and
+/// non-recursive composites (structs, tuples, enums, closures) are expanded.
+/// Self-referential pointer cycles (such as `Node { next: *const Node }`) are
+/// tracked in `active_pointees` and declined on the back-edge so the tree stays
+/// finite. `char` and unit are rejected until `DebugLocalTypeKind` has an
+/// accurate encoding for them.
+fn debug_pointer_pointee_type(
+    ty: &Ty,
+    depth: usize,
+    active_pointees: &mut Vec<Ty>,
+) -> Option<DebugLocalTypeKind> {
+    if depth >= MAX_DEBUG_TYPE_DEPTH || active_pointees.contains(ty) {
+        return None;
+    }
     match ty.kind() {
         TyKind::RigidTy(RigidTy::Bool) => Some(DebugLocalTypeKind::Basic {
             name: "bool".to_string(),
@@ -1553,16 +1589,23 @@ fn debug_pointer_pointee_type(ty: &Ty, depth: usize) -> Option<DebugLocalTypeKin
             size_bits: float_size_bits(float_ty),
             encoding: "DW_ATE_float",
         }),
-        TyKind::RigidTy(RigidTy::RawPtr(pointee, mutability)) => {
-            debug_typed_pointer_type(ty, &pointee, DebugPointerKind::Raw(mutability), depth)
-        }
-        TyKind::RigidTy(RigidTy::Ref(_, pointee, mutability)) => {
-            debug_typed_pointer_type(ty, &pointee, DebugPointerKind::Reference(mutability), depth)
-        }
-        TyKind::RigidTy(RigidTy::Pat(base_ty, _)) => debug_pointer_pointee_type(&base_ty, depth),
-        TyKind::RigidTy(RigidTy::Array(element, len)) if depth < MAX_DEBUG_TYPE_DEPTH => {
+        TyKind::RigidTy(RigidTy::RawPtr(pointee, mutability)) => debug_typed_pointer_type(
+            ty,
+            &pointee,
+            DebugPointerKind::Raw(mutability),
+            depth,
+            active_pointees,
+        ),
+        TyKind::RigidTy(RigidTy::Ref(_, pointee, mutability)) => debug_typed_pointer_type(
+            ty,
+            &pointee,
+            DebugPointerKind::Reference(mutability),
+            depth,
+            active_pointees,
+        ),
+        TyKind::RigidTy(RigidTy::Array(element, len)) => {
             let count = array_len_const(&len)?;
-            let element_debug = debug_pointer_pointee_type(&element, depth + 1)?;
+            let element_debug = debug_pointer_pointee_type(&element, depth + 1, active_pointees)?;
             let element_name = typed_pointer_pointee_display_name(&element_debug);
             Some(DebugLocalTypeKind::Array {
                 name: format!("[{element_name}; {count}]"),
@@ -1570,6 +1613,21 @@ fn debug_pointer_pointee_type(ty: &Ty, depth: usize) -> Option<DebugLocalTypeKin
                 element: Box::new(element_debug),
                 count,
             })
+        }
+        TyKind::RigidTy(RigidTy::Pat(base_ty, _)) => {
+            debug_pointer_pointee_type(&base_ty, depth, active_pointees)
+        }
+        TyKind::RigidTy(RigidTy::Tuple(subtypes)) if !subtypes.is_empty() => {
+            active_pointees.push(*ty);
+            let built = debug_type_for_ty_at(ty, depth, active_pointees);
+            active_pointees.pop();
+            built
+        }
+        TyKind::RigidTy(RigidTy::Adt(..)) | TyKind::RigidTy(RigidTy::Closure(..)) => {
+            active_pointees.push(*ty);
+            let built = debug_type_for_ty_at(ty, depth, active_pointees);
+            active_pointees.pop();
+            built
         }
         _ => None,
     }
@@ -1586,6 +1644,7 @@ fn debug_struct_type(
     name: String,
     fields: impl Iterator<Item = (String, Ty)>,
     depth: usize,
+    active_pointees: &mut Vec<Ty>,
 ) -> Option<DebugLocalTypeKind> {
     let fields: Vec<(String, Ty)> = fields.collect();
     let layout = ty.layout().ok()?;
@@ -1603,7 +1662,7 @@ fn debug_struct_type(
     let mut has_shrunk_shared_pointer_member = false;
     for (idx, (field_name, field_ty)) in fields.into_iter().enumerate() {
         let offset_bytes = *offsets.get(idx)?;
-        let Some(member_ty) = debug_type_for_ty_at(&field_ty, depth + 1) else {
+        let Some(member_ty) = debug_type_for_ty_at(&field_ty, depth + 1, active_pointees) else {
             continue;
         };
         if member_ty.size_bits() == 0 {
@@ -1647,7 +1706,11 @@ fn debug_struct_type(
 /// integer-normalized niche carrier. Variant payload fields use rustc's exact
 /// per-variant offsets. For niche layouts the untagged variant deliberately has
 /// no discriminant value, so the debugger treats it as the default branch.
-fn debug_enum_type(ty: &Ty, depth: usize) -> Option<DebugLocalTypeKind> {
+fn debug_enum_type(
+    ty: &Ty,
+    depth: usize,
+    active_pointees: &mut Vec<Ty>,
+) -> Option<DebugLocalTypeKind> {
     let TyKind::RigidTy(RigidTy::Adt(adt_def, substs)) = ty.kind() else {
         return None;
     };
@@ -1798,7 +1861,8 @@ fn debug_enum_type(ty: &Ty, depth: usize) -> Option<DebugLocalTypeKind> {
         let mut members = Vec::new();
         for (field_index, field) in fields.into_iter().enumerate() {
             let field_ty = field.ty_with_args(&substs);
-            let Some(member_ty) = debug_type_for_ty_at(&field_ty, depth + 1) else {
+            let Some(member_ty) = debug_type_for_ty_at(&field_ty, depth + 1, active_pointees)
+            else {
                 continue;
             };
             if member_ty.size_bits() == 0 {
@@ -3751,8 +3815,36 @@ pub fn pointer_debug_types(
             assert_eq!(*size_bits, 64, "compatibility fallback preserves old width");
         }
 
-        assert_opaque_pointer(&debug_types[4], "*const _");
-        assert_opaque_pointer(&debug_types[5], "*const _");
+        assert!(matches!(
+            &debug_types[4],
+            Some(DebugLocalTypeKind::TypedPointer {
+                name,
+                size_bits: 64,
+                pointee,
+            }) if name == "*const Pair" && matches!(
+                pointee.as_ref(),
+                DebugLocalTypeKind::Struct {
+                    name,
+                    size_bits: 128,
+                    members,
+                } if name == "Pair" && members.len() == 2
+            )
+        ));
+        assert!(matches!(
+            &debug_types[5],
+            Some(DebugLocalTypeKind::TypedPointer {
+                name,
+                size_bits: 64,
+                pointee,
+            }) if name == "*const (u32, u64)" && matches!(
+                pointee.as_ref(),
+                DebugLocalTypeKind::Struct {
+                    name,
+                    size_bits: 128,
+                    members,
+                } if name == "(u32, u64)" && members.len() == 2
+            )
+        ));
         assert!(matches!(
             &debug_types[6],
             Some(DebugLocalTypeKind::Struct {
@@ -3772,13 +3864,62 @@ pub fn pointer_debug_types(
         assert_opaque_pointer(&debug_types[8], "*const _");
         assert_opaque_pointer(&debug_types[9], "*const _");
         assert_opaque_pointer(&debug_types[10], "*const _");
-        assert_opaque_pointer(&debug_types[11], "*const _");
+        // Self-referential `Node { next: *const Node, value: u32 }` expands
+        // `Node` once and breaks the recursive `next` cycle with an opaque
+        // `*const _` pointer.
+        let Some(DebugLocalTypeKind::TypedPointer {
+            name,
+            size_bits: 64,
+            pointee,
+        }) = &debug_types[11]
+        else {
+            panic!(
+                "self-referential pointer must expand outer struct once, got {:?}",
+                debug_types[11]
+            );
+        };
+        assert_eq!(name, "*const Node");
+        let DebugLocalTypeKind::Struct {
+            name: node_name,
+            members: node_members,
+            ..
+        } = pointee.as_ref()
+        else {
+            panic!("expected Node struct pointee, got {pointee:?}");
+        };
+        assert_eq!(node_name, "Node");
+        assert_eq!(node_members.len(), 2);
+        assert!(
+            node_members.iter().any(|m| m.name == "next"
+                && matches!(
+                    &m.ty,
+                    DebugLocalTypeKind::Pointer {
+                        name,
+                        size_bits: 64,
+                    } if name == "*const _"
+                )),
+            "recursive `next` field must break cycle with opaque pointer: {node_members:?}"
+        );
+        assert!(
+            node_members.iter().any(|m| m.name == "value"
+                && matches!(
+                    &m.ty,
+                    DebugLocalTypeKind::Basic {
+                        name,
+                        size_bits: 32,
+                        ..
+                    } if name == "u32"
+                )),
+            "scalar `value` field must remain intact on Node: {node_members:?}"
+        );
     }
 
     /// Deeply nested composite types (such as chained iterator adapters past
-    /// depth 8, NVBug 7039104) must preserve their inner leaf fields.
+    /// depth 8, NVBug 7039104) and slice/reference pointers to structs
+    /// (`&[Params]` and `&Params`, NVBug 7039124) must preserve their inner
+    /// leaf fields.
     #[test]
-    fn deep_composite_nesting_preserves_inner_fields() {
+    fn deep_composite_nesting_and_struct_slice_references_preserve_inner_fields() {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system time before unix epoch")
@@ -3793,6 +3934,12 @@ pub fn pointer_debug_types(
         std::fs::write(
             &fixture,
             r#"
+#[repr(C)]
+pub struct Params {
+    pub scale: f32,
+    pub offset: f32,
+}
+
 pub struct L10 { pub leaf: u64 }
 pub struct L9 { pub inner: L10 }
 pub struct L8 { pub inner: L9 }
@@ -3805,8 +3952,10 @@ pub struct L2 { pub inner: L3 }
 pub struct L1 { pub inner: L2 }
 pub struct L0 { pub inner: L1 }
 
-pub fn deep_and_iter(
+pub fn deep_and_struct_refs(
     _deep: L0,
+    _params_ref: &Params,
+    _params_slice: &[Params],
     a: &[f32],
     b: &[f32],
 ) -> f32 {
@@ -3852,7 +4001,7 @@ pub fn deep_and_iter(
             fixture.display().to_string(),
         ];
 
-        let (deep_debug_ty, iter_debug_ty) = std::thread::Builder::new()
+        let (debug_types, iter_debug_ty) = std::thread::Builder::new()
             .stack_size(64 * 1024 * 1024)
             .spawn(move || {
                 rustc_public::run!(&args, || {
@@ -3860,12 +4009,18 @@ pub fn deep_and_iter(
                         .into_iter()
                         .find_map(|item| {
                             (item.kind() == rustc_public::ItemKind::Fn
-                                && item.trimmed_name() == "deep_and_iter")
+                                && item.trimmed_name() == "deep_and_struct_refs")
                             .then(|| item.body())
                             .flatten()
                         })
                         .expect("fixture function has a body");
-                    let deep_ty = debug_type_for_ty(&body.locals()[1].ty);
+                    let debug_types = body
+                        .locals()
+                        .iter()
+                        .skip(1)
+                        .take(3)
+                        .map(|decl| debug_type_for_ty(&decl.ty))
+                        .collect::<Vec<_>>();
                     let iter_ty = body
                         .locals()
                         .iter()
@@ -3876,7 +4031,7 @@ pub fn deep_and_iter(
                                 .then_some(dbg)
                         })
                         .expect("TakeWhile iterator local must be present");
-                    std::ops::ControlFlow::<(), _>::Continue((deep_ty, iter_ty))
+                    std::ops::ControlFlow::<(), _>::Continue((debug_types, iter_ty))
                 })
             })
             .unwrap()
@@ -3886,7 +4041,8 @@ pub fn deep_and_iter(
 
         std::fs::remove_dir_all(&root).ok();
 
-        let mut cursor = deep_debug_ty
+        // 1. Walk 11 levels of struct nesting (`L0` -> ... -> `L10.leaf: u64`).
+        let mut cursor = debug_types[0]
             .as_ref()
             .expect("L0 must produce a debug type");
         for expected_level in 0..=9 {
@@ -3913,6 +4069,57 @@ pub fn deep_and_iter(
             } if name == "u64"
         ));
 
+        // 2. `&Params` must describe `Params { scale: f32, offset: f32 }`.
+        let Some(DebugLocalTypeKind::TypedPointer {
+            name,
+            size_bits: 64,
+            pointee,
+        }) = &debug_types[1]
+        else {
+            panic!("&Params must be a TypedPointer, got {:?}", debug_types[1]);
+        };
+        assert_eq!(name, "&Params");
+        let DebugLocalTypeKind::Struct {
+            name: struct_name,
+            size_bits: 64,
+            members,
+        } = pointee.as_ref()
+        else {
+            panic!("&Params pointee must be Struct Params, got {pointee:?}");
+        };
+        assert_eq!(struct_name, "Params");
+        assert_eq!(members.len(), 2);
+        assert_eq!(members[0].name, "scale");
+        assert_eq!(members[1].name, "offset");
+
+        // 3. `&[Params]` must have `data_ptr: *const Params` pointing to `Params`.
+        let Some(DebugLocalTypeKind::Struct {
+            name: slice_name,
+            size_bits: 128,
+            members: slice_members,
+        }) = &debug_types[2]
+        else {
+            panic!("&[Params] must be a slice Struct, got {:?}", debug_types[2]);
+        };
+        assert_eq!(slice_name, "&[Params]");
+        assert_eq!(slice_members.len(), 2);
+        assert_eq!(slice_members[0].name, "data_ptr");
+        assert!(matches!(
+            &slice_members[0].ty,
+            DebugLocalTypeKind::TypedPointer {
+                name,
+                size_bits: 64,
+                pointee,
+            } if name == "*const Params" && matches!(
+                pointee.as_ref(),
+                DebugLocalTypeKind::Struct { name, members, .. }
+                if name == "Params" && members.len() == 2
+            )
+        ));
+
+        // 4. `TakeWhile -> Zip -> Fuse -> Scan -> FlatMap -> FlattenCompat`
+        // retains `Scan.f`, `FlattenCompat.iter`, and `FlattenCompat.frontiter`'s
+        // `Some` payload (NVBug 7039104).
         fn find_struct<'a>(
             ty: &'a DebugLocalTypeKind,
             target: &str,

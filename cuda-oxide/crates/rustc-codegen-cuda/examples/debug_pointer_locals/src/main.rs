@@ -15,8 +15,20 @@ use cuda_device::{DisjointSlice, cuda_module, kernel, thread};
 const N: usize = 8;
 const INT_SENTINEL: i32 = 41;
 const FLOAT_SENTINEL: f32 = 13.0;
+const PARAM_SCALE: f32 = 2.0;
+const PARAM_OFFSET: f32 = 3.0;
 const DEEP_LEAF: i32 = 21;
-const EXPECTED_SUM: i32 = INT_SENTINEL + FLOAT_SENTINEL as i32 + DEEP_LEAF;
+const EXPECTED_SUM: i32 =
+    INT_SENTINEL + FLOAT_SENTINEL as i32 + (PARAM_SCALE as i32) + (PARAM_OFFSET as i32) + DEEP_LEAF;
+
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct Params {
+    pub scale: f32,
+    pub offset: f32,
+}
+
+unsafe impl cuda_core::DeviceCopy for Params {}
 
 #[derive(Clone, Copy)]
 pub struct L1(pub i32);
@@ -48,6 +60,7 @@ mod kernels {
     pub fn debug_pointer_locals(
         input: &[i32],
         fdata: &[f32],
+        ps: &[Params],
         null_address: usize,
         mut out: DisjointSlice<i32>,
     ) {
@@ -57,6 +70,8 @@ mod kernels {
         if let Some(slot) = out.get_mut(idx) {
             let ptr: *const i32 = &input[tid] as *const i32;
             let fptr: *const f32 = &fdata[tid] as *const f32;
+            let param_ref: &Params = &ps[tid];
+            let param_ptr: *const Params = ps.as_ptr();
             let b8 = Deep8 {
                 top: 7,
                 nested: L8(L7(L6(L5(L4(L3(L2(
@@ -68,7 +83,11 @@ mod kernels {
             let null_ptr: *const i32 = null_address as *const i32;
 
             // All pointer and nested locals are live here. CUDA_OXIDE_DEBUG_POINTER_BREAKPOINT
-            let sum = unsafe { *ptr } + unsafe { *fptr } as i32 + b8.nested.0.0.0.0.0.0.0.0;
+            let sum = unsafe { *ptr }
+                + unsafe { *fptr } as i32
+                + (param_ref.scale as i32)
+                + (unsafe { (*param_ptr).offset } as i32)
+                + b8.nested.0.0.0.0.0.0.0.0;
             *slot = if null_ptr.is_null() { sum } else { i32::MIN };
         }
     }
@@ -81,8 +100,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let input = vec![INT_SENTINEL; N];
     let fdata = vec![FLOAT_SENTINEL; N];
+    let params = vec![
+        Params {
+            scale: PARAM_SCALE,
+            offset: PARAM_OFFSET,
+        };
+        N
+    ];
     let input_dev = DeviceBuffer::from_host(&stream, &input)?;
     let fdata_dev = DeviceBuffer::from_host(&stream, &fdata)?;
+    let params_dev = DeviceBuffer::from_host(&stream, &params)?;
     let mut out_dev = DeviceBuffer::<i32>::zeroed(&stream, N)?;
 
     // SAFETY: all buffers contain N elements, and out.get_mut gates lanes outside 0..N.
@@ -92,6 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             LaunchConfig::for_num_elems(N as u32),
             &input_dev,
             &fdata_dev,
+            &params_dev,
             0,
             &mut out_dev,
         )

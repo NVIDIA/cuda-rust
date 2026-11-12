@@ -27,6 +27,9 @@ mod verify_target;
 
 pub use error::{Error, Result};
 
+/// SHA-256 over this crate's sources, for cache keys over compiler output.
+pub const SOURCE_DIGEST: &str = env!("CUTILE_IR_SOURCE_DIGEST");
+
 // Re-export the most commonly used entry points at crate root.
 pub use builder::OpBuilder;
 pub use bytecode::decoder::{decode_bytecode, decode_bytecode_file};

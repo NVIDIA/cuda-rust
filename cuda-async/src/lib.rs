@@ -29,3 +29,7 @@ mod submission;
 mod validator_codec;
 
 pub use futures;
+
+/// SHA-256 over this crate's sources. cuTile's JIT cache keys on it because
+/// its compiler builds launch checks with [`predicate`].
+pub const SOURCE_DIGEST: &str = env!("CUDA_ASYNC_SOURCE_DIGEST");

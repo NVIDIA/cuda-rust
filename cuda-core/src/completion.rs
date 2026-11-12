@@ -6,8 +6,20 @@
 //! Completion-bound retirement without waiting in destructors.
 
 use crate::{DriverError, Event, Stream};
-use std::sync::{mpsc, Arc, OnceLock};
+use std::sync::{mpsc, Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
+
+/// Set at process exit, after which the worker makes no driver call: the driver
+/// and its injection libraries tear down in their own exit handlers (#1783).
+static EXITING: Mutex<bool> = Mutex::new(false);
+
+extern "C" fn close_at_exit() {
+    *EXITING.lock().unwrap_or_else(PoisonError::into_inner) = true;
+}
+
+extern "C" {
+    fn atexit(callback: extern "C" fn()) -> std::ffi::c_int;
+}
 
 type Cleanup = Box<dyn FnOnce() + Send>;
 struct Pending {
@@ -30,6 +42,11 @@ fn enqueue(pending: Pending) {
                         Err(mpsc::RecvTimeoutError::Timeout) => {}
                     }
                     pending.extend(receiver.try_iter());
+                    // Held across every driver call below, so exit waits for this batch.
+                    let exiting = EXITING.lock().unwrap_or_else(PoisonError::into_inner);
+                    if *exiting {
+                        break;
+                    }
                     let mut i = 0;
                     while i < pending.len() {
                         let ready = pending[i]
@@ -56,9 +73,16 @@ fn enqueue(pending: Pending) {
                 for item in pending {
                     std::mem::forget(item);
                 }
+                // Dropping the receiver would drop whatever is still queued.
+                std::mem::forget(receiver);
             })
             .ok()
-            .map(|_| sender)
+            .map(|_| {
+                // SAFETY: `close_at_exit` only takes a lock. Nothing is retired before
+                // the driver initializes, so this runs before its exit handlers.
+                unsafe { atexit(close_at_exit) };
+                sender
+            })
     });
     if let Some(queue) = queue {
         if let Err(error) = queue.send(pending) {

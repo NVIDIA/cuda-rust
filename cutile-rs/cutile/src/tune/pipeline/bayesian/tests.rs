@@ -206,6 +206,7 @@ fn failures_reduce_exploration_without_using_their_latencies() {
         .unwrap();
     for kind in [
         FailureKind::Invalid,
+        FailureKind::InvalidCandidate,
         FailureKind::TimedOut,
         FailureKind::Cancelled,
         FailureKind::Infrastructure,
@@ -215,7 +216,12 @@ fn failures_reduce_exploration_without_using_their_latencies() {
                 &view(
                     &configs,
                     std::slice::from_ref(&valid),
-                    if matches!(kind, FailureKind::Invalid | FailureKind::TimedOut) {
+                    if matches!(
+                        kind,
+                        FailureKind::Invalid
+                            | FailureKind::InvalidCandidate
+                            | FailureKind::TimedOut
+                    ) {
                         &[3]
                     } else {
                         &[]
@@ -242,7 +248,10 @@ fn failures_reduce_exploration_without_using_their_latencies() {
                 .unwrap();
             assert_eq!(actual, expected);
         }
-        if matches!(kind, FailureKind::Invalid | FailureKind::TimedOut) {
+        if matches!(
+            kind,
+            FailureKind::Invalid | FailureKind::InvalidCandidate | FailureKind::TimedOut
+        ) {
             assert!(expected.iter().zip(&baseline).all(|(a, b)| a < b));
         } else {
             assert_eq!(expected, baseline);

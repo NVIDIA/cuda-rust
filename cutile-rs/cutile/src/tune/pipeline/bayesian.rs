@@ -189,7 +189,14 @@ impl BayesianSearch {
         let failed = view.completed.iter().filter_map(|o| {
             o.failure
                 .as_ref()
-                .filter(|f| matches!(f.kind, FailureKind::Invalid | FailureKind::TimedOut))
+                .filter(|f| {
+                    matches!(
+                        f.kind,
+                        FailureKind::Invalid
+                            | FailureKind::InvalidCandidate
+                            | FailureKind::TimedOut
+                    )
+                })
                 .map(|_| o.trial_id)
         });
         for i in view.pending.iter().copied().chain(failed) {

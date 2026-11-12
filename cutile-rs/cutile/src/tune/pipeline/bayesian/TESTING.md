@@ -40,8 +40,9 @@ spaces, typed failures/late measurements, cancellation, worker draining, budget
 reservation, an unscreened incumbent, invalid paired samples, and refusing a
 partial confirmation winner. Helion's analogous tests support keeping these
 contracts; its fallback policy and timing aggregation are not identical to ours.
-For example, our interrupted confirmation keeps the supplied incumbent with
-`NotConfirmed`, without asserting that the incumbent was freshly validated.
+For example, interrupted confirmation can retain a fully confirmed alternative,
+but never a partial leader. If none qualified it keeps the supplied incumbent
+with `NotConfirmed`, without asserting that the incumbent was freshly validated.
 
 Forest-specific leaf ranking, hyperparameter optimization, autograd, Monte Carlo
 acquisition, multi-output GPs and distributed-rank coordination are outside the
@@ -77,12 +78,19 @@ including removal of partial outputs and compiler intermediates.
 Follow-up work remains: fitting/scoring stays synchronous with cubic dense-GP
 fitting cost, and can dominate short evaluations after hundreds of observations.
 Incremental updates or a training-set cap need separate performance validation.
-Confirmation deliberately requires every configured round and retains the
-incumbent if a finalist fails or time expires. Integer axes still default to
-linear scaling; callers should select Log2 for appropriate tile-size knobs.
-Interruption takes precedence over a late infrastructure error's classification;
-the original diagnostic is retained, but that expired trial does not by itself
-abort a still-live run. These policies are not changed by the review fixes.
+Integer axes still default to linear scaling; callers should select Log2 for
+appropriate tile-size knobs.
+
+Consensus regressions cover candidate-only rejection before/after a successful
+round, local timeout recovery, retaining a fully confirmed winner when a later
+comparison is interrupted, and aborting on infrastructure or incumbent/ambiguous
+errors even after an alternative has qualified. An invalidity error must be
+explicitly scoped with `Failure::for_candidate` to disqualify only that arm;
+marking it cannot relabel infrastructure errors or interruptions. Infrastructure
+failure takes precedence over cancellation/timeout in every screening stage and
+worker draining, including after earlier successful measurements. Original
+errors and interruption diagnostics are both retained. These are synthetic,
+ordered tests; they do not depend on real-time speed thresholds.
 
 ## Running the focused checks
 

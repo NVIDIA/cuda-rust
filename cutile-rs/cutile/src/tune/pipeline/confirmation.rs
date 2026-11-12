@@ -116,6 +116,9 @@ pub struct ConfirmedOutput {
     pub selected: Config,
     pub confirmations: Vec<ConfirmationRound>,
     pub status: ConfirmationStatus,
+    /// Why confirmation stopped early, if applicable. May coexist with
+    /// Improved when the selected candidate completed every required round
+    /// before a later timeout/cancellation. Per-candidate failures are in rounds.
     pub failure: Option<Failure>,
     pub elapsed: Duration,
 }
@@ -169,10 +172,12 @@ impl Pipeline {
     /// with `bench::do_bench_paired_controlled`. It must not launch background
     /// preparation. External GPU work is outside this scheduler's control.
     ///
-    /// All shortlisted comparisons must finish successfully within the budget.
-    /// A replacement must pass the repeatability rule in every fresh round;
-    /// otherwise the incumbent is retained. Confirmation errors and overruns
-    /// never promote a partial leader. Results include raw paired samples.
+    /// A replacement must pass the repeatability rule in every fresh round.
+    /// Candidate-only invalidity must be marked with `Failure::for_candidate`;
+    /// it disqualifies that candidate without discarding other completed results.
+    /// Generic invalidity could implicate the incumbent and aborts confirmation,
+    /// as do infrastructure failures. A budget/cancellation cutoff may retain a
+    /// fully confirmed winner, never a partial leader. Results include raw pairs.
     #[allow(clippy::too_many_arguments)]
     pub fn run_confirmed<J: Send, P: Send>(
         mut self,
@@ -236,7 +241,7 @@ impl Pipeline {
             .iter()
             .find(|o| o.trial_id == options.incumbent)
             .and_then(|o| o.failure.as_ref())
-            .filter(|f| f.kind == FailureKind::Invalid)
+            .filter(|f| matches!(f.kind, FailureKind::Invalid | FailureKind::InvalidCandidate))
         {
             output.failure = Some(failure.clone());
             return Ok(output);
@@ -255,13 +260,18 @@ impl Pipeline {
         }
         let mut eligible = vec![true; finalists.len()];
         let mut worst_median = vec![f64::INFINITY; finalists.len()];
-        for round in 0..options.rounds {
+        let mut completed = vec![0; finalists.len()];
+        let mut excluded = vec![false; finalists.len()];
+        'rounds: for round in 0..options.rounds {
             let order: Vec<_> = if round % 2 == 0 {
                 (0..finalists.len()).collect()
             } else {
                 (0..finalists.len()).rev().collect()
             };
             for position in order {
+                if excluded[position] {
+                    continue;
+                }
                 let candidate = &configs[finalists[position].0];
                 let begun = Instant::now();
                 let control = match trial_limit {
@@ -289,12 +299,23 @@ impl Pipeline {
                     Err(failure) => (None, Some(failure)),
                 };
                 if let Err(error) = control.check() {
-                    failure = Some(Failure::interrupted(error, failure));
+                    // An unscoped correctness error may concern the incumbent;
+                    // a deadline cannot make that evidence safe to ignore.
+                    if let Some(failure) =
+                        failure.as_mut().filter(|f| f.kind == FailureKind::Invalid)
+                    {
+                        failure.reason.push_str(&format!("; also: {error}"));
+                    } else {
+                        failure = Some(Failure::interrupted(error, failure));
+                    }
                 }
-                if let Some(evidence) = &evidence {
-                    eligible[position] &= evidence.passes;
-                    worst_median[position] =
-                        worst_median[position].min(evidence.median_improvement);
+                if failure.is_none() {
+                    if let Some(evidence) = &evidence {
+                        completed[position] += 1;
+                        eligible[position] &= evidence.passes;
+                        worst_median[position] =
+                            worst_median[position].min(evidence.median_improvement);
+                    }
                 }
                 output.confirmations.push(ConfirmationRound {
                     candidate_id: candidate.id.clone(),
@@ -304,24 +325,41 @@ impl Pipeline {
                     failure: failure.clone(),
                 });
                 if let Some(failure) = failure {
-                    output.failure = Some(failure);
-                    output.elapsed = start.elapsed();
-                    return Ok(output);
+                    excluded[position] = true;
+                    match failure.kind {
+                        FailureKind::Infrastructure | FailureKind::Invalid => {
+                            output.failure = Some(failure);
+                            output.elapsed = start.elapsed();
+                            return Ok(output);
+                        }
+                        FailureKind::InvalidCandidate => {}
+                        FailureKind::TimedOut | FailureKind::Cancelled => {
+                            // A candidate-local timeout can leave time for other
+                            // finalists. Global interruption stops new work.
+                            if overall.check().is_err() || failure.kind == FailureKind::Cancelled {
+                                output.failure = Some(failure);
+                                break 'rounds;
+                            }
+                        }
+                    }
                 }
             }
         }
-        if let Err(error) = overall.check() {
-            output.failure = Some(error.into());
-            output.elapsed = start.elapsed();
-            return Ok(output);
+        if output.failure.is_none() {
+            if let Err(error) = overall.check() {
+                output.failure = Some(error.into());
+            }
         }
-        output.status = ConfirmationStatus::NoImprovement;
         if let Some(position) = (0..finalists.len())
-            .filter(|&i| eligible[i])
+            .filter(|&i| !excluded[i] && eligible[i] && completed[i] == options.rounds)
             .max_by(|&a, &b| worst_median[a].total_cmp(&worst_median[b]))
         {
             output.selected = configs[finalists[position].0].clone();
             output.status = ConfirmationStatus::Improved;
+        } else if completed.iter().all(|&n| n == options.rounds) {
+            output.status = ConfirmationStatus::NoImprovement;
+        } else if output.failure.is_none() {
+            output.failure = output.confirmations.iter().find_map(|r| r.failure.clone());
         }
         output.elapsed = start.elapsed();
         Ok(output)
@@ -380,9 +418,9 @@ mod tests {
             assert_eq!(result.status, ConfirmationStatus::NotConfirmed);
             assert_eq!(result.selected.id, cs[0].id);
             let failure = result.failure.as_ref().unwrap();
-            assert_eq!(failure.kind, FailureKind::Cancelled);
+            assert_eq!(failure.kind, original.kind);
             assert!(failure.reason.contains("work cancelled"));
-            assert!(failure.reason.contains(&original.to_string()));
+            assert!(failure.reason.contains(&original.reason));
             assert_eq!(
                 result.confirmations[0].failure.as_ref().unwrap().reason,
                 failure.reason
@@ -580,6 +618,186 @@ mod tests {
         );
         assert_eq!(result.selected.id, cs[0].id);
         assert!(result.confirmations.last().unwrap().evidence.is_some());
+    }
+
+    #[test]
+    fn candidate_failure_disqualifies_only_that_candidate() {
+        for fail_after_one_pass in [false, true] {
+            let cs = configs();
+            let mut calls = [0; 3];
+            let result = Pipeline::default()
+                .budget(Duration::from_secs(30))
+                .run_confirmed(
+                    &cs,
+                    &mut GridOrder,
+                    &options(),
+                    |_| Ok(()),
+                    |_, _| Ok(()),
+                    |c, _, _, _| Ok(score(c)),
+                    |_, candidate, _, _| {
+                        let i = candidate.int("x").unwrap() as usize;
+                        calls[i] += 1;
+                        if i == 2 && (!fail_after_one_pass || calls[i] == 2) {
+                            Err(Failure::invalid("candidate correctness failed").for_candidate())
+                        } else {
+                            Ok(samples(&[1.0; 4], &[if i == 2 { 0.1 } else { 0.8 }; 4]))
+                        }
+                    },
+                )
+                .unwrap();
+            assert_eq!(result.status, ConfirmationStatus::Improved);
+            assert_eq!(result.selected.id, cs[1].id);
+            assert!(result.failure.is_none());
+            assert_eq!(calls[1], options().rounds);
+            assert_eq!(calls[2], if fail_after_one_pass { 2 } else { 1 });
+            let failed = result
+                .confirmations
+                .iter()
+                .find_map(|r| r.failure.as_ref())
+                .unwrap();
+            assert_eq!(failed.kind, FailureKind::InvalidCandidate);
+            assert!(failed.reason.contains("correctness failed"));
+        }
+    }
+
+    #[test]
+    fn completed_winner_survives_a_later_timeout_or_cancellation() {
+        for cancel in [false, true] {
+            let cs = configs();
+            let mut calls = 0;
+            let result = Pipeline::default()
+                .budget(Duration::from_secs(30))
+                .run_confirmed(
+                    &cs,
+                    &mut GridOrder,
+                    &options(),
+                    |_| Ok(()),
+                    |_, _| Ok(()),
+                    |c, _, _, _| Ok(score(c)),
+                    |_, candidate, _, control| {
+                        calls += 1;
+                        // Order is 2,1,1,2: candidate1 has finished both rounds;
+                        // candidate2 looks faster but never completes its last round.
+                        if calls == 4 {
+                            assert_eq!(candidate.id, cs[2].id);
+                            if cancel {
+                                control.cancel();
+                            }
+                            return Err(CompileInterrupted::DeadlineExceeded.into());
+                        }
+                        Ok(samples(
+                            &[1.0; 4],
+                            &[if candidate.id == cs[2].id { 0.5 } else { 0.8 }; 4],
+                        ))
+                    },
+                )
+                .unwrap();
+            assert_eq!(result.status, ConfirmationStatus::Improved);
+            assert_eq!(result.selected.id, cs[1].id);
+            if cancel {
+                assert_eq!(
+                    result.failure.as_ref().unwrap().kind,
+                    FailureKind::Cancelled
+                );
+            }
+            assert_eq!(
+                result
+                    .confirmations
+                    .iter()
+                    .filter(|r| r.candidate_id == cs[1].id && r.failure.is_none())
+                    .count(),
+                options().rounds
+            );
+            let decoded: ConfirmedOutput =
+                serde_json::from_value(serde_json::to_value(&result).unwrap()).unwrap();
+            assert_eq!(decoded.status, ConfirmationStatus::Improved);
+            assert_eq!(decoded.selected.id, cs[1].id);
+        }
+    }
+
+    #[test]
+    fn local_timeout_leaves_other_finalists_time_to_confirm() {
+        let cs = configs();
+        let mut seen = Vec::new();
+        let result = Pipeline::default()
+            .budget(Duration::from_secs(30))
+            .run_confirmed(
+                &cs,
+                &mut GridOrder,
+                &options(),
+                |_| Ok(()),
+                |_, _| Ok(()),
+                |c, _, _, _| Ok(score(c)),
+                |_, candidate, _, _| {
+                    seen.push(candidate.int("x").unwrap());
+                    if candidate.id == cs[2].id {
+                        Err(CompileInterrupted::DeadlineExceeded.into())
+                    } else {
+                        Ok(samples(&[1.0; 4], &[0.8; 4]))
+                    }
+                },
+            )
+            .unwrap();
+        assert_eq!(seen, [2, 1, 1]);
+        assert_eq!(result.status, ConfirmationStatus::Improved);
+        assert_eq!(result.selected.id, cs[1].id);
+    }
+
+    #[test]
+    fn fatal_comparison_error_stops_even_after_another_finalist_qualified() {
+        for original in [
+            Failure::invalid("incumbent or unspecified arm failed"),
+            Failure::infrastructure("GPU disconnected"),
+        ] {
+            let cs = configs();
+            let mut calls = 0;
+            let result = Pipeline::default()
+                .budget(Duration::from_secs(30))
+                .run_confirmed(
+                    &cs,
+                    &mut GridOrder,
+                    &options(),
+                    |_| Ok(()),
+                    |_, _| Ok(()),
+                    |c, _, _, _| Ok(score(c)),
+                    |_, _, _, control| {
+                        calls += 1;
+                        if calls == 4 {
+                            control.cancel();
+                            Err(original.clone())
+                        } else {
+                            Ok(samples(&[1.0; 4], &[0.8; 4]))
+                        }
+                    },
+                )
+                .unwrap();
+            assert_eq!(result.status, ConfirmationStatus::NotConfirmed);
+            assert_eq!(result.selected.id, cs[0].id);
+            assert_eq!(result.failure.as_ref().unwrap().kind, original.kind);
+            assert!(result
+                .failure
+                .as_ref()
+                .unwrap()
+                .reason
+                .contains(&original.reason));
+        }
+    }
+
+    #[test]
+    fn candidate_scope_never_relabels_infrastructure_or_interruption() {
+        for failure in [
+            Failure::infrastructure("lost device"),
+            CompileInterrupted::DeadlineExceeded.into(),
+            CompileInterrupted::Cancelled.into(),
+        ] {
+            let scoped = failure.clone().for_candidate();
+            assert_eq!(scoped.kind, failure.kind);
+            assert_eq!(scoped.reason, failure.reason);
+        }
+        assert_eq!(
+            Failure::invalid("wrong output").for_candidate().kind,
+            FailureKind::InvalidCandidate
+        );
     }
 
     #[test]

@@ -57,7 +57,8 @@ pending candidates so it does not suggest the same experiment twice.
 
 Use `run_confirmed` to compare finalists with a known incumbent; its default
 reserves 25% of the same budget for fresh paired measurements. If confirmation
-cannot finish, `NotConfirmed` keeps the incumbent selection and does not
+cannot finish, only an alternative that already completed every required round
+can replace the incumbent. Otherwise `NotConfirmed` keeps the incumbent and does not
 certify a replacement. Budgeting is cooperative: it stops new work and bounds
 controlled stages, but an already-running GPU operation or user callback can
 overrun. Application build time and the example's fixture setup are outside
@@ -127,7 +128,9 @@ The example defaults to the Bayesian selector described below; the synchronous
 The budget includes resolution, queueing, preparation, loading, correctness
 checks and measurement. `trial_limit` gives resolution, preparation and evaluation
 each a fresh active-stage allowance, always capped by the overall run deadline.
-Time waiting in a queue counts against the run budget, but not the stage limit.
+Time waiting in the scheduler's own queues counts against the run budget, but
+not the stage limit; waiting inside a callback, including a remote service queue,
+still consumes that callback's active-stage allowance.
 The example's fixture and CPU-reference setup happen before the run clock
 starts. Expired deadlines stop dispatch and exclude late measurements from
 scoring. The assembler process can be killed and reaped; frontend passes and
@@ -143,11 +146,11 @@ Explicit `Failure::invalid` outcomes and source-located frontend rejections
 Unclassified compiler/driver errors still stop the run. Return a
 measured `Trial` on success: legacy invalid trials also represent non-finite
 timings, so the pipeline treats them as infrastructure errors. Timeouts and
-cancellations are unscored; infrastructure errors stop
-the run. If a callback fails after interruption, the failure kind stays
-`TimedOut` or `Cancelled`, and `Failure::reason` also retains the callback's
-original kind and diagnostic. This applies during screening, worker draining
-and confirmation; a late failure never becomes a usable measurement. Generic
+cancellations are unscored. Infrastructure errors remain `Infrastructure` and
+stop the run even if a deadline or cancellation happened first, including when
+collecting results from draining workers. Other late failures are classified as
+`TimedOut` or `Cancelled`, with their original diagnostic retained in
+`Failure::reason`. Neither outcome becomes a usable measurement. Generic
 compiler/driver errors default to infrastructure errors because they may reflect
 the environment rather than the candidate. The caller can
 classify a known candidate-specific rejection explicitly. Observations include
@@ -244,7 +247,9 @@ let result = pipeline.run_confirmed(
     resolve, prepare,
     |config, prepared, bench_options, control| { /* check, screen -> Trial */ },
     |incumbent, candidate, bench_options, control| {
-        // Independently check both outputs, then return aligned measurements
+        // Check the incumbent normally: an error here must stop confirmation.
+        // Mark only candidate-specific invalidity with
+        // .map_err(Failure::for_candidate), then return aligned measurements
         // from bench::do_bench_paired_controlled(...).
     },
 )?;
@@ -256,8 +261,15 @@ is exhausted. After **all preparation workers have joined and queued artifacts
 have been dropped**, it compares the four best measured alternatives with the
 incumbent in three fresh rounds. The incumbent is compared even if it was never
 screened. Both arms must pass fresh correctness checks in the callback, and a
-known invalid incumbent is not used. No background preparation runs during these
-comparisons; callers must also keep unrelated GPU work away from the device.
+known invalid incumbent is not used. Attribute candidate-only failures with
+`.map_err(Failure::for_candidate)` around that arm's checks: this converts
+`Invalid` into `InvalidCandidate`, without relabeling infrastructure errors or
+interruptions. A generic `Invalid` from the paired callback remains ambiguous
+and stops confirmation because it may concern the incumbent. Never wrap the
+whole comparison or incumbent checks with `for_candidate`.
+
+No background preparation runs during these comparisons; callers must also keep
+unrelated GPU work away from the device.
 
 `do_bench_paired_controlled` alternates A/B then B/A ordering, with aligned raw
 samples and cancellation/deadline checks between arms. A comparison cannot return
@@ -278,16 +290,25 @@ guarantee an optimal choice. Finalist order reverses on alternate rounds.
 the incumbent, the selected configuration and one of three statuses:
 
 - `Improved`: a replacement passed the configured confirmation rule.
-- `NoImprovement`: comparisons completed, but no alternative passed.
+- `NoImprovement`: every shortlisted alternative completed its comparisons, but
+  none passed the improvement rule.
 - `NotConfirmed`: insufficient valid candidates, failed checks, cancellation or
   insufficient time. The selected configuration remains the supplied incumbent;
   this status does **not** certify that the incumbent passed validation.
 
-Every shortlisted comparison must complete within the budget. A partial leader
-is never promoted after a timeout or failure. Neither previous screening times
-nor the strategy's predictions count as fresh confirmation evidence. This works
-with each selector; predictions never bypass the correctness gate or the paired
-confirmation rule.
+Every selected replacement must complete all of its own required rounds, with
+all correctness checks passing. An `InvalidCandidate` or candidate-local timeout
+disqualifies only that candidate. Other finalists can continue, and a later
+budget/cancellation cutoff can retain the best already fully confirmed candidate;
+a partial leader never wins. `ConfirmedOutput.failure` may therefore contain a
+timeout/cancellation diagnostic alongside `Improved`; per-candidate errors remain
+in `confirmations`. Infrastructure errors and incumbent/ambiguous correctness
+errors stop confirmation without recommending a replacement, even after another
+candidate completed its rounds.
+
+Previous screening times and model predictions never count as fresh confirmation
+evidence. A questionable correctness test should be investigated separately;
+these rules do not waive failed tests or select by correctness pass percentage.
 
 To save the example's observations and raw confirmation samples, pass
 `--evidence NEW_FILE`. It creates a new JSON file without overwriting an existing

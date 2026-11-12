@@ -27,7 +27,11 @@ pub use confirmation::{
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FailureKind {
+    /// A rejection whose scope is the current screening configuration, or is
+    /// unspecified in a paired comparison (and could include the incumbent).
     Invalid,
+    /// A paired-comparison rejection explicitly limited to the candidate arm.
+    InvalidCandidate,
     TimedOut,
     Cancelled,
     Infrastructure,
@@ -43,11 +47,19 @@ pub struct Failure {
 }
 
 impl Failure {
-    /// Interruption controls scoring, but must not erase a callback's diagnosis.
+    /// Infrastructure failures remain fatal even after interruption. Other late
+    /// results remain unscored without erasing the callback's diagnosis.
     /// Rechecking the same interruption keeps its existing diagnostic intact.
     fn interrupted(interruption: CompileInterrupted, earlier: Option<Self>) -> Self {
         let mut failure = Self::from(interruption);
-        if let Some(earlier) = earlier {
+        if let Some(mut earlier) = earlier {
+            if earlier.kind == FailureKind::Infrastructure {
+                let note = format!("; also: {interruption}");
+                if !earlier.reason.ends_with(&note) {
+                    earlier.reason.push_str(&note);
+                }
+                return earlier;
+            }
             if earlier.kind == failure.kind {
                 return earlier;
             }
@@ -61,6 +73,15 @@ impl Failure {
             kind: FailureKind::Invalid,
             reason: reason.into(),
         }
+    }
+    /// Attribute an invalidity error to the candidate arm of a paired
+    /// comparison. Use only around candidate-specific checks, never incumbent
+    /// checks or the whole comparison. Infrastructure/interruption is unchanged.
+    pub fn for_candidate(mut self) -> Self {
+        if self.kind == FailureKind::Invalid {
+            self.kind = FailureKind::InvalidCandidate;
+        }
+        self
     }
     pub fn infrastructure(reason: impl Into<String>) -> Self {
         Self {
@@ -620,6 +641,13 @@ impl Pipeline {
                     .err()
                     .unwrap_or(CompileInterrupted::Cancelled);
                 let failure = Failure::interrupted(interruption, ready.result.err());
+                if failure.kind == FailureKind::Infrastructure {
+                    if status != RunStatus::Incomplete {
+                        run_error = Some(failure.reason.clone());
+                    }
+                    status = RunStatus::Incomplete;
+                    control.cancel();
+                }
                 let observation = Observation {
                     trial_id: ready.index,
                     config_id: configs[ready.index].id.clone(),
@@ -681,7 +709,9 @@ fn status_for(failure: &Failure) -> RunStatus {
     match failure.kind {
         FailureKind::TimedOut => RunStatus::BudgetExhausted,
         FailureKind::Cancelled => RunStatus::Cancelled,
-        FailureKind::Invalid | FailureKind::Infrastructure => RunStatus::Incomplete,
+        FailureKind::Invalid | FailureKind::InvalidCandidate | FailureKind::Infrastructure => {
+            RunStatus::Incomplete
+        }
     }
 }
 
@@ -1201,7 +1231,14 @@ mod tests {
                         },
                     )
                     .unwrap();
-                assert_eq!(result.status, RunStatus::Cancelled);
+                assert_eq!(
+                    result.status,
+                    if original.kind == FailureKind::Infrastructure {
+                        RunStatus::Incomplete
+                    } else {
+                        RunStatus::Cancelled
+                    }
+                );
                 assert!(result.best_observed.is_none());
                 assert_eq!(result.observations.len(), 1);
                 let observation = &result.observations[0];
@@ -1210,9 +1247,16 @@ mod tests {
                 assert_eq!(observation.stages.prepare.is_some(), stage >= 1);
                 assert_eq!(observation.stages.evaluate.is_some(), stage == 2);
                 let failure = observation.failure.as_ref().unwrap();
-                assert_eq!(failure.kind, FailureKind::Cancelled);
+                assert_eq!(
+                    failure.kind,
+                    if original.kind == FailureKind::Infrastructure {
+                        FailureKind::Infrastructure
+                    } else {
+                        FailureKind::Cancelled
+                    }
+                );
                 assert!(failure.reason.contains("work cancelled"));
-                assert!(failure.reason.contains(&original.to_string()));
+                assert!(failure.reason.contains(&original.reason));
                 let decoded: PipelineOutput =
                     serde_json::from_value(serde_json::to_value(&result).unwrap()).unwrap();
                 assert_eq!(
@@ -1240,9 +1284,16 @@ mod tests {
                 checked_result(resolved, &control).unwrap_err(),
                 checked_result(prepared, &control).unwrap_err(),
             ] {
-                assert_eq!(failure.kind, FailureKind::TimedOut);
+                assert_eq!(
+                    failure.kind,
+                    if original.kind == FailureKind::Infrastructure {
+                        FailureKind::Infrastructure
+                    } else {
+                        FailureKind::TimedOut
+                    }
+                );
                 assert!(failure.reason.contains("work deadline exceeded"));
-                assert!(failure.reason.contains(&original.to_string()));
+                assert!(failure.reason.contains(&original.reason));
                 let again = checked_result::<()>(Err(failure.clone()), &control).unwrap_err();
                 assert_eq!(again.reason, failure.reason);
             }
@@ -1250,9 +1301,16 @@ mod tests {
                 observation(&configs(1), 0, StageTimes::default(), evaluated, &control);
             assert!(observation.score_ms().is_none());
             let failure = observation.failure.unwrap();
-            assert_eq!(failure.kind, FailureKind::TimedOut);
+            assert_eq!(
+                failure.kind,
+                if original.kind == FailureKind::Infrastructure {
+                    FailureKind::Infrastructure
+                } else {
+                    FailureKind::TimedOut
+                }
+            );
             assert!(failure.reason.contains("work deadline exceeded"));
-            assert!(failure.reason.contains(&original.to_string()));
+            assert!(failure.reason.contains(&original.reason));
         }
     }
 
@@ -1267,11 +1325,11 @@ mod tests {
             let resume = Mutex::new(resume);
             let result = Pipeline::default()
                 .run(
-                    &configs(2),
+                    &configs(3),
                     &mut GridOrder,
                     |c| Ok(c.int("x").unwrap()),
                     |index, _| {
-                        if index == 1 {
+                        if index == 2 {
                             started.send(()).unwrap();
                             resume
                                 .lock()
@@ -1284,7 +1342,10 @@ mod tests {
                         }
                     },
                     |c, _, control| {
-                        assert_eq!(c.int("x"), Some(0));
+                        if c.int("x") == Some(0) {
+                            return Ok(measured(c));
+                        }
+                        assert_eq!(c.int("x"), Some(1));
                         waiting.recv_timeout(Duration::from_secs(30)).unwrap();
                         control.cancel();
                         release.send(()).unwrap();
@@ -1292,19 +1353,42 @@ mod tests {
                     },
                 )
                 .unwrap();
-            assert_eq!(result.status, RunStatus::Cancelled);
-            assert!(result.best_observed.is_none());
-            assert_eq!(result.observations.len(), 2);
+            assert_eq!(
+                result.status,
+                if original.kind == FailureKind::Infrastructure {
+                    RunStatus::Incomplete
+                } else {
+                    RunStatus::Cancelled
+                }
+            );
+            assert!(result.observations[0].score_ms().is_some());
+            if original.kind == FailureKind::Infrastructure {
+                assert!(
+                    result.best_observed.is_none(),
+                    "late infrastructure failure must invalidate the provisional winner"
+                );
+                assert!(result.error.as_ref().unwrap().contains(&original.reason));
+            } else {
+                assert_eq!(result.best_observed.as_ref().unwrap().int("x"), Some(0));
+            }
+            assert_eq!(result.observations.len(), 3);
             let drained = result
                 .observations
                 .iter()
-                .find(|o| o.trial_id == 1)
+                .find(|o| o.trial_id == 2)
                 .unwrap();
             assert!(drained.stages.evaluate.is_none());
             assert!(drained.score_ms().is_none());
             let failure = drained.failure.as_ref().unwrap();
-            assert_eq!(failure.kind, FailureKind::Cancelled);
-            assert!(failure.reason.contains(&original.to_string()));
+            assert_eq!(
+                failure.kind,
+                if original.kind == FailureKind::Infrastructure {
+                    FailureKind::Infrastructure
+                } else {
+                    FailureKind::Cancelled
+                }
+            );
+            assert!(failure.reason.contains(&original.reason));
         }
     }
 

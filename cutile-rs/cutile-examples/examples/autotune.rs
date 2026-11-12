@@ -332,7 +332,9 @@ fn main() -> Result<(), Error> {
             },
             |incumbent, candidate, opts, control| {
                 let mut a = problem.check(incumbent, problem.output()?, control)?;
-                let mut b = problem.check(candidate, problem.output()?, control)?;
+                let mut b = problem
+                    .check(candidate, problem.output()?, control)
+                    .map_err(Failure::for_candidate)?;
                 do_bench_paired_controlled(
                     &problem.stream,
                     opts,
@@ -390,7 +392,10 @@ fn main() -> Result<(), Error> {
         serde_json::to_writer_pretty(file, &evidence).map_err(|e| example_error(&e.to_string()))?;
     }
     if let Some(failure) = output.failure {
-        eprintln!("no replacement: {failure}");
+        eprintln!(
+            "confirmation diagnostic (selection status {:?}): {failure}",
+            output.status
+        );
         if matches!(
             failure.kind,
             cutile::tune::pipeline::FailureKind::Infrastructure

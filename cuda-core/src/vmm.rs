@@ -41,6 +41,61 @@ fn set_mem_location_device(
     cuda_bindings::set_mem_location_id(loc, device);
 }
 
+/// Where [`PhysicalAllocation::new_at`] places physical memory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MemLocation {
+    /// The memory of `device` (on a multi-die GPU, interleaved across its
+    /// dies).
+    Device(cuda_bindings::CUdevice),
+    /// The memory of locality domain `domain` of `device`: one die of a
+    /// multi-die GPU (`CU_MEM_LOCATION_TYPE_DEVICE_LOCALITY_DOMAIN`; the
+    /// device has `CU_DEVICE_ATTRIBUTE_LOCALITY_DOMAIN_COUNT` domains).
+    /// Requires bindings generated from CUDA 13.4+ headers and a driver that
+    /// supports locality domains.
+    LocalityDomain {
+        device: cuda_bindings::CUdevice,
+        domain: u8,
+    },
+}
+
+impl MemLocation {
+    /// The device this location belongs to.
+    pub fn device(self) -> cuda_bindings::CUdevice {
+        match self {
+            MemLocation::Device(device) | MemLocation::LocalityDomain { device, .. } => device,
+        }
+    }
+
+    /// Fills `loc`. A locality domain fails with `CUDA_ERROR_INVALID_DEVICE`
+    /// for a device ordinal the location cannot encode (above 255) and with
+    /// `CUDA_ERROR_NOT_SUPPORTED` when the bindings predate locality domains.
+    fn write(self, loc: &mut cuda_bindings::CUmemLocation_st) -> Result<(), DriverError> {
+        match self {
+            MemLocation::Device(device) => set_mem_location_device(loc, device),
+            MemLocation::LocalityDomain { device, domain } => {
+                let device = u8::try_from(device).map_err(|_| {
+                    DriverError(cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_DEVICE)
+                })?;
+                if !cuda_bindings::set_mem_location_locality_domain(loc, device, domain) {
+                    return Err(DriverError(
+                        cuda_bindings::cudaError_enum_CUDA_ERROR_NOT_SUPPORTED,
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Pinned device-memory allocation properties for this location.
+    fn allocation_prop(self) -> Result<cuda_bindings::CUmemAllocationProp_st, DriverError> {
+        let mut prop: cuda_bindings::CUmemAllocationProp_st = unsafe { std::mem::zeroed() };
+        prop.type_ = cuda_bindings::CUmemAllocationType_enum_CU_MEM_ALLOCATION_TYPE_PINNED;
+        self.write(&mut prop.location)?;
+        Ok(prop)
+    }
+}
+
 /// A physical memory allocation created by `cuMemCreate`.
 ///
 /// Owns the underlying `CUmemGenericAllocationHandle`. The allocation lives on
@@ -53,7 +108,7 @@ fn set_mem_location_device(
 pub struct PhysicalAllocation {
     handle: cuda_bindings::CUmemGenericAllocationHandle,
     size: usize,
-    device: cuda_bindings::CUdevice,
+    location: MemLocation,
 }
 
 impl PhysicalAllocation {
@@ -62,17 +117,22 @@ impl PhysicalAllocation {
     /// `size` must be a multiple of the allocation granularity for the device
     /// (query via [`allocation_granularity`]).
     pub fn new(device: cuda_bindings::CUdevice, size: usize) -> Result<Self, DriverError> {
-        let mut prop: cuda_bindings::CUmemAllocationProp_st = unsafe { std::mem::zeroed() };
-        prop.type_ = cuda_bindings::CUmemAllocationType_enum_CU_MEM_ALLOCATION_TYPE_PINNED;
-        set_mem_location_device(&mut prop.location, device);
+        Self::new_at(MemLocation::Device(device), size)
+    }
 
+    /// Allocates `size` bytes of physical memory at `location`.
+    ///
+    /// `size` must be a multiple of the allocation granularity for the
+    /// location (query via [`allocation_granularity_at`]).
+    pub fn new_at(location: MemLocation, size: usize) -> Result<Self, DriverError> {
+        let prop = location.allocation_prop()?;
         let mut handle = MaybeUninit::uninit();
         unsafe {
             cuda_bindings::cuMemCreate(handle.as_mut_ptr(), size, &prop, 0).result()?;
             Ok(Self {
                 handle: handle.assume_init(),
                 size,
-                device,
+                location,
             })
         }
     }
@@ -89,7 +149,12 @@ impl PhysicalAllocation {
 
     /// Returns the device this allocation lives on.
     pub fn device(&self) -> cuda_bindings::CUdevice {
-        self.device
+        self.location.device()
+    }
+
+    /// Returns where this allocation lives.
+    pub fn location(&self) -> MemLocation {
+        self.location
     }
 }
 
@@ -223,6 +288,36 @@ impl Drop for Mapping {
     }
 }
 
+/// Returns the locality domain whose memory backs device address `ptr`
+/// (`CU_POINTER_ATTRIBUTE_LOCALITY_DOMAIN_ORDINAL`), or `None` when the memory
+/// is not localized to one domain (for example `cuMemAlloc` memory, which
+/// interleaves the dies).
+///
+/// Errors with `CUDA_ERROR_NOT_SUPPORTED` when the bindings were generated from
+/// headers that predate locality domains (before CUDA 13.4).
+pub fn locality_domain_of(ptr: CUdeviceptr) -> Result<Option<u8>, DriverError> {
+    let attribute = cuda_bindings::POINTER_ATTRIBUTE_LOCALITY_DOMAIN_ORDINAL.ok_or(DriverError(
+        cuda_bindings::cudaError_enum_CUDA_ERROR_NOT_SUPPORTED,
+    ))?;
+    let mut ordinal: std::ffi::c_int = -1;
+    unsafe {
+        cuda_bindings::cuPointerGetAttribute(
+            (&mut ordinal as *mut std::ffi::c_int).cast(),
+            attribute,
+            ptr,
+        )
+        .result()?;
+    }
+    // -1: not localized. A domain ordinal that does not fit u8 cannot be named
+    // by MemLocation either; report it as an invalid value.
+    if ordinal < 0 {
+        return Ok(None);
+    }
+    u8::try_from(ordinal)
+        .map(Some)
+        .map_err(|_| DriverError(cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_VALUE))
+}
+
 /// Sets read/write access on a virtual address range for one or more devices.
 ///
 /// After calling `cuMemMap`, the mapping is not yet accessible. This function
@@ -253,19 +348,39 @@ pub fn set_access(
 /// All sizes passed to [`PhysicalAllocation::new`], [`VirtualReservation::new`],
 /// and [`Mapping::new`] must be multiples of this value.
 pub fn allocation_granularity(device: cuda_bindings::CUdevice) -> Result<usize, DriverError> {
-    let mut prop: cuda_bindings::CUmemAllocationProp_st = unsafe { std::mem::zeroed() };
-    prop.type_ = cuda_bindings::CUmemAllocationType_enum_CU_MEM_ALLOCATION_TYPE_PINNED;
-    set_mem_location_device(&mut prop.location, device);
+    allocation_granularity_at(MemLocation::Device(device), AllocationGranularity::Minimum)
+}
 
-    let mut granularity = MaybeUninit::uninit();
+/// Granularity flavor for [`allocation_granularity_at`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AllocationGranularity {
+    /// Minimum required granularity for allocation, reservation and mapping sizes.
+    Minimum,
+    /// Recommended granularity for best performance.
+    Recommended,
+}
+
+/// Queries the allocation granularity of pinned device memory at `location`.
+///
+/// Sizes passed to [`PhysicalAllocation::new_at`] for `location` must be
+/// multiples of the [`AllocationGranularity::Minimum`] value.
+pub fn allocation_granularity_at(
+    location: MemLocation,
+    granularity: AllocationGranularity,
+) -> Result<usize, DriverError> {
+    let prop = location.allocation_prop()?;
+    let flag = match granularity {
+        AllocationGranularity::Minimum => {
+            cuda_bindings::CUmemAllocationGranularity_flags_enum_CU_MEM_ALLOC_GRANULARITY_MINIMUM
+        }
+        AllocationGranularity::Recommended => {
+            cuda_bindings::CUmemAllocationGranularity_flags_enum_CU_MEM_ALLOC_GRANULARITY_RECOMMENDED
+        }
+    };
+    let mut value = MaybeUninit::uninit();
     unsafe {
-        cuda_bindings::cuMemGetAllocationGranularity(
-            granularity.as_mut_ptr(),
-            &prop,
-            cuda_bindings::CUmemAllocationGranularity_flags_enum_CU_MEM_ALLOC_GRANULARITY_MINIMUM,
-        )
-        .result()?;
-        Ok(granularity.assume_init())
+        cuda_bindings::cuMemGetAllocationGranularity(value.as_mut_ptr(), &prop, flag).result()?;
+        Ok(value.assume_init())
     }
 }
 

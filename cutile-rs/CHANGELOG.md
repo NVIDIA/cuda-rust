@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Ordinary launches can join CPU preparation of the same specialization and
+  load its binary on the launching thread. Retained prepared binaries are
+  reusable without explicit installation. Waiting callers have independent
+  cancellation, and interrupted or abandoned compilation remains retryable.
 - Add an opt-in autotuning preparation pipeline under `experimental-tune`,
   separating CPU CUBIN compilation from foreground loading, correctness checks
   and measurement. It defaults to one candidate ahead, supports bounded workers

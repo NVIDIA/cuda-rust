@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `Event::record_with_flags` and `Stream::wait_event_with_flags` take
+  `CUevent_record_flags` / `CUevent_wait_flags`, so a stream capture can turn a
+  record or wait into an event-record or event-wait node of the graph
+  (`CU_EVENT_RECORD_EXTERNAL`, `CU_EVENT_WAIT_EXTERNAL`).
 - Add opt-in B200 profiles to the fused QKV and NVFP4 MoE examples. Add public
   CTK 13.5 setup instructions, explicit large MoE fixture selection, focused
   correctness runs and raw timing samples; retain the original default profiles.

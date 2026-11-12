@@ -1,4 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 610" width="1240" height="610" role="img" aria-label="Provider mode in one page: Rust exports become a shared object the Tile compiler loads; it asks per call site which implementations exist and once for their code">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 620" width="1240" height="620" role="img"
+  aria-label="Provider mode flow: Left column builds relu.tilelib with embedded NVVM IR, middle column shows the provider runtime inside the .so, and right column shows tileiras querying implementations and compiling size-specific symbols on demand">
 <style>
   :root, svg {
   --bg: #f4f6f8; --fg: #1a232e; --muted: #5d6b7a; --line: #9aa7b4; --panel: #ffffff;
@@ -13,65 +14,128 @@
   --rust: #c9a0f0; --rust-fill: #2b1b3f;
  } }
 </style>
-<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" style="fill: var(--fg)"/></marker></defs>
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" style="fill: var(--fg)"/>
+  </marker>
+</defs>
 
-<rect x="0" y="0" width="1240" height="610" style="fill: var(--bg)"/>
-<text x="40" y="34" text-anchor="start" xml:space="preserve" style="font: 600 17px var(--sans); fill: var(--fg); white-space: pre">Provider mode: a tile library that answers the Tile compiler while the kernel compiles</text>
-<text x="40" y="56" text-anchor="start" xml:space="preserve" style="font: 400 12.5px var(--sans); fill: var(--muted); white-space: pre">For exports without tile_shape. The compiler asks for one implementation symbol per tile size; the provider builds it from one Rust body.</text>
-<text x="40" y="92" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--muted); white-space: pre">RUST SIDE  (build time)</text>
-<text x="500" y="92" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--muted); white-space: pre">THE LIBRARY</text>
-<text x="830" y="92" text-anchor="start" xml:space="preserve" style="font: 600 11px var(--sans); fill: var(--muted); white-space: pre">TILE COMPILER  (kernel compile time)</text>
-<rect x="40" y="108" width="400" height="74" rx="6" style="fill: var(--rust-fill); stroke: var(--rust); stroke-width: 1.2"/>
-<text x="52" y="128" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--mono); fill: var(--rust); white-space: pre">#[tile_export]  pub fn relu_any(x: f32) -&gt; f32</text>
-<text x="52" y="148" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">no tile_shape: the call supplies the size</text>
-<text x="52" y="166" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">declaration @relu_any&lt;[N: index]&gt;(tile&lt;[N]xf32&gt;)</text>
-<line x1="90" y1="182" x2="90" y2="216" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
-<text x="102" y="204" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--muted); white-space: pre">cargo oxide tilelib relu --arch sm_120 --provider</text>
-<rect x="40" y="218" width="400" height="74" rx="6" style="fill: var(--code-fill); stroke: var(--code); stroke-width: 1.2"/>
-<text x="52" y="238" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--mono); fill: var(--fg); white-space: pre">relu.ll + descriptions  -&gt;  librelu_provider.so</text>
-<text x="52" y="258" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">a generated cdylib: the oxide-tile-provider runtime</text>
-<text x="52" y="276" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">with the crate's NVVM IR and descriptions embedded</text>
-<line x1="90" y1="292" x2="90" y2="326" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
-<text x="102" y="314" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--muted); white-space: pre">tileiras --preview-create-tile-lib  (interface + the .so)</text>
-<rect x="40" y="328" width="400" height="56" rx="6" style="fill: var(--code-fill); stroke: var(--code); stroke-width: 1.2"/>
-<text x="52" y="348" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--mono); fill: var(--fg); white-space: pre">relu.tilelib</text>
-<text x="52" y="368" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">the shared object with the interface section spliced in</text>
-<rect x="500" y="108" width="300" height="350" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
-<text x="514" y="130" text-anchor="start" xml:space="preserve" style="font: 600 12.5px var(--sans); fill: var(--fg); white-space: pre">Inside the .so</text>
-<text x="514" y="162" text-anchor="start" xml:space="preserve" style="font: 600 11.5px var(--mono); fill: var(--rust); white-space: pre">oxide-tile-provider</text>
-<text x="514" y="178" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--sans); fill: var(--muted); white-space: pre">the callbacks</text>
-<text x="514" y="206" text-anchor="start" xml:space="preserve" style="font: 600 11.5px var(--mono); fill: var(--rust); white-space: pre">oxide-tile-provider-sys</text>
-<text x="514" y="222" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--sans); fill: var(--muted); white-space: pre">the C ABI as Rust types</text>
-<text x="514" y="250" text-anchor="start" xml:space="preserve" style="font: 600 11.5px var(--mono); fill: var(--rust); white-space: pre">oxide-tilebc</text>
-<text x="514" y="266" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--sans); fill: var(--muted); white-space: pre">writes the descriptors</text>
-<text x="514" y="294" text-anchor="start" xml:space="preserve" style="font: 600 11.5px var(--mono); fill: var(--rust); white-space: pre">cuda-artifact-finalizer</text>
-<text x="514" y="310" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--sans); fill: var(--muted); white-space: pre">libNVVM at run time</text>
-<text x="514" y="338" text-anchor="start" xml:space="preserve" style="font: 600 11.5px var(--mono); fill: var(--rust); white-space: pre">payload</text>
-<text x="514" y="354" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--sans); fill: var(--muted); white-space: pre">relu.ll + descriptions</text>
-<text x="514" y="382" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--sans); fill: var(--muted); white-space: pre">exports one symbol:</text>
-<text x="514" y="398" text-anchor="start" xml:space="preserve" style="font: 400 11px var(--mono); fill: var(--fg); white-space: pre">tileir_create_linkage_provider</text>
-<rect x="830" y="108" width="370" height="74" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
-<text x="842" y="128" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--fg); white-space: pre">1  load</text>
-<text x="842" y="148" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">dlopen the .tilelib, call the entry point,</text>
-<text x="842" y="166" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">get a table of Rust callbacks (ABI 0.0.1)</text>
-<line x1="880" y1="182" x2="880" y2="202" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
-<rect x="830" y="204" width="370" height="92" rx="6" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1.2"/>
-<text x="842" y="224" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--meta); white-space: pre">2  ask per call site</text>
-<text x="842" y="244" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--mono); fill: var(--fg); white-space: pre">@relu_any&lt;[N = 256]&gt;?  -&gt;  the catalog:</text>
-<text x="842" y="262" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--mono); fill: var(--fg); white-space: pre">@relu_any_impl&lt;[N: index]&gt;</text>
-<text x="842" y="280" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">    implements @relu_any&lt;[N]&gt;</text>
-<line x1="880" y1="296" x2="880" y2="316" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
-<rect x="830" y="318" width="370" height="74" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
-<text x="842" y="338" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--fg); white-space: pre">3  name the symbols</text>
-<text x="842" y="358" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">one per size the kernel used:</text>
-<text x="842" y="376" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">relu_any_impl__N128, relu_any_impl__N256</text>
-<line x1="880" y1="392" x2="880" y2="412" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
-<rect x="830" y="414" width="370" height="74" rx="6" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1.2"/>
-<text x="842" y="434" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--meta); white-space: pre">4  ask for code, once</text>
-<text x="842" y="454" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">wrapper per name around the Rust body,</text>
-<text x="842" y="472" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">libNVVM -&gt; LTOIR; nvJitLink -&gt; cubin</text>
-<rect x="40" y="508" width="1160" height="66" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
-<text x="54" y="530" text-anchor="start" xml:space="preserve" style="font: 600 12px var(--sans); fill: var(--fg); white-space: pre">Why a provider at all</text>
-<text x="54" y="550" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">Tile IR declarations can be parametric, but code never is: each tile size links its own symbol. A static library must ship those symbols ahead of time (tile_shape).</text>
-<text x="54" y="566" text-anchor="start" xml:space="preserve" style="font: 400 11.5px var(--sans); fill: var(--fg); white-space: pre">The provider is asked for them while the kernel compiles, so one Rust body serves every size.</text>
+<rect x="0" y="0" width="1240" height="620" style="fill: var(--bg)"/>
+
+<!-- Title & Subtitle -->
+<text x="40" y="34" text-anchor="start" style="font: 600 17px var(--sans); fill: var(--fg)">Provider mode: one parametric Rust export compiled on demand for any tile size N</text>
+<text x="40" y="56" text-anchor="start" style="font: 400 12.5px var(--sans); fill: var(--muted)">Omit tile_shape in Rust. When a Tile kernel compiles, tileiras loads the provider .so and requests one symbol per tile size used.</text>
+
+<!-- Column Headers -->
+<text x="40" y="92" text-anchor="start" style="font: 600 11px var(--sans); fill: var(--muted)">1 · RUST BUILD  (cargo oxide tilelib --provider)</text>
+<text x="455" y="92" text-anchor="start" style="font: 600 11px var(--sans); fill: var(--muted)">2 · PROVIDER RUNTIME  (inside relu.tilelib)</text>
+<text x="845" y="92" text-anchor="start" style="font: 600 11px var(--sans); fill: var(--muted)">3 · KERNEL COMPILE TIME  (tileiras)</text>
+
+<!-- ================= COLUMN 1: RUST BUILD ================= -->
+<rect x="40" y="108" width="365" height="74" rx="6" style="fill: var(--rust-fill); stroke: var(--rust); stroke-width: 1.2"/>
+<text x="52" y="128" text-anchor="start" style="font: 600 12px var(--mono); fill: var(--rust)">#[tile_export]  pub fn relu_any(x: f32) -&gt; f32</text>
+<text x="52" y="148" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--fg)">No tile_shape: caller supplies tile extent N</text>
+<text x="52" y="166" text-anchor="start" style="font: 400 11.5px var(--mono); fill: var(--muted)">@relu_any&lt;[N: index]&gt;(tile&lt;[N]xf32&gt;)</text>
+
+<line x1="96" y1="182" x2="96" y2="216" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
+<text x="108" y="204" text-anchor="start" style="font: 400 11px var(--mono); fill: var(--muted)">cargo oxide tilelib relu --arch sm_120 --provider</text>
+
+<rect x="40" y="218" width="365" height="74" rx="6" style="fill: var(--code-fill); stroke: var(--code); stroke-width: 1.2"/>
+<text x="52" y="238" text-anchor="start" style="font: 600 12px var(--mono); fill: var(--fg)">relu.ll + metadata -&gt; librelu_provider.so</text>
+<text x="52" y="258" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--fg)">Generated cdylib embedding the crate's NVVM IR</text>
+<text x="52" y="276" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">and #[tile_export] JSON descriptions</text>
+
+<line x1="96" y1="292" x2="96" y2="326" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
+<text x="108" y="314" text-anchor="start" style="font: 400 11px var(--mono); fill: var(--muted)">tileiras --preview-create-tile-lib (iface + .so)</text>
+
+<rect x="40" y="328" width="365" height="74" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.6"/>
+<text x="52" y="350" text-anchor="start" style="font: 600 12.5px var(--mono); fill: var(--fg)">relu.tilelib</text>
+<text x="391" y="350" text-anchor="end" style="font: 400 11px var(--sans); fill: var(--muted)">provider shared object</text>
+<text x="52" y="370" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--fg)">• .nvtlifc section: parametric @relu_any&lt;[N]&gt;</text>
+<text x="52" y="388" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--fg)">• Entry symbol: tileir_create_linkage_provider</text>
+
+<!-- Arrow from Column 1 (relu.tilelib) into Column 2 (Provider Runtime) -->
+<line x1="405" y1="365" x2="453" y2="365" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
+
+
+<!-- ================= COLUMN 2: PROVIDER RUNTIME ================= -->
+<rect x="455" y="108" width="320" height="388" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
+<text x="469" y="130" text-anchor="start" style="font: 600 12px var(--sans); fill: var(--fg)">Inside relu.tilelib (loaded via dlopen)</text>
+
+<!-- Sub-box 1: Embedded Payload -->
+<rect x="469" y="142" width="292" height="58" rx="5" style="fill: var(--rust-fill); stroke: var(--rust); stroke-width: 1.1"/>
+<text x="481" y="162" text-anchor="start" style="font: 600 11.5px var(--sans); fill: var(--rust)">Embedded Payload</text>
+<text x="481" y="180" text-anchor="start" style="font: 400 11px var(--mono); fill: var(--fg)">relu.ll (NVVM IR) + relu.tileexports.json</text>
+
+<!-- Sub-box 2: provide_impls callback -->
+<rect x="469" y="214" width="292" height="90" rx="5" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1.1"/>
+<text x="481" y="234" text-anchor="start" style="font: 600 11.5px var(--mono); fill: var(--meta)">provide_impls()</text>
+<text x="481" y="254" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--fg)">Returns parametric implementation catalog:</text>
+<text x="481" y="272" text-anchor="start" style="font: 400 11px var(--mono); fill: var(--fg)">@relu_any_impl&lt;[N: index]&gt;</text>
+<text x="481" y="290" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">  implements @relu_any&lt;[N]&gt;</text>
+
+<!-- Sub-box 3: instantiate callback -->
+<rect x="469" y="320" width="292" height="160" rx="5" style="fill: var(--code-fill); stroke: var(--code); stroke-width: 1.1"/>
+<text x="481" y="340" text-anchor="start" style="font: 600 11.5px var(--mono); fill: var(--code)">instantiate()</text>
+<text x="481" y="360" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--fg)">1. Emits thin wrapper per requested symbol:</text>
+<text x="481" y="378" text-anchor="start" style="font: 400 10.5px var(--mono); fill: var(--fg)">   relu_any_impl__N128 -&gt; relu_any_impl</text>
+<text x="481" y="394" text-anchor="start" style="font: 400 10.5px var(--mono); fill: var(--fg)">   relu_any_impl__N256 -&gt; relu_any_impl</text>
+<text x="481" y="418" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--fg)">2. Compiles NVVM IR -&gt; LTOIR via libNVVM</text>
+<text x="481" y="436" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">   for the kernel's target architecture</text>
+<text x="481" y="460" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--fg)">3. Returns single LTOIR module to tileiras</text>
+
+
+<!-- ================= COLUMN 3: TILE COMPILER ================= -->
+<!-- Step 1: Load -->
+<rect x="845" y="108" width="355" height="74" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="857" y="128" text-anchor="start" style="font: 600 12px var(--sans); fill: var(--fg)">1 · Load provider &amp; inspect kernel calls</text>
+<text x="857" y="148" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--fg)">dlopen(relu.tilelib) -&gt; callback table</text>
+<text x="857" y="166" text-anchor="start" style="font: 400 11px var(--mono); fill: var(--muted)">Kernel calls relu_any&lt;128&gt; and relu_any&lt;256&gt;</text>
+
+<!-- Arrow Col 3 Step 1 -> Col 2 (dlopen) -->
+<line x1="845" y1="145" x2="777" y2="145" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.3"/>
+<text x="810" y="137" text-anchor="middle" style="font: 400 10px var(--mono); fill: var(--muted)">dlopen</text>
+
+<line x1="1022" y1="182" x2="1022" y2="212" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
+
+<!-- Step 2: Query per call site -->
+<rect x="845" y="214" width="355" height="90" rx="6" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1.2"/>
+<text x="857" y="234" text-anchor="start" style="font: 600 12px var(--sans); fill: var(--meta)">2 · Query per call site &amp; name symbols</text>
+<text x="857" y="254" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--fg)">Asks provider for N = 128 and N = 256;</text>
+<text x="857" y="272" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--fg)">assigns concrete symbol per tile size:</text>
+<text x="857" y="290" text-anchor="start" style="font: 600 11px var(--mono); fill: var(--fg)">relu_any_impl__N128, relu_any_impl__N256</text>
+
+<!-- Request / Response arrows between Step 2 and provide_impls() -->
+<line x1="845" y1="246" x2="777" y2="246" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.3"/>
+<text x="810" y="239" text-anchor="middle" style="font: 400 10px var(--sans); fill: var(--muted)">query</text>
+<line x1="775" y1="274" x2="843" y2="274" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.3"/>
+<text x="810" y="287" text-anchor="middle" style="font: 400 10px var(--mono); fill: var(--muted)">.tilebc</text>
+
+<line x1="1022" y1="304" x2="1022" y2="334" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
+
+<!-- Step 3: Instantiate code once -->
+<rect x="845" y="336" width="355" height="84" rx="6" style="fill: var(--code-fill); stroke: var(--code); stroke-width: 1.2"/>
+<text x="857" y="356" text-anchor="start" style="font: 600 12px var(--sans); fill: var(--code)">3 · Request device code once</text>
+<text x="857" y="376" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--fg)">Requests LTOIR defining both symbols;</text>
+<text x="857" y="394" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--fg)">provider compiles wrappers via libNVVM</text>
+
+<!-- Request / Response arrows between Step 3 and instantiate() -->
+<line x1="845" y1="366" x2="777" y2="366" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.3"/>
+<text x="810" y="359" text-anchor="middle" style="font: 400 10px var(--sans); fill: var(--muted)">symbols</text>
+<line x1="775" y1="396" x2="843" y2="396" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.3"/>
+<text x="810" y="409" text-anchor="middle" style="font: 400 10px var(--mono); fill: var(--muted)">.ltoir</text>
+
+<line x1="1022" y1="420" x2="1022" y2="444" marker-end="url(#arrow)" style="stroke: var(--fg); stroke-width: 1.4"/>
+
+<!-- Step 4: Final cubin -->
+<rect x="845" y="446" width="355" height="50" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.6"/>
+<text x="1022" y="467" text-anchor="middle" style="font: 600 12.5px var(--mono); fill: var(--fg)">4 · nvJitLink -&gt; kernel.cubin</text>
+<text x="1022" y="485" text-anchor="middle" style="font: 400 11px var(--sans); fill: var(--muted)">Tile kernel + both size instantiations linked</text>
+
+
+<!-- ================= BOTTOM SUMMARY BOX ================= -->
+<rect x="40" y="518" width="1160" height="72" rx="6" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.2"/>
+<text x="54" y="540" text-anchor="start" style="font: 600 12px var(--sans); fill: var(--fg)">Why provider mode exists</text>
+<text x="54" y="560" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--fg)">• Tile IR declarations can be parametric (@relu_any&lt;[N]&gt;), but compiled device code is never generic: each tile size links its own symbol.</text>
+<text x="54" y="578" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--fg)">• A static library must know tile_shape ahead of time; a provider library generates and compiles only the sizes your kernel actually calls.</text>
 </svg>

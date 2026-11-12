@@ -171,8 +171,7 @@ pub use _tileir::tileir;
 
 // LINKING Phase B: register an additional registry entry at the public
 // `cutile::core` path so kernel `use cutile::core::*` statements resolve
-// to the same module that `cutile::_core::core::__module_ast_self()`
-// builds. Without this alias, the registry-driven JIT path misses the
+// to the same module, `cutile::_core::core::__MODULE_SOURCE`. Without this alias, the registry-driven JIT path misses the
 // cutile DSL core module when kernels use the public re-export name.
 //
 // Per-`pub use ...::module` re-exports of cuTile modules will need a
@@ -182,13 +181,13 @@ pub use _tileir::tileir;
 static __CUTILE_REEXPORT_CORE: cutile_compiler::registry::CutileModuleEntry =
     cutile_compiler::registry::CutileModuleEntry {
         absolute_path: "cutile::core",
-        build: _core::core::__module_ast_self,
+        source: &_core::core::__MODULE_SOURCE,
     };
 #[linkme::distributed_slice(cutile_compiler::registry::CUTILE_MODULES)]
 static __CUTILE_REEXPORT_TILEIR: cutile_compiler::registry::CutileModuleEntry =
     cutile_compiler::registry::CutileModuleEntry {
         absolute_path: "cutile::tileir",
-        build: _tileir::tileir::__module_ast_self,
+        source: &_tileir::tileir::__MODULE_SOURCE,
     };
 pub mod api;
 pub mod bench;

@@ -22,13 +22,32 @@
 //! participates in the same registry.
 
 use crate::ast::Module;
+use crate::jit_cache::{hex, put_field};
 use linkme::distributed_slice;
+use sha2::{Digest, Sha256};
+use std::sync::OnceLock;
 
 /// Re-export so macro-emitted code at user crates can name `linkme`
 /// through `cutile::cutile_compiler::registry::linkme` without requiring
 /// `linkme` to be a direct dependency of every crate that uses
 /// `#[cutile::module]`.
 pub use linkme;
+
+/// How a single cuTile module's [`Module`] is built, and what it is built
+/// from. `#[cutile::module]` emits one per module as `__MODULE_SOURCE`;
+/// every entry registering that module, aliases included, points at it, so
+/// a builder cannot be paired with another module's identity.
+pub struct ModuleSource {
+    /// Per-module AST builder. Returns just *this* module's [`Module`] —
+    /// no recursive dep aggregation. Dep traversal happens at JIT time by
+    /// walking `use` statements against this registry.
+    pub build: fn() -> Module,
+
+    /// Hex SHA-256 over the inputs `build` takes from the macro: module
+    /// name, captured source text, source file, and the line and column the
+    /// spans are anchored at.
+    pub identity: &'static str,
+}
 
 /// Registry entry for a single cuTile module.
 ///
@@ -40,10 +59,8 @@ pub struct CutileModuleEntry {
     /// site (e.g. `"cutile::core"`, `"my_crate::kernels"`).
     pub absolute_path: &'static str,
 
-    /// Per-module AST builder. Returns just *this* module's [`Module`] —
-    /// no recursive dep aggregation. Dep traversal happens at JIT time by
-    /// walking `use` statements against this registry.
-    pub build: fn() -> Module,
+    /// The module registered at this path.
+    pub source: &'static ModuleSource,
 }
 
 /// Distributed slice of all `#[cutile::module]`-annotated modules linked
@@ -52,3 +69,25 @@ pub struct CutileModuleEntry {
 /// Read at JIT time to look up modules by absolute path.
 #[distributed_slice]
 pub static CUTILE_MODULES: [CutileModuleEntry] = [..];
+
+/// Hex SHA-256 over every registered `(absolute_path, identity)` pair: it
+/// changes whenever a module the JIT can resolve a `use` to changes, or a
+/// path starts or stops resolving.
+pub fn registry_digest() -> &'static str {
+    static DIGEST: OnceLock<String> = OnceLock::new();
+    DIGEST.get_or_init(|| {
+        let mut entries: Vec<(&str, &str)> = CUTILE_MODULES
+            .iter()
+            .map(|e| (e.absolute_path, e.source.identity))
+            .collect();
+        // Slice order follows link order, which the digest must not.
+        entries.sort_unstable();
+        let mut h = Sha256::new();
+        h.update(b"cutile-module-registry-v1\0");
+        for (path, identity) in entries {
+            put_field(&mut h, path.as_bytes());
+            put_field(&mut h, identity.as_bytes());
+        }
+        hex(&h.finalize())
+    })
+}

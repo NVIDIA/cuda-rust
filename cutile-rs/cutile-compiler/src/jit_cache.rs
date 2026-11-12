@@ -764,12 +764,12 @@ pub fn l2_key(
     hex(&h.finalize())
 }
 
-fn put_field(h: &mut Sha256, bytes: &[u8]) {
+pub(crate) fn put_field(h: &mut Sha256, bytes: &[u8]) {
     h.update((bytes.len() as u64).to_le_bytes());
     h.update(bytes);
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
     for &b in bytes {

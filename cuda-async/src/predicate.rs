@@ -171,6 +171,26 @@ impl Term {
         }
     }
 
+    /// The term with these coefficients, in order, and constant. `None` unless
+    /// they are already in normal form: strictly increasing atoms, none with a
+    /// zero coefficient.
+    pub(crate) fn from_parts(
+        coeffs: impl IntoIterator<Item = (Atom, i64)>,
+        constant: i64,
+    ) -> Option<Self> {
+        let mut map = BTreeMap::new();
+        for (atom, c) in coeffs {
+            if c == 0 || map.last_key_value().is_some_and(|(last, _)| *last >= atom) {
+                return None;
+            }
+            map.insert(atom, c);
+        }
+        Some(Term {
+            coeffs: map,
+            constant,
+        })
+    }
+
     /// The whole-term constant, if it has no atoms.
     pub fn as_constant(&self) -> Option<i64> {
         self.coeffs.is_empty().then_some(self.constant)

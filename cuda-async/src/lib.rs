@@ -26,5 +26,6 @@ mod reactor;
 pub mod scheduling_policies;
 mod slot_table;
 mod submission;
+mod validator_codec;
 
 pub use futures;

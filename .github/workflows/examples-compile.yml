@@ -162,6 +162,22 @@ jobs:
 
           cuda-oxide/scripts/smoketest.sh --compile-only --no-color
 
+      # The scaffold tests read `cargo oxide new` output as text. This builds
+      # both templates against this checkout, so an API change that breaks a
+      # new user's first project fails here. Reuses the shared target dir.
+      - name: Both `cargo oxide new` templates build
+        timeout-minutes: 10
+        env:
+          CUDA_OXIDE_LLC: /usr/bin/llc-23
+          CARGO_TARGET_DIR: ${{ runner.temp }}/examples-shared-target
+          CARGO_INCREMENTAL: "0"
+        run: |
+          set -euo pipefail
+          sysroot="$(rustc --print sysroot)"
+          export LIBRARY_PATH="${sysroot}/lib:${LIBRARY_PATH:-}"
+          export LD_LIBRARY_PATH="${sysroot}/lib:${LD_LIBRARY_PATH:-}"
+          bash cuda-oxide/scripts/check-scaffold-builds.sh
+
       # Builds shared_static_names, then copies with added kernels, in
       # release and full-debug, and requires the original kernels' PTX to be
       # unchanged (#1477). Reuses the shared target dir, so it adds only the

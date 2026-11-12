@@ -1,72 +1,67 @@
 # Tile Libraries
 
-A Tile kernel works on whole tiles and never names a thread. A SIMT function
-works on one element from one thread. A **tile library** joins the two. It
-packages Rust device functions so the Tile compiler can call them from inside
-a cuTile kernel, once per element or once per warp, and link them into the
-kernel's cubin. The Rust side is `#[tile_export]`, the packaging is
-`cargo oxide tilelib`, and the caller is cuTile Python's `foreign_call` today,
-with [cutile-rs](https://nvidia.github.io/cuda-rust/cutile/) to follow.
+A Tile kernel operates on whole tiles without naming individual threads. A SIMT
+function operates on elements from individual threads or warps. A **tile
+library** connects the two: it packages Rust device functions so the Tile
+compiler can call them from inside a Tile kernel and link them into a single
+`cubin`.
 
-```text
-#[tile_export(tile_shape = 128)]
-pub fn relu(x: f32) -> f32 { .. }                     your Rust function
-        |
-        |  cargo oxide tilelib <crate> --arch sm_120
-        v
-<crate>.ltoir          device code     void relu_impl(float x, float *relu_out)
-<crate>.iface.tilebc   declaration     @relu(tile<128xf32> in, tile<128xf32> out) -> tile<128xf32>
-<crate>.impl.tilebc    implementation  @relu_impl implements @relu, one invocation per element
-        |
-        |  tileiras --preview-create-tile-lib       (CUDA 13.5 or newer)
-        v
-<crate>.tilelib
-        |
-        |  tp.foreign_call(symbol_name="relu", ...)   inside a cuTile kernel
-        v
-the Tile compiler links relu_impl into the kernel's cubin
-```
+- **Annotate in Rust:** Mark device functions with `#[tile_export]`.
+- **Package the library:** Run `cargo oxide tilelib` to emit compiled device
+  code and Tile IR metadata, packaged into a `.tilelib` archive by `tileiras`
+  (CUDA 13.5+).
+- **Call from a Tile kernel:** Invoke the exported function from Tile C++ or
+  cuTile Python, with [cutile-rs](https://nvidia.github.io/cuda-rust/cutile/)
+  caller support to follow.
+
+| Mode              | Rust Attribute                   | How It Works                                                        |
+|:------------------|:---------------------------------|:--------------------------------------------------------------------|
+| **Static mode**   | `#[tile_export(tile_shape = N)]` | Fixed tile size `N` is compiled ahead of time into `.tilelib`       |
+| **Provider mode** | `#[tile_export]`                 | Caller chooses size `N`; provider compiles each size `N` on demand  |
 
 :::{seealso}
 [Kernels and Device Functions](../gpu-programming/kernels-and-device-functions.md)
-covers `#[device]` and the LTOIR route to CUDA C++. A tile library is the same
-route with the Tile compiler as the caller.
+covers `#[device]` and LTOIR linking with CUDA C++. A tile library uses the
+same LTOIR pipeline with the Tile compiler as the caller.
 :::
 
 ```{figure} images/tilelib-direct-linkage.svg
 :align: center
 :width: 100%
 
-The direct-linkage path. cuda-oxide ships the code (LTOIR) and two
-descriptions (interface and implementation bytecode); tileiras packs them
-into one `.tilelib`, and a Tile kernel calls the Rust function from inside
-its body.
+Static tile library flow. `cargo oxide tilelib` emits compiled device code
+(`.ltoir`) plus interface and implementation descriptions (`.tilebc`);
+`tileiras` packages them into a `.tilelib` and links called exports into the
+Tile kernel's `cubin`.
 ```
 
-## Writing an export
+---
 
-Put `#[tile_export(tile_shape = N)]` on an ordinary function. `N` is the tile size
-the caller will pass. The function stays as written, so the rest of your
-device code keeps calling it. The attribute adds two items next to it: an
-`extern "C"` implementation on the native SIMT ABI, named `<name>_impl` by
-default, and a host-only description that the compiler writes out as JSON.
-Leave `tile_shape` out and the call supplies the tile size instead; such an
-export needs the provider form of the library, described below.
+## Writing Exports
+
+Add `#[tile_export]` to a standard Rust function. Your original function stays
+unchanged so other Rust device code can still call it directly. Alongside it,
+the macro generates:
+
+- An `extern "C"` wrapper (`<name>_impl` by default) using the Tile-to-SIMT C
+  ABI.
+- A host-side export description that the compiler writes to
+  `<crate>.tileexports.json`.
 
 The
 [`tilelib_relu`](https://github.com/NVIDIA/cuda-rust/tree/main/cuda-oxide/crates/rustc-codegen-cuda/examples/tilelib_relu)
-example exports three functions, and this chapter follows them:
+example demonstrates four export patterns:
 
 ```rust
 use cuda_device::{tile_export, warp};
 
-/// Elementwise `max(x, 0)`.
+/// 1. Fixed-size elementwise export (128 threads, 1 element each).
 #[tile_export(tile_shape = 128)]
 pub fn relu(x: f32) -> f32 {
     if x > 0.0 { x } else { 0.0 }
 }
 
-/// Scale a tile in place. The cuTile side knows it as `scale_in_place`.
+/// 2. In-place mutation with a custom Tile-side declaration name.
 #[tile_export(
     tile_shape = 128,
     name = "scale_in_place",
@@ -76,7 +71,7 @@ pub fn scale(x: &mut f32, factor: f32) {
     *x *= factor;
 }
 
-/// Sum over the 32 lanes of each warp; every lane gets the warp total.
+/// 3. Warp-synchronized export (all 32 lanes of each warp call together).
 #[tile_export(tile_shape = 128, sync = "warp")]
 pub fn warp_sum(x: f32) -> f32 {
     let mut total = x;
@@ -87,286 +82,309 @@ pub fn warp_sum(x: f32) -> f32 {
     }
     total
 }
+
+/// 4. Parametric export (no tile_shape; caller supplies tile size N).
+#[tile_export]
+pub fn relu_any(x: f32) -> f32 {
+    if x > 0.0 { x } else { 0.0 }
+}
 ```
 
-What each one becomes in the device artifact:
+How each export maps to its generated C wrapper in the device artifact:
 
-| cuTile name      | Rust                                    | Implementation the call resolves to                |
-|:-----------------|:----------------------------------------|:---------------------------------------------------|
-| `relu`           | `fn relu(x: f32) -> f32`                | `void relu_impl(float x, float *relu_out)`         |
-| `scale_in_place` | `fn scale(x: &mut f32, factor: f32)`    | `void scale_in_place_impl(float *x, float factor)` |
-| `warp_sum`       | `fn warp_sum(x: f32) -> f32`, warp sync | `void warp_sum_impl(float x, float *warp_sum_out)` |
+| Tile name        | Rust function                        | Generated SIMT wrapper                              |
+|:-----------------|:-------------------------------------|:----------------------------------------------------|
+| `relu`           | `fn relu(x: f32) -> f32`             | `void relu_impl(float x, float *relu_out)`          |
+| `scale_in_place` | `fn scale(x: &mut f32, factor: f32)` | `void scale_in_place_impl(float *x, float factor)`  |
+| `warp_sum`       | `fn warp_sum(x: f32) -> f32`         | `void warp_sum_impl(float x, float *warp_sum_out)`  |
+| `relu_any`       | `fn relu_any(x: f32) -> f32`         | `void relu_any_impl__N<size>(float x, float *out)`  |
 
-`warp_sum` uses warp shuffles, which are legal because `sync = "warp"` makes
-all 32 lanes of a warp call it together. The
-[Warp-Level Programming](warp-level-programming.md) chapter explains the
-shuffle pattern.
+`warp_sum` can safely use warp shuffles because `sync = "warp"` guarantees all
+32 lanes of a warp execute the function together. See
+[Warp-Level Programming](warp-level-programming.md) for the butterfly reduction
+pattern.
 
-### Attribute arguments
+### Attribute Options
 
-| Argument                    | Meaning                                          | Default            |
+| Option                      | Meaning                                          | Default            |
 |:----------------------------|:-------------------------------------------------|:-------------------|
-| `tile_shape = N`            | 1-D tile size, an integer literal; without it the call supplies the size and only the provider form ships the export | parametric |
-| `name = "..."`              | declaration name the cuTile caller uses          | the function name  |
-| `symbol = "..."`            | implementation symbol in the device artifact     | `<name>_impl`      |
-| `sync = "none"` or `"warp"` | threads that must call the function together     | `"none"`           |
-| `arch = ["sm_120", ...]`    | compute capabilities the implementation supports | every architecture |
+| `tile_shape = N`            | Fixed 1D tile size (omit for parametric exports) | Parametric         |
+| `name = "..."`              | Declaration name visible to the Tile caller      | Rust function name |
+| `symbol = "..."`            | Linker symbol in the device artifact             | `<name>_impl`      |
+| `sync = "none"` or `"warp"` | Threads that enter the function together         | `"none"`           |
+| `arch = ["sm_120", ...]`    | Compute capabilities supported by the export     | All architectures  |
 
-`arch` is normally omitted, which matches every target. When given, names are
-compared after stripping `_` and lowercasing, so `"sm_120"` also matches the
-`sm_120a` the Tile compiler builds for.
+- Omit `tile_shape` when the caller should choose the tile size at each call
+  site (shipped with `cargo oxide tilelib --provider`).
+- Omit `arch` to match every target. When specified, architecture strings
+  normalize underscores and case, so `"sm_120"` also matches `sm_120a`.
 
-### Parameters and the ABI
+### Parameters and ABI
 
-Every parameter is a plain identifier with one of four types. `T` is one of
-`f16`, `f32`, `f64`, `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`.
-Tile IR has no unsigned integers, so a `u32` parameter is an `i32` tile on the
-Tile side, same bits.
+| Rust parameter        | Access  | Footprint | SIMT ABI parameter            |
+|:----------------------|:--------|:----------|:------------------------------|
+| `x: T`                | `in`    | 1         | `T` by value                  |
+| `x: &T`               | `in`    | 1         | `*const T`                    |
+| `x: &[T; F]`          | `in`    | `F`       | `*const T`                    |
+| `x: &mut T`           | `inout` | 1         | `*mut T`                      |
+| `x: &mut [T; F]`      | `inout` | `F`       | `*mut T`                      |
+| `-> T` (return value) | `out`   | 1         | `*mut T` (appended last)      |
 
-| Rust parameter        | Access  | Footprint | ABI parameter                         |
-|:----------------------|:--------|:----------|:--------------------------------------|
-| `x: T`                | `in`    | 1         | `T` by value                          |
-| `x: &T`               | `in`    | 1         | `*const T`                            |
-| `x: &[T; F]`          | `in`    | F         | `*const T`                            |
-| `x: &mut T`           | `inout` | 1         | `*mut T`                              |
-| `x: &mut [T; F]`      | `inout` | F         | `*mut T`                              |
-| `-> T` (return value) | `out`   | 1         | `*mut T`, appended last as `<fn>_out` |
+- **Supported element types (`T`):** `f16`, `f32`, `f64`, `i8`, `i16`, `i32`,
+  `i64`, `u8`, `u16`, `u32`, and `u64`. Tile IR uses signless integers, so
+  unsigned Rust types (`u32`) map to same-width integer tiles (`i32`) with
+  identical bits.
+- **Footprint (`F`):** The number of contiguous tile elements owned by a single
+  invocation (`1` for scalars and single-element references, `F` for array
+  references).
+- **By-value vs. pointer passing:** Only read-only scalars (`x: T`) travel by
+  value. Reference parameters and the return value travel as pointers to the
+  invocation's private elements.
+- **Tile-side signature:** On the Tile side, every parameter (including the
+  trailing return slot) is passed as a tile argument, and the call returns all
+  `inout` and `out` tiles in declaration order.
 
-The footprint is the number of contiguous tile elements one invocation owns.
-Only an `in` scalar travels by value. Everything else is a pointer to the
-invocation's own elements, and the implementation returns nothing: a return
-value is stored through the trailing `out` pointer. On the Tile side every
-parameter, the return slot included, is one argument of the declaration, typed
-as a tile of the export's size. Slices, raw pointers, tuples, structs, `bool`,
-generics, `self`, and patterns in parameter position are rejected.
+### Compile-Time Rules
 
-### Rules the tooling enforces
+Both `#[tile_export]` and `cargo oxide tilelib` enforce these invariants:
 
-The attribute reports these at compile time:
+- **Positive integer literal `tile_shape`:** When given, `tile_shape` must be a
+  positive integer literal (not a `const` or expression).
+- **At least one output:** Every export must either return a value (`-> T`) or
+  accept at least one `&mut` parameter.
+- **Inputs before outputs:** All `in` parameters must precede `&mut` (`inout`)
+  parameters so that `inout` and `out` slots form a single contiguous run. For
+  example, write `fn f(b: f32, a: &mut f32) -> f32` rather than
+  `fn f(a: &mut f32, b: f32) -> f32`.
+- **Uniform footprint across parameters:** All parameters of an export must
+  share the same footprint `F` so they require the same number of invocations
+  (`tile_shape / F`). Pair `acc: &mut [i32; 4]` with `bias: &[i32; 4]`, not
+  `bias: &i32`.
+- **Whole warps for `sync = "warp"`:** Warp-synchronized exports require
+  `tile_shape` to be a multiple of `32 * F`.
+- **Unreserved identifiers:** `name` and `symbol` must be valid ASCII
+  identifiers and cannot start with `cuda_oxide_`.
 
-- `tile_shape`, when given, is an integer literal and positive. A constant or
-  an expression is not accepted: a static library ships one concrete symbol
-  per export. Without it the export is parametric and only the provider form
-  of the library can ship it.
-- The export has an output: a return value, or at least one `&mut` parameter.
-  A declaration's results are its `out` and `inout` arguments.
-- The `out` and `inout` parameters form one contiguous run.
-  `fn f(a: &mut f32, b: f32) -> f32` is `[inout, in, out]` and is rejected;
-  write `fn f(b: f32, a: &mut f32) -> f32`, with the `in` parameters first.
-- Every parameter of one export has the same footprint, because the
-  fragments of one implementation share their invocation count. A
-  `&mut [i32; 4]` next to a `&i32` would need 32 invocations for one argument
-  and 128 for the other, so `fn window(acc: &mut [i32; 4], bias: &i32)` is
-  rejected and `bias: &[i32; 4]` is the accepted form.
-- `sync = "warp"` needs a tile size that is a multiple of 32 times the
-  footprint, so every invocation fills whole warps.
-- `name` and `symbol` are ASCII identifiers outside the reserved
-  `cuda_oxide_` prefix.
+---
 
-`cargo oxide tilelib` repeats the same checks when it reads the descriptions
-back, so a hand-edited description cannot slip past them.
+## Building a Static Library
 
-## Building the library
+Run `cargo oxide tilelib` with a target architecture to build a static tile
+library:
 
 ```bash
 cargo oxide tilelib tilelib_relu --arch sm_120 --print
 ```
 
-`--arch` is required because the LTOIR inside a library is built for one
-architecture. In a standalone project, such as one made with `cargo oxide new`,
-the crate name can be omitted. The command runs `emit-ltoir`, then writes the
-description modules next to the device artifact:
+In a standalone project created with `cargo oxide new`, you can omit the crate
+name. The command compiles the device crate and writes the library files next
+to the artifact:
 
-```text
-tilelib_relu.ltoir               device code for sm_120
-tilelib_relu.tileexports.json    one description per export, written by the compiler
-tilelib_relu.iface.tilebc        declarations, Tile IR bytecode at the assembler's version
-tilelib_relu.impl.tilebc         implementations, same version
-tilelib_relu.tilelib.mlir        readable form of both; --print shows it
-tilelib_relu.tilelib             the library, when tileiras can build it
-```
+| Generated File                   | Contents                                                             |
+|:---------------------------------|:---------------------------------------------------------------------|
+| `tilelib_relu.ltoir`             | Compiled device code (LTOIR) for `sm_120`                            |
+| `tilelib_relu.tileexports.json`  | Export metadata emitted by the compiler                              |
+| `tilelib_relu.iface.tilebc`      | Tile IR interface bytecode (declarations)                            |
+| `tilelib_relu.impl.tilebc`       | Tile IR implementation bytecode (fragment layouts)                   |
+| `tilelib_relu.tilelib.mlir`      | Human-readable dump of both bytecode modules                         |
+| `tilelib_relu.tilelib`           | Packaged tile library (when CUDA 13.5+ `tileiras` is available)      |
 
-This is the static form: the LTOIR and the descriptions are final when the
-command ends, and every export in it names a `tile_shape`. An export without
-one is left out, and the command says so:
+What happens during the build:
 
-```text
-Left out of the static library: `relu_any`, `warp_sum_any` (no tile_shape, so the call supplies the extent); `cargo oxide tilelib --provider` ships them
-```
+- **ABI verification:** Before writing bytecode, `cargo oxide tilelib` checks
+  the emitted NVVM IR to confirm every wrapper symbol (such as
+  `define void @relu_impl(float, ptr)`) matches the ABI table.
+- **Static filtering:** Only exports with a fixed `tile_shape` are included in a
+  static library. Parametric exports are skipped with a reminder to pass
+  `--provider`.
+- **Assembler packaging (`tileiras`):** Creating the final `.tilelib` requires
+  `tileiras --preview-create-tile-lib` from **CUDA 13.5 or newer** (resolved via
+  `CUTILE_TILEIRAS_PATH`, `PATH`, or your configured CUDA toolkit). On CUDA
+  13.4, the command still writes the `.ltoir` and `.tilebc` files, prints the
+  `tileiras` command to run on a newer toolkit, and exits with code `2` (or `0`
+  if you pass `--library-optional`).
 
-Before writing the modules it checks the emitted NVVM IR: every implementation
-symbol must be a `define void` with the parameter list the ABI table predicts,
-for example `define void @relu_impl(float, ptr)`. The assembler never looks
-inside the code payload, so a missing or misdeclared symbol would otherwise
-surface only when a cuTile program is compiled against the library. The two
-bytecode modules are built by the `oxide-tilebc` crate, cuda-oxide's own
-writer for these two kinds of module; the Tile stack's crates are not
-involved.
-writes its own Tile IR with.
+### Inspecting the Tile IR Dump (`--print`)
 
-### Reading the dump
+Passing `--print` prints the human-readable `.tilelib.mlir` descriptions for the
+interface and implementation modules:
 
-`--print` shows both modules in Tile IR syntax. The text is the same as
-`tilelib_relu.tilelib.mlir`. For `tilelib_relu`:
-
-```text
-// tilelib_relu.iface.tilebc: the interface a cuTile program calls
+```mlir
+// tilelib_relu.iface.tilebc: declarations called by a Tile kernel
 cuda_tile.module @tilelib_relu {
-  cuda_tile.preview$func extern @relu(%x: !cuda_tile.tile<128xf32> {cuda_tile.preview$access = #cuda_tile.preview$access<in>}, %relu_out: !cuda_tile.tile<128xf32> {cuda_tile.preview$access = #cuda_tile.preview$access<out>}) -> !cuda_tile.tile<128xf32>
-  cuda_tile.preview$func extern @scale_in_place(%x: !cuda_tile.tile<128xf32> {cuda_tile.preview$access = #cuda_tile.preview$access<inout>}, %factor: !cuda_tile.tile<128xf32> {cuda_tile.preview$access = #cuda_tile.preview$access<in>}) -> !cuda_tile.tile<128xf32>
-  cuda_tile.preview$func extern @warp_sum(%x: !cuda_tile.tile<128xf32> {cuda_tile.preview$access = #cuda_tile.preview$access<in>}, %warp_sum_out: !cuda_tile.tile<128xf32> {cuda_tile.preview$access = #cuda_tile.preview$access<out>}) -> !cuda_tile.tile<128xf32>
+  cuda_tile.preview$func extern @relu(
+      %x: !cuda_tile.tile<128xf32> {cuda_tile.preview$access = #cuda_tile.preview$access<in>},
+      %relu_out: !cuda_tile.tile<128xf32> {cuda_tile.preview$access = #cuda_tile.preview$access<out>}
+  ) -> !cuda_tile.tile<128xf32>
+
+  cuda_tile.preview$func extern @scale_in_place(
+      %x: !cuda_tile.tile<128xf32> {cuda_tile.preview$access = #cuda_tile.preview$access<inout>},
+      %factor: !cuda_tile.tile<128xf32> {cuda_tile.preview$access = #cuda_tile.preview$access<in>}
+  ) -> !cuda_tile.tile<128xf32>
+
+  cuda_tile.preview$func extern @warp_sum(
+      %x: !cuda_tile.tile<128xf32> {cuda_tile.preview$access = #cuda_tile.preview$access<in>},
+      %warp_sum_out: !cuda_tile.tile<128xf32> {cuda_tile.preview$access = #cuda_tile.preview$access<out>}
+  ) -> !cuda_tile.tile<128xf32>
 }
-// tilelib_relu.impl.tilebc: the implementations the LTOIR defines
+
+// tilelib_relu.impl.tilebc: SIMT implementations and fragment layouts
 cuda_tile.module @tilelib_relu {
-  cuda_tile.preview$extern_impl @relu_impl implements @relu(%x: !cuda_tile.preview$fragment<1xf32, local, mem_layout = #cuda_tile.preview$layout<():()>, fragmap = #cuda_tile.preview$layout<(128, 1, 1):(1, 0, 0)>> {cuda_tile.preview$access = #cuda_tile.preview$access<in>}, %relu_out: !cuda_tile.preview$fragment<1xf32, local, mem_layout = #cuda_tile.preview$layout<(1):(1)>, fragmap = #cuda_tile.preview$layout<(128, 1, 1):(1, 0, 0)>> {cuda_tile.preview$access = #cuda_tile.preview$access<out>})
-  cuda_tile.preview$extern_impl @scale_in_place_impl implements @scale_in_place(%x: !cuda_tile.preview$fragment<1xf32, local, mem_layout = #cuda_tile.preview$layout<(1):(1)>, fragmap = #cuda_tile.preview$layout<(128, 1, 1):(1, 0, 0)>> {cuda_tile.preview$access = #cuda_tile.preview$access<inout>}, %factor: !cuda_tile.preview$fragment<1xf32, local, mem_layout = #cuda_tile.preview$layout<():()>, fragmap = #cuda_tile.preview$layout<(128, 1, 1):(1, 0, 0)>> {cuda_tile.preview$access = #cuda_tile.preview$access<in>})
-  cuda_tile.preview$extern_impl @warp_sum_impl implements @warp_sum(%x: !cuda_tile.preview$fragment<1xf32, local, mem_layout = #cuda_tile.preview$layout<():()>, fragmap = #cuda_tile.preview$layout<(4, 32, 1):(32, 1, 0)>> {cuda_tile.preview$access = #cuda_tile.preview$access<in>}, %warp_sum_out: !cuda_tile.preview$fragment<1xf32, local, mem_layout = #cuda_tile.preview$layout<(1):(1)>, fragmap = #cuda_tile.preview$layout<(4, 32, 1):(32, 1, 0)>> {cuda_tile.preview$access = #cuda_tile.preview$access<out>})
-    synchronization = #cuda_tile.preview$synchronization<warp>
+  cuda_tile.preview$extern_impl @relu_impl implements @relu(
+      %x: !cuda_tile.preview$fragment<1xf32, local,
+          mem_layout = #cuda_tile.preview$layout<():()>,
+          fragmap = #cuda_tile.preview$layout<(128, 1, 1):(1, 0, 0)>>
+          {cuda_tile.preview$access = #cuda_tile.preview$access<in>},
+      %relu_out: !cuda_tile.preview$fragment<1xf32, local,
+          mem_layout = #cuda_tile.preview$layout<(1):(1)>,
+          fragmap = #cuda_tile.preview$layout<(128, 1, 1):(1, 0, 0)>>
+          {cuda_tile.preview$access = #cuda_tile.preview$access<out>})
+
+  cuda_tile.preview$extern_impl @scale_in_place_impl implements @scale_in_place(
+      %x: !cuda_tile.preview$fragment<1xf32, local,
+          mem_layout = #cuda_tile.preview$layout<(1):(1)>,
+          fragmap = #cuda_tile.preview$layout<(128, 1, 1):(1, 0, 0)>>
+          {cuda_tile.preview$access = #cuda_tile.preview$access<inout>},
+      %factor: !cuda_tile.preview$fragment<1xf32, local,
+          mem_layout = #cuda_tile.preview$layout<():()>,
+          fragmap = #cuda_tile.preview$layout<(128, 1, 1):(1, 0, 0)>>
+          {cuda_tile.preview$access = #cuda_tile.preview$access<in>})
+
+  cuda_tile.preview$extern_impl @warp_sum_impl implements @warp_sum(
+      %x: !cuda_tile.preview$fragment<1xf32, local,
+          mem_layout = #cuda_tile.preview$layout<():()>,
+          fragmap = #cuda_tile.preview$layout<(4, 32, 1):(32, 1, 0)>>
+          {cuda_tile.preview$access = #cuda_tile.preview$access<in>},
+      %warp_sum_out: !cuda_tile.preview$fragment<1xf32, local,
+          mem_layout = #cuda_tile.preview$layout<(1):(1)>,
+          fragmap = #cuda_tile.preview$layout<(4, 32, 1):(32, 1, 0)>>
+          {cuda_tile.preview$access = #cuda_tile.preview$access<out>})
+      synchronization = #cuda_tile.preview$synchronization<warp>
 }
 ```
 
-How to read it:
+How to read the two sections:
 
-- The interface has one `preview$func extern` per export. Every Rust parameter
-  is a `tile<128xf32>` argument with its access, and the results are the
-  `out` and `inout` arguments in order. `relu` returns one tile, its
-  `relu_out` slot.
-- The implementation has one `preview$extern_impl` per export, naming the
-  symbol it `implements`. Every argument is a `fragment`: the piece of the tile
-  one invocation sees. `mem_layout` is the buffer's own layout: `():()` for a
-  by-value scalar, `(1):(1)` for one element behind a pointer.
-- `fragmap` maps `(invocations, participants, footprint)` onto the tile.
-  `(128, 1, 1):(1, 0, 0)` is one invocation per element, 128 of them.
-  `(4, 32, 1):(32, 1, 0)` is 4 invocations of 32 lanes each, which is what
-  `synchronization = warp` requires.
+- **Interface (`preview$func extern`):** Lists each function as the Tile
+  kernel sees it, taking `tile<128xf32>` inputs and returning all `inout` and
+  `out` tiles.
+- **Implementation (`preview$extern_impl`):** Maps each C symbol (`@relu_impl`)
+  to the per-invocation `fragment` it receives. `mem_layout` is `():()` for a
+  by-value scalar and `(1):(1)` for a pointer to 1 element.
+- **Fragment map (`fragmap`):** Maps `(invocations, participants, footprint)`
+  across the tile:
+  - `(128, 1, 1):(1, 0, 0)` runs **128 independent thread invocations** of 1
+    element each (`sync = "none"`).
+  - `(4, 32, 1):(32, 1, 0)` runs **4 warp invocations of 32 lanes** each
+    (`sync = "warp"`).
 
-The summary line names the artifacts and their sizes:
+---
 
-```text
-✓ Tile library descriptions written: 3 export(s), Tile IR 13.5 with the preview tag
-```
-
-### The tileiras requirement
-
-The descriptions are Tile IR public-preview content, which exists from
-bytecode 13.5 on. An assembler reads preview content only at the version it
-calls current, the newest numbered version its `--list-versions` prints, so
-the command asks the resolved `tileiras` first and writes the descriptions at
-that version: 13.5 for the CUDA 13.5 assembler, the newer version a newer
-assembler names, and 13.5 when no assembler can read them yet.
-`tileiras --preview-create-tile-lib` arrives with CUDA 13.5, the first
-assembler whose `--list-versions` names 13.5. When the resolved `tileiras`
-lists 13.5 or newer, the command assembles the interface, the
-implementations, and the LTOIR into `tilelib_relu.tilelib` (or the path given
-with `-o`) and prints the `tileiras` invocation it used.
-
-On CUDA 13.4 the command stops after the descriptions and says why:
-
-```text
-Tile library skipped: /usr/local/cuda/bin/tileiras lists bytecode versions 13.1, 13.2, 13.3, 13.4; the descriptions need 13.5 or newer
-The installed tileiras cannot create tile libraries: the descriptions are Tile IR public-preview content, which exists from bytecode 13.5 on and needs the CUDA 13.5 or newer assembler.
-```
-
-It then prints the `tileiras --preview-create-tile-lib` command that turns the
-written files into the library on a newer toolkit, and exits 2 so a script
-notices the missing library. `--library-optional` makes that outcome exit 0
-when the LTOIR and the descriptions are all you need. Both outcomes print a
-line a script can match: `Tile library written to` on success,
-`Tile library skipped:` otherwise. The assembler is resolved from
-`CUTILE_TILEIRAS_PATH` first, then from `PATH`, the configured CUDA toolkit
-root, and the standard install locations. The
-[installation guide](../getting-started/installation.md) covers toolkit
-selection.
-
-## The provider form
+## Building a Provider Library (`--provider`)
 
 ```{figure} images/tilelib-provider-linkage.svg
 :align: center
 :width: 100%
 
-The provider form. The library is a shared object the Tile compiler loads
-while a kernel compiles; it asks, per call site, which implementations exist,
-and once for their code, so one Rust body serves every tile size.
+Provider tile library flow. The `.tilelib` embeds a shared library that
+`tileiras` loads while compiling a Tile kernel, generating and compiling
+size-specific wrapper symbols on demand from a single Rust function body.
 ```
 
-A declaration can be parametric in its tile size: `@relu_any<[N: index]>`
-takes tiles of `N` elements, and each call binds `N`. The Tile compiler then
-asks the library for one implementation symbol per size a kernel uses
-(`relu_any_impl__N128`, `relu_any_impl__N256`), because code is never generic
-in Tile IR. A static library would have to ship every such symbol ahead of
-time. The provider form answers while the kernel compiles instead:
+When an export omits `tile_shape`, its declaration is parametric in the tile
+size: `@relu_any<[N: index]>(tile<[N]xf32>)`. Because compiled device functions
+in Tile IR are never generic, calling `relu_any` at sizes 128 and 256 requires
+two distinct symbols (`relu_any_impl__N128` and `relu_any_impl__N256`).
+
+Instead of prebuilding symbols for every possible size, pass `--provider` to
+package a linkage provider shared library:
 
 ```bash
 cargo oxide tilelib tilelib_relu --arch sm_120 --provider
 ```
 
-```text
-emit-ltoir ──> tilelib_relu.ll + tilelib_relu.tileexports.json
-                        │
-   target/oxide-provider/tilelib_relu/   a generated cdylib crate:
-     oxide-tile-provider runtime + the two files embedded
-                        │ cargo build --release
-   libtilelib_relu_provider.so
-                        │ tileiras --preview-create-tile-lib (interface + .so)
-   tilelib_relu.tilelib
+How provider mode works:
+
+1. **Embed NVVM IR at build time:** `cargo oxide tilelib --provider` embeds your
+   crate's NVVM IR (`.ll`) and export metadata into a generated `cdylib`
+   (`lib<crate>_provider.so`), then combines the interface bytecode and `.so`
+   into `<crate>.tilelib`. Both parametric and fixed-size exports are included.
+2. **Load during Tile compilation:** When `tileiras` compiles a Tile kernel
+   against the library, it loads the `.tilelib` shared object via `dlopen`.
+3. **Resolve each call site:** For every foreign call in the kernel (such as
+   `relu_any<128>` and `relu_any<256>`), `tileiras` queries the provider for
+   matching implementations and assigns a concrete symbol per tile size.
+4. **Compile requested sizes on demand:** `tileiras` requests the device code
+   once for all chosen symbols. The provider appends a thin wrapper per symbol
+   that tail-calls your Rust function, compiles the module to LTOIR with
+   `libNVVM`, and hands it back to `tileiras` for final linking.
+
+Set `OXIDE_TILE_PROVIDER_LOG=1` when compiling a Tile kernel to print every
+query from `tileiras` and every symbol compiled by the provider.
+
+---
+
+## Calling from a Tile Kernel
+
+### From Tile C++
+
+With CUDA 13.5 or newer, `nvcc` supports `--enable-tile` and
+`--tile-preview simt`. Declare exported functions with
+`__experimental_foreign_decl__`:
+
+```cpp
+namespace ct = cuda::tiles;
+using tile_f32 = ct::tile<float, ct::shape<128>>;
+
+// Fixed-size export: @relu(tile<128xf32> in, tile<128xf32> out) -> tile<128xf32>
+__experimental_foreign_decl__ __experimental_foreign_name__("relu")
+    tile_f32 relu(tile_f32 x, [[cutile::experimental_inout]] tile_f32 relu_out);
+
+[[cutile::hint(0, num_worker_warps_per_cta = 4)]] __tile_global__ void kernel(float* x, float* y) {
+    auto xs = ct::partition_view { ct::tensor_span { x, ct::shape<128> {} }, ct::shape<128> {} };
+    auto ys = ct::partition_view { ct::tensor_span { y, ct::shape<128> {} }, ct::shape<128> {} };
+    ys.store(relu(xs.load(0), ys.load(0)), 0);
+}
 ```
 
-The library is now a shared object with the interface spliced in. When a
-Tile kernel is compiled against it, the assembler loads it and asks it, call
-by call, which implementations exist; the provider answers with the
-description of each export, parametric where the export named no
-`tile_shape`. Once the assembler has chosen the implementations it asks once
-more for their code and names the symbol it wants for each size. The provider
-adds one wrapper per name around the Rust body in the embedded NVVM IR,
-compiles the module for the kernel's architecture with the assembler's own
-libNVVM, and hands back the LTOIR. Exports that do name a `tile_shape` are
-served the same way under their own symbol, so one provider library carries
-both kinds.
+Compile and run with `nvcc`:
 
-Two things the provider form needs that the static form does not:
+```bash
+nvcc --enable-tile --tile-preview simt -Xtileiras=-l=tilelib_relu.tilelib \
+     -std=c++20 -arch=sm_120 -o tile_caller cpp/tile_caller.cu
+./tile_caller
+```
 
-- The Tile IR compiler's linkage provider header, which the runtime's `-sys`
-  crate binds at build time from `TILEIR_LINKAGE_PROVIDER_INCLUDE_DIR`. The
-  header is part of the Tile IR compiler's source tree, not of a CUDA toolkit,
-  and the command stops with that explanation when the variable is unset.
-- The cuda-oxide workspace. The generated crate depends on the runtime by
-  path; standalone projects cannot build the provider form yet.
+For parametric exports in a `--provider` library, declare a C++ function
+template parameterized by the tile extent `N` (see
+`cpp/tile_caller_parametric.cu`):
 
-A caller passes the size as the declaration's constant parameter. In Tile C++
-the foreign declaration is a function template whose extent parameter is
-`N`, and every distinct `relu_any<128>`, `relu_any<256>` is one instantiation:
-
-```text
+```cpp
 template <size_t N>
 __experimental_foreign_decl__ __experimental_foreign_name__("relu_any")
-    ct::tile<float, ct::shape<N>> relu_any(ct::tile<float, ct::shape<N>> x,
+    ct::tile<float, ct::shape<N>> relu_any(
+        ct::tile<float, ct::shape<N>> x,
         [[cutile::experimental_inout]] ct::tile<float, ct::shape<N>> relu_any_out);
 
+// Instantiates relu_any_impl__N128 and relu_any_impl__N256 on demand:
 relu128.store(relu_any<128>(view<128>(ramp128).load(0), relu128.load(0)), 0);
 relu256.store(relu_any<256>(view<256>(ramp256).load(0), relu256.load(0)), 0);
 ```
 
-In cuTile Python the size goes in `constant_params`:
+Key points for Tile C++ callers:
 
-```python
-(out,) = tp.foreign_call(
-    tilelibs=(PROVIDER,),
-    symbol_name="relu_any",
-    constant_params=(TILE,),
-    inputs=(tile, result_slot),
-    output_types=((ct.float32, (TILE,)),),
-)
-```
+- **Input vs. output attributes:** Read-only parameters take no attribute;
+  `inout` and `out` parameters take `[[cutile::experimental_inout]]` and are
+  returned as the call result.
+- **Use the declaration name:** Pass `"relu"` (not `"relu_impl"`) to
+  `__experimental_foreign_name__`.
+- **Matched toolchain:** Because `nvcc` and `tileiras` come from the same CUDA
+  toolkit, their Tile IR bytecode versions always match.
 
-The example's `cpp/tile_caller_parametric.cu` calls `relu_any` at 128 and 256
-elements and `warp_sum_any` at 64 from one kernel; `OXIDE_TILE_PROVIDER_LOG=1`
-in the compiler's environment prints every question the assembler asked and
-the symbols the provider compiled.
+### From cuTile Python
 
-## Calling it from cuTile Python
-
-A cuTile kernel reaches the export through `cuda.tile_preview.foreign_call`.
-This is the kernel from the example's `python/call_from_cutile.py`:
+In cuTile Python, load the `.tilelib` at module scope and invoke exports with
+`cuda.tile_preview.foreign_call` (from `python/call_from_cutile.py`):
 
 ```python
 import cuda.tile as ct
@@ -377,10 +395,9 @@ PROVIDER = tp.Tilelib(path="tilelib_relu.tilelib", version="0.1.0")
 
 
 def relu_tile(x, y):
-    """One block runs `relu` over one 128-float tile of `x` into `y`."""
+    """Run Rust `relu` over one 128-float tile per block."""
     pid = ct.bid(0)
     tile = ct.load(x, index=(pid,), shape=(TILE,))
-    # Every declaration argument needs an input tile, the `out` slot included.
     result_slot = ct.zeros((TILE,), dtype=ct.float32)
     (out,) = tp.foreign_call(
         tilelibs=(PROVIDER,),
@@ -392,137 +409,76 @@ def relu_tile(x, y):
     ct.store(y, index=(pid,), tile=out)
 ```
 
-Three things to get right:
+Key points for cuTile Python callers:
 
-- `symbol_name` is the declaration name, `relu`, not the implementation symbol
-  `relu_impl`. The Tile compiler resolves the call to the implementation when
-  it links the library.
-- Every declaration argument takes a tile, the `out` ones included. `relu` has
-  two arguments, so `inputs` has two tiles; a zero tile stands in for the
-  result slot. A scalar needs a 0-d tile, and a Python literal is rejected.
-- `output_types` lists the results, one `(dtype, shape)` per `out` or `inout`
-  argument in declaration order. `relu` has one.
+- **Declaration name:** Pass `symbol_name="relu"`, not `"relu_impl"`.
+- **Pass a tile for every parameter:** `inputs` must supply a tile for every
+  declaration argument, including output slots (`result_slot = ct.zeros(...)`).
+- **Specify `output_types`:** Provide one `(dtype, shape)` tuple per `inout` or
+  `out` parameter in declaration order.
+- **Parametric exports:** When calling a `--provider` export without a fixed
+  `tile_shape`, pass the tile extent in `constant_params=(TILE,)` instead of
+  `()`.
 
-`foreign_call` reads the library as a compile-time constant, so the `Tilelib`
-is a module global rather than a kernel argument, and its file has to exist
-when the kernel is traced. The script's `--dry-run` compiles the kernel to
-bytecode without `tileiras`, which works on CUDA 13.4 today:
+---
 
-```text
-bytecode: 844 bytes, header 0d050100 (version 13.5, preview flag set)
-PASS: the caller side compiles; the program calls `relu` through preview$call (dry run, no cubin)
-```
+## Execution Model and Current Limits
 
-The full run needs the `.tilelib` from a CUDA 13.5 or newer `tileiras` and
-a cuTile Python that lists that assembler's current bytecode version, because
-preview content is read only at that version.
+### What Happens at the SIMT Boundary
 
-## Calling it from Tile C++
+The Tile compiler never passes an entire tile to a single Rust call. Instead, it
+partitions each tile into per-invocation fragments in local memory or registers:
 
-The same toolkit that brings the assembler teaches nvcc `--enable-tile` and
-`--tile-preview simt`, and a Tile C++ kernel calls the library through a
-foreign declaration. The example's `cpp/tile_caller.cu` declares all three
-exports; this is the `relu` one:
+- **Per-element (`sync = "none"`):** A 128-element tile with footprint 1 runs
+  128 calls, each on one thread.
+- **Per-warp (`sync = "warp"`):** Each invocation is a full 32-lane hardware
+  warp. Every lane receives its own element(s), and warp collectives
+  (`cuda_device::warp`) are valid inside the function.
+- **Private fragment pointers:** Reference parameters (`&T`, `&mut T`,
+  `&[T; F]`) point strictly to that invocation's own elements (`1` or `F`
+  contiguous values). Do not index past them, and never assume adjacent
+  threads' fragments are contiguous in memory.
+- **Registers only (no shared memory):** The Tile compiler owns shared-memory
+  allocation for the kernel. Do not declare `SharedArray` inside a
+  `#[tile_export]` function.
 
-```text
-namespace ct = cuda::tiles;
-using tile_f32 = ct::tile<float, ct::shape<128>>;
+### Current Limitations
 
-// @relu(%x: tile<128xf32> in, %relu_out: tile<128xf32> out) -> tile<128xf32>
-__experimental_foreign_decl__ __experimental_foreign_name__("relu")
-    tile_f32 relu(tile_f32 x, [[cutile::experimental_inout]] tile_f32 relu_out);
+- **Synchronization scopes:** `sync` supports `"none"` and `"warp"` only
+  (warpgroup and CTA scopes are not yet available).
+- **Tile rank and element types:** Only 1D tiles and `f16`, `f32`, `f64`, and
+  8/16/32/64-bit integer types are supported (`bf16` and 2D tiles are not yet
+  supported).
+- **No shared-memory scratch:** Exports cannot request a shared-memory scratch
+  buffer from the Tile compiler.
+- **Workspace requirement for `--provider`:** Building a `--provider` library
+  currently requires running inside the `cuda-oxide` workspace so the generated
+  provider crate can reference `oxide-tile-provider` by path.
+- **Caller front ends:** Tile C++ and cuTile Python can call tile libraries
+  today; `cutile-rs` caller support is planned.
 
-[[cutile::hint(0, num_worker_warps_per_cta = 4)]] __tile_global__ void kernel(float* x, float* y) {
-    auto xs = ct::partition_view { ct::tensor_span { x, ct::shape<128> {} }, ct::shape<128> {} };
-    auto ys = ct::partition_view { ct::tensor_span { y, ct::shape<128> {} }, ct::shape<128> {} };
-    ys.store(relu(xs.load(0), ys.load(0)), 0);
-}
-```
-
-A parameter the library reads carries no attribute; one it writes carries
-`[[cutile::experimental_inout]]` and comes back as the call's result, in
-argument order. The declaration's name is the library's declaration name,
-not the implementation symbol. Compile and run:
-
-```bash
-nvcc --enable-tile --tile-preview simt -Xtileiras=-l=tilelib_relu.tilelib \
-     -std=c++20 -arch=sm_120 -o tile_caller cpp/tile_caller.cu
-./tile_caller
-```
-
-```text
-PASS relu: 128 elements through the tile library
-PASS scale_in_place: 128 elements through the tile library
-PASS warp_sum: 128 elements through the tile library, every lane holding its warp's total
-SUCCESS: 3/3 tile exports called from a Tile C++ kernel
-```
-
-Because nvcc, tileiras and the Tile C++ front end come from one toolkit, the
-program and the library always agree on the bytecode version. That is the
-shortest path to a running Tile kernel on top of a Rust library; the cuTile
-Python path needs a cuTile Python that lists the same assembler's version.
-
-## What happens at the boundary
-
-The Tile compiler never hands your function a whole tile. It splits each tile
-argument into fragments, one per invocation, and calls the implementation once
-per fragment. With `sync = "none"` a fragment is one element, so a 128-element
-tile means 128 calls, each from one thread. With `sync = "warp"` an invocation
-is a whole warp: 32 lanes call together, each with its own element, and warp
-intrinsics are legal inside. The calling thread is a real thread of the Tile
-kernel, and `threadIdx.x` reads the hardware register, so lane and warp
-identity work as in any SIMT kernel (see the
-[Execution Model](../gpu-programming/execution-model.md)).
-
-The pointers you receive point at the invocation's own buffer and nothing
-else. `&mut f32` is one element and `&mut [f32; 4]` is four contiguous
-elements; the function may not reach past them, and nothing outside the
-invocation aliases them during the call. The function cannot allocate shared
-memory, so do not declare a `SharedArray` in an export: the shared memory of a
-Tile kernel is the Tile compiler's to place, and this release has no way to
-request a scratch buffer from it (see
-[Shared Memory and Synchronization](shared-memory-and-synchronization.md)
-for what shared memory means in a SIMT kernel). Keep exports to registers,
-the parameters they receive, and warp traffic.
-
-## Not in this release
-
-- Warpgroup and CTA scope. `sync` accepts `"none"` and `"warp"` only.
-- Scratch memory. An export cannot ask for a shared-memory buffer.
-- `bf16` parameters. The attribute accepts `f16` but not `bf16` yet.
-- 2-D tiles. `tile_shape` has one extent.
-- The provider form outside the cuda-oxide workspace, and without the Tile IR
-  compiler's linkage provider header. One provider library also serves one
-  architecture per compilation.
-- A cutile-rs caller. Only cuTile Python has `foreign_call` today.
-
-The [Supported Features](../appendix/supported-features.md) appendix tracks
-the interop status alongside the rest of the compiler.
+See [Supported Features](../appendix/supported-features.md) for the full
+compiler feature matrix.
 
 ### Verifying the ABI on CUDA 13.4
 
-The `.tilelib` needs the CUDA 13.5 or newer assembler, but the ABI can be
-proven today. The example's
-host program stands in for the Tile compiler:
+Even without the CUDA 13.5 `tileiras` assembler, you can test the generated SIMT
+wrappers and ABI end-to-end on a GPU using the example's host harness:
 
 ```bash
 cargo oxide run tilelib_relu --emit-nvvm-ir --arch sm_120
 ```
 
-It reads `tilelib_relu.tileexports.json`, generates `mock/caller.cu` with the
-prototypes the ABI table predicts and one kernel per export, compiles that with
-`nvcc` to LTOIR, links it with the Rust LTOIR through nvJitLink, the same
-two-input link a consumed library gets, and runs one block of 128 threads per
-export on the GPU. Every result is compared bit for bit:
+The host runner reads `tilelib_relu.tileexports.json`, generates a CUDA C++
+caller (`mock/caller.cu`) with the exact prototypes derived from the export
+descriptions, links it with the Rust LTOIR via `nvJitLink`, and verifies all 5
+exports on the GPU:
 
 ```text
 PASS relu: 128 elements through `relu_impl`, relu of a ramp from -4 to 4
 PASS scale_in_place: 128 elements through `scale_in_place_impl`, the ramp scaled in place by 0.5
 PASS warp_sum: 128 elements through `warp_sum_impl`, 32-lane sums over 0..128, every lane holding its warp's total
-SUCCESS: 3/3 tile exports verified through the native ABI
+PASS relu_any: 128 elements through `relu_any_impl`, relu of a ramp from -4 to 4
+PASS warp_sum_any: 128 elements through `warp_sum_any_impl`, 32-lane sums over 0..128, every lane holding its warp's total
+SUCCESS: 5/5 tile exports verified through the native ABI
 ```
-
-The prototypes in `mock/caller.cu` are derived from the descriptions, not
-written by hand, so the generated file is the ABI as the tooling understands
-it. Without `nvcc`, or on a GPU that does not match `--arch`, the program
-prints `skipping:` with the reason and exits 0.

@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Add optional cheap screening and budget-reserved paired confirmation to the
+  preparation pipeline. Preparation stops before fresh incumbent comparisons;
+  incomplete confirmation retains the incumbent and records raw samples and
+  failures. The RMSNorm autotune example uses this path. Confirmation defaults
+  are configurable repeatability heuristics, not statistical guarantees.
 - Ordinary launches can join CPU preparation of the same specialization and
   load its binary on the launching thread. Retained prepared binaries are
   reusable without explicit installation. Waiting callers have independent

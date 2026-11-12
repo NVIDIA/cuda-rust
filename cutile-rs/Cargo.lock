@@ -610,6 +610,7 @@ dependencies = [
  "cutile-compiler",
  "cutile-ir",
  "cutile-kernels",
+ "serde_json",
  "tokio",
 ]
 

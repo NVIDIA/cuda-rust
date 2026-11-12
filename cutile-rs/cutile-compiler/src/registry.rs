@@ -43,9 +43,9 @@ pub struct ModuleSource {
     /// walking `use` statements against this registry.
     pub build: fn() -> Module,
 
-    /// Hex SHA-256 over the inputs `build` takes from the macro: module
-    /// name, captured source text, source file, and the line and column the
-    /// spans are anchored at.
+    /// Hex SHA-256 over the macro's own source and the inputs `build` takes
+    /// from it: module name, captured source text, source file, and the line
+    /// and column the spans are anchored at.
     pub identity: &'static str,
 }
 

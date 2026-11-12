@@ -1286,7 +1286,8 @@ fn emit_ast_self_and_registry(
 }
 
 /// Hex SHA-256 over everything `__module_ast_self` is built from besides
-/// `module_path!()`, which the registry entry carries.
+/// `module_path!()`, which the registry entry carries, including this
+/// macro's own source, which writes the builder.
 fn module_identity(
     name: &str,
     source_text: &str,
@@ -1296,6 +1297,7 @@ fn module_identity(
 ) -> String {
     let mut h = Sha256::new();
     for field in [
+        env!("CUTILE_MACRO_SOURCE_DIGEST").as_bytes(),
         name.as_bytes(),
         source_text.as_bytes(),
         source_file.as_bytes(),

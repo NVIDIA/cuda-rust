@@ -4265,14 +4265,22 @@ pub fn encode_literal_bytes(lit_string: &str, cuda_tile_ty: &str) -> Result<Vec<
         ScalarType::I16 => encode_integer_literal(lit_string, 16)?,
         ScalarType::I32 => encode_integer_literal(lit_string, 32)?,
         ScalarType::I64 => encode_integer_literal(lit_string, 64)?,
-        ScalarType::F16 => {
-            let v = parse_float_or_hex(lit_string);
-            half::f16::from_f64(v).to_le_bytes().to_vec()
-        }
-        ScalarType::BF16 => {
-            let v = parse_float_or_hex(lit_string);
-            half::bf16::from_f64(v).to_le_bytes().to_vec()
-        }
+        // A 16-bit hex spelling is ambiguous between `f16` and `bf16` bit
+        // patterns, so each arm decodes hex by its own target type rather than
+        // `parse_float_or_hex`'s length heuristic, which read `bf16::ONE`
+        // (`0x3f80`) through the `f16` layout as 1.875.
+        ScalarType::F16 => match parse_hex_bits(lit_string) {
+            Some(bits) => half::f16::from_bits(bits as u16).to_le_bytes().to_vec(),
+            None => half::f16::from_f64(parse_float_or_hex(lit_string))
+                .to_le_bytes()
+                .to_vec(),
+        },
+        ScalarType::BF16 => match parse_hex_bits(lit_string) {
+            Some(bits) => half::bf16::from_bits(bits as u16).to_le_bytes().to_vec(),
+            None => half::bf16::from_f64(parse_float_or_hex(lit_string))
+                .to_le_bytes()
+                .to_vec(),
+        },
         ScalarType::F32 => {
             let v = parse_float_or_hex(lit_string);
             (v as f32).to_le_bytes().to_vec()
@@ -4317,6 +4325,10 @@ fn encode_integer_literal(literal: &str, bits: u32) -> Result<Vec<u8>, String> {
 }
 
 /// Parse a float literal string, handling both decimal ("3.14") and hex ("0x40490fdb") forms.
+fn parse_hex_bits(s: &str) -> Option<u64> {
+    u64::from_str_radix(s.strip_prefix("0x")?, 16).ok()
+}
+
 fn parse_float_or_hex(s: &str) -> f64 {
     if s.starts_with("0x") || s.starts_with("-0x") {
         let negative = s.starts_with('-');
@@ -4340,6 +4352,16 @@ fn parse_float_or_hex(s: &str) -> f64 {
 #[cfg(test)]
 mod literal_encoding_tests {
     use super::encode_literal_bytes;
+
+    #[test]
+    fn sixteen_bit_hex_constants_decode_by_target_type() {
+        // bf16 1.0 and f16 1.0 have different bit patterns.
+        assert_eq!(encode_literal_bytes("0x3f80", "bf16"), Ok(vec![0x80, 0x3F]));
+        assert_eq!(encode_literal_bytes("0x3c00", "f16"), Ok(vec![0x00, 0x3C]));
+        // Decimal spellings are unaffected.
+        assert_eq!(encode_literal_bytes("1.0", "bf16"), Ok(vec![0x80, 0x3F]));
+        assert_eq!(encode_literal_bytes("1.0", "f16"), Ok(vec![0x00, 0x3C]));
+    }
 
     #[test]
     fn boolean_spellings_preserve_values() {

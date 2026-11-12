@@ -149,8 +149,8 @@ Function argument attributes are available through the low-level IR builder.
 `DISubprogram::is_declaration` exposes the 13.5 debug declaration flag; ordinary
 definitions keep the flag clear, and older writers reject declarations.
 
-The named `simt` preview has its own feature gate and is not a versioned
-CTK 13.5 API; 13.6 MMA overflow attributes are also outside this versioned surface.
+The named `simt` preview has its own feature gate and is separate from the
+versioned CTK 13.5 API surface.
 
 Multicast operations require an NVLink SHARP-capable fabric and the supported
 `sm_100`, `sm_103`, or `sm_107` families. All-false atomic inbounds arrays retain

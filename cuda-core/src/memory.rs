@@ -194,6 +194,93 @@ pub unsafe fn memset_d8_async(
     unsafe { cuda_bindings::cuMemsetD8Async(dptr, value, num_bytes, stream) }.result()
 }
 
+/// When the copies of a [`memcpy_batch_async`] batch may read their sources
+/// (`CUmemcpySrcAccessOrder`). Destinations are always written in stream order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MemcpySrcAccessOrder {
+    /// In stream order, after all work enqueued on the stream before the batch.
+    Stream,
+    /// Out of stream order, and all reads complete before the call returns: for
+    /// ephemeral sources (e.g. stack memory) that no earlier work on the stream
+    /// touches. The stream need not be synchronized before reusing them.
+    DuringApiCall,
+    /// Out of stream order, possibly after the call returns: for sources that no
+    /// earlier work on the stream touches and that stay valid until the copies
+    /// complete.
+    Any,
+}
+
+impl MemcpySrcAccessOrder {
+    fn to_raw(self) -> cuda_bindings::CUmemcpySrcAccessOrder {
+        match self {
+            Self::Stream => cuda_bindings::CUmemcpySrcAccessOrder_enum_CU_MEMCPY_SRC_ACCESS_ORDER_STREAM,
+            Self::DuringApiCall => {
+                cuda_bindings::CUmemcpySrcAccessOrder_enum_CU_MEMCPY_SRC_ACCESS_ORDER_DURING_API_CALL
+            }
+            Self::Any => cuda_bindings::CUmemcpySrcAccessOrder_enum_CU_MEMCPY_SRC_ACCESS_ORDER_ANY,
+        }
+    }
+}
+
+/// Enqueues `sizes.len()` copies, `sizes[i]` bytes from `srcs[i]` to `dsts[i]`,
+/// on `stream` as one batch (`cuMemcpyBatchAsync`), with `src_access_order` for
+/// every copy.
+///
+/// One driver call replaces one `cuMemcpyAsync` per copy, which matters for
+/// many small copies (e.g. scattered cache pages between device and pinned host
+/// memory). Pointers are unified addresses: device memory, pinned host memory,
+/// or other host memory as the access order permits. The copies of a batch have
+/// no order among themselves. An empty batch enqueues nothing.
+///
+/// Errors with `CUDA_ERROR_INVALID_VALUE`, before calling the driver, when the
+/// three slices differ in length.
+///
+/// # Safety
+///
+/// - A CUDA context must be bound to the calling thread, and `stream` must be a
+///   valid `CUstream` from it.
+/// - Every `[dsts[i], dsts[i] + sizes[i])` and `[srcs[i], srcs[i] + sizes[i])`
+///   must be valid memory until the copy executes (and, for
+///   [`MemcpySrcAccessOrder::Any`], until it completes).
+/// - Destination ranges must not overlap each other or any source range.
+pub unsafe fn memcpy_batch_async(
+    dsts: &[CUdeviceptr],
+    srcs: &[CUdeviceptr],
+    sizes: &[usize],
+    src_access_order: MemcpySrcAccessOrder,
+    stream: cuda_bindings::CUstream,
+) -> Result<(), DriverError> {
+    if dsts.len() != sizes.len() || srcs.len() != sizes.len() {
+        return Err(DriverError(
+            cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_VALUE,
+        ));
+    }
+    if sizes.is_empty() {
+        return Ok(());
+    }
+    // SAFETY: an all-zero CUmemcpyAttributes is valid (no location hints, no
+    // flags); the access order is set below.
+    let mut attr: cuda_bindings::CUmemcpyAttributes = unsafe { std::mem::zeroed() };
+    attr.srcAccessOrder = src_access_order.to_raw();
+    // One attribute for the whole batch: it applies from copy 0 on.
+    let mut attr_start = 0usize;
+    // The driver takes the arrays through non-const pointers but only reads
+    // them.
+    unsafe {
+        cuda_bindings::cuMemcpyBatchAsync_v2(
+            dsts.as_ptr().cast_mut(),
+            srcs.as_ptr().cast_mut(),
+            sizes.as_ptr().cast_mut(),
+            sizes.len(),
+            &mut attr,
+            &mut attr_start,
+            1,
+            stream,
+        )
+    }
+    .result()
+}
+
 /// Allocates `num_bytes` of page-locked host memory.
 ///
 /// Pinned host memory can be used as a staging area for CUDA transfers that

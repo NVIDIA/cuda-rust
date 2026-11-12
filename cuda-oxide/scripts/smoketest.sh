@@ -2213,10 +2213,10 @@ run_cargo() {
         : >"${log}"
         if [[ -f "${nvvm_shape_check}" ]]; then
             if [[ ${VERBOSE} -eq 1 ]]; then
-                cargo oxide build "${ex}" "--arch=${nvvm_arch}" 2>&1 | tee -a "${log}"
+                cargo oxide build "${ex}" 2>&1 | tee -a "${log}"
                 CARGO_EC=${PIPESTATUS[0]}
             else
-                cargo oxide build "${ex}" "--arch=${nvvm_arch}" >>"${log}" 2>&1
+                cargo oxide build "${ex}" >>"${log}" 2>&1
                 CARGO_EC=$?
             fi
             if [[ ${CARGO_EC} -eq 0 ]] && ! bash "${nvvm_shape_check}" >>"${log}" 2>&1; then

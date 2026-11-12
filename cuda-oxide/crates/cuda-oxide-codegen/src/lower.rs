@@ -84,7 +84,7 @@ pub fn add_device_extern_declarations(
         region.iter(ctx).next().expect("Module should have a block")
     };
 
-    let declared_symbols: HashMap<_, _> = block
+    let mut declared_symbols: HashMap<_, _> = block
         .deref(ctx)
         .iter(ctx)
         .filter_map(|op| {
@@ -140,6 +140,7 @@ pub fn add_device_extern_declarations(
 
         // Insert at the front of the module (declarations come before definitions)
         func_op.get_operation().insert_at_front(block, ctx);
+        declared_symbols.insert(decl.export_name.clone(), func_type);
     }
 
     Ok(())
@@ -195,4 +196,63 @@ fn device_extern_type_to_pliron(
             ArrayType::get(ctx, element, *len).into()
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::export::DeviceExternAttrs;
+    use llvm_export::export::{NvvmExportConfig, export_module_with_externs};
+    use pliron::builtin::ops::ModuleOp;
+    use pliron::common_traits::Verify;
+
+    #[test]
+    fn repeated_externs_keep_one_operation_and_preserve_conflict_checks() {
+        let mut ctx = Context::new();
+        let module = ModuleOp::new(&mut ctx, "externs".try_into().unwrap());
+        let declaration = DeviceExternDecl {
+            export_name: "external".to_string(),
+            param_types: vec![DeviceExternType::Integer(32)],
+            return_type: DeviceExternType::Void,
+            attrs: DeviceExternAttrs::default(),
+        };
+        let mut externs = [declaration.clone(), declaration];
+        add_device_extern_declarations(&mut ctx, module.get_operation(), &externs).unwrap();
+        let declarations = {
+            let region = module.get_operation().deref(&ctx).get_region(0).deref(&ctx);
+            let block = region.iter(&ctx).next().unwrap();
+            block
+                .deref(&ctx)
+                .iter(&ctx)
+                .filter(|&op| {
+                    Operation::get_op::<llvm_export::ops::FuncOp>(op, &ctx).is_some_and(
+                        |function| function.get_symbol_name(&ctx).to_string() == "external",
+                    )
+                })
+                .count()
+        };
+        assert_eq!(declarations, 1);
+        module.get_operation().deref(&ctx).verify(&ctx).unwrap();
+        let ir = export_module_with_externs(&ctx, &module, &externs, &NvvmExportConfig::default())
+            .unwrap();
+        assert_eq!(ir.matches("declare void @external(i32)").count(), 1);
+
+        // Lowering shares only the FuncOp. The complete declarations still
+        // reach export, where differing convergence requirements are rejected.
+        externs[1].attrs.is_convergent = true;
+        add_device_extern_declarations(&mut ctx, module.get_operation(), &externs).unwrap();
+        let error =
+            export_module_with_externs(&ctx, &module, &externs, &NvvmExportConfig::default())
+                .unwrap_err();
+        assert!(error.contains("convergent is false versus true"), "{error}");
+
+        externs[1].param_types[0] = DeviceExternType::Float32;
+        let error =
+            add_device_extern_declarations(&mut ctx, module.get_operation(), &externs).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("conflicts with the call-site declaration")
+        );
+    }
 }

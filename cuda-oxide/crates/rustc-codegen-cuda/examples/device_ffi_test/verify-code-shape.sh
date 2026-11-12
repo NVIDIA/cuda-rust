@@ -4,12 +4,14 @@
 
 # A runtime q -> Q check cannot distinguish a plain i32 ABI from the plausible
 # but wrong `zeroext i32` mapping: both reach the same PTX and hardware result.
-# Pin the declaration and calls in the emitted LLVM IR before LTO.
+# Pin the declaration and calls in the emitted LLVM IR before LTO. Also check
+# that a private extern reached through a dependency's generic helper retains
+# convergence, while the ordinary char declarations remain unmarked.
 
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ll="${root}/device_ffi_test.ll"
+ll="${1:-${root}/device_ffi_test.ll}"
 
 test -s "${ll}"
 
@@ -46,4 +48,19 @@ if grep -Eq '\b(signext|zeroext)\b' <<<"${char_lines}"; then
     exit 1
 fi
 
-echo "device_ffi_test char ABI shape: PASS"
+# Calls retain the existing conservative convergence group; only these ordinary
+# declarations must be unmarked. The anchored declaration patterns above also
+# reject an unexpected attribute trailer.
+if grep -E '^declare .*@(char_to_upper|char_store)\(' "${ll}" | grep -qw convergent; then
+    echo "error: ordinary char declarations must not be convergent" >&2
+    exit 1
+fi
+
+for symbol in warp_reduce_sum cub_warp_reduce_sum_f32; do
+    require_count "convergent ${symbol} declaration" 1 \
+        "^declare float @${symbol}\(float\) convergent$"
+done
+require_count "convergent warp_ballot declaration" 1 \
+    '^declare i32 @warp_ballot\(i32\) convergent$'
+
+echo "device_ffi_test char ABI and convergence shape: PASS (${ll})"

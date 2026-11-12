@@ -553,6 +553,29 @@ impl Drop for ScopedTempFile {
     }
 }
 
+/// Isolate assembler intermediates so killing the process does not orphan them.
+struct ScopedTempDir(PathBuf);
+
+impl ScopedTempDir {
+    fn new() -> std::io::Result<Self> {
+        let path = env::temp_dir().join(format!("cutile-assembler-{}", Uuid::new_v4()));
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder.create(&path)?;
+        Ok(Self(path))
+    }
+}
+
+impl Drop for ScopedTempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 /// Serializes a `cutile_ir::Module` to Tile IR bytecode (the `.bc` image).
 ///
 /// Runs the module verifiers first, so bytecode returned here is what `tileiras`
@@ -738,7 +761,8 @@ fn tilelib_debug_info_error(opts: &TileirasOptions, stderr: &str) -> Option<Stri
 ///
 /// The temporary `.bc` and `.cubin` are removed before returning. The one
 /// exception is a `tileiras` run that fails or cannot be launched, which
-/// leaves the `.bc` on disk because the error message names it.
+/// leaves the `.bc` on disk because the error message names it. Cancellation
+/// and deadline expiry remove the bytecode and isolated assembler intermediates.
 pub fn run_tileiras(
     bytecode: &[u8],
     gpu_name: &str,
@@ -810,10 +834,7 @@ fn run_tileiras_at_controlled(
                 .get_ref()
                 .and_then(|e| e.downcast_ref::<CompileInterrupted>())
             {
-                let error = anyhow::Error::new(*interrupted).context(format!(
-                    "assembler interrupted; bytecode kept at {bc_filename}"
-                ));
-                bc_file.keep();
+                let error = anyhow::Error::new(*interrupted).context("assembler interrupted");
                 return Err(JITError::Anyhow(error));
             }
             // The message names the bytecode, so it has to outlive this call.
@@ -872,9 +893,13 @@ fn controlled_output(
         return command.output();
     };
     control.check().map_err(std::io::Error::other)?;
-    let base = env::temp_dir().join(Uuid::new_v4().to_string());
+    let temporary = ScopedTempDir::new()?;
+    let base = temporary.0.join("output");
     let stdout = ScopedTempFile::new(base.with_extension("stdout"));
     let stderr = ScopedTempFile::new(base.with_extension("stderr"));
+    command.env("TMPDIR", &temporary.0);
+    command.env("TMP", &temporary.0);
+    command.env("TEMP", &temporary.0);
     command.stdin(std::process::Stdio::null());
     command.stdout(std::fs::File::create(stdout.path())?);
     command.stderr(std::fs::File::create(stderr.path())?);
@@ -1460,6 +1485,75 @@ mod tests {
                     .downcast_ref::<CompileInterrupted>(),
                 Some(&CompileInterrupted::Cancelled)
             );
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn interrupted_assembler_removes_bytecode_output_and_intermediates() {
+        let fixture = ScopedTempDir::new().unwrap();
+        let marker = fixture.0.join("started");
+        let binary = fixture.0.join("tileiras");
+        write_fake_tileiras_script(
+            &binary,
+            &format!(
+                r#"
+output=
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = '-o' ]; then shift; output="$1"; fi
+    input="$1"
+    shift
+done
+printf partial > "$output"
+printf temporary > "$TMPDIR/intermediate"
+printf '%s\n%s\n%s\n' "$input" "$output" "$TMPDIR" > '{}'
+while :; do :; done
+"#,
+                marker.display()
+            ),
+        );
+        let control = CompileControl::default();
+        std::thread::scope(|scope| {
+            let child_control = control.clone();
+            let worker = scope.spawn(move || {
+                run_tileiras_at_controlled(
+                    &binary,
+                    b"bytecode",
+                    "sm_100",
+                    &TileirasOptions::default(),
+                    Some(&child_control),
+                )
+            });
+            let watchdog = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            let paths = loop {
+                let paths: Vec<PathBuf> = std::fs::read_to_string(&marker)
+                    .unwrap_or_default()
+                    .lines()
+                    .map(PathBuf::from)
+                    .collect();
+                if paths.len() == 3 {
+                    break paths;
+                }
+                if std::time::Instant::now() >= watchdog {
+                    break Vec::new();
+                }
+                std::thread::yield_now();
+            };
+            let existed = paths.iter().all(|p| p.exists());
+            control.cancel();
+            let error = worker.join().unwrap().unwrap_err();
+            assert_eq!(paths.len(), 3, "assembler startup watchdog");
+            assert!(existed);
+            let JITError::Anyhow(error) = error else {
+                panic!("expected typed interruption")
+            };
+            assert_eq!(
+                error.downcast_ref::<CompileInterrupted>(),
+                Some(&CompileInterrupted::Cancelled)
+            );
+            for path in paths {
+                assert!(!path.exists(), "orphaned {}", path.display());
+            }
         });
     }
 

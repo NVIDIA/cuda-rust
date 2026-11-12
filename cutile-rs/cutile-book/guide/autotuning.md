@@ -14,6 +14,56 @@ measure a whole request. These synchronous interfaces and their resume logs
 remain supported. The opt-in preparation pipeline below overlaps CPU
 compilation with foreground GPU evaluation.
 
+## Finding a good configuration under a time budget
+
+Use Bayesian optimization (BO) with lookahead compilation when a full sweep
+would take too long. BO uses measurements from this run to choose useful next
+experiments; lookahead compiles future candidates while the GPU evaluates the
+current one. With a budget shorter than a full sweep, this explores only part
+of the declared space. The result is a tested candidate, not proof of the global
+optimum. A small space may still be exhausted within the budget.
+
+From `cutile-rs/`, try the RMSNorm example with a 30-second tuning budget and
+one preparation worker (the default lookahead):
+
+```sh
+cargo run --release -p cutile-examples --example autotune --features experimental-tune -- --search bayes --workers 1 --budget-ms 30000 --seed 42
+```
+
+To try more parallel compilation, change `--workers 1` to `--workers 4`.
+This bounds the number of preparing or ready candidates, not concurrent GPU
+measurements. More lookahead can hide slow compilation, but those candidates
+are chosen before the latest results arrive and some may never be measured.
+Compare with `--serial` and with `--search random` under the same budget.
+
+For your own workload, configure the pipeline and selector together:
+
+```rust
+use std::time::Duration;
+use cutile::tune::pipeline::{BayesianOptions, BayesianSearch, Pipeline};
+
+let mut strategy = BayesianSearch::new(&configs, BayesianOptions::default())?;
+let pipeline = Pipeline::default()
+    .workers(1)
+    .budget(Duration::from_secs(30))
+    .trial_limit(Duration::from_secs(10));
+// Supply resolve/prepare/evaluate and paired-confirmation callbacks to
+// pipeline.run_confirmed(...), as described below and in the example.
+```
+
+With one worker, B compiles while A is evaluated. A's result then informs the
+choice of C, which compiles while B is evaluated. The strategy accounts for
+pending candidates so it does not suggest the same experiment twice.
+
+Use `run_confirmed` to compare finalists with a known incumbent; its default
+reserves 25% of the same budget for fresh paired measurements. If confirmation
+cannot finish, only an alternative that already completed every required round
+can replace the incumbent. Otherwise `NotConfirmed` keeps the incumbent and does not
+certify a replacement. Budgeting is cooperative: it stops new work and bounds
+controlled stages, but an already-running GPU operation or user callback can
+overrun. Application build time and the example's fixture setup are outside
+the tuning budget.
+
 ## Preparing candidates in parallel
 
 The `autotune` example checks RMSNorm outputs against a CPU reference and
@@ -25,6 +75,9 @@ cargo run --release -p cutile-examples --example autotune --features experimenta
 # Compare more CPU workers with the same measurement protocol:
 cargo run --release -p cutile-examples --example autotune --features experimental-tune -- --workers 4 --budget-ms 30000
 cargo run --release -p cutile-examples --example autotune --features experimental-tune -- --serial
+# Compare selection with the same worker count, budget and confirmation:
+cargo run --release -p cutile-examples --example autotune --features experimental-tune -- --search random --seed 42
+cargo run --release -p cutile-examples --example autotune --features experimental-tune -- --search grid
 ```
 
 `tune::pipeline::Pipeline` owns scheduling. Its three callbacks have separate
@@ -68,24 +121,38 @@ comparison with the same callbacks.
 each outcome. `RandomOrder::new(seed).with_initial([baseline_index])` provides
 seeded sampling without replacement, exhausting the space when the budget
 allows. Create a fresh strategy per run. Initial indices are suggestions,
-not a guarantee of incumbent coverage.
+not a guarantee of incumbent coverage. `GridOrder` visits the declared order.
+The example defaults to the Bayesian selector described below; the synchronous
+`Autotuner` still defaults to `GridSearch`.
 
 The budget includes resolution, queueing, preparation, loading, correctness
-checks and measurement. `trial_limit` also starts before resolution, so waiting
-counts. The example's fixture and CPU-reference setup happen before that clock
+checks and measurement. `trial_limit` gives resolution, preparation and evaluation
+each a fresh active-stage allowance, always capped by the overall run deadline.
+Time waiting in the scheduler's own queues counts against the run budget, but
+not the stage limit; waiting inside a callback, including a remote service queue,
+still consumes that callback's active-stage allowance.
+The example's fixture and CPU-reference setup happen before the run clock
 starts. Expired deadlines stop dispatch and exclude late measurements from
 scoring. The assembler process can be killed and reaped; frontend passes and
 benchmark repetitions check cancellation between stages. Arbitrary callbacks,
 CUDA calls and running GPU kernels cannot be forcibly interrupted. Returning
 waits for outstanding workers, so this is a cooperative deadline, not a hard
-wall-clock guarantee.
+wall-clock guarantee. Interrupted assembler runs remove their bytecode and
+temporary intermediates after reaping the process; ordinary compiler failures
+still retain the bytecode named in their diagnostic.
 
-Only explicit `Failure::invalid` outcomes mark a candidate invalid. Return a
+Explicit `Failure::invalid` outcomes and source-located frontend rejections
+(`JITError::Located`, converted through `Failure::from`) mark a candidate invalid.
+Unclassified compiler/driver errors still stop the run. Return a
 measured `Trial` on success: legacy invalid trials also represent non-finite
 timings, so the pipeline treats them as infrastructure errors. Timeouts and
-cancellations are unscored; infrastructure errors stop
-the run. Generic compiler/driver errors default to infrastructure errors because
-they may reflect the environment rather than the candidate. The caller can
+cancellations are unscored. Infrastructure errors remain `Infrastructure` and
+stop the run even if a deadline or cancellation happened first, including when
+collecting results from draining workers. Other late failures are classified as
+`TimedOut` or `Cancelled`, with their original diagnostic retained in
+`Failure::reason`. Neither outcome becomes a usable measurement. Generic
+compiler/driver errors default to infrastructure errors because they may reflect
+the environment rather than the candidate. The caller can
 classify a known candidate-specific rejection explicitly. Observations include
 separate stage durations; an unvisited stage is `None`, and overlapping stage
 times must not be summed as elapsed wall time. Evaluation time includes loading,
@@ -101,6 +168,72 @@ Prepared artifacts are bounded by the pipeline, but installed modules retain
 the existing global cache lifetime. Automatic eviction is deliberately avoided:
 other streams may still be using a specialization. See cache management below.
 
+## Bayesian selection with a neutral starting point
+
+`BayesianSearch` fits a small Gaussian process to **current-run log latencies**
+and scores every unvisited configuration by expected improvement. It can spend
+a measurement on a promising uncertain region rather than simply trying the
+lowest predicted latency. This is intended for small finite spaces with costly
+evaluations, not millions of candidates. Fitting is cubic in the number of
+observations, and scoring the finite list adds work for each candidate. Model
+work is included in the budget and checks the deadline between fit rows and
+candidate scores.
+
+```rust
+use cutile::tune::pipeline::{BayesianOptions, BayesianSearch, ParameterScale};
+
+let options = BayesianOptions {
+    seed: 42,
+    scales: [("BLOCK_SIZE".into(), ParameterScale::Log2)].into(),
+    ..Default::default()
+};
+let mut strategy = BayesianSearch::new(&configs, options)?.with_initial([0])?;
+// Pass &mut strategy to Pipeline::run_confirmed as below.
+```
+
+Without `with_initial` or explicit prior offsets, every configuration has the
+same prior mean and marginal uncertainty; a seeded tie-break selects the first
+candidate. Integer axes default to linear normalization, positive tile sizes
+can opt into logarithmic scaling, and strings are categorical. Integer category
+IDs can also use `Categorical`. Every configuration must declare the same keys
+and parameter types. The Matérn 5/2 kernel, length scale and observation noise
+are fixed explicit settings in `BayesianOptions`, rather than hyperparameters
+fit from a handful of samples. These defaults are starting assumptions, not a
+claim that this model is best for every tuning space.
+
+Optional `prior_log_offsets` give weak preferences by configuration ID. For
+example, `-0.1` encodes an expected latency about 10% below the common baseline.
+Offsets are limited to magnitude `ln(2)`, leave initial uncertainty unchanged,
+and never add observations. Hardware-informed hints must be supplied explicitly;
+the tuner does not invent architecture rules, call an LLM, or train offline.
+The default remains neutral. If using previous tuning runs to construct hints
+or initial candidate suggestions, verify the kernel, parameter meanings,
+workload, GPU and compiler first. Do not insert old timings into current-run
+observations. Automatic history retrieval and cross-kernel transfer are not
+implemented, and resume provenance checks are unchanged.
+
+Pending configurations are temporarily conditioned at their predicted means,
+reducing redundant exploration while another candidate is compiling or being
+measured. They cannot improve the measured incumbent. Expected improvement uses
+the best posterior mean among valid measured points; this is a plug-in treatment
+of noise, not an integrated noisy-EI algorithm. Invalid and timed-out points use
+the same predicted-mean conditioning to reduce repeated exploration around
+failures. This reduces acquisition uncertainty without changing the predicted
+mean or incumbent; it is a search heuristic, not evidence of a measured latency
+or a learned probability of validity. Cancelled and infrastructure-failed points
+receive no such penalty. All failed trials remain excluded as latency targets.
+Known rejected candidate indices are excluded; the first implementation does not
+predict the validity of unseen configurations. A numerical failure falls back to seeded random and
+increments `numerical_fallbacks()`.
+
+The implementation uses standard GP regression equations with Cholesky solves,
+checked against independent scikit-learn/SciPy fixtures. It adds no ML runtime
+dependency. Compare it with seeded random and grid under the **same elapsed-time
+budget**, including compilation, correctness checks and confirmation. Small
+spaces that fit the budget can be exhausted by any strategy; there is no claim
+that a model always wins. The existing `Strategy` interface also permits a
+different selector without changing compilation or measurement.
+
 ## Screening and confirming a replacement
 
 The RMSNorm example uses `Pipeline::run_confirmed` with
@@ -114,7 +247,9 @@ let result = pipeline.run_confirmed(
     resolve, prepare,
     |config, prepared, bench_options, control| { /* check, screen -> Trial */ },
     |incumbent, candidate, bench_options, control| {
-        // Independently check both outputs, then return aligned measurements
+        // Check the incumbent normally: an error here must stop confirmation.
+        // Mark only candidate-specific invalidity with
+        // .map_err(Failure::for_candidate), then return aligned measurements
         // from bench::do_bench_paired_controlled(...).
     },
 )?;
@@ -126,8 +261,15 @@ is exhausted. After **all preparation workers have joined and queued artifacts
 have been dropped**, it compares the four best measured alternatives with the
 incumbent in three fresh rounds. The incumbent is compared even if it was never
 screened. Both arms must pass fresh correctness checks in the callback, and a
-known invalid incumbent is not used. No background preparation runs during these
-comparisons; callers must also keep unrelated GPU work away from the device.
+known invalid incumbent is not used. Attribute candidate-only failures with
+`.map_err(Failure::for_candidate)` around that arm's checks: this converts
+`Invalid` into `InvalidCandidate`, without relabeling infrastructure errors or
+interruptions. A generic `Invalid` from the paired callback remains ambiguous
+and stops confirmation because it may concern the incumbent. Never wrap the
+whole comparison or incumbent checks with `for_candidate`.
+
+No background preparation runs during these comparisons; callers must also keep
+unrelated GPU work away from the device.
 
 `do_bench_paired_controlled` alternates A/B then B/A ordering, with aligned raw
 samples and cancellation/deadline checks between arms. A comparison cannot return
@@ -148,19 +290,30 @@ guarantee an optimal choice. Finalist order reverses on alternate rounds.
 the incumbent, the selected configuration and one of three statuses:
 
 - `Improved`: a replacement passed the configured confirmation rule.
-- `NoImprovement`: comparisons completed, but no alternative passed.
+- `NoImprovement`: every shortlisted alternative completed its comparisons, but
+  none passed the improvement rule.
 - `NotConfirmed`: insufficient valid candidates, failed checks, cancellation or
   insufficient time. The selected configuration remains the supplied incumbent;
   this status does **not** certify that the incumbent passed validation.
 
-Every shortlisted comparison must complete within the budget. A partial leader
-is never promoted after a timeout or failure. Neither previous screening times
-nor the strategy's predictions count as fresh confirmation evidence. This works
-with `RandomOrder`; no Bayesian model or new ML dependency is needed.
+Every selected replacement must complete all of its own required rounds, with
+all correctness checks passing. An `InvalidCandidate` or candidate-local timeout
+disqualifies only that candidate. Other finalists can continue, and a later
+budget/cancellation cutoff can retain the best already fully confirmed candidate;
+a partial leader never wins. `ConfirmedOutput.failure` may therefore contain a
+timeout/cancellation diagnostic alongside `Improved`; per-candidate errors remain
+in `confirmations`. Infrastructure errors and incumbent/ambiguous correctness
+errors stop confirmation without recommending a replacement, even after another
+candidate completed its rounds.
+
+Previous screening times and model predictions never count as fresh confirmation
+evidence. A questionable correctness test should be investigated separately;
+these rules do not waive failed tests or select by correctness pass percentage.
 
 To save the example's observations and raw confirmation samples, pass
 `--evidence NEW_FILE`. It creates a new JSON file without overwriting an existing
-one. Record workload, source revision, GPU and toolkit alongside it; this example
+one. It includes the strategy settings and declared configurations. Record source
+revision, GPU and toolkit alongside it; this example
 file is evidence, not a provenance-checked resume log.
 
 ## Declaring a space and running the search

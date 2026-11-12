@@ -45,16 +45,19 @@ impl<K, V> Default for Registry<K, V> {
 
 struct Lease<'a, K: Eq + Hash, V> {
     key: K,
-    flight: Arc<Flight<V>>,
+    flight: Option<Arc<Flight<V>>>,
     registry: &'a Registry<K, V>,
 }
 
 impl<K: Eq + Hash, V> Lease<'_, K, V> {
+    fn flight(&self) -> &Arc<Flight<V>> {
+        self.flight.as_ref().expect("lease is live until drop")
+    }
     fn unregister(&self) {
         let mut flights = self.registry.flights.lock().unwrap();
         if flights
             .get(&self.key)
-            .is_some_and(|old| old.as_ptr() == Arc::as_ptr(&self.flight))
+            .is_some_and(|old| old.as_ptr() == Arc::as_ptr(self.flight()))
         {
             flights.remove(&self.key);
         }
@@ -63,16 +66,19 @@ impl<K: Eq + Hash, V> Lease<'_, K, V> {
 
 impl<K: Eq + Hash, V> Drop for Lease<'_, K, V> {
     fn drop(&mut self) {
-        // Check under the map lock: a lookup cannot upgrade the weak pointer
-        // between checking the last owner and unregistering it.
+        // Both the count check and strong-reference release must happen under
+        // the map lock. Otherwise two releasers can both see count == 2 and
+        // leave a dead weak entry when their fields drop after unlocking.
         let mut flights = self.registry.flights.lock().unwrap();
-        if Arc::strong_count(&self.flight) == 1
+        let flight = self.flight.take().unwrap();
+        if Arc::strong_count(&flight) == 1
             && flights
                 .get(&self.key)
-                .is_some_and(|old| old.as_ptr() == Arc::as_ptr(&self.flight))
+                .is_some_and(|old| old.as_ptr() == Arc::as_ptr(&flight))
         {
             flights.remove(&self.key);
         }
+        drop(flight);
     }
 }
 
@@ -99,9 +105,9 @@ impl<K: Eq + Hash, V> Drop for OwnerGuard<'_, '_, K, V> {
         if !self.finished {
             // Unwinding must release waiters too. Each still-live caller can
             // retry with its own compiler closure and cancellation control.
-            *self.lease.flight.state.lock().unwrap() = State::Interrupted;
+            *self.lease.flight().state.lock().unwrap() = State::Interrupted;
             self.lease.unregister();
-            self.lease.flight.changed.notify_all();
+            self.lease.flight().changed.notify_all();
         }
     }
 }
@@ -148,7 +154,7 @@ impl<K: Eq + Hash + Clone, V> Registry<K, V> {
             };
             let lease = Lease {
                 key: key.clone(),
-                flight,
+                flight: Some(flight),
                 registry: self,
             };
             if owner {
@@ -160,7 +166,7 @@ impl<K: Eq + Hash + Clone, V> Registry<K, V> {
                     check(control)?;
                     Ok(Arc::new(value))
                 });
-                *lease.flight.state.lock().unwrap() = match &result {
+                *lease.flight().state.lock().unwrap() = match &result {
                     Ok(value) => State::Ready(Arc::clone(value)),
                     Err(error) if interrupted(error) => State::Interrupted,
                     Err(error) => State::Failed(error.to_string()),
@@ -170,13 +176,13 @@ impl<K: Eq + Hash + Clone, V> Registry<K, V> {
                 }
                 guard.finished = true;
                 drop(guard);
-                lease.flight.changed.notify_all();
+                lease.flight().changed.notify_all();
                 return result.map(|value| Artifact {
                     value,
                     _lease: lease,
                 });
             }
-            let mut state = lease.flight.state.lock().unwrap();
+            let mut state = lease.flight().state.lock().unwrap();
             #[cfg(test)]
             let mut announced = false;
             loop {
@@ -212,7 +218,7 @@ impl<K: Eq + Hash + Clone, V> Registry<K, V> {
                     announced = true;
                 }
                 state = lease
-                    .flight
+                    .flight()
                     .changed
                     .wait_timeout(state, Duration::from_millis(10))
                     .unwrap()
@@ -257,6 +263,39 @@ mod tests {
             assert!(Arc::ptr_eq(&owner.value, &waiter.value));
             assert_eq!(*waiter, 42);
             assert_eq!(registry.flights.lock().unwrap().len(), 1);
+        });
+        assert!(registry.flights.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn simultaneous_last_holders_leave_no_stale_entries() {
+        let registry = Registry::<u32, usize>::default();
+        let barrier = std::sync::Barrier::new(2);
+        std::thread::scope(|scope| {
+            let registry = &registry;
+            let barrier = &barrier;
+            let mut holders = Vec::new();
+            for key in 0..256 {
+                let a = registry.compile(key, None, || Ok(key as usize)).unwrap();
+                let b = registry
+                    .compile(key, None, || panic!("must share"))
+                    .unwrap();
+                holders.push((a, b));
+            }
+            let (a, b): (Vec<_>, Vec<_>) = holders.into_iter().unzip();
+            let worker = scope.spawn(move || {
+                for value in a {
+                    barrier.wait();
+                    drop(value);
+                    barrier.wait();
+                }
+            });
+            for value in b {
+                barrier.wait();
+                drop(value);
+                barrier.wait();
+            }
+            worker.join().unwrap();
         });
         assert!(registry.flights.lock().unwrap().is_empty());
     }

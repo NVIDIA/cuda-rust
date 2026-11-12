@@ -1,0 +1,25 @@
+[package]
+name = "math_sin_cos"
+version = "0.1.0"
+edition = "2024"
+authors = ["Alex Khalyavin <joss13@gmail.com>"]
+license = "Apache-2.0"
+
+# Mark as standalone crate (not part of parent workspace)
+[workspace]
+
+# Checks cuda_device::math::sin_cos bit for bit against f32::sin / f32::cos (libdevice).
+# Build with:
+#   cargo oxide run math_sin_cos
+# Or manually:
+#   RUSTFLAGS="-Z codegen-backend=path/to/librustc_codegen_cuda.so" cargo build --release
+
+[dependencies]
+# Device-side intrinsics (thread indexing, barriers, etc.)
+cuda-device = { path = "../../../cuda-device" }
+
+# Host-side utilities (CudaKernel trait, etc.)
+cuda-host = { path = "../../../cuda-host" }
+
+# Host-side CUDA runtime
+cuda-core = { path = "../../../../../cuda-core" }

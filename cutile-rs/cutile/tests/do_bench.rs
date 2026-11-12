@@ -6,8 +6,9 @@
 //! GPU integration tests for `cutile::bench` (device-event timing).
 
 use cuda_core::Context;
-use cutile::bench::{do_bench, do_bench_paired, BenchOptions};
+use cutile::bench::{do_bench, do_bench_controlled, do_bench_paired, BenchOptions};
 use cutile::prelude::*;
+use cutile_compiler::compile_control::{CompileControl, CompileInterrupted};
 use std::time::Duration;
 
 fn quick_opts() -> BenchOptions {
@@ -82,4 +83,28 @@ fn closure_errors_propagate() {
         )))
     });
     assert!(err.is_err(), "closure errors must not be swallowed");
+}
+
+#[test]
+fn cancellation_never_returns_a_partial_measurement() {
+    let device = Context::new(0).expect("device 0");
+    let stream = device.new_stream().expect("stream");
+    for cancel_before_start in [true, false] {
+        let control = CompileControl::default();
+        if cancel_before_start {
+            control.cancel();
+        }
+        let mut calls = 0;
+        let error = do_bench_controlled(&stream, &quick_opts(), &control, |_| {
+            calls += 1;
+            control.cancel();
+            Ok(())
+        })
+        .unwrap_err();
+        let cutile::error::Error::Anyhow(error) = error else {
+            panic!("expected typed cancellation");
+        };
+        assert_eq!(error.downcast_ref(), Some(&CompileInterrupted::Cancelled));
+        assert_eq!(calls, usize::from(!cancel_before_start));
+    }
 }

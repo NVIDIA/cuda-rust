@@ -10,8 +10,82 @@ cutile = { version = "...", features = ["experimental-tune"] }
 ```
 
 Use a closure to tune an individual kernel, or implement `Objective` to
-measure a whole request. The `autotune` example uses a closure:
-`cargo run -p cutile-examples --example autotune --features experimental-tune`.
+measure a whole request. These synchronous interfaces and their resume logs
+remain supported. The opt-in preparation pipeline below overlaps CPU
+compilation with foreground GPU evaluation.
+
+## Preparing candidates in parallel
+
+The `autotune` example checks RMSNorm outputs against a CPU reference and
+verifies that its first launch reuses the prepared binary. Run it from the
+`cutile-rs/` workspace:
+
+```sh
+cargo run --release -p cutile-examples --example autotune --features experimental-tune
+# Compare more CPU workers with the same measurement protocol:
+cargo run --release -p cutile-examples --example autotune --features experimental-tune -- --workers 4 --budget-ms 30000
+cargo run --release -p cutile-examples --example autotune --features experimental-tune -- --serial
+```
+
+`tune::pipeline::Pipeline` owns scheduling. Its three callbacks have separate
+roles:
+
+1. `resolve` runs on the foreground thread. Resolve the actual launch metadata
+   with `.specialize_on(&stream)`, then call `.into_compile_job()` to capture
+   the target and compiler settings. This step can query the device and execute
+   input operations; do not move it into a preparation worker.
+2. `prepare` runs on CPU workers. `job.compile(control)` runs the Rust frontend
+   and assembler, producing a host-owned `PreparedKernel`. It does not load a
+   CUDA module or synchronize a CUDA stream.
+3. `evaluate` runs on the foreground thread, one candidate at a time. Check
+   the artifact's key against the actual launch, call `prepared.install(control)`,
+   run a correctness check, then measure with `bench::do_bench_controlled`.
+
+One worker is the default: while A is evaluated, B compiles; after observing
+A, the strategy selects C while B is evaluated. With `workers(k)`, at most k
+candidates are preparing or ready in addition to the current evaluation.
+More workers can improve throughput but also perturb short-kernel timings;
+measure this tradeoff on your workload. `overlap(false)` supplies a sequential
+comparison with the same callbacks.
+
+`Strategy::suggest` sees completed observations, every pending index
+(including the current evaluation), and remaining time. `observe` receives
+each outcome. `RandomOrder::new(seed).with_initial([baseline_index])` provides
+seeded sampling without replacement, exhausting the space when the budget
+allows. Create a fresh strategy per run. Initial indices are suggestions,
+not a guarantee of incumbent coverage.
+
+The budget includes resolution, queueing, preparation, loading, correctness
+checks and measurement. `trial_limit` also starts before resolution, so waiting
+counts. The example's fixture and CPU-reference setup happen before that clock
+starts. Expired deadlines stop dispatch and exclude late measurements from
+scoring. The assembler process can be killed and reaped; frontend passes and
+benchmark repetitions check cancellation between stages. Arbitrary callbacks,
+CUDA calls and running GPU kernels cannot be forcibly interrupted. Returning
+waits for outstanding workers, so this is a cooperative deadline, not a hard
+wall-clock guarantee.
+
+Only explicit `Failure::invalid` outcomes mark a candidate invalid. Return a
+measured `Trial` on success: legacy invalid trials also represent non-finite
+timings, so the pipeline treats them as infrastructure errors. Timeouts and
+cancellations are unscored; infrastructure errors stop
+the run. Generic compiler/driver errors default to infrastructure errors because
+they may reflect the environment rather than the candidate. The caller can
+classify a known candidate-specific rejection explicitly. Observations include
+separate stage durations; an unvisited stage is `None`, and overlapping stage
+times must not be summed as elapsed wall time. Evaluation time includes loading,
+checks and measurement, rather than pretending those costs were measured separately.
+
+**`best_observed` is provisional.** This pipeline does not yet reserve time for
+screening or paired finalist confirmation. Re-measure finalists and the incumbent
+without background compilation before applying a result. An incomplete run has
+no best result. The synchronous resume-log schema is unchanged; the pipeline does
+not read or write it. Store observations with workload, source and toolchain
+provenance if you need an audit record.
+
+Prepared artifacts are bounded by the pipeline, but installed modules retain
+the existing global cache lifetime. Automatic eviction is deliberately avoided:
+other streams may still be using a specialization. See cache management below.
 
 ## Declaring a space and running the search
 

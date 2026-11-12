@@ -16,6 +16,7 @@ validation and timing code.
 - Run `cargo run --release -p cutile-examples --example fused_qkv` for fused QKV projection, Q/K RMSNorm, FP8 conversion and paged KV stores. Add `-- --bench` for the opt-in graph timing sweep; see the [QKV guide](fused_qkv.md) for layouts, validation scope and tuning options.
 - Run `cargo run -p cutile-examples --example pdl` for a CUDA 13.4 programmatic dependent launch example: a producer/consumer kernel pair with output checking and a stream-order vs PDL timing comparison (sm_90 or newer).
 - Run `cargo run -p cutile-examples --example async_gemm` for a larger async example.
+- Run `cargo run --release -p cutile-examples --example autotune --features experimental-tune` for RMSNorm tuning with CPU compilation overlapped with GPU evaluation. It checks correctness and prepared-binary reuse; `-- --workers 4` increases preparation concurrency and `-- --serial` disables overlap for comparison. See the [autotuning guide](../cutile-book/guide/autotuning.md) for deadlines and finalist-confirmation requirements.
 
 ## Toolkit and GPU requirements
 

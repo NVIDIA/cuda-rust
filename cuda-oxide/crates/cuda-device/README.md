@@ -62,8 +62,8 @@ which needs `sm_90+`. Each function's rustdoc states its own requirement.
 |--------------|---------------------------------------------------------------------------------|
 | `access`     | Choosing a tile shape from a target memory transaction width.                   |
 | `async_copy` | Classic global-to-shared asynchronous copy intrinsics                           |
-| `bf16`       | Scalar `bf16` min/max; each value is the `u16` bit pattern of one bfloat16       |
-| `bf16x2`     | Packed `bf16x2` arithmetic; two values per `u32`, the first in the low 16 bits   |
+| `bf16`       | Scalar `bf16` min/max on `u16` bit patterns, and the typed value `Bf16`          |
+| `bf16x2`     | Packed `bf16x2` arithmetic on `u32` (first value low), and the typed `Bf16x2`    |
 | `constant`   | `ConstantMemory<T>` -- module-scope statics in PTX `.const` (address space 4)    |
 | `convert`    | PTX type-conversion instructions                                                |
 | `dotprod`    | Integer dot products: `dp4a` (packed bytes) and `dp2a` (packed halves)           |

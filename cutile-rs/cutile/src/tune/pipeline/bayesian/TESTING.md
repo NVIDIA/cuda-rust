@@ -49,6 +49,41 @@ implemented API. Their tests were not transplanted. Held-out GPU comparisons
 remain necessary to establish sample efficiency; deterministic numerical and
 protocol tests do not demonstrate that one selector is universally faster.
 
+## Review regressions and remaining limits
+
+A structured failing region exposed a selection failure: discarding invalid and
+timed-out points left their neighborhoods at high prior variance, attracting
+repeated exploration. The selector now applies predicted-mean conditioning to
+those points, as it does for pending work. Tests verify that late latency values
+cannot change that conditioning, while cancellation and infrastructure errors do
+not penalize neighborhoods. A fixed 40-seed replay compares early failing share
+against seeded random on 32-point 1-D and 64-point 2-D spaces for both invalid and
+timed-out outcomes. This is a regression fixture, not held-out evidence that BO
+beats random generally; it uses evaluation-count rather than wall-time budgets.
+
+Negative-tail EI now uses the normal Mills-ratio continued fraction instead of
+subtracting nearly equal approximate CDF/PDF terms. Independent 80-digit fixtures
+check relative accuracy through z = -20, including either side of the old -8
+cutoff. Central CDF values retain the documented approximation; extreme tails can
+still underflow, and this is not log-EI.
+
+Pipeline regressions check refreshed active-stage deadlines with 1/2/4 workers,
+clamping to the overall deadline, selector interruption, and source-located
+frontend rejection without discarding other valid candidates. They assert
+ordering/deadline arithmetic rather than elapsed-time cutoffs. Separate tests
+exercise simultaneous flight releases and assembler cancellation after startup,
+including removal of partial outputs and compiler intermediates.
+
+Follow-up work remains: fitting/scoring stays synchronous with cubic dense-GP
+fitting cost, and can dominate short evaluations after hundreds of observations.
+Incremental updates or a training-set cap need separate performance validation.
+Confirmation deliberately requires every configured round and retains the
+incumbent if a finalist fails or time expires. Integer axes still default to
+linear scaling; callers should select Log2 for appropriate tile-size knobs.
+Interruption takes precedence over a late infrastructure error's classification;
+the original diagnostic is retained, but that expired trial does not by itself
+abort a still-live run. These policies are not changed by the review fixes.
+
 ## Running the focused checks
 
 From `cutile-rs/`, with the normal toolkit/libclang environment:

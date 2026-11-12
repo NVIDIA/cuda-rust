@@ -56,7 +56,10 @@ impl Default for BayesianOptions {
 ///
 /// Pending points are temporarily conditioned at their predicted means to
 /// reduce redundant proposals. They never become measured observations or
-/// improve the incumbent. Invalid/failed/timed-out trials do not train the GP.
+/// improve the incumbent. Invalid and timed-out points use the same uncertainty
+/// penalty so failed regions do not repeatedly attract exploration. Their
+/// latencies never train the GP or improve the incumbent. This is a search
+/// heuristic, not a learned probability of validity.
 /// A numerical failure falls back to seeded random selection and increments
 /// `numerical_fallbacks`. Instantiate a fresh selector for each run.
 pub struct BayesianSearch {
@@ -183,7 +186,13 @@ impl BayesianSearch {
             .map(|&(i, _)| center + self.prior[i] + observed.predict(&self.features[i]).0)
             .min_by(f64::total_cmp)
             .unwrap_or(center);
-        for &i in view.pending {
+        let failed = view.completed.iter().filter_map(|o| {
+            o.failure
+                .as_ref()
+                .filter(|f| matches!(f.kind, FailureKind::Invalid | FailureKind::TimedOut))
+                .map(|_| o.trial_id)
+        });
+        for i in view.pending.iter().copied().chain(failed) {
             if deadline.is_some_and(|d| Instant::now() >= d) {
                 return None;
             }

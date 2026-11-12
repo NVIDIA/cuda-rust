@@ -102,6 +102,27 @@ fn expected_improvement_matches_scipy_including_tails() {
 }
 
 #[test]
+fn negative_tail_improvement_has_relative_accuracy() {
+    // Independently evaluated with mpmath at 80 decimal digits:
+    // z*erfc(-z/sqrt(2))/2 + exp(-z*z/2)/sqrt(2*pi).
+    for (z, expected) in [
+        (-2.0, 0.008_490_702_616_829_637),
+        (-3.0, 0.000_382_154_317_047_723_6),
+        (-5.0, 5.346_165_533_832_815e-8),
+        (-7.9, 1.712_707_557_436_171e-16),
+        (-8.0, 7.550_262_411_946_499e-17),
+        (-10.0, 7.474_560_254_589_328e-25),
+        (-20.0, 1.370_012_494_729_58e-90),
+    ] {
+        let actual = gp::expected_improvement(z, 0.0, 1.0);
+        assert!(
+            (actual / expected - 1.0).abs() < 3e-12,
+            "z={z}: {actual} vs {expected}"
+        );
+    }
+}
+
+#[test]
 fn duplicate_rows_are_stable_and_noise_prevents_overconfidence() {
     let rows = vec![&[0.5][..], &[0.5][..]];
     let quiet = gp::Posterior::fit(rows.clone(), &[1.0, 1.0], 0.5, 1.0, 1e-12, None).unwrap();
@@ -172,30 +193,146 @@ fn pending_mean_fantasy_keeps_mean_and_reduces_uncertainty() {
 }
 
 #[test]
-fn failures_and_late_measurements_do_not_train_latency_model() {
+fn failures_reduce_exploration_without_using_their_latencies() {
     let configs = space(&[0, 1, 2, 3, 4, 5]);
     let search = BayesianSearch::new(&configs, Default::default()).unwrap();
-    let mut observations = Vec::new();
-    for (i, kind) in [
+    let valid = observation(&configs, 0, 2.0);
+    let baseline = search
+        .scores(
+            &view(&configs, std::slice::from_ref(&valid), &[]),
+            &[2, 4],
+            None,
+        )
+        .unwrap();
+    for kind in [
         FailureKind::Invalid,
         FailureKind::TimedOut,
         FailureKind::Cancelled,
         FailureKind::Infrastructure,
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let mut o = observation(&configs, i, 0.00001);
-        o.failure = Some(Failure {
-            kind,
-            reason: "not a valid timing".into(),
-        });
-        observations.push(o);
+    ] {
+        let expected = search
+            .scores(
+                &view(
+                    &configs,
+                    std::slice::from_ref(&valid),
+                    if matches!(kind, FailureKind::Invalid | FailureKind::TimedOut) {
+                        &[3]
+                    } else {
+                        &[]
+                    },
+                ),
+                &[2, 4],
+                None,
+            )
+            .unwrap();
+        // Neither an impossibly good nor bad late timing changes the posterior
+        // targets or incumbent. Invalid/timeouts only get the pending penalty.
+        for time in [0.00001, 10000.0] {
+            let mut failed = observation(&configs, 3, time);
+            failed.failure = Some(Failure {
+                kind,
+                reason: "failed experiment".into(),
+            });
+            let actual = search
+                .scores(
+                    &view(&configs, &[valid.clone(), failed], &[]),
+                    &[2, 4],
+                    None,
+                )
+                .unwrap();
+            assert_eq!(actual, expected);
+        }
+        if matches!(kind, FailureKind::Invalid | FailureKind::TimedOut) {
+            assert!(expected.iter().zip(&baseline).all(|(a, b)| a < b));
+        } else {
+            assert_eq!(expected, baseline);
+        }
     }
-    assert_eq!(
-        search.scores(&view(&configs, &observations, &[]), &[4, 5], None),
-        search.scores(&view(&configs, &[], &[]), &[4, 5], None)
-    );
+}
+
+#[test]
+fn structured_failing_regions_do_not_dominate_early_search() {
+    // Fixed-seed replay regression, not a claim of general superiority over
+    // random. Compare failing share under equal evaluation-count budgets.
+    for dimensions in [1, 2] {
+        let configs = if dimensions == 1 {
+            space(&(0..32).collect::<Vec<_>>())
+        } else {
+            (0..8)
+                .flat_map(|a| {
+                    (0..8).map(move |b| {
+                        Config::new([("a", ParamValue::Int(a)), ("b", ParamValue::Int(b))])
+                    })
+                })
+                .collect()
+        };
+        let latency = |i: usize| {
+            let c = &configs[i];
+            if dimensions == 1 {
+                let x = c.int("tile").unwrap();
+                (x < 16).then(|| 1.0 + 0.5 * ((x - 5) as f32 / 16.0).powi(2))
+            } else {
+                let a = c.int("a").unwrap();
+                let b = c.int("b").unwrap();
+                (a + b < 8).then(|| {
+                    1.0 + 0.4 * ((a - 4) as f32 / 8.0).powi(2)
+                        + 0.4 * ((b - 2) as f32 / 8.0).powi(2)
+                })
+            }
+        };
+        for kind in [FailureKind::Invalid, FailureKind::TimedOut] {
+            let mut failures = [0, 0];
+            let budget = configs.len() / 4;
+            for seed in 0..40 {
+                let mut bayes = BayesianSearch::new(
+                    &configs,
+                    BayesianOptions {
+                        seed,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                let mut random = RandomOrder::new(seed);
+                failures[0] += replay_failures(&mut bayes, &configs, budget, kind, &latency);
+                failures[1] += replay_failures(&mut random, &configs, budget, kind, &latency);
+            }
+            eprintln!(
+                "{dimensions}D {kind:?}: BO {} / {}, random {} / {} failures",
+                failures[0],
+                40 * budget,
+                failures[1],
+                40 * budget
+            );
+            assert!(
+                failures[0] <= failures[1],
+                "failed region attracts exploration: {failures:?}"
+            );
+        }
+    }
+}
+
+fn replay_failures(
+    selector: &mut dyn Strategy,
+    configs: &[Config],
+    budget: usize,
+    kind: FailureKind,
+    latency: &impl Fn(usize) -> Option<f32>,
+) -> usize {
+    let mut completed = Vec::new();
+    for _ in 0..budget {
+        let i = selector.suggest(&view(configs, &completed, &[])).unwrap();
+        assert!(!completed.iter().any(|o| o.trial_id == i));
+        let mut o = observation(configs, i, latency(i).unwrap_or(0.00001));
+        if latency(i).is_none() {
+            o.failure = Some(Failure {
+                kind,
+                reason: "synthetic rejected region".into(),
+            });
+        }
+        selector.observe(&o);
+        completed.push(o);
+    }
+    completed.iter().filter(|o| o.score_ms().is_none()).count()
 }
 
 #[test]

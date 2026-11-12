@@ -33,7 +33,8 @@ pub enum FailureKind {
     Infrastructure,
 }
 
-/// Only an explicit validity check may classify a configuration as invalid.
+/// Explicit validity checks and source-located frontend rejections can classify
+/// a configuration as invalid. Unclassified compiler errors are infrastructure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Failure {
     pub kind: FailureKind,
@@ -91,6 +92,14 @@ impl From<CompileInterrupted> for Failure {
 
 impl From<Error> for Failure {
     fn from(error: Error) -> Self {
+        // Frontend/source-located rejections belong to this specialization.
+        // Unclassified assembler, I/O and driver errors remain infrastructure.
+        if matches!(
+            &error,
+            Error::JIT(cutile_compiler::error::JITError::Located(..))
+        ) {
+            return Self::invalid(error.to_string());
+        }
         let inner = match &error {
             Error::Anyhow(error) => Some(error),
             Error::JIT(cutile_compiler::error::JITError::Anyhow(error)) => Some(error),
@@ -321,6 +330,8 @@ impl Pipeline {
         self.budget = Some(budget);
         self
     }
+    /// Limit each active stage (resolve, prepare, evaluate), excluding queue
+    /// time. Every stage is also bounded by the overall run deadline.
     pub fn trial_limit(mut self, limit: Duration) -> Self {
         self.trial_limit = Some(limit);
         self
@@ -334,8 +345,9 @@ impl Pipeline {
 
     /// Resolve on the foreground thread, prepare on CPU workers, then evaluate
     /// on the foreground thread. A successful evaluation must include the
-    /// caller's correctness gate. Only explicit `Failure::invalid` results are
-    /// invalidity evidence. Return a measured `Trial` on success; legacy invalid
+    /// caller's correctness gate. Use `Failure::invalid` or convert a located
+    /// frontend rejection with `Failure::from` for invalidity evidence.
+    /// Return a measured `Trial` on success; legacy invalid
     /// trials can also represent broken timing and are infrastructure errors.
     /// Per-trial timeouts are unscored;
     /// infrastructure errors stop the run.
@@ -394,18 +406,17 @@ impl Pipeline {
                             let Ok(job) = job else { break };
                             let begun = Instant::now();
                             let mut prepare_time = None;
-                            let result =
-                                job.control.check().map_err(Failure::from).and_then(|()| {
+                            let result = stage_control(&job.control, self.trial_limit, begun)
+                                .and_then(|stage| {
+                                    stage.check()?;
                                     let result = std::panic::catch_unwind(
-                                        std::panic::AssertUnwindSafe(|| {
-                                            prepare(job.input, &job.control)
-                                        }),
+                                        std::panic::AssertUnwindSafe(|| prepare(job.input, &stage)),
                                     )
                                     .unwrap_or_else(|_| {
                                         Err(Failure::infrastructure("preparation worker panicked"))
                                     });
                                     prepare_time = Some(begun.elapsed());
-                                    result
+                                    checked_result(result, &stage)
                                 });
                             let ready = Ready {
                                 index: job.index,
@@ -445,6 +456,9 @@ impl Pipeline {
                             .map(|end| end.saturating_duration_since(Instant::now())),
                     };
                     let Some(index) = strategy.suggest(&view) else {
+                        // A selector may spend the remaining budget fitting its
+                        // model and return None. That is not space exhaustion.
+                        control.check()?;
                         break;
                     };
                     if index >= configs.len()
@@ -456,14 +470,7 @@ impl Pipeline {
                         ));
                     }
                     let begun = Instant::now();
-                    let trial_control = match self.trial_limit {
-                        Some(limit) => {
-                            control.with_deadline(begun.checked_add(limit).ok_or_else(|| {
-                                Failure::infrastructure("trial limit is too large")
-                            })?)
-                        }
-                        None => control.clone(),
-                    };
+                    let trial_control = stage_control(&control, self.trial_limit, begun)?;
                     let mut resolve_time = None;
                     let input = trial_control.check().map_err(Failure::from).and_then(|()| {
                         let start = Instant::now();
@@ -481,7 +488,7 @@ impl Pipeline {
                                     input,
                                     resolve: resolve_time,
                                     queued: Instant::now(),
-                                    control: trial_control,
+                                    control: control.clone(),
                                 })
                                 .map_err(|_| {
                                     Failure::infrastructure("preparation workers disconnected")
@@ -556,19 +563,29 @@ impl Pipeline {
                     status = status_for(&error);
                     run_error = Some(error.reason);
                     ready.result = Err(Failure::interrupted(
-                        CompileInterrupted::Cancelled,
+                        control
+                            .check()
+                            .err()
+                            .unwrap_or(CompileInterrupted::Cancelled),
                         ready.result.err(),
                     ));
                 }
                 let result = checked_result(ready.result, &ready.control);
+                let evaluation_control = stage_control(&control, self.trial_limit, Instant::now())?;
                 let result = result.and_then(|prepared| {
+                    evaluation_control.check()?;
                     let begun = Instant::now();
-                    let result = evaluate(&configs[ready.index], prepared, &ready.control);
+                    let result = evaluate(&configs[ready.index], prepared, &evaluation_control);
                     ready.stages.evaluate = Some(begun.elapsed());
                     result
                 });
-                let observation =
-                    observation(configs, ready.index, ready.stages, result, &ready.control);
+                let observation = observation(
+                    configs,
+                    ready.index,
+                    ready.stages,
+                    result,
+                    &evaluation_control,
+                );
                 pending.retain(|&index| index != ready.index);
                 let fatal = observation
                     .failure
@@ -634,6 +651,21 @@ impl Pipeline {
             error: run_error,
             elapsed: start.elapsed(),
         })
+    }
+}
+
+fn stage_control(
+    overall: &WorkControl,
+    limit: Option<Duration>,
+    begun: Instant,
+) -> Result<WorkControl, Failure> {
+    match limit {
+        Some(limit) => Ok(overall.with_deadline(
+            begun
+                .checked_add(limit)
+                .ok_or_else(|| Failure::infrastructure("trial limit is too large"))?,
+        )),
+        None => Ok(overall.clone()),
     }
 }
 
@@ -844,6 +876,123 @@ mod tests {
         assert_eq!(result.status, RunStatus::BudgetExhausted);
         assert!(result.observations.is_empty());
         assert_eq!(result.unvisited, [0, 1]);
+    }
+
+    #[test]
+    fn stage_limits_start_at_execution_and_remain_bounded_by_run() {
+        let start = Instant::now();
+        let overall = WorkControl::default().with_deadline(start + Duration::from_secs(100));
+        for (offset, expected) in [(0, 30), (40, 70), (90, 100)] {
+            let stage = stage_control(
+                &overall,
+                Some(Duration::from_secs(30)),
+                start + Duration::from_secs(offset),
+            )
+            .unwrap();
+            assert_eq!(
+                stage.deadline(),
+                Some(start + Duration::from_secs(expected))
+            );
+        }
+        for workers in [1, 2, 4] {
+            let limit = Duration::from_secs(30);
+            let result = Pipeline::default()
+                .workers(workers)
+                .trial_limit(limit)
+                .run(
+                    &configs(24),
+                    &mut GridOrder,
+                    |_| Ok(Instant::now()),
+                    |resolved, control| {
+                        // Deadline arithmetic verifies that queueing did not consume
+                        // the stage allowance; no execution-speed assertion needed.
+                        assert!(control.deadline().unwrap() >= resolved + limit);
+                        Ok(Instant::now())
+                    },
+                    |c, prepared, control| {
+                        assert!(control.deadline().unwrap() >= prepared + limit);
+                        Ok(measured(c))
+                    },
+                )
+                .unwrap();
+            assert_eq!(result.status, RunStatus::Completed);
+            assert_eq!(
+                result
+                    .observations
+                    .iter()
+                    .filter(|o| o.score_ms().is_some())
+                    .count(),
+                24
+            );
+        }
+    }
+
+    #[test]
+    fn selector_interruption_is_not_reported_as_exhaustion() {
+        struct CancelSelector(WorkControl);
+        impl Strategy for CancelSelector {
+            fn suggest(&mut self, _: &SearchView<'_>) -> Option<usize> {
+                self.0.cancel();
+                None
+            }
+        }
+        let control = WorkControl::default();
+        let mut selector = CancelSelector(control.clone());
+        let result = Pipeline::default()
+            .control(control)
+            .run::<(), ()>(
+                &configs(2),
+                &mut selector,
+                |_| panic!("no dispatch"),
+                |_, _| unreachable!(),
+                |_, _, _| unreachable!(),
+            )
+            .unwrap();
+        assert_eq!(result.status, RunStatus::Cancelled);
+        assert_eq!(result.unvisited.len(), 2);
+    }
+
+    #[test]
+    fn frontend_rejection_skips_candidate_but_unclassified_errors_stop_run() {
+        use cutile_compiler::{ast::SourceLocation, error::JITError};
+        for located in [true, false] {
+            let result = Pipeline::default()
+                .overlap(false)
+                .run(
+                    &configs(3),
+                    &mut GridOrder,
+                    |c| Ok(c.int("x").unwrap()),
+                    |i, _| {
+                        if i == 1 {
+                            let error = if located {
+                                JITError::located(
+                                    "tile size must be a power of two",
+                                    SourceLocation::new("kernel.rs".into(), 7, 3),
+                                )
+                            } else {
+                                JITError::Generic("cannot launch assembler".into())
+                            };
+                            Err(Failure::from(Error::JIT(error)))
+                        } else {
+                            Ok(())
+                        }
+                    },
+                    |c, _, _| Ok(measured(c)),
+                )
+                .unwrap();
+            let failure = result.observations[1].failure.as_ref().unwrap();
+            if located {
+                assert_eq!(failure.kind, FailureKind::Invalid);
+                assert!(failure.reason.contains("kernel.rs:7:3"));
+                assert_eq!(result.status, RunStatus::Completed);
+                assert!(result.best_observed.is_some());
+                assert_eq!(result.observations.len(), 3);
+            } else {
+                assert_eq!(failure.kind, FailureKind::Infrastructure);
+                assert_eq!(result.status, RunStatus::Incomplete);
+                assert!(result.best_observed.is_none());
+            }
+        }
     }
 
     #[test]

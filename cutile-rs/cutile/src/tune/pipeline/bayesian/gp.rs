@@ -109,8 +109,9 @@ fn forward(lower: &[Vec<f64>], rhs: &[f64]) -> Vec<f64> {
     out
 }
 
-/// Expected improvement for minimization. A&S 26.2.17 normal CDF approximation
-/// (absolute CDF error < 7.5e-8); tested independently against scipy.stats.norm.
+/// Expected improvement for minimization. Central values use A&S 26.2.17
+/// (absolute CDF error < 7.5e-8). The negative tail uses the normal Mills-ratio
+/// continued fraction, avoiding subtraction of nearly equal CDF/PDF terms.
 pub(super) fn expected_improvement(best: f64, mean: f64, variance: f64) -> f64 {
     let delta = best - mean;
     // A fixed positive cutoff breaks EI's scale equivariance: a small but
@@ -123,10 +124,18 @@ pub(super) fn expected_improvement(best: f64, mean: f64, variance: f64) -> f64 {
     if z >= 8.0 {
         return delta.max(0.0);
     }
-    if z <= -8.0 {
-        return 0.0;
-    }
     let density = (-0.5 * z * z).exp() / (2.0 * std::f64::consts::PI).sqrt();
+    if z <= -2.0 {
+        // R(x) = 1 / (x + 1 / (x + 2 / (x + ...))). Then
+        // EI / (sigma * phi(x)) = 1 - x*R(x) = tail / (x + tail).
+        // At x >= 2, 64 terms give relative error below 2e-12.
+        let x = -z;
+        let mut tail = 0.0;
+        for n in (1..=64).rev() {
+            tail = f64::from(n) / (x + tail);
+        }
+        return sigma * density * (tail / (x + tail));
+    }
     let t = 1.0 / (1.0 + 0.2316419 * z.abs());
     let tail = density
         * t

@@ -125,16 +125,22 @@ The example defaults to the Bayesian selector described below; the synchronous
 `Autotuner` still defaults to `GridSearch`.
 
 The budget includes resolution, queueing, preparation, loading, correctness
-checks and measurement. `trial_limit` also starts before resolution, so waiting
-counts. The example's fixture and CPU-reference setup happen before that clock
+checks and measurement. `trial_limit` gives resolution, preparation and evaluation
+each a fresh active-stage allowance, always capped by the overall run deadline.
+Time waiting in a queue counts against the run budget, but not the stage limit.
+The example's fixture and CPU-reference setup happen before the run clock
 starts. Expired deadlines stop dispatch and exclude late measurements from
 scoring. The assembler process can be killed and reaped; frontend passes and
 benchmark repetitions check cancellation between stages. Arbitrary callbacks,
 CUDA calls and running GPU kernels cannot be forcibly interrupted. Returning
 waits for outstanding workers, so this is a cooperative deadline, not a hard
-wall-clock guarantee.
+wall-clock guarantee. Interrupted assembler runs remove their bytecode and
+temporary intermediates after reaping the process; ordinary compiler failures
+still retain the bytecode named in their diagnostic.
 
-Only explicit `Failure::invalid` outcomes mark a candidate invalid. Return a
+Explicit `Failure::invalid` outcomes and source-located frontend rejections
+(`JITError::Located`, converted through `Failure::from`) mark a candidate invalid.
+Unclassified compiler/driver errors still stop the run. Return a
 measured `Trial` on success: legacy invalid trials also represent non-finite
 timings, so the pipeline treats them as infrastructure errors. Timeouts and
 cancellations are unscored; infrastructure errors stop
@@ -207,10 +213,14 @@ Pending configurations are temporarily conditioned at their predicted means,
 reducing redundant exploration while another candidate is compiling or being
 measured. They cannot improve the measured incumbent. Expected improvement uses
 the best posterior mean among valid measured points; this is a plug-in treatment
-of noise, not an integrated noisy-EI algorithm. Invalid, cancelled, timed-out
-and infrastructure-failed trials never become latency targets. Known rejected
-candidates are excluded; the first implementation does not predict the validity
-of unseen configurations. A numerical failure falls back to seeded random and
+of noise, not an integrated noisy-EI algorithm. Invalid and timed-out points use
+the same predicted-mean conditioning to reduce repeated exploration around
+failures. This reduces acquisition uncertainty without changing the predicted
+mean or incumbent; it is a search heuristic, not evidence of a measured latency
+or a learned probability of validity. Cancelled and infrastructure-failed points
+receive no such penalty. All failed trials remain excluded as latency targets.
+Known rejected candidate indices are excluded; the first implementation does not
+predict the validity of unseen configurations. A numerical failure falls back to seeded random and
 increments `numerical_fallbacks()`.
 
 The implementation uses standard GP regression equations with Cholesky solves,

@@ -964,6 +964,18 @@ fn classify_call(
         return WriteClass::Classified(address_space::SHARED);
     }
 
+    // --- addrspace 4 (constant) producers -----------------------------------
+    //
+    // `ConstantMemory::<T>::get_ref(&self) -> &T` borrows constant-memory
+    // storage in place (`addrspace(4)`). Without MIR inlining (`opt-level = 0`),
+    // this appears as a `Call` terminator rather than an inlined field borrow.
+    if fn_def.krate().name.as_str() == "cuda_device"
+        && path.contains("ConstantMemory")
+        && path.ends_with("::get_ref")
+    {
+        return WriteClass::Classified(address_space::CONSTANT);
+    }
+
     // --- addrspace 7 (cluster shared) producers ------------------------------
     //
     // `map_shared_rank` and `map_shared_rank_mut` return mapped DSMEM pointers.

@@ -2140,6 +2140,16 @@ impl<'tcx> DeviceCollector<'tcx> {
             return;
         }
 
+        if crate_name.as_str() == "cuda_device"
+            && raw_name.contains("ConstantMemory")
+            && (raw_name.ends_with("::get") || raw_name.ends_with("::get_ref"))
+        {
+            if self.verbose {
+                eprintln!("[collector] Skipping ConstantMemory intrinsic: {raw_name}");
+            }
+            return;
+        }
+
         // Skip functions without MIR bodies (extern intrinsics like cuda_device::threadIdx_x).
         // These are handled specially by the terminator translator in mir-importer
         // which dispatches them to NVVM intrinsic operations.

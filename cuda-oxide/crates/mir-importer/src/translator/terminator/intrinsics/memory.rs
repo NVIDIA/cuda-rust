@@ -1499,6 +1499,266 @@ pub fn emit_cvta_generic_to_shared_offset(
     )
 }
 
+/// Project `&ConstantMemory<T>` through `ConstantMemory(UnsafeCell<T>)` to `&T`
+/// while preserving the receiver pointer's address space, mutability, and kind.
+fn project_constant_memory_inner_ptr(
+    ctx: &mut Context,
+    receiver_ptr: Value,
+    block_ptr: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    loc: Location,
+    intrinsic_name: &str,
+) -> TranslationResult<(Value, pliron::r#type::TypeHandle, Ptr<Operation>)> {
+    use dialect_mir::ops::MirFieldAddrOp;
+    use dialect_mir::types::MirStructType;
+
+    let (outer_pointee, address_space, origin) = {
+        let ptr_ty = receiver_ptr.get_type(ctx);
+        let ptr_ty_ref = ptr_ty.deref(ctx);
+        let Some(ptr_ty) = ptr_ty_ref.downcast_ref::<MirPtrType>() else {
+            return input_err!(
+                loc,
+                TranslationErr::unsupported(format!(
+                    "{intrinsic_name}: expected MirPtrType receiver, got {:?}",
+                    ptr_ty_ref
+                ))
+            );
+        };
+        (
+            ptr_ty.pointee,
+            ptr_ty.address_space,
+            facts::pointer_origin_of_ptr_carrier(ptr_ty),
+        )
+    };
+
+    let unsafe_cell_ty = {
+        let outer_ref = outer_pointee.deref(ctx);
+        let Some(outer_struct) = outer_ref.downcast_ref::<MirStructType>() else {
+            return input_err!(
+                loc,
+                TranslationErr::unsupported(format!(
+                    "{intrinsic_name}: expected ConstantMemory MirStructType pointee, got {:?}",
+                    outer_ref
+                ))
+            );
+        };
+        let Some(&field_ty) = outer_struct.field_types().first() else {
+            return input_err!(
+                loc,
+                TranslationErr::unsupported(format!(
+                    "{intrinsic_name}: ConstantMemory struct has no inner UnsafeCell field"
+                ))
+            );
+        };
+        field_ty
+    };
+
+    let inner_ty = {
+        let cell_ref = unsafe_cell_ty.deref(ctx);
+        let Some(cell_struct) = cell_ref.downcast_ref::<MirStructType>() else {
+            return input_err!(
+                loc,
+                TranslationErr::unsupported(format!(
+                    "{intrinsic_name}: expected UnsafeCell MirStructType field, got {:?}",
+                    cell_ref
+                ))
+            );
+        };
+        let Some(&field_ty) = cell_struct.field_types().first() else {
+            return input_err!(
+                loc,
+                TranslationErr::unsupported(format!(
+                    "{intrinsic_name}: UnsafeCell struct has no inner value field"
+                ))
+            );
+        };
+        field_ty
+    };
+
+    let cell_ptr_ty: pliron::r#type::TypeHandle =
+        facts::mint_ptr_type(ctx, unsafe_cell_ty, address_space, origin).into();
+    let cell_addr_op = MirFieldAddrOp::build(ctx, receiver_ptr, cell_ptr_ty, 0)?;
+    cell_addr_op.deref_mut(ctx).set_loc(loc.clone());
+    match prev_op {
+        Some(prev) => cell_addr_op.insert_after(ctx, prev),
+        None => cell_addr_op.insert_at_front(block_ptr, ctx),
+    }
+    let cell_ptr = cell_addr_op.deref(ctx).get_result(0);
+
+    let inner_ptr_ty: pliron::r#type::TypeHandle =
+        facts::mint_ptr_type(ctx, inner_ty, address_space, origin).into();
+    let inner_addr_op = MirFieldAddrOp::build(ctx, cell_ptr, inner_ptr_ty, 0)?;
+    inner_addr_op.deref_mut(ctx).set_loc(loc);
+    inner_addr_op.insert_after(ctx, cell_addr_op);
+    let inner_ptr = inner_addr_op.deref(ctx).get_result(0);
+
+    Ok((inner_ptr, inner_ty, inner_addr_op))
+}
+
+/// Emits `ConstantMemory::<T>::get_ref(&self) -> &T`.
+///
+/// Projects `&ConstantMemory<T>` directly to `&T` in the receiver's address
+/// space (`addrspace(4)` when backed by a `#[constant]` static) so callers at
+/// `opt-level = 0` do not fall through to an uninlined `mir.call` expecting
+/// generic `addrspace(0)`.
+#[allow(clippy::too_many_arguments)]
+pub fn emit_constant_memory_get_ref(
+    ctx: &mut Context,
+    body: &mir::Body,
+    args: &[mir::Operand],
+    destination: &mir::Place,
+    target: &Option<usize>,
+    block_ptr: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    value_map: &mut ValueMap,
+    block_map: &[Ptr<BasicBlock>],
+    loc: Location,
+) -> TranslationResult<Ptr<Operation>> {
+    if args.len() != 1 {
+        return input_err!(
+            loc,
+            TranslationErr::unsupported(format!(
+                "ConstantMemory::get_ref expects 1 argument, got {}",
+                args.len()
+            ))
+        );
+    }
+
+    let (receiver_ptr, last_op) = rvalue::translate_operand(
+        ctx,
+        body,
+        &args[0],
+        value_map,
+        block_ptr,
+        prev_op,
+        loc.clone(),
+    )?;
+    let (prepared_destination, last_op) = helpers::prepare_destination_write(
+        ctx,
+        body,
+        destination,
+        value_map,
+        block_ptr,
+        last_op,
+        loc.clone(),
+    )?;
+    let (inner_ptr, _inner_ty, addr_op) = project_constant_memory_inner_ptr(
+        ctx,
+        receiver_ptr,
+        block_ptr,
+        last_op,
+        loc.clone(),
+        "ConstantMemory::get_ref",
+    )?;
+
+    helpers::emit_prepared_result_and_goto(
+        ctx,
+        prepared_destination,
+        inner_ptr,
+        target,
+        block_ptr,
+        addr_op,
+        value_map,
+        block_map,
+        loc,
+        "ConstantMemory::get_ref call without target block",
+    )
+}
+
+/// Emits `ConstantMemory::<T>::get(&self) -> T`.
+///
+/// Projects `&ConstantMemory<T>` to `&T` in the receiver's address space and
+/// loads `T` directly (`ld.const` when backed by `addrspace(4)`).
+#[allow(clippy::too_many_arguments)]
+pub fn emit_constant_memory_get(
+    ctx: &mut Context,
+    body: &mir::Body,
+    args: &[mir::Operand],
+    destination: &mir::Place,
+    target: &Option<usize>,
+    block_ptr: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    value_map: &mut ValueMap,
+    block_map: &[Ptr<BasicBlock>],
+    loc: Location,
+) -> TranslationResult<Ptr<Operation>> {
+    use dialect_mir::ops::MirLoadOp;
+
+    if args.len() != 1 {
+        return input_err!(
+            loc,
+            TranslationErr::unsupported(format!(
+                "ConstantMemory::get expects 1 argument, got {}",
+                args.len()
+            ))
+        );
+    }
+
+    let (receiver_ptr, last_op) = rvalue::translate_operand(
+        ctx,
+        body,
+        &args[0],
+        value_map,
+        block_ptr,
+        prev_op,
+        loc.clone(),
+    )?;
+    let (prepared_destination, last_op) = helpers::prepare_destination_write(
+        ctx,
+        body,
+        destination,
+        value_map,
+        block_ptr,
+        last_op,
+        loc.clone(),
+    )?;
+    let (inner_ptr, inner_ty, addr_op) = project_constant_memory_inner_ptr(
+        ctx,
+        receiver_ptr,
+        block_ptr,
+        last_op,
+        loc.clone(),
+        "ConstantMemory::get",
+    )?;
+
+    if types::is_zst_type(ctx, inner_ty) {
+        if let Some(target_idx) = target {
+            return Ok(emit_goto(ctx, *target_idx, addr_op, block_map, loc));
+        }
+        return input_err!(
+            loc,
+            TranslationErr::unsupported(
+                "ConstantMemory::get call without target block".to_string()
+            )
+        );
+    }
+
+    let load_op = Operation::new(
+        ctx,
+        MirLoadOp::get_concrete_op_info(),
+        vec![inner_ty],
+        vec![inner_ptr],
+        vec![],
+        0,
+    );
+    load_op.deref_mut(ctx).set_loc(loc.clone());
+    load_op.insert_after(ctx, addr_op);
+
+    let result = load_op.deref(ctx).get_result(0);
+    helpers::emit_prepared_result_and_goto(
+        ctx,
+        prepared_destination,
+        result,
+        target,
+        block_ptr,
+        load_op,
+        value_map,
+        block_map,
+        loc,
+        "ConstantMemory::get call without target block",
+    )
+}
+
 #[cfg(test)]
 // Tests build kinded fixture types directly; production code mints via facts::PointerOrigin.
 #[allow(clippy::disallowed_methods)]
@@ -1616,5 +1876,60 @@ mod tests {
             );
             assert!(cast.verify(&ctx).is_ok());
         }
+    }
+
+    #[test]
+    fn constant_memory_projection_preserves_addrspace_and_shared_ref_kind() {
+        use dialect_mir::ops::MirFieldAddrOp;
+        use dialect_mir::types::MirStructType;
+
+        let mut ctx = Context::new();
+        crate::translator::register_dialects(&mut ctx);
+        let inner_ty = IntegerType::get(&ctx, 32, Signedness::Unsigned).to_handle();
+        let unsafe_cell_ty: pliron::r#type::TypeHandle = MirStructType::get(
+            &mut ctx,
+            "UnsafeCell".to_string(),
+            vec!["value".to_string()],
+            vec![inner_ty],
+        )
+        .into();
+        let constant_memory_ty: pliron::r#type::TypeHandle = MirStructType::get(
+            &mut ctx,
+            "ConstantMemory".to_string(),
+            vec!["0".to_string()],
+            vec![unsafe_cell_ty],
+        )
+        .into();
+        let receiver_ty: pliron::r#type::TypeHandle = MirPtrType::get_with_kind(
+            &mut ctx,
+            constant_memory_ty,
+            false,
+            address_space::CONSTANT,
+            MirPointerKind::SharedRef,
+        )
+        .into();
+        let block = BasicBlock::new(&mut ctx, None, vec![receiver_ty]);
+        let receiver = block.deref(&ctx).get_argument(0);
+
+        let (projected, projected_inner_ty, last_op) = project_constant_memory_inner_ptr(
+            &mut ctx,
+            receiver,
+            block,
+            None,
+            Location::Unknown,
+            "ConstantMemory::get_ref",
+        )
+        .expect("ConstantMemory(UnsafeCell<T>) receiver must project to inner T");
+
+        assert_eq!(projected_inner_ty, inner_ty);
+        let projected_ty = projected.get_type(&ctx);
+        let projected_ty_ref = projected_ty.deref(&ctx);
+        let projected_ptr = projected_ty_ref.downcast_ref::<MirPtrType>().unwrap();
+        assert_eq!(projected_ptr.pointee, inner_ty);
+        assert_eq!(projected_ptr.address_space, address_space::CONSTANT);
+        assert!(!projected_ptr.is_mutable);
+        assert_eq!(projected_ptr.kind, MirPointerKind::SharedRef);
+        assert!(MirFieldAddrOp::new(last_op).verify(&ctx).is_ok());
+        assert_eq!(block.deref(&ctx).iter(&ctx).count(), 2);
     }
 }

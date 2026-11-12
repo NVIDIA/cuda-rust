@@ -3526,6 +3526,45 @@ fn try_dispatch_intrinsic(
             )?))
         }
 
+        // `ConstantMemory::<T>::{get_ref, get}` must lower inline even at
+        // `opt-level = 0` when rustc does not run MIR inlining, preserving the
+        // `addrspace(4)` reference / `ld.const` read instead of emitting a call
+        // to an uninlined `mir.func` with generic `addrspace(0)` signature.
+        path if is_cuda_device_fn(func)
+            && path.contains("ConstantMemory")
+            && path.ends_with("::get_ref") =>
+        {
+            Ok(Some(intrinsics::memory::emit_constant_memory_get_ref(
+                ctx,
+                body,
+                args,
+                destination,
+                target,
+                block_ptr,
+                prev_op,
+                value_map,
+                block_map,
+                loc,
+            )?))
+        }
+        path if is_cuda_device_fn(func)
+            && path.contains("ConstantMemory")
+            && path.ends_with("::get") =>
+        {
+            Ok(Some(intrinsics::memory::emit_constant_memory_get(
+                ctx,
+                body,
+                args,
+                destination,
+                target,
+                block_ptr,
+                prev_op,
+                value_map,
+                block_map,
+                loc,
+            )?))
+        }
+
         // Note: DynamicSharedArray operations are handled specially before this function
         // to extract the ALIGN const generic parameter. See the handling above
         // try_dispatch_intrinsic() call.

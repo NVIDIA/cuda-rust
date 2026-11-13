@@ -236,8 +236,11 @@ jobs:
   # roots carry cutile's Tile API and the cuda-oxide surface lives under
   # `simt`, so an old root path (`cuda_core::LaunchConfig`,
   # `cuda_async::device_operation::...`) either fails to compile or binds the
-  # Tile-side type. Nothing compiles book, README, or `cargo oxide new`
+  # Tile-side type. Nothing compiled book, README, or `cargo oxide new`
   # snippets, which is how some forty stale lines outlived the crate switch.
+  # examples-compile now compiles the `use` lines in markdown
+  # (check-doc-use-paths.py); this job still covers the other spellings and
+  # the `cargo oxide new` templates.
   host-api-paths:
     name: host API paths in docs and templates
     runs-on: linux-amd64-cpu4

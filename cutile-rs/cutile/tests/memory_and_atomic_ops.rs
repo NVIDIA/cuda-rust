@@ -537,13 +537,12 @@ mod atomic_red_view_module {
     #[cutile::entry()]
     unsafe fn atomic_red_view_kernel(output: &mut Tensor<f32, { [-1, -1] }>) {
         let mut out_part: PartitionMut<f32, { [16, 16] }> = output.partition_mut(shape![16, 16]);
-        let pid: (i32, i32, i32) = get_tile_block_id();
         let tile: Tile<f32, { [16, 16] }> = constant(1.0f32, shape![16, 16]);
         let _tok: Token = unsafe {
             atomic_red_view_tko(
                 &mut out_part,
                 tile,
-                [pid.0, 0i32],
+                [0i32, 0i32],
                 atomic::AddF,
                 ordering::Relaxed,
                 scope::Device,

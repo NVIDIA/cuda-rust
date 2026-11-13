@@ -42,8 +42,8 @@ mod kernels {
 Entry points follow four rules:
 
 1. They must be inside a `#[cutile::module]`.
-2. Writable tensor parameters use static tile shapes, such as `Tensor<f32, S>` or `Tensor<f32, { [BM, BN] }>`.
-3. Read-only tensor parameters may use dynamic dimensions, such as `Tensor<f32, { [-1, -1] }>`.
+2. A writable tensor parameter is one partition of the host tensor, and its shape, such as `Tensor<f32, { [BM, BN] }>`, is the partition shape.
+3. A dimension written `-1` is fixed at launch: by the tensor for a read-only parameter, such as `Tensor<f32, { [-1, -1] }>`, and by the partition for a writable one.
 4. Kernels write results into tensor parameters instead of returning values.
 
 Unmarked functions inside a `#[cutile::module]` are device functions. They can be called from entry points or other device functions and are inlined during compilation, but they cannot be launched directly.

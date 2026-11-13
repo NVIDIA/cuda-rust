@@ -140,6 +140,14 @@ Source lives in [NVIDIA/cuda-rust](https://github.com/NVIDIA/cuda-rust) under
 `cutile-rs/`; the [book](https://nvidia.github.io/cuda-rust/cutile/) and release tags
 (`cutile-rs/vX.Y.Z`) use the unified repository. Crate names are unchanged.
 
+### Fixed
+
+- `.const_grid(grid)` with a zero dimension now fails the launch, warmup
+  (`.compile()`) and `specialize()` with an error naming the grid. Before,
+  the kernel was compiled for the empty grid first. A `(0, 0, 0)` const grid
+  then launched on the grid inferred from an exact partition binding, or
+  failed with "Launch grid required" when there was none.
+
 ## [0.4.0] - 2026-09-25
 
 Debug builds support cuda-gdb and Nsight. DGX Spark is now supported.

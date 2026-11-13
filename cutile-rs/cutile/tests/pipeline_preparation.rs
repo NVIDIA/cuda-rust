@@ -49,18 +49,21 @@ fn concurrent_preparations_and_normal_launch_share_one_backend_compile() {
     use cutile::jit_cache::{self, JitStore};
     use std::sync::{mpsc, Mutex};
     use std::time::Duration;
+    // Only the flight's first store read blocks: a compile reads the store
+    // again for the cubin after its specialization lookup.
     struct GatedStore {
         started: mpsc::Sender<()>,
-        release: Mutex<mpsc::Receiver<()>>,
+        release: Mutex<Option<mpsc::Receiver<()>>>,
     }
     impl JitStore for GatedStore {
         fn get(&self, _: &str) -> std::io::Result<Option<Vec<u8>>> {
-            self.started.send(()).unwrap();
-            self.release
-                .lock()
-                .unwrap()
-                .recv_timeout(Duration::from_secs(30))
-                .expect("deadlock watchdog");
+            let release = self.release.lock().unwrap().take();
+            if let Some(release) = release {
+                self.started.send(()).unwrap();
+                release
+                    .recv_timeout(Duration::from_secs(30))
+                    .expect("deadlock watchdog");
+            }
             Ok(None)
         }
         fn put(&self, _: &str, _: &[u8]) -> std::io::Result<()> {
@@ -102,7 +105,7 @@ fn concurrent_preparations_and_normal_launch_share_one_backend_compile() {
     let (release_tx, release_rx) = mpsc::channel();
     jit_cache::enable(Arc::new(GatedStore {
         started: started_tx,
-        release: Mutex::new(release_rx),
+        release: Mutex::new(Some(release_rx)),
     }));
     let _disable = DisableStore;
     std::thread::scope(|scope| {

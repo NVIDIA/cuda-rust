@@ -174,6 +174,18 @@ pub fn matches_filter(fn_name: &str, module_name: &str) -> bool {
     }
 }
 
+/// `CUTILE_DEBUG_COMPILER2`: print each entry function's lowered body.
+pub(crate) fn compiler2_trace_enabled() -> bool {
+    std::env::var("CUTILE_DEBUG_COMPILER2").is_ok()
+}
+
+/// Whether any front-end diagnostic output is requested, whatever the
+/// filter. The JIT then runs the front end even for a specialization the
+/// disk cache holds, so that the output appears.
+pub fn any_enabled() -> bool {
+    !config().stages.is_empty() || compiler2_trace_enabled()
+}
+
 /// Dump output for a compilation stage.
 ///
 /// Prints to stderr with a labeled header. No-op if the stage isn't

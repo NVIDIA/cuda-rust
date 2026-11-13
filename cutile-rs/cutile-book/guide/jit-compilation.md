@@ -226,8 +226,23 @@ cutile::jit_cache::enable(std::sync::Arc::new(store));
 
 `cutile::jit_cache::disable()` stops all disk reads and writes; kernels already in the in-memory cache are unaffected. The `JitStore` trait behind `enable` is a plain byte-oriented get/put interface, so a custom backend (an object store, a network cache) can replace the filesystem implementation.
 
-A disk hit skips `tileiras`. The compiler frontend still runs on every
-in-memory miss to validate the launch parameters.
+A disk hit skips `tileiras`. Each compile also stores a specialization entry
+that records the frontend's output: the kernel's bytecode, the foreign
+functions it calls and its launch validator. An in-memory miss that finds one,
+whether a launch or a preparation job, skips the compiler frontend and goes on
+to link tile libraries and look up or build the cubin as usual. Its key covers
+every frontend input: the fields of the in-memory key above except `device_id`,
+with `compile_options` resolved against the `CUTILE_JIT_*` overrides, the
+sources of every registered module, the builds of `cutile`, `cutile-compiler`,
+`cutile-ir` and `cuda-async`, the `CUTILE_FORCE_DEVICE_CHECKS` and
+`CUTILE_DISABLE_CHECK_HOISTING` switches, the bytecode target, and the
+`tileiras` version. Tile libraries are linked after the frontend, so
+rebuilding one leaves these entries valid. The key does not cover the versions
+of third-party crates or of `rustc`; clear the cache after changing either.
+
+The frontend runs whenever it has output to show: a kernel with `print_ir` or
+`dump_mlir_dir` stores no specialization entry, and `CUTILE_DUMP` or
+`CUTILE_DEBUG_COMPILER2` bypasses the lookup.
 
 The persistent key is a SHA-256 hash of the full `tileiras` input:
 
@@ -250,7 +265,8 @@ without the disk cache. To inspect cache use:
 
 - `cutile::jit_cache::stats()` — hits, misses, entries written, bytes written, soft I/O errors.
 - `cutile::jit_cache::jit_backend_compile_count()` / `jit_disk_hit_count()` — with `jit_compile_count()`, these satisfy `compiles == backend + disk_hits` absent failures.
-- `CUTILE_JIT_TIMING=1` — the per-kernel timing line includes `stage2_source=disk|tileiras`.
+- `cutile::jit_cache::jit_front_end_skip_count()` — compiles that took the frontend's output from a specialization entry; each still reaches `tileiras` or a disk hit.
+- `CUTILE_JIT_TIMING=1` — the per-kernel timing line includes `stage1_source=disk|compiler` and `stage2_source=disk|tileiras`.
 
 The eviction policy is LRU by file mtime with a high/low watermark pair (defaults: collect above capacity, delete oldest entries down to 80%). The configured capacity is a soft target, not a hard cap: eviction is probabilistically triggered and uses a non-blocking lock, so transient overshoot is possible. Multiple processes can share one cache directory; writes are atomic and eviction is coordinated through a lock file.
 

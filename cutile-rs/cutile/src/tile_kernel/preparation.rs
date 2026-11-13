@@ -82,21 +82,12 @@ impl<F: Fn() -> Module> KernelCompileJob<F> {
         let specialization = self.specialization;
         let key = specialization.key;
         let binary = compile_shared(&key, Some(control), || {
-            let modules = CUDATileModules::from_kernel((specialization.module_ast_fn)())?;
             let binary = compile_kernel_binary(
-                &modules,
-                &key.module_name,
-                &key.function_name,
-                &key.function_generics,
-                &key.stride_args,
-                &key.spec_args,
-                &key.scalar_hints,
-                key.grid,
-                &key.gpu_name,
+                &key,
+                || (specialization.module_ast_fn)(),
                 &self.effective_options,
                 &specialization.tile_libraries,
                 Arc::clone(&self.capabilities),
-                &key.display_hash(),
                 Some(control),
             )?;
             control.check().map_err(anyhow::Error::from)?;

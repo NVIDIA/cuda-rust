@@ -12,8 +12,8 @@
 //!   disk (`disk hits: 0`; `backend compiles` is the number of distinct kernels
 //!   — the `add` kernel plus the fill kernel behind `ones`/`zeros`);
 //! - second run: a fresh process finds those cubins on disk and skips `tileiras`
-//!   entirely (`backend compiles: 0`, and `disk hits` equals the first run's
-//!   backend compiles).
+//!   and the compiler frontend entirely (`backend compiles: 0`, and `disk hits`
+//!   equals the first run's backend compiles).
 //!
 //! Disk persistence is off by default and has no environment-variable switch;
 //! it starts only when the program calls `jit_cache::enable*`. This example
@@ -22,7 +22,7 @@
 //! created with strict per-user permissions. Delete that directory to start cold again.
 //!
 //! `CUTILE_JIT_TIMING=1` prints per-stage timings including
-//! `stage2_source=disk|tileiras`.
+//! `stage1_source=disk|compiler` and `stage2_source=disk|tileiras`.
 
 use cutile::api::{ones, zeros};
 use cutile::jit_cache::{self, FileSystemJitStore};

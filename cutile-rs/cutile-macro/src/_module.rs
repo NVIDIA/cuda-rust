@@ -179,6 +179,9 @@ pub fn get_self_ast_ident() -> Ident {
 ///     // Per-module AST builder used by the linker-registry entry below.
 ///     pub fn __module_ast_self() -> Module { ... }
 ///
+///     // The builder plus a digest of its inputs, shared with any alias entry.
+///     pub static __MODULE_SOURCE: ModuleSource = ...;
+///
 ///     // Self-registers this module into the global linker-registry slice.
 ///     #[linkme::distributed_slice(CUTILE_MODULES)]
 ///     static __CUTILE_MODULE_ENTRY_FOO: CutileModuleEntry = ...;
@@ -1233,6 +1236,7 @@ fn emit_ast_self_and_registry(
     let name_string = name.to_string();
     let registry_static_ident =
         format_ident!("__CUTILE_MODULE_ENTRY_{}", name_string.to_uppercase());
+    let identity = module_identity(&name_string, source_text, source_file, base_line, base_col);
 
     quote! {
         // Per-module self-only AST builder. Builds *just* this module's
@@ -1260,6 +1264,14 @@ fn emit_ast_self_and_registry(
             this_ast
         }
 
+        // The builder above with the identity of its inputs. Re-export
+        // aliases register this same static, never a builder of their own.
+        pub static __MODULE_SOURCE: #registry_path::ModuleSource =
+            #registry_path::ModuleSource {
+                build: #self_ast_ident,
+                identity: #identity,
+            };
+
         // Linker-registry entry. Self-registers this module into the
         // global `CUTILE_MODULES` distributed slice at link time so the
         // JIT can discover it via `CUDATileModules::from_kernel`.
@@ -1268,7 +1280,55 @@ fn emit_ast_self_and_registry(
         static #registry_static_ident: #registry_path::CutileModuleEntry =
             #registry_path::CutileModuleEntry {
                 absolute_path: ::std::module_path!(),
-                build: #self_ast_ident,
+                source: &__MODULE_SOURCE,
             };
+    }
+}
+
+/// Hex SHA-256 over everything `__module_ast_self` is built from besides
+/// `module_path!()`, which the registry entry carries, including this
+/// macro's own source, which writes the builder.
+fn module_identity(
+    name: &str,
+    source_text: &str,
+    source_file: &str,
+    base_line: usize,
+    base_col: usize,
+) -> String {
+    let mut h = Sha256::new();
+    for field in [
+        env!("CUTILE_MACRO_SOURCE_DIGEST").as_bytes(),
+        name.as_bytes(),
+        source_text.as_bytes(),
+        source_file.as_bytes(),
+        &(base_line as u64).to_le_bytes(),
+        &(base_col as u64).to_le_bytes(),
+    ] {
+        h.update((field.len() as u64).to_le_bytes());
+        h.update(field);
+    }
+    format!("{:x}", h.finalize())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::module_identity;
+
+    #[test]
+    fn module_identity_tracks_every_input() {
+        let base = module_identity("m", "mod m {}", "src/lib.rs", 3, 4);
+        assert_eq!(base.len(), 64);
+        assert_eq!(base, module_identity("m", "mod m {}", "src/lib.rs", 3, 4));
+        for flipped in [
+            module_identity("n", "mod m {}", "src/lib.rs", 3, 4),
+            module_identity("m", "mod m { }", "src/lib.rs", 3, 4),
+            module_identity("m", "mod m {}", "src/a.rs", 3, 4),
+            module_identity("m", "mod m {}", "src/lib.rs", 2, 4),
+            module_identity("m", "mod m {}", "src/lib.rs", 3, 5),
+            // Field boundaries are length-prefixed, not concatenated.
+            module_identity("mm", "od m {}", "src/lib.rs", 3, 4),
+        ] {
+            assert_ne!(base, flipped);
+        }
     }
 }

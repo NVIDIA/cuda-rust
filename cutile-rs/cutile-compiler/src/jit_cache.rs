@@ -38,8 +38,8 @@ use std::sync::{Arc, PoisonError, RwLock};
 ///
 /// `key` is the 64-char lowercase hex SHA-256 produced by the cache layer, so
 /// implementations can use it directly as a file or object name. The stored
-/// value is an encoded entry (header + cubin), opaque at this layer; all
-/// validation happens above, in the cache layer.
+/// value is an encoded cubin or specialization entry, opaque at this layer;
+/// all validation happens above, in the cache layer.
 ///
 /// Implementations must be safe under concurrent `put` of the same key from
 /// multiple processes: a reader must see either nothing or one complete value,
@@ -764,12 +764,12 @@ pub fn l2_key(
     hex(&h.finalize())
 }
 
-fn put_field(h: &mut Sha256, bytes: &[u8]) {
+pub(crate) fn put_field(h: &mut Sha256, bytes: &[u8]) {
     h.update((bytes.len() as u64).to_le_bytes());
     h.update(bytes);
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
     for &b in bytes {
@@ -891,6 +891,213 @@ pub fn decode_entry(bytes: &[u8], params: &EntryParams<'_>) -> Option<Vec<u8>> {
         return None;
     }
     Some(payload.to_vec())
+}
+
+// ── Specialization entries ──────────────────────────────────────────────────
+//
+// A specialization entry lets a compile skip the compiler front end. Its key
+// covers every input the front end reads; its value is what the front end
+// hands stage 2: the bytecode, the foreign tile functions it calls (which
+// decide the tile libraries it links), and the launch validator. Stage 2
+// then runs as after the front end, so the cubin entry and its recovery are
+// shared with every other path to the same bytecode.
+//
+//   offset  size  field
+//   0       12    magic            b"CUTILESPEC\0\0"
+//   12      2     format_version   u16 LE
+//   14      2     reserved
+//   16      32    payload_sha256   sha256(payload)
+//   48      8     payload_len      u64 LE
+//   56      ..    payload
+//
+// payload: bytecode (u64 LE length ‖ bytes) ‖ foreign callees (u64 LE count,
+// each u64 LE length ‖ UTF-8) ‖ check counts (3 × u32 LE) ‖ validator
+// (`Validator::to_bytes`, the rest).
+
+/// Domain separator of [`specialization_key`]; bump it with any change to
+/// the preimage or to the set of fields callers pass.
+const SPECIALIZATION_DOMAIN: &[u8] = b"cutile-jit-specialization-v1\0";
+const SPECIALIZATION_MAGIC: &[u8; 12] = b"CUTILESPEC\0\0";
+const SPECIALIZATION_FORMAT_VERSION: u16 = 1;
+const SPECIALIZATION_HEADER_LEN: usize = 56;
+
+/// Key of a specialization entry: SHA-256 over named fields, each name and
+/// value length-prefixed. The caller passes every input of the front end.
+pub fn specialization_key(fields: &[(&str, &[u8])]) -> String {
+    let mut h = Sha256::new();
+    h.update(SPECIALIZATION_DOMAIN);
+    for (name, value) in fields {
+        put_field(&mut h, name.as_bytes());
+        put_field(&mut h, value);
+    }
+    hex(&h.finalize())
+}
+
+/// What the front end produced for one specialization.
+#[derive(Debug, Clone)]
+pub struct SpecializationEntry {
+    /// The serialized Tile IR stage 2 compiles.
+    pub bytecode: Vec<u8>,
+    /// The foreign tile functions the kernel calls, from which stage 2
+    /// decides the tile libraries it links.
+    pub foreign_callees: Vec<String>,
+    /// The checks the launcher enforces.
+    pub validator: cuda_async::device_context::Validator,
+    /// Launch checks discharged, hoisted and left in place, for
+    /// `CUTILE_JIT_TIMING`.
+    pub check_counts: [u32; 3],
+}
+
+/// Encodes a specialization entry.
+pub fn encode_specialization(entry: &SpecializationEntry) -> Vec<u8> {
+    fn put_bytes(out: &mut Vec<u8>, bytes: &[u8]) {
+        out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+        out.extend_from_slice(bytes);
+    }
+    let mut payload = Vec::new();
+    put_bytes(&mut payload, &entry.bytecode);
+    payload.extend_from_slice(&(entry.foreign_callees.len() as u64).to_le_bytes());
+    for callee in &entry.foreign_callees {
+        put_bytes(&mut payload, callee.as_bytes());
+    }
+    for count in entry.check_counts {
+        payload.extend_from_slice(&count.to_le_bytes());
+    }
+    payload.extend_from_slice(&entry.validator.to_bytes());
+
+    let mut out = Vec::with_capacity(SPECIALIZATION_HEADER_LEN + payload.len());
+    out.extend_from_slice(SPECIALIZATION_MAGIC);
+    out.extend_from_slice(&SPECIALIZATION_FORMAT_VERSION.to_le_bytes());
+    out.extend_from_slice(&[0u8; 2]); // reserved
+    out.extend_from_slice(&Sha256::digest(&payload));
+    out.extend_from_slice(&(payload.len() as u64).to_le_bytes());
+    debug_assert_eq!(out.len(), SPECIALIZATION_HEADER_LEN);
+    out.extend_from_slice(&payload);
+    out
+}
+
+/// Decodes [`encode_specialization`] output; `None` for anything else,
+/// including a torn or corrupted entry.
+pub fn decode_specialization(bytes: &[u8]) -> Option<SpecializationEntry> {
+    if bytes.len() < SPECIALIZATION_HEADER_LEN
+        || &bytes[0..12] != SPECIALIZATION_MAGIC
+        || u16::from_le_bytes(bytes[12..14].try_into().unwrap()) != SPECIALIZATION_FORMAT_VERSION
+    {
+        return None;
+    }
+    let payload_sha256: [u8; 32] = bytes[16..48].try_into().unwrap();
+    let payload_len: usize = u64::from_le_bytes(bytes[48..56].try_into().unwrap())
+        .try_into()
+        .ok()?;
+    let payload = &bytes[SPECIALIZATION_HEADER_LEN..];
+    if payload.len() != payload_len || <[u8; 32]>::from(Sha256::digest(payload)) != payload_sha256 {
+        return None;
+    }
+
+    fn take<'a>(rest: &mut &'a [u8], n: usize) -> Option<&'a [u8]> {
+        let (head, tail) = rest.split_at_checked(n)?;
+        *rest = tail;
+        Some(head)
+    }
+    fn len(rest: &mut &[u8]) -> Option<usize> {
+        usize::try_from(u64::from_le_bytes(take(rest, 8)?.try_into().unwrap())).ok()
+    }
+    fn field<'a>(rest: &mut &'a [u8]) -> Option<&'a [u8]> {
+        let n = len(rest)?;
+        take(rest, n)
+    }
+
+    let mut rest = payload;
+    let bytecode = field(&mut rest)?.to_vec();
+    let callees = len(&mut rest)?;
+    // Each callee takes at least its 8-byte length, which bounds the count
+    // before anything is allocated for it.
+    if callees > rest.len() / 8 {
+        return None;
+    }
+    let foreign_callees = (0..callees)
+        .map(|_| String::from_utf8(field(&mut rest)?.to_vec()).ok())
+        .collect::<Option<Vec<_>>>()?;
+    let mut check_counts = [0u32; 3];
+    for count in &mut check_counts {
+        *count = u32::from_le_bytes(take(&mut rest, 4)?.try_into().unwrap());
+    }
+    let validator = cuda_async::device_context::Validator::from_bytes(rest)?;
+    Some(SpecializationEntry {
+        bytecode,
+        foreign_callees,
+        validator,
+        check_counts,
+    })
+}
+
+/// The specialization entry stored at `key` in the installed store, counted
+/// as a front-end skip ([`jit_front_end_skip_count`]). An entry that does
+/// not decode is deleted. Hits and misses count cubin entries only, so a
+/// read here counts as neither.
+pub fn load_specialization(key: &str) -> Option<SpecializationEntry> {
+    let entry = load_specialization_at(installed_store()?.as_ref(), key)?;
+    FRONT_END_SKIPS.fetch_add(1, Ordering::Relaxed);
+    Some(entry)
+}
+
+fn load_specialization_at(store: &dyn JitStore, key: &str) -> Option<SpecializationEntry> {
+    let bytes = match store.get(key) {
+        Ok(bytes) => bytes?,
+        Err(e) => {
+            STATS.io_errors.fetch_add(1, Ordering::Relaxed);
+            cache_log(format_args!(
+                "specialization entry read for {key} failed: {e}"
+            ));
+            return None;
+        }
+    };
+    if let Some(entry) = decode_specialization(&bytes) {
+        return Some(entry);
+    }
+    cache_log(format_args!(
+        "specialization entry {key} failed validation; deleting"
+    ));
+    if let Err(e) = store.delete(key) {
+        STATS.io_errors.fetch_add(1, Ordering::Relaxed);
+        cache_log(format_args!("failed to delete entry {key}: {e}"));
+    }
+    None
+}
+
+/// Stores `entry` at `key` in the installed store; a failed write is a soft
+/// I/O error.
+pub fn store_specialization(key: &str, entry: &SpecializationEntry) {
+    if let Some(store) = installed_store() {
+        store_specialization_at(store.as_ref(), key, entry);
+    }
+}
+
+fn store_specialization_at(store: &dyn JitStore, key: &str, entry: &SpecializationEntry) {
+    let bytes = encode_specialization(entry);
+    match store.put(key, &bytes) {
+        Ok(()) => {
+            STATS.puts.fetch_add(1, Ordering::Relaxed);
+            STATS
+                .bytes_written
+                .fetch_add(bytes.len() as u64, Ordering::Relaxed);
+        }
+        Err(e) => {
+            STATS.io_errors.fetch_add(1, Ordering::Relaxed);
+            cache_log(format_args!(
+                "specialization entry write for {key} failed: {e}"
+            ));
+        }
+    }
+}
+
+static FRONT_END_SKIPS: AtomicU64 = AtomicU64::new(0);
+
+/// Number of compiles in this process whose front end a specialization
+/// entry skipped. Stage 2 still runs for each, from the disk cache or with
+/// `tileiras`.
+pub fn jit_front_end_skip_count() -> u64 {
+    FRONT_END_SKIPS.load(Ordering::Relaxed)
 }
 
 #[cfg(test)]
@@ -1217,6 +1424,171 @@ mod tests {
             l2_key(b"bc", V, "sm_90", &opts(3), "fp"),
             "45274c4d279d97c5e383d8a8b035225d5ec81c91bd9f27c3027f5f5593473533",
             "l2 key preimage changed: bump L2_KEY_SCHEMA (see comment above)"
+        );
+    }
+
+    fn spec_entry(foreign_callees: &[&str]) -> SpecializationEntry {
+        use cuda_async::device_context::{TensorParamType, ValidParamType, Validator};
+        SpecializationEntry {
+            bytecode: b"bytecode".to_vec(),
+            foreign_callees: foreign_callees.iter().map(|c| c.to_string()).collect(),
+            validator: Validator {
+                params: vec![ValidParamType::Tensor(TensorParamType {
+                    element_type: "f32".into(),
+                    shape: vec![-1, 128],
+                })],
+                launch_checks: vec![],
+            },
+            check_counts: [4, 2, 1],
+        }
+    }
+
+    fn assert_same_entry(a: &SpecializationEntry, b: &SpecializationEntry) {
+        assert_eq!(a.bytecode, b.bytecode);
+        assert_eq!(a.foreign_callees, b.foreign_callees);
+        assert_eq!(a.validator.to_bytes(), b.validator.to_bytes());
+        assert_eq!(a.check_counts, b.check_counts);
+    }
+
+    #[test]
+    fn specialization_entry_roundtrip() {
+        for callees in [&[][..], &["lib_add"], &["lib_add", "lib_mul"]] {
+            let entry = spec_entry(callees);
+            let decoded = decode_specialization(&encode_specialization(&entry)).unwrap();
+            assert_same_entry(&decoded, &entry);
+        }
+    }
+
+    #[test]
+    fn specialization_entry_rejects_corruption_truncation_and_trailing_junk() {
+        let encoded = encode_specialization(&spec_entry(&["lib_add"]));
+
+        for at in [SPECIALIZATION_HEADER_LEN, encoded.len() - 1] {
+            let mut corrupt = encoded.clone();
+            corrupt[at] ^= 0xff;
+            assert!(decode_specialization(&corrupt).is_none(), "byte {at}");
+        }
+        for len in [0, 11, SPECIALIZATION_HEADER_LEN - 1, encoded.len() - 1] {
+            assert!(
+                decode_specialization(&encoded[..len]).is_none(),
+                "len {len}"
+            );
+        }
+        let mut long = encoded.clone();
+        long.push(0);
+        assert!(decode_specialization(&long).is_none());
+
+        let mut bad_magic = encoded.clone();
+        bad_magic[0] ^= 0xff;
+        assert!(decode_specialization(&bad_magic).is_none());
+        let mut bad_version = encoded.clone();
+        bad_version[12] ^= 0xff;
+        assert!(decode_specialization(&bad_version).is_none());
+
+        // A cubin entry is not a specialization entry.
+        let cubin = encode_entry(&params(b"bc"), b"cubin").unwrap();
+        assert!(decode_specialization(&cubin).is_none());
+    }
+
+    /// Re-wraps `payload` in a header with a matching checksum, so only the
+    /// payload's own structure is under test.
+    fn spec_with_payload(payload: &[u8]) -> Vec<u8> {
+        let mut out = SPECIALIZATION_MAGIC.to_vec();
+        out.extend_from_slice(&SPECIALIZATION_FORMAT_VERSION.to_le_bytes());
+        out.extend_from_slice(&[0u8; 2]);
+        out.extend_from_slice(&Sha256::digest(payload));
+        out.extend_from_slice(&(payload.len() as u64).to_le_bytes());
+        out.extend_from_slice(payload);
+        out
+    }
+
+    #[test]
+    fn specialization_entry_rejects_a_malformed_payload() {
+        let encoded = encode_specialization(&spec_entry(&["lib_add"]));
+        let payload = &encoded[SPECIALIZATION_HEADER_LEN..];
+        assert!(decode_specialization(&spec_with_payload(payload)).is_some());
+        let count_at = 8 + b"bytecode".len();
+        let callee_at = count_at + 8 + 8;
+
+        // Trailing bytes after the validator.
+        let mut long = payload.to_vec();
+        long.push(0);
+        assert!(decode_specialization(&spec_with_payload(&long)).is_none());
+
+        // A bytecode length past the end of the payload.
+        let mut bad_len = payload.to_vec();
+        bad_len[..8].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(decode_specialization(&spec_with_payload(&bad_len)).is_none());
+
+        // A callee count the payload cannot hold.
+        let mut bad_count = payload.to_vec();
+        bad_count[count_at..count_at + 8].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(decode_specialization(&spec_with_payload(&bad_count)).is_none());
+
+        // A callee name that is not UTF-8.
+        let mut bad_callee = payload.to_vec();
+        bad_callee[callee_at] = 0xff;
+        assert!(decode_specialization(&spec_with_payload(&bad_callee)).is_none());
+
+        // A validator the codec does not produce.
+        let mut bad_validator = payload.to_vec();
+        bad_validator[callee_at + b"lib_add".len() + 12] ^= 0xff;
+        assert!(decode_specialization(&spec_with_payload(&bad_validator)).is_none());
+    }
+
+    #[test]
+    fn specialization_store_round_trips_and_deletes_an_undecodable_entry() {
+        let dir = std::env::temp_dir().join(format!(
+            "cutile_spec_store_{}_{}",
+            std::process::id(),
+            uuid::Uuid::new_v4(),
+        ));
+        let store = FileSystemJitStore::new(&dir).unwrap();
+        let key = specialization_key(&[("module", b"m")]);
+        assert!(load_specialization_at(&store, &key).is_none());
+
+        let entry = spec_entry(&["lib_add"]);
+        store_specialization_at(&store, &key, &entry);
+        assert_same_entry(&load_specialization_at(&store, &key).unwrap(), &entry);
+
+        let mut torn = encode_specialization(&entry);
+        torn.truncate(torn.len() - 1);
+        store.put(&key, &torn).unwrap();
+        assert!(load_specialization_at(&store, &key).is_none());
+        assert!(store.get(&key).unwrap().is_none(), "deleted");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn specialization_key_is_deterministic_and_field_sensitive() {
+        let base = specialization_key(&[("module", b"m"), ("function", b"f")]);
+        assert_eq!(
+            base,
+            specialization_key(&[("module", b"m"), ("function", b"f")])
+        );
+        assert_eq!(base.len(), 64);
+        assert_ne!(
+            base,
+            specialization_key(&[("module", b"m"), ("function", b"g")])
+        );
+        assert_ne!(
+            base,
+            specialization_key(&[("module", b"m"), ("func", b"f")])
+        );
+        assert_ne!(base, specialization_key(&[("module", b"m")]));
+        // Its own domain: the same bytes never collide with a cubin key.
+        assert_ne!(specialization_key(&[]), l2_key(b"", V, "", &opts(3), ""));
+    }
+
+    #[test]
+    fn specialization_key_length_prefix_blocks_field_boundary_shifts() {
+        assert_ne!(
+            specialization_key(&[("a", b"bc")]),
+            specialization_key(&[("ab", b"c")])
+        );
+        assert_ne!(
+            specialization_key(&[("a", b"b"), ("c", b"")]),
+            specialization_key(&[("a", b""), ("bc", b"")])
         );
     }
 }

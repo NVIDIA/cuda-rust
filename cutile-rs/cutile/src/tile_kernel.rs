@@ -10,18 +10,21 @@ use cuda_async::error::DeviceError;
 use cuda_core::DType;
 use cuda_core::{memcpy_dtoh_async, Function};
 use cutile_compiler::ast::Module;
+use cutile_compiler::check_optimizations::CheckOptimizations;
 use cutile_compiler::compile_api::KernelCompiler;
 use cutile_compiler::compile_control::CompileControl;
 use cutile_compiler::compiler::{CUDATileFunctionCompiler, CUDATileModules};
 use cutile_compiler::cuda_tile_runtime_utils::{
     bytecode_override, compile_bytecode_cached_with_control, compile_bytecode_cached_with_toolkit,
-    env_flag_enabled, get_compiler_version, get_gpu_name,
+    compiler_build_digest, env_flag_enabled, get_compiler_version, get_gpu_name,
     recompile_after_disk_rejection_with_control, recompile_after_disk_rejection_with_toolkit,
     serialize_tile_ir_bytecode_for_version, tileiras_fingerprint, toolchain_env_snapshot,
     Stage2Source, TileirasOptions, ToolchainEnvSnapshot, ToolkitCapabilities,
 };
+use cutile_compiler::registry::registry_digest;
 use cutile_compiler::specialization::{DivHint, SpecializationBits};
 use cutile_compiler::tile_library::{default_tile_libraries_generation, TileLibrarySnapshot};
+use cutile_compiler::{dump, jit_cache};
 use dashmap::DashMap;
 use once_cell::sync::OnceCell;
 use std::fs;
@@ -769,6 +772,96 @@ fn write_ir(
     Ok(())
 }
 
+/// The front-end inputs every specialization shares: the sources of the
+/// registered modules, the builds of the compiler and of this crate, and the
+/// check-placement switches.
+#[derive(Debug, Clone)]
+struct FrontEndBuild {
+    registry: &'static str,
+    compiler: &'static str,
+    cutile: &'static str,
+    check_optimizations: CheckOptimizations,
+}
+
+impl FrontEndBuild {
+    fn current() -> Self {
+        Self {
+            registry: registry_digest(),
+            compiler: compiler_build_digest(),
+            cutile: env!("CUTILE_SOURCE_DIGEST"),
+            check_optimizations: CheckOptimizations::from_env(),
+        }
+    }
+}
+
+/// Key of the disk-cache entry that lets `key` skip the compiler front end.
+/// It covers every input the front end reads: `compile_options` are `key`'s
+/// options with the `CUTILE_JIT_*` overrides applied, and `capabilities` the
+/// toolchain and target the compile uses.
+fn specialization_key(
+    key: &TileFunctionKey,
+    compile_options: &CompileOptions,
+    capabilities: &ToolkitCapabilities,
+    build: &FrontEndBuild,
+) -> String {
+    let TileFunctionKey {
+        bytecode_override,
+        module_name,
+        function_name,
+        function_generics,
+        stride_args,
+        spec_args,
+        scalar_hints,
+        grid,
+        // The front end reads only the resolved `compile_options`.
+        compile_options: _,
+        source_hash,
+        // Reaches the front end only through `gpu_name` and the target.
+        device_id: _,
+        gpu_name,
+        compiler_version,
+        tileiras_fingerprint,
+        // Stage 2 links the libraries after the front end, which reads none.
+        tile_libraries_digest: _,
+    } = key;
+    let FrontEndBuild {
+        registry,
+        compiler,
+        cutile,
+        check_optimizations,
+    } = build;
+    // Debug renderings of plain data; each type's fields all print.
+    let fields = [
+        ("module", module_name.clone()),
+        ("function", function_name.clone()),
+        ("generics", format!("{function_generics:?}")),
+        ("strides", format!("{stride_args:?}")),
+        ("spec_args", format!("{spec_args:?}")),
+        ("scalar_hints", format!("{scalar_hints:?}")),
+        ("grid", format!("{grid:?}")),
+        ("compile_options", format!("{compile_options:?}")),
+        ("source_hash", source_hash.clone()),
+        ("gpu_name", gpu_name.clone()),
+        ("compiler_version", compiler_version.clone()),
+        ("bytecode_override", format!("{bytecode_override:?}")),
+        ("tileiras", tileiras_fingerprint.clone()),
+        (
+            "tileiras_version",
+            capabilities.tileiras_version.to_string(),
+        ),
+        ("target", format!("{:?}", capabilities.target)),
+        ("checks", format!("{check_optimizations:?}")),
+        ("registry", registry.to_string()),
+        ("compiler_build", compiler.to_string()),
+        ("cutile_build", cutile.to_string()),
+    ];
+    let fields: Vec<(&str, &[u8])> = fields
+        .iter()
+        .map(|(name, value)| (*name, value.as_bytes()))
+        .collect();
+    jit_cache::specialization_key(&fields)
+}
+
 // Plain host-owned artifacts. No CUDA module is loaded until load_kernel_binary.
 struct KernelBinary {
     cubin: Vec<u8>,
@@ -778,26 +871,26 @@ struct KernelBinary {
     stage2_source: Stage2Source,
     validator: Arc<Validator>,
     links_tile_libraries: bool,
+    /// Whether a specialization entry stood in for the front end.
+    stage1_from_disk: bool,
     stage1_ms: f64,
     stage2_ms: f64,
     check_stats: (u32, u32, u32),
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Compiles one specialization to a host-owned CUBIN. Stage 1 comes from its
+/// specialization entry in the disk cache when one is stored, otherwise from
+/// the front end, which then stores one; stage 2 runs the same either way.
+///
+/// Diagnostic output (`CUTILE_DUMP`, `CUTILE_DEBUG_COMPILER2`) bypasses the
+/// lookup, and a kernel that prints or dumps its IR stores no entry, so the
+/// front end runs whenever it has output to show.
 fn compile_kernel_binary(
-    modules: &CUDATileModules,
-    module_name: &str,
-    function_name: &str,
-    generics: &[String],
-    stride_args: &[(String, Vec<i32>)],
-    spec_args: &[(String, SpecializationBits)],
-    scalar_hints: &[(String, DivHint)],
-    const_grid: Option<(u32, u32, u32)>,
-    gpu_name: &str,
+    key: &TileFunctionKey,
+    module_ast: impl FnOnce() -> Module,
     compile_options: &CompileOptions,
     tile_libraries: &TileLibrarySnapshot,
     capabilities: Arc<ToolkitCapabilities>,
-    key_str: &str,
     control: Option<&CompileControl>,
 ) -> Result<KernelBinary, Error> {
     if let Some(control) = control {
@@ -805,85 +898,46 @@ fn compile_kernel_binary(
     }
     let compile_options = &compile_options.with_jit_env_overrides()?;
 
-    let stride_args_refs: Vec<(&str, &[i32])> = stride_args
-        .iter()
-        .map(|x| (x.0.as_str(), x.1.as_slice()))
-        .collect();
-    let spec_args_refs: Vec<(&str, &SpecializationBits)> =
-        spec_args.iter().map(|x| (x.0.as_str(), &x.1)).collect();
-    let scalar_hints_refs: Vec<(&str, &DivHint)> =
-        scalar_hints.iter().map(|x| (x.0.as_str(), &x.1)).collect();
-
     let stage1_start = std::time::Instant::now();
-    let (tile_module, validator, check_stats) = {
-        let compiler = CUDATileFunctionCompiler::new(
-            modules,
-            module_name,
-            function_name,
-            generics,
-            &stride_args_refs,
-            &spec_args_refs,
-            &scalar_hints_refs,
-            const_grid,
-            gpu_name.to_string(),
+    let spec_key = jit_cache::is_enabled().then(|| {
+        specialization_key(
+            key,
             compile_options,
-        )?;
-        let compiler = compiler.with_target_capabilities(capabilities.target.clone())?;
-        let tile_module = compiler.compile()?;
-        // AFTER compile, not before: the launch-check accumulator fills
-        // DURING compilation, and this snapshot is the one the generated
-        // launcher enforces. Taken early, every hoisted check is silently
-        // dropped at launch while the compiler has already discharged the
-        // in-kernel assert on its promise — out-of-bounds accesses then run
-        // unchecked (caught by the differential placement harness; pinned by
-        // `launch_checks_are_enforced_at_launch`).
-        let validator = Arc::new(compiler.get_validator());
-        let check_stats = (
-            compiler.check_stats.discharged.get(),
-            compiler.check_stats.hoisted.get(),
-            compiler.check_stats.in_place.get(),
-        );
-        (tile_module, validator, check_stats)
+            &capabilities,
+            &FrontEndBuild::current(),
+        )
+    });
+    let stored = spec_key
+        .as_deref()
+        .filter(|_| !dump::any_enabled())
+        .and_then(jit_cache::load_specialization);
+    let stage1_from_disk = stored.is_some();
+    let stage1 = match stored {
+        Some(stage1) => stage1,
+        None => {
+            let modules = CUDATileModules::from_kernel(module_ast())?;
+            let (stage1, shows_ir) =
+                run_front_end(&modules, key, compile_options, &capabilities, control)?;
+            if let Some(spec_key) = spec_key.filter(|_| !shows_ir) {
+                jit_cache::store_specialization(&spec_key, &stage1);
+            }
+            stage1
+        }
     };
     let stage1_ms = stage1_start.elapsed().as_secs_f64() * 1000.0;
     if let Some(control) = control {
         control.check().map_err(anyhow::Error::from)?;
     }
 
+    let jit_cache::SpecializationEntry {
+        bytecode,
+        foreign_callees,
+        validator,
+        check_counts: [discharged, hoisted, in_place],
+    } = stage1;
     let stage2_start = std::time::Instant::now();
-    {
-        let print_ir =
-            modules.get_entry_arg_bool_by_function_name(module_name, function_name, "print_ir")?;
-        let dump_mlir_dir = modules.get_entry_arg_string_by_function_name(
-            module_name,
-            function_name,
-            "dump_mlir_dir",
-        )?;
-        // `to_mlir_text` renders the whole module; only pay for it when asked.
-        if print_ir || dump_mlir_dir.is_some() {
-            let ir_text = tile_module.to_mlir_text();
-            if print_ir {
-                println!("COMPILED IR: {module_name}::{function_name}\n{ir_text}");
-            }
-            if let Some(path) = dump_mlir_dir {
-                write_ir(
-                    module_name,
-                    function_name,
-                    key_str,
-                    "mlir",
-                    path.as_str(),
-                    ir_text.as_str(),
-                )?;
-            }
-        }
-    }
-    let (bytecode, _) =
-        serialize_tile_ir_bytecode_for_version(&tile_module, capabilities.target.bytecode_version)?;
-    if let Some(control) = control {
-        control.check().map_err(anyhow::Error::from)?;
-    }
     // A kernel with foreign tile-library calls links its tile libraries.
-    let tilelibs = tile_libraries.link(&tile_module)?;
+    let tilelibs = tile_libraries.link(&foreign_callees)?;
     let links_tile_libraries = !tilelibs.is_empty();
     let tileiras_opts =
         TileirasOptions::from_compile_options(compile_options).with_tilelibs(tilelibs);
@@ -900,12 +954,109 @@ fn compile_kernel_binary(
         tileiras_opts,
         capabilities,
         stage2_source,
-        validator,
+        validator: Arc::new(validator),
         links_tile_libraries,
+        stage1_from_disk,
         stage1_ms,
         stage2_ms,
-        check_stats,
+        check_stats: (discharged, hoisted, in_place),
     })
+}
+
+/// Stage 1 of [`compile_kernel_binary`] through the compiler front end,
+/// honoring the `print_ir` / `dump_mlir_dir` entry attributes. Also returns
+/// whether it showed the IR.
+fn run_front_end(
+    modules: &CUDATileModules,
+    key: &TileFunctionKey,
+    compile_options: &CompileOptions,
+    capabilities: &ToolkitCapabilities,
+    control: Option<&CompileControl>,
+) -> Result<(jit_cache::SpecializationEntry, bool), Error> {
+    let (module_name, function_name) = (key.module_name(), key.function_name());
+    let stride_args_refs: Vec<(&str, &[i32])> = key
+        .stride_args
+        .iter()
+        .map(|x| (x.0.as_str(), x.1.as_slice()))
+        .collect();
+    let spec_args_refs: Vec<(&str, &SpecializationBits)> =
+        key.spec_args.iter().map(|x| (x.0.as_str(), &x.1)).collect();
+    let scalar_hints_refs: Vec<(&str, &DivHint)> = key
+        .scalar_hints
+        .iter()
+        .map(|x| (x.0.as_str(), &x.1))
+        .collect();
+
+    let (tile_module, validator, check_counts) = {
+        let compiler = CUDATileFunctionCompiler::new(
+            modules,
+            module_name,
+            function_name,
+            &key.function_generics,
+            &stride_args_refs,
+            &spec_args_refs,
+            &scalar_hints_refs,
+            key.grid,
+            key.gpu_name.clone(),
+            compile_options,
+        )?;
+        let compiler = compiler.with_target_capabilities(capabilities.target.clone())?;
+        let tile_module = compiler.compile()?;
+        // AFTER compile, not before: the launch-check accumulator fills
+        // DURING compilation, and this snapshot is the one the generated
+        // launcher enforces. Taken early, every hoisted check is silently
+        // dropped at launch while the compiler has already discharged the
+        // in-kernel assert on its promise — out-of-bounds accesses then run
+        // unchecked (caught by the differential placement harness; pinned by
+        // `launch_checks_are_enforced_at_launch`).
+        let validator = compiler.get_validator();
+        let check_counts = [
+            compiler.check_stats.discharged.get(),
+            compiler.check_stats.hoisted.get(),
+            compiler.check_stats.in_place.get(),
+        ];
+        (tile_module, validator, check_counts)
+    };
+    if let Some(control) = control {
+        control.check().map_err(anyhow::Error::from)?;
+    }
+
+    let print_ir =
+        modules.get_entry_arg_bool_by_function_name(module_name, function_name, "print_ir")?;
+    let dump_mlir_dir = modules.get_entry_arg_string_by_function_name(
+        module_name,
+        function_name,
+        "dump_mlir_dir",
+    )?;
+    let shows_ir = print_ir || dump_mlir_dir.is_some();
+    // `to_mlir_text` renders the whole module; only pay for it when asked.
+    if shows_ir {
+        let ir_text = tile_module.to_mlir_text();
+        if print_ir {
+            println!("COMPILED IR: {module_name}::{function_name}\n{ir_text}");
+        }
+        if let Some(path) = dump_mlir_dir {
+            write_ir(
+                module_name,
+                function_name,
+                &key.display_hash(),
+                "mlir",
+                path.as_str(),
+                ir_text.as_str(),
+            )?;
+        }
+    }
+    let (bytecode, _) =
+        serialize_tile_ir_bytecode_for_version(&tile_module, capabilities.target.bytecode_version)?;
+    Ok((
+        jit_cache::SpecializationEntry {
+            bytecode,
+            foreign_callees: tile_module.foreign_callees(),
+            validator,
+            check_counts,
+        },
+        shows_ir,
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -927,6 +1078,7 @@ fn load_kernel_binary(
         stage2_source,
         validator,
         links_tile_libraries,
+        stage1_from_disk,
         stage1_ms,
         stage2_ms,
         check_stats,
@@ -997,9 +1149,14 @@ fn load_kernel_binary(
         std::time::Duration::from_secs_f64((stage1_ms + stage2_ms + stage3_ms) / 1000.0)
     );
     if std::env::var_os("CUTILE_JIT_TIMING").is_some() {
+        let stage1_source = if *stage1_from_disk {
+            "disk"
+        } else {
+            "compiler"
+        };
         let stage2_source = if from_disk { "disk" } else { "tileiras" };
         eprintln!(
-            "CUTILE_JIT_TIMING module={module_name} function={function_name} key={key_str} stage1_ms={stage1_ms:.3} stage2_ms={stage2_ms:.3} stage2_source={stage2_source} stage3_ms={stage3_ms:.3} checks_discharged={} checks_hoisted={} checks_in_place={} generics={}",
+            "CUTILE_JIT_TIMING module={module_name} function={function_name} key={key_str} stage1_ms={stage1_ms:.3} stage1_source={stage1_source} stage2_ms={stage2_ms:.3} stage2_source={stage2_source} stage3_ms={stage3_ms:.3} checks_discharged={} checks_hoisted={} checks_in_place={} generics={}",
             check_stats.0,
             check_stats.1,
             check_stats.2,
@@ -1142,7 +1299,6 @@ fn compile_for_launch_site<F: Fn() -> Module>(
     );
     let key = specialization.l1_cache_key().clone();
     let device_id = key.device_id;
-    let gpu_name = key.gpu_name.clone();
     let slot = kernel_cache_slot(&key);
 
     // Use OnceCell::get_or_try_init for single-flight compilation dedup.
@@ -1152,21 +1308,12 @@ fn compile_for_launch_site<F: Fn() -> Module>(
         // No CUDA work runs in a preparation worker. Ordinary launches join
         // the same CPU flight before loading on this foreground thread.
         let build = || {
-            let modules = CUDATileModules::from_kernel((specialization.module_ast_fn)())?;
             compile_kernel_binary(
-                &modules,
-                module_name,
-                function_name,
-                &key.function_generics,
-                &key.stride_args,
-                &key.spec_args,
-                &key.scalar_hints,
-                const_grid,
-                &gpu_name,
+                &key,
+                || (specialization.module_ast_fn)(),
                 &key.compile_options,
                 &specialization.tile_libraries,
                 ToolkitCapabilities::for_device(device_id)?,
-                &key.display_hash(),
                 None,
             )
         };
@@ -2354,5 +2501,159 @@ mod tests {
         };
 
         assert_eq!(specialization.l1_cache_key(), &expected);
+    }
+
+    /// Every input of one specialization key, set to distinct non-default
+    /// values so that each flip below changes exactly one of them.
+    struct SpecKeyInputs {
+        key: TileFunctionKey,
+        options: CompileOptions,
+        capabilities: ToolkitCapabilities,
+        build: FrontEndBuild,
+    }
+
+    impl SpecKeyInputs {
+        fn new() -> Self {
+            let hint = DivHint {
+                divisor: 8,
+                max: 16,
+            };
+            let mut key = TileFunctionKey::builder("module", "kernel")
+                .generics(vec!["f32".into(), "128".into()])
+                .stride_args(vec![("x".into(), vec![128, 1])])
+                .spec_args(vec![(
+                    "x".into(),
+                    SpecializationBits {
+                        shape_div: vec![hint; 2],
+                        stride_div: vec![
+                            hint,
+                            DivHint {
+                                divisor: 1,
+                                max: 16,
+                            },
+                        ],
+                        stride_one: vec![false, true],
+                        base_ptr_div: DivHint {
+                            divisor: 16,
+                            max: 16,
+                        },
+                        elements_disjoint: true,
+                    },
+                )])
+                .scalar_hints(vec![("n".into(), hint)])
+                .grid((4, 2, 1))
+                .source_hash("source")
+                .device_id(0)
+                .gpu_name("sm_90")
+                .compiler_version("compiler")
+                .tileiras_fingerprint("tileiras")
+                .tile_libraries_digest(Some("libraries".into()))
+                .build();
+            key.bytecode_override = None;
+            Self {
+                key,
+                options: CompileOptions::default(),
+                capabilities: ToolkitCapabilities {
+                    tileiras: PathBuf::from("/opt/cuda/bin/tileiras"),
+                    tileiras_version: "13.3",
+                    target: cutile_ir::capabilities::TargetCapabilities::new(
+                        cutile_ir::bytecode::BytecodeVersion::V13_3,
+                        "sm_90",
+                    ),
+                    driver_version: 13000,
+                },
+                build: FrontEndBuild {
+                    registry: "registry",
+                    compiler: "compiler-build",
+                    cutile: "cutile-build",
+                    check_optimizations: CheckOptimizations {
+                        hoist_to_preheaders: true,
+                        relocate_to_launch: true,
+                        discharge_proofs: true,
+                    },
+                },
+            }
+        }
+
+        fn spec_key(&self) -> String {
+            specialization_key(&self.key, &self.options, &self.capabilities, &self.build)
+        }
+    }
+
+    #[test]
+    fn specialization_key_hits_for_identical_inputs() {
+        assert_eq!(
+            SpecKeyInputs::new().spec_key(),
+            SpecKeyInputs::new().spec_key()
+        );
+    }
+
+    #[test]
+    fn specialization_key_misses_when_any_front_end_input_changes() {
+        type Flip = fn(&mut SpecKeyInputs);
+        let flips: &[(&str, Flip)] = &[
+            ("module", |i| i.key.module_name = "other".into()),
+            ("function", |i| i.key.function_name = "other".into()),
+            ("generics", |i| i.key.function_generics[1] = "64".into()),
+            ("strides", |i| i.key.stride_args[0].1 = vec![256, 1]),
+            ("spec_args", |i| {
+                i.key.spec_args[0].1.elements_disjoint = false
+            }),
+            ("scalar_hints", |i| i.key.scalar_hints[0].1.divisor = 4),
+            ("grid", |i| i.key.grid = None),
+            ("resolved options", |i| i.options.occupancy = Some(2)),
+            ("source_hash", |i| i.key.source_hash = "edited".into()),
+            ("gpu_name", |i| i.key.gpu_name = "sm_100".into()),
+            ("compiler_version", |i| {
+                i.key.compiler_version = "other".into()
+            }),
+            ("bytecode_override", |i| {
+                i.key.bytecode_override = Some("13.2".into())
+            }),
+            ("tileiras", |i| i.key.tileiras_fingerprint = "other".into()),
+            ("tileiras_version", |i| {
+                i.capabilities.tileiras_version = "13.4"
+            }),
+            ("bytecode_version", |i| {
+                i.capabilities.target.bytecode_version = cutile_ir::bytecode::BytecodeVersion::V13_2
+            }),
+            ("architecture", |i| {
+                i.capabilities.target.architecture = "sm_100".into()
+            }),
+            ("hoist", |i| {
+                i.build.check_optimizations.hoist_to_preheaders = false
+            }),
+            ("relocate", |i| {
+                i.build.check_optimizations.relocate_to_launch = false
+            }),
+            ("discharge", |i| {
+                i.build.check_optimizations.discharge_proofs = false
+            }),
+            ("registry", |i| i.build.registry = "edited-module"),
+            ("compiler_build", |i| i.build.compiler = "rebuilt"),
+            ("cutile_build", |i| i.build.cutile = "rebuilt"),
+        ];
+        let base = SpecKeyInputs::new().spec_key();
+        let mut seen = std::collections::HashSet::from([base.clone()]);
+        for (name, flip) in flips {
+            let mut inputs = SpecKeyInputs::new();
+            flip(&mut inputs);
+            let flipped = inputs.spec_key();
+            assert_ne!(flipped, base, "{name} must change the key");
+            assert!(seen.insert(flipped), "{name} collides with another flip");
+        }
+    }
+
+    #[test]
+    fn specialization_key_ignores_what_the_front_end_does_not_read() {
+        let base = SpecKeyInputs::new().spec_key();
+        let mut inputs = SpecKeyInputs::new();
+        // The front end reads the resolved options, not the requested ones.
+        inputs.key.compile_options.occupancy = Some(2);
+        inputs.key.device_id = 1;
+        // Stage 2 links the libraries; the front end reads none.
+        inputs.key.tile_libraries_digest = None;
+        inputs.capabilities.driver_version = 13010;
+        assert_eq!(inputs.spec_key(), base);
     }
 }

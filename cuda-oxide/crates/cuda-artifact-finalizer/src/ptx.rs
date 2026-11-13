@@ -220,6 +220,14 @@ impl PtxasTool {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Observe an actual ETXTBSY before retrying, only in this test thread.
+    /// Tests can release their write descriptor at that exact point.
+    static ON_BUSY_TEXT_FILE: std::cell::RefCell<Option<Box<dyn FnMut()>>> =
+        std::cell::RefCell::new(None);
+}
+
 /// Runs `command`, retrying briefly when the kernel reports ETXTBSY.
 ///
 /// Executing a just-written tool by path can collide with an unrelated
@@ -233,6 +241,12 @@ fn run_tolerating_busy_text_file(command: &mut Command) -> io::Result<Output> {
     for _ in 0..8 {
         match command.output() {
             Err(error) if error.kind() == io::ErrorKind::ExecutableFileBusy => {
+                #[cfg(test)]
+                ON_BUSY_TEXT_FILE.with(|hook| {
+                    if let Some(hook) = hook.borrow_mut().as_mut() {
+                        hook();
+                    }
+                });
                 thread::sleep(delay);
                 delay = delay.saturating_mul(2);
             }
@@ -720,23 +734,31 @@ echo 'not a cubin' > "$output"
         ));
     }
 
-    /// Exec of the fake tool must survive a write descriptor that another
-    /// process (here: this test) still holds when the version probe runs.
-    /// Without the bounded ETXTBSY retry this fails immediately with
-    /// "Text file busy", which is the race CI hits when a concurrent
-    /// test's spawn inherits a freshly written script's descriptor.
-    #[cfg(unix)]
+    /// Exercise real ETXTBSY retries, keeping the writer open until three
+    /// attempts actually fail. No thread scheduling or release delay is assumed.
+    #[cfg(target_os = "linux")]
     #[test]
-    fn version_probe_survives_a_briefly_held_write_descriptor() {
+    fn version_probe_retries_until_the_write_descriptor_is_released() {
         let (_directory, path) = fake_ptxas("exit 0", None);
-        let held = fs::OpenOptions::new().append(true).open(&path).unwrap();
-        let release = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(30));
-            drop(held);
+        let mut held = Some(fs::OpenOptions::new().append(true).open(&path).unwrap());
+        let attempts = std::rc::Rc::new(std::cell::Cell::new(0));
+        let observed = attempts.clone();
+        ON_BUSY_TEXT_FILE.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                observed.set(observed.get() + 1);
+                if observed.get() == 3 {
+                    drop(held.take());
+                }
+            }));
         });
         let assembler = PtxAssembler::from_path(path);
-        release.join().unwrap();
+        ON_BUSY_TEXT_FILE.with(|hook| *hook.borrow_mut() = None);
         assert!(assembler.is_ok());
+        assert_eq!(
+            attempts.get(),
+            3,
+            "the real busy-executable retry path was not exercised"
+        );
     }
 
     #[cfg(unix)]

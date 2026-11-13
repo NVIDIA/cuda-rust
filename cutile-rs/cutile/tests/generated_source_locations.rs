@@ -9,6 +9,9 @@ mod common;
 #[path = "fixtures/generated_debug_helpers.rs"]
 mod helpers;
 
+#[path = "support/temp_dir.rs"]
+mod temp_dir;
+
 use cutile::compile_api::{CompileArtifacts, KernelCompiler};
 use cutile::tile_kernel::{CompileOptions, DebugInfoLevel};
 use cutile_ir::bytecode::Opcode;
@@ -473,23 +476,14 @@ fn generated_locations_survive_assembly() {
     common::with_test_stack(|| {
         use cutile_compiler::cuda_tile_runtime_utils::{run_tileiras, TileirasOptions};
         use std::process::Command;
-        struct Directory(std::path::PathBuf);
-        impl Drop for Directory {
-            fn drop(&mut self) {
-                let _ = std::fs::remove_dir_all(&self.0);
-            }
-        }
-        let directory = Directory(
-            std::env::temp_dir().join(format!("cutile-generated-locations-{}", std::process::id())),
-        );
-        std::fs::create_dir(&directory.0).unwrap();
+        let directory = temp_dir::TempDir::new("cutile-generated-locations");
         for level in [DebugInfoLevel::Line, DebugInfoLevel::Full] {
             for name in ["arrays", "reduction_source", "loop_source"] {
                 let artifacts = compile(name, level);
                 let flags =
                     TileirasOptions::from_compile_options(&CompileOptions::new().debug_info(level));
                 let cubin = run_tileiras(&artifacts.bytecode().unwrap(), "sm_120", &flags).unwrap();
-                let path = directory.0.join(format!("{name}-{level:?}.cubin"));
+                let path = directory.path().join(format!("{name}-{level:?}.cubin"));
                 std::fs::write(&path, cubin).unwrap();
                 let output = Command::new("nvdisasm")
                     .arg("--print-line-info-inline")

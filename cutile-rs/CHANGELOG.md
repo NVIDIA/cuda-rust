@@ -52,6 +52,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `scan_sum` and `scan` now emit the caller's `dim` and `identity`; both were
+  silently hardcoded to zero, so scans along any non-leading dimension of a
+  multi-dimensional tile computed the wrong axis. The closure `reduce` form
+  still reduces along dimension 0 only; the `reduce_*` intrinsics were
+  unaffected.
 - Update the optional `cuda-tile-rs` bindings and `cuda-tile-translate` build
   from CUDA Tile IR 13.2 to the public 13.5 release, including SIMT preview
   support and translator round-trip tests.

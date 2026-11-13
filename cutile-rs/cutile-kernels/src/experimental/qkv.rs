@@ -203,8 +203,10 @@ pub mod kernels {
                     slot_base.reshape(const_shape![1]);
                 let slot_base_tile: PointerTile<*const i64, { [BM] }> =
                     slot_base_1d.broadcast(const_shape![BM]);
+                let zero_rows: Tile<i64, { [BM] }> = constant(0i64, const_shape![BM]);
+                let safe_rows: Tile<i64, { [BM] }> = select(row_valid, rows64, zero_rows);
                 let slot_ptrs: PointerTile<*const i64, { [BM] }> =
-                    slot_base_tile.offset_tile(rows64);
+                    slot_base_tile.offset_tile(safe_rows);
                 let (slot, _): (Tile<i64, { [BM] }>, Token) = unsafe {
                     load_ptr_tko(
                         slot_ptrs,

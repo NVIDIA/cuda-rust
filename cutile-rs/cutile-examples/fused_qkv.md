@@ -7,9 +7,10 @@ FP8 quantization, a contiguous Q output, and paged K/V cache stores in one kerne
 V is quantized and stored without normalization. There is no FP16 intermediate
 rounding, bias, RoPE, residual, attention, or communication.
 
-Use the **public CUDA Toolkit 13.5 Tile IR assembler for performance evaluation**.
+Use a complete **public CUDA Toolkit 13.5** installation for evaluation.
+Compiler support for individual opt-in SM100 schedules can vary.
 Execution requires FP8 support (SM90+); the normal target/version rules still
-apply. The kernel is a starting implementation, not a tuned B200 result. Source
+apply. The schedules were evaluated on B200; they are not universal optima. Source
 fusion does not establish overlap between GEMM and the epilogue. Its grouped-M
 traversal and TMA loading derive from TileGym; the kernel retains the MIT notice.
 
@@ -21,11 +22,11 @@ From `cutile-rs/`, after configuring your toolkit and `CUTILE_TILEIRAS_PATH`:
 # Small full-output correctness check, including direct and graph launches.
 cargo run --release -p cutile-examples --example fused_qkv
 
-# Opt-in performance sweep, with per-sample CUDA-event measurements.
-cargo run --release -p cutile-examples --example fused_qkv -- --bench
+# Opt-in B200 profiles, with per-sample CUDA-event measurements.
+cargo run --release --locked -p cutile-examples --example fused_qkv -- --bench --profile b200
 
 # Same sweep with non-unit gamma/scales and permuted physical cache slots.
-cargo run --release -p cutile-examples --example fused_qkv -- --bench --nontrivial
+cargo run --release --locked -p cutile-examples --example fused_qkv -- --bench --profile b200 --nontrivial
 
 # Inspect dimensions, schedule controls and measurement options without a GPU.
 cargo run -p cutile-examples --example fused_qkv -- --help
@@ -36,12 +37,26 @@ The benchmark defaults to M=128,256,512,1024,2048,4096,8192, K=4096,
 with `--m-list`, `--k`, `--q-heads`, and `--kv-heads`. K must be a multiple of
 8 so FP16 input/weight row strides meet 16-byte TMA alignment.
 
-The starting schedule is BM=64, BN=128, BK=64, GROUP_M=8, occupancy=1 and one
-CTA per cluster. `--bm` and `--bk` accept 16,32,64,128; `--group-m` controls
+With `--profile b200`, the standard benchmark dimensions on SM100 use
+BM=128, BN=128 and occupancy=1. BK=128 through M=2048 and BK=64 for larger M.
+GROUP_M=1 at M=2048 and 8 otherwise. M=256 uses one CTA per output tile; other
+sizes use a persistent grid with one CTA per SM. M=128 uses two CTAs per cluster
+(with the grid rounded up to a complete cluster); other sizes use one.
+
+The default profile retains BM=64, BN=128, BK=64, GROUP_M=8, occupancy=1 and
+one CTA per cluster on all architectures. `--profile b200` rejects other
+architectures/nonstandard shapes and cannot mix with manual schedule controls.
+With the default profile, `--bm`, `--bk`, `--group-m` and `--programs` start from
+the original defaults. `--bm` and `--bk` accept 16,32,64,128; `--group-m` controls
 grouped-M traversal. `--programs 0` launches one CTA per output tile; a positive
 count sets a persistent grid. These controls enable evaluation, not an implicit
 claim that a configuration is optimal. This kernel does not explicitly implement
 the CuTe example's two-CTA, two-accumulator, warp-specialized schedule.
+
+See [B200 setup](README.md#b200-reference-profiles) for matching public toolkit
+tools and libraries, and [validation](README.md#validation) for
+compiler-instrumented sanitizer commands. Comparing compilers with different
+profiles is not an isolated compiler comparison.
 
 ## Data and validation
 
@@ -64,6 +79,9 @@ ordinary and persistent grids. It checks every Q/K/V element against an
 independent FP64 projection/norm and FP8 converter, allowing one neighboring
 FP8 spacing for FP32 reduction/rsqrt rounding. Untouched bytes must match exactly.
 Output buffers are reset before direct and graph checks.
+Inactive tail rows retain their slot-load mask and use an in-bounds pointer
+before the load. The fixture remains unpadded and retains its numerical checks
+when running compiler-instrumented memcheck.
 
 Benchmark inputs/weights use the same deterministic, nonuniform recipe in the
 source, including a zero first input row. By default gamma is one, all inverse

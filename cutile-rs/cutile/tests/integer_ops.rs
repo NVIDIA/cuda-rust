@@ -62,6 +62,20 @@ mod integer_ops_module {
     }
 
     #[cutile::entry()]
+    fn overflow_none_kernel<const S: [i32; 1]>(output: &mut Tensor<i64, S>) {
+        let x: Tile<i64, S> = output.load();
+        let one: Tile<i64, S> = constant(1i64, output.shape());
+        let sum = addi(x, one, overflow::None);
+        let diff = subi(sum, one, overflow::None);
+        let product = muli(diff, x, overflow::None);
+        let shifted = shli(product, one, overflow::None);
+        let negated = negi(shifted, overflow::None);
+        let narrowed: Tile<i32, S> = trunci(negated, overflow::None);
+        let result: Tile<i64, S> = exti(narrowed);
+        output.store(result);
+    }
+
+    #[cutile::entry()]
     fn cmpi_kernel<const S: [i32; 1]>(output: &mut Tensor<i64, S>) {
         let x: Tile<i64, S> = load_tile_mut(output);
         let y: Tile<i64, S> = constant(1i64, output.shape());
@@ -201,6 +215,33 @@ fn named_integer_arithmetic_serializes_bytecode() {
         .bytecode()
         .expect("divi/remi signedness must serialize to Tile IR bytecode");
     assert!(!bytecode.is_empty());
+}
+
+#[test]
+fn overflow_none_serializes_bytecode() {
+    common::with_test_stack(|| {
+        for version in cutile_ir::bytecode::BytecodeVersion::SUPPORTED {
+            let artifacts = KernelCompiler::new(
+                __module_ast_self,
+                "integer_ops_module",
+                "overflow_none_kernel",
+            )
+            .target("sm_120")
+            .generics(vec!["128".to_owned()])
+            .strides(&[("output", &[1])])
+            .bytecode_version(version)
+            .compile()
+            .expect("overflow::None calls should compile");
+            let ir = artifacts.ir_text();
+            for op in ["addi", "subi", "muli", "shli", "negi", "trunci"] {
+                assert!(ir.contains(&format!("= {op}")), "missing {op}: {ir}");
+            }
+            let bytecode = artifacts
+                .bytecode()
+                .expect("overflow::None calls should serialize, not just print IR");
+            cutile_ir::decode_bytecode(&bytecode).expect("valid bytecode");
+        }
+    });
 }
 
 #[test]

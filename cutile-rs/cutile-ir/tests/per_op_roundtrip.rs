@@ -229,6 +229,55 @@ fn roundtrip_simple_binary_ops() {
 // =========================================================================
 
 #[test]
+fn omitted_overflow_matches_explicit_none() {
+    use cutile_ir::bytecode::{write_bytecode_version, BytecodeVersion};
+
+    for opcode in [
+        Opcode::AddI,
+        Opcode::MulI,
+        Opcode::SubI,
+        Opcode::ShLI,
+        Opcode::TruncI,
+        Opcode::NegI,
+    ] {
+        let build = |overflow: Option<i64>| {
+            build_kernel("overflow", &[tile_i32(), tile_i32()], |m, b, args| {
+                let result_type = if opcode == Opcode::TruncI {
+                    Type::Tile(TileType {
+                        shape: vec![128],
+                        element_type: TileElementType::Scalar(ScalarType::I8),
+                    })
+                } else {
+                    tile_i32()
+                };
+                let mut builder = OpBuilder::new(opcode, Location::Unknown)
+                    .operand(args[0])
+                    .result(result_type);
+                if !matches!(opcode, Opcode::TruncI | Opcode::NegI) {
+                    builder = builder.operand(args[1]);
+                }
+                if let Some(mode) = overflow {
+                    builder = builder.attr("overflow", Attribute::i32(mode));
+                }
+                let (op, _) = builder.build(m);
+                append_op(m, b, op);
+            })
+        };
+        for version in BytecodeVersion::SUPPORTED {
+            let implicit = write_bytecode_version(&build(None), version)
+                .unwrap_or_else(|e| panic!("{opcode:?} at {version}: {e}"));
+            let explicit = write_bytecode_version(&build(Some(0)), version).unwrap();
+            assert_eq!(implicit, explicit, "{opcode:?} at {version}");
+            cutile_ir::decode_bytecode(&implicit).unwrap();
+            for mode in 1..=3 {
+                let flagged = write_bytecode_version(&build(Some(mode)), version).unwrap();
+                assert_ne!(implicit, flagged, "{opcode:?} mode {mode} at {version}");
+            }
+        }
+    }
+}
+
+#[test]
 fn roundtrip_overflow_ops() {
     for opcode in [
         Opcode::AddI,

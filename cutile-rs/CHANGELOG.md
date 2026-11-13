@@ -52,6 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Serialize `overflow::None` in explicit `addi`, `subi`, `muli`, `shli`, and
+  `trunci` calls instead of reporting a missing overflow attribute (#1370).
 - Update the optional `cuda-tile-rs` bindings and `cuda-tile-translate` build
   from CUDA Tile IR 13.2 to the public 13.5 release, including SIMT preview
   support and translator round-trip tests.

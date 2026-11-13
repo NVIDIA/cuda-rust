@@ -154,10 +154,10 @@ pub(super) fn write_op_body(
             write_result_types(op, w, ctx)?;
         }
 
-        // ----- Required attributes only -----
+        // An omitted overflow mode means NONE, as for NegI.
         AddI | MulI | SubI | ShLI | TruncI => {
             write_result_types(op, w, ctx)?;
-            write_inline_attr(op, "overflow", w, ctx)?;
+            write_inline_attr_or_default(op, "overflow", 0, w, ctx)?;
             write_operands(op, w, ctx, false)?;
         }
         ShRI | ExtI => {

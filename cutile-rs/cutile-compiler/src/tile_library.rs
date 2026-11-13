@@ -315,18 +315,19 @@ pub fn link_tile_libraries(
     module: &cutile_ir::Module,
     specs: &[TileLibrarySpec],
 ) -> Result<Vec<TileLibrary>, JITError> {
-    link(module, specs.is_empty(), || resolve_tile_libraries(specs))
+    link(&module.foreign_callees(), specs.is_empty(), || {
+        resolve_tile_libraries(specs)
+    })
 }
 
-/// The libraries `module` links: none without foreign calls, else
-/// `resolve()`, or, when no library is configured, an error that names the
-/// callees.
+/// The libraries a module calling the foreign functions `callees` links:
+/// none without any, else `resolve()`, or, when no library is configured,
+/// an error that names the callees.
 fn link(
-    module: &cutile_ir::Module,
+    callees: &[String],
     unconfigured: bool,
     resolve: impl FnOnce() -> Result<Vec<TileLibrary>, JITError>,
 ) -> Result<Vec<TileLibrary>, JITError> {
-    let callees = module.foreign_callees();
     if callees.is_empty() {
         return Ok(Vec::new());
     }
@@ -417,10 +418,12 @@ impl TileLibrarySnapshot {
             .and_then(|libraries| tile_libraries_digest(libraries))
     }
 
-    /// The libraries a compiled `module` links (see [`link_tile_libraries`]).
-    pub fn link(&self, module: &cutile_ir::Module) -> Result<Vec<TileLibrary>, JITError> {
+    /// The libraries a module calling the foreign functions `callees`
+    /// ([`cutile_ir::Module::foreign_callees`]) links (see
+    /// [`link_tile_libraries`]).
+    pub fn link(&self, callees: &[String]) -> Result<Vec<TileLibrary>, JITError> {
         let unconfigured = matches!(&self.libraries, Ok(libraries) if libraries.is_empty());
-        link(module, unconfigured, || {
+        link(callees, unconfigured, || {
             self.libraries.clone().map_err(JITError::Generic)
         })
     }

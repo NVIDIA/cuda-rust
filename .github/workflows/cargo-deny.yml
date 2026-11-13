@@ -4,13 +4,18 @@ name: cargo-deny
 # Runs as a job of the top-level CI workflow (.github/workflows/ci.yml),
 # plus a standalone weekly security scan via schedule.
 # Concurrency for the CI path is governed by CI's own group.
+# ci.yml does not run for a cutile-rs-only diff. That gap is covered by
+# .github/workflows/cutile-cargo-deny.yml, which runs the cutile-rs step
+# below when the Tile lock, a Tile manifest, or cutile-rs/deny.toml changes.
 #
 # Four parts of the same concern. `check` enforces the license *policy* over
 # the whole resolved graph from deny.toml, once per `[workspace]` root that
-# resolves third-party crates and is neither an example nor under cutile-rs:
-# the stable host workspace, the SIMT workspace,
-# cuda-oxide/crates/rustc-codegen-cuda, and the cuda-macros device-only
-# fixture. Each declares its own `[workspace]`, so each is a
+# resolves third-party crates and is not an example: the stable host
+# workspace, the SIMT workspace, cuda-oxide/crates/rustc-codegen-cuda, the
+# cuda-macros device-only fixture, and cutile-rs. The cutile-rs run starts at
+# cutile-rs/Cargo.toml so it uses cutile-rs/deny.toml rather than the Oxide
+# policy. Paper benchmarks under cutile-rs/cutile-benchmarks/paper stay out.
+# Each root declares its own `[workspace]`, so each is a
 # separate resolution the others cannot reach. `license-manifest` enforces that
 # the human-readable inventory in dependency-licenses.csv still lists what the
 # workspace declares, which nothing checked before: CONTRIBUTING asks
@@ -90,17 +95,19 @@ jobs:
       # ok. (cuda-oxide/crates/fuzzer/rustlantis is another `[workspace]` root
       # and is deliberately not here: it is a vendored upstream project, not
       # first-party code, and bringing its graph under deny.toml is a policy
-      # call rather than a gap. The cutile-rs roots -- cutile-rs/Cargo.toml and
-      # the four paper benchmarks under cutile-rs/cutile-benchmarks/paper --
-      # are out for the same kind of reason: cutile-rs is a nested import of a
-      # separate product that carries its own cutile-rs/deny.toml, so Oxide's
-      # policy is not the one that judges it. To bring them in one day, add a
-      # `cargo deny --manifest-path <root> --locked check` step per root here,
-      # and drop the matching CUTILE_ROOT filter in
-      # cuda-oxide/scripts/check-dependency-licenses.sh so the inventory half
-      # covers them too.)
+      # call rather than a gap. The paper benchmarks under
+      # cutile-rs/cutile-benchmarks/paper are separate workspaces and stay
+      # out; launch_overhead_rust patches its dependencies to a path outside
+      # this tree. The license inventory still skips cutile-rs via CUTILE_ROOT
+      # in cuda-oxide/scripts/check-dependency-licenses.sh.)
       - name: Run cargo-deny over the cuda-macros device-only fixture
         run: cargo deny --manifest-path cuda-oxide/crates/cuda-macros/tests/device-only/Cargo.toml --locked check
+
+      # cutile-rs/deny.toml is a separate policy. A walk that starts at this
+      # manifest finds that file before the root deny.toml. Tile-only diffs
+      # miss ci.yml, so cutile-cargo-deny.yml runs this same command for those.
+      - name: Run cargo-deny over the cutile-rs workspace
+        run: cargo deny --manifest-path cutile-rs/Cargo.toml --locked check
 
   license-manifest:
     name: dependency-licenses.csv covers every declared crate

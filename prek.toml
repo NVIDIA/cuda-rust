@@ -1,0 +1,132 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#:tombi toml-version = "v1.1.0"
+
+default_install_hook_types = ["pre-commit", "pre-push"]
+
+# We want to run hooks on pre-commit unless otherwise specified (i.e. the sign-off check)
+default_stages = ["pre-commit"]
+
+# File-modifying hooks use default sequential order; read-only checks run together.
+[priorities]
+read-only = 100
+
+[[repos]]
+repo = "builtin"
+hooks = [
+  {
+    id = "trailing-whitespace",
+    stages = ["pre-commit"],
+    exclude = '''(?x)
+      ^(
+        cuda-oxide/cuda-oxide-book/_(static|templates)/.*|
+        cutile-rs/cutile-book/_(static|templates)/.*|
+        cutile-rs/cutile-benchmarks/paper/.*\.(csv|jsonl|log|txt)|
+        cuda-oxide/intrinsics/probes/[^/]*\.ll
+      )$
+    '''
+  },
+  { id = "check-added-large-files", stages = ["pre-commit"], priority = "read-only" },
+  {
+    id = "end-of-file-fixer",
+    stages = ["pre-commit"],
+    exclude = '''(?x)
+      ^(
+        cuda-oxide/cuda-oxide-book/_(static|templates)/.*|
+        cutile-rs/cutile-book/_(static|templates)/.*|
+        cutile-rs/cutile-benchmarks/paper/.*\.(csv|jsonl|log|txt)|
+        cuda-oxide/intrinsics/probes/[^/]*\.ll
+      )$
+    '''
+  },
+  { id = "check-toml", stages = ["pre-commit"], priority = "read-only" },
+  { id = "check-yaml", stages = ["pre-commit"], priority = "read-only" },
+  {
+    id = "check-commit-trailers",
+    priority = "read-only",
+    stages = ["pre-push"],
+    description = "Add missing sign-offs before pushing: git rebase --signoff main",
+    args = ["--require=Signed-off-by"]
+  },
+]
+
+[[repos]]
+repo = "local"
+hooks = [
+  {
+    id = "check-branch-name",
+    priority = "read-only",
+    name = "check branch name",
+    language = "system",
+    entry = "bash cuda-oxide/scripts/check-branch-name.sh",
+    pass_filenames = false,
+    always_run = true
+  },
+  {
+    id = "check-license-headers",
+    priority = "read-only",
+    name = "check license headers",
+    language = "system",
+    entry = "./cuda-oxide/scripts/check-spdx-headers.sh",
+    pass_filenames = false
+  },
+  {
+    id = "check-dependency-licenses",
+    priority = "read-only",
+    name = "check dependency license inventory",
+    language = "system",
+    shell = "sh",
+    entry = "unset RUSTUP_TOOLCHAIN && bash cuda-oxide/scripts/check-dependency-licenses.sh",
+    files = '''(?x)
+      ^(
+        (.*/)?Cargo\.(toml|lock)
+        | cuda-oxide/dependency-licenses\.csv
+        | cuda-oxide/scripts/check-dependency-licenses\.sh
+      )$
+    ''',
+    exclude = "^cutile-rs/",
+    pass_filenames = false
+  },
+  # Component formatting and lint hooks live in cuda-oxide/ and cutile-rs/prek.toml.
+  {
+    id = "cargo-fmt-host",
+    name = "format shared host workspace",
+    language = "system",
+    shell = "sh",
+    entry = "unset RUSTUP_TOOLCHAIN && cargo fmt --all",
+    files = '''(?x)
+      ^(
+        cuda-(async|bindings|core|core-derive)/.*(
+          \.rs
+          | Cargo\.toml
+          | rustfmt\.toml
+        )
+        | Cargo\.toml
+        | rust-toolchain\.toml
+        | \.?rustfmt\.toml
+      )$
+    ''',
+    pass_filenames = false
+  },
+  {
+    id = "cargo-clippy-host",
+    priority = "read-only",
+    name = "lint shared host workspace",
+    language = "system",
+    shell = "sh",
+    entry = "unset RUSTUP_TOOLCHAIN && cargo clippy --locked --workspace --all-targets",
+    files = '''(?x)
+      ^(
+        cuda-(async|bindings|core|core-derive)/.*(
+          \.rs
+          | Cargo\.(toml|lock)
+          | clippy\.toml
+        )
+        | Cargo\.(toml|lock)
+        | rust-toolchain\.toml
+        | \.?clippy\.toml
+      )$
+    ''',
+    pass_filenames = false
+  },
+]

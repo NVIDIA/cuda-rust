@@ -42,7 +42,7 @@
 //! #[cutile::module]
 //! mod kernels {
 //!     use cutile::core::*;
-//!     
+//!
 //!     #[cutile::entry]
 //!     fn vector_add<T: ElementType, const N: i32>(
 //!         z: &mut Tensor<T, {[N]}>,

@@ -110,12 +110,12 @@ Add to `cublasdx_wrappers.cu`:
 ```cpp
 template<unsigned int Arch>
 using GEMM_MxNxK_F32_T = decltype(
-    cublasdx::Size<M, N, K>() + 
-    cublasdx::Precision<float>() + 
+    cublasdx::Size<M, N, K>() +
+    cublasdx::Precision<float>() +
     cublasdx::Type<cublasdx::type::real>() +
     cublasdx::Arrangement<cublasdx::row_major, cublasdx::col_major>() +
-    cublasdx::Function<cublasdx::function::MM>() + 
-    cublasdx::SM<Arch>() + 
+    cublasdx::Function<cublasdx::function::MM>() +
+    cublasdx::SM<Arch>() +
     cublasdx::Block() +
     cublasdx::BlockDim<THREADS>()
 );

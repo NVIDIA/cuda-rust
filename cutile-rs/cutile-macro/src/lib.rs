@@ -101,7 +101,7 @@ mod validate_dsl_syntax;
 /// #[cutile::module]
 /// mod kernels {
 ///     use cutile::core::*;
-///     
+///
 ///     #[cutile::entry]
 ///     fn my_kernel<const N: i32>(data: &mut Tensor<f32, {[N]}>) {
 ///         let tile = data.load();

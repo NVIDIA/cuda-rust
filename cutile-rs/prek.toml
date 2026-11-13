@@ -1,0 +1,47 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#:tombi toml-version = "v1.1.0"
+
+default_stages = ["pre-commit"]
+
+# File-modifying hooks use default sequential order; read-only checks run together.
+[priorities]
+read-only = 100
+
+[[repos]]
+repo = "local"
+hooks = [
+  {
+    id = "cargo-fmt-tile",
+    name = "format Tile workspace",
+    language = "system",
+    shell = "sh",
+    entry = "unset RUSTUP_TOOLCHAIN && cargo fmt",
+    files = '''(?x)
+      ^.*(
+        \.rs
+        | Cargo\.toml
+        | rust-toolchain\.toml
+        | rustfmt\.toml
+      )$
+    ''',
+    pass_filenames = false
+  },
+  {
+    id = "cargo-clippy-tile",
+    priority = "read-only",
+    name = "lint Tile workspace",
+    language = "system",
+    shell = "sh",
+    entry = "unset RUSTUP_TOOLCHAIN && cargo clippy --locked --workspace --exclude cuda-tile-rs --all-targets",
+    files = '''(?x)
+      ^.*(
+        \.rs
+        | Cargo\.(toml|lock)
+        | rust-toolchain\.toml
+        | clippy\.toml
+      )$
+    ''',
+    pass_filenames = false
+  },
+]

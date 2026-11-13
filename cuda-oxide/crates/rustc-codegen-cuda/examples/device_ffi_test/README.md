@@ -225,7 +225,7 @@ attributes #7 = { convergent nounwind }
 
 During LTO linking:
 1. cuda-oxide LTOIR has **declarations** (no function body)
-2. External LTOIR has **definitions** with proper attributes  
+2. External LTOIR has **definitions** with proper attributes
 3. nvJitLink resolves symbols and uses the **definition's attributes** for optimization
 
 ### Attributes on Declarations Are Redundant

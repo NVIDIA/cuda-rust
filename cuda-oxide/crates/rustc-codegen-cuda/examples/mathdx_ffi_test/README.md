@@ -162,12 +162,12 @@ generated entirely from Rust code via the libmathdx C API - no C++ wrappers need
 fn my_fft_kernel(data: *mut f32) {
     // Each thread has its own local array
     let mut local: [f32; 16] = [0.0; 16];  // 8 complex = 16 floats
-    
+
     // Load data into local array...
-    
+
     // Execute FFT (each thread independently)
     unsafe { cufftdx_fft_8_c2c_f32_forward(local.as_mut_ptr()); }
-    
+
     // Store results...
 }
 ```
@@ -189,7 +189,7 @@ fn my_fft_kernel(data: *mut f32) {
 fn my_gemm_kernel(a: *const f32, b: *const f32, c: *mut f32) {
     // All 256 threads cooperate
     let smem: *mut i8 = DynamicSharedArray::<i8, 128>::get();
-    
+
     // Execute GEMM (all threads must participate)
     unsafe { cublasdx_gemm_32x32x32_f32(a, b, c, smem); }
 }
@@ -201,7 +201,7 @@ fn my_gemm_kernel(a: *const f32, b: *const f32, c: *mut f32) {
 
 The cuBLASDx 32x32x32 GEMM uses:
 - **A**: 32x32, row-major
-- **B**: 32x32, col-major  
+- **B**: 32x32, col-major
 - **C**: 32x32, output
 
 This matches the official cuBLASDx introduction example configuration.

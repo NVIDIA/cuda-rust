@@ -17,25 +17,25 @@ extern "C" __device__ void debug_extern_double_array(float* data, int n);
 // ============================================================================
 // Test Kernel: Local memory -> extern function
 //
-// This kernel tests if a CUDA C++ kernel can pass local memory pointers to 
+// This kernel tests if a CUDA C++ kernel can pass local memory pointers to
 // extern functions defined in a separate LTOIR file.
 // ============================================================================
 
 extern "C" __global__ void cuda_test_local_extern(float* input, float* output) {
     int tid = threadIdx.x;
     int offset = tid * 16;
-    
+
     // Local storage (same as Rust test)
     float local_data[16];
-    
+
     // Load from global memory
     for (int i = 0; i < 16; i++) {
         local_data[i] = input[offset + i];
     }
-    
+
     // Call extern function to double the values
     debug_extern_double_array(local_data, 16);
-    
+
     // Store to global memory
     for (int i = 0; i < 16; i++) {
         output[offset + i] = local_data[i];
@@ -51,7 +51,7 @@ extern "C" __global__ void cuda_test_local_extern(float* input, float* output) {
 extern "C" __global__ void cuda_test_global_extern(float* data) {
     int tid = threadIdx.x;
     int offset = tid * 16;
-    
+
     // Call extern function directly on global memory
     debug_extern_double_array(data + offset, 16);
 }
@@ -81,7 +81,7 @@ extern "C" __global__ void cuda_test_gemm_32x32x32(
 ) {
     // Dynamic shared memory - must be declared extern with align
     extern __shared__ __align__(128) char smem[];
-    
+
     // All 256 threads call GEMM together
     cublasdx_gemm_32x32x32_f32(a, b, c, smem);
 }
@@ -95,7 +95,7 @@ extern "C" __global__ void cuda_test_gemm_32x32x32_alphabeta(
     float alpha, const float* a, const float* b, float beta, float* c
 ) {
     extern __shared__ __align__(128) char smem[];
-    
+
     cublasdx_gemm_32x32x32_f32_alphabeta(alpha, a, b, beta, c, smem);
 }
 

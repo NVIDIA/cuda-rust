@@ -1,0 +1,162 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#:tombi toml-version = "v1.1.0"
+
+default_stages = ["pre-commit"]
+
+# File-modifying hooks use default sequential order; read-only checks run together.
+[priorities]
+read-only = 100
+
+[[repos]]
+repo = "local"
+hooks = [
+  {
+    id = "cargo-fmt-simt",
+    name = "format SIMT workspace",
+    language = "system",
+    shell = "sh",
+    entry = "unset RUSTUP_TOOLCHAIN && cargo fmt --all",
+    files = '''(?x)
+      ^.*(
+        \.rs
+        | Cargo\.toml
+        | rust-toolchain\.toml
+        | rustfmt\.toml
+      )$
+    ''',
+    exclude = '^crates/(rustc-codegen-cuda/|cuda-macros/tests/device-only/)',
+    pass_filenames = false
+  },
+  {
+    id = "cargo-clippy-simt",
+    priority = "read-only",
+    name = "lint SIMT workspace",
+    language = "system",
+    shell = "sh",
+    entry = "unset RUSTUP_TOOLCHAIN && cargo clippy --locked --workspace --all-targets -- -D warnings",
+    files = '''(?x)
+      ^.*(
+        \.rs
+        | Cargo\.(toml|lock)
+        | rust-toolchain\.toml
+        | clippy\.toml
+      )$
+    ''',
+    exclude = '^crates/(rustc-codegen-cuda/|cuda-macros/tests/device-only/)',
+    pass_filenames = false
+  },
+  {
+    id = "cargo-fmt-backend",
+    name = "format SIMT codegen backend",
+    language = "system",
+    shell = "sh",
+    entry = "cd crates/rustc-codegen-cuda && unset RUSTUP_TOOLCHAIN && cargo fmt --all",
+    files = '''(?x)
+      ^crates/rustc-codegen-cuda/.*(
+        \.rs
+        | Cargo\.toml
+        | rust-toolchain\.toml
+        | rustfmt\.toml
+      )$
+    ''',
+    exclude = '^crates/rustc-codegen-cuda/examples/',
+    pass_filenames = false
+  },
+  {
+    id = "cargo-clippy-backend",
+    priority = "read-only",
+    name = "lint SIMT codegen backend",
+    language = "system",
+    shell = "sh",
+    entry = "cd crates/rustc-codegen-cuda && unset RUSTUP_TOOLCHAIN && cargo clippy --locked --all-targets -- -D warnings",
+    files = '''(?x)
+      ^crates/rustc-codegen-cuda/.*(
+        \.rs
+        | Cargo\.(toml|lock)
+        | rust-toolchain\.toml
+        | clippy\.toml
+      )$
+    ''',
+    exclude = '^crates/rustc-codegen-cuda/examples/',
+    pass_filenames = false
+  },
+  {
+    id = "cargo-fmt-device-only",
+    name = "format cuda-macros device-only fixture",
+    language = "system",
+    shell = "sh",
+    entry = "cd crates/cuda-macros/tests/device-only && unset RUSTUP_TOOLCHAIN && cargo fmt --all",
+    files = '''(?x)
+      ^crates/cuda-macros/tests/device-only/.*(
+        \.rs
+        | Cargo\.toml
+        | rust-toolchain\.toml
+        | rustfmt\.toml
+      )$
+    ''',
+    pass_filenames = false
+  },
+  {
+    id = "cargo-clippy-device-only",
+    priority = "read-only",
+    name = "lint cuda-macros device-only fixture",
+    language = "system",
+    shell = "sh",
+    entry = "cd crates/cuda-macros/tests/device-only && unset RUSTUP_TOOLCHAIN && cargo clippy --locked --all-targets -- -D warnings",
+    files = '''(?x)
+      ^crates/cuda-macros/tests/device-only/.*(
+        \.rs
+        | Cargo\.(toml|lock)
+        | rust-toolchain\.toml
+        | clippy\.toml
+      )$
+    ''',
+    pass_filenames = false
+  },
+  {
+    id = "cargo-fmt-examples",
+    name = "format changed SIMT example crates",
+    language = "system",
+    entry = "bash scripts/check-changed-examples.sh fmt",
+    files = '''(?x)
+      ^crates/rustc-codegen-cuda/examples/.*(
+        \.rs
+        | Cargo\.toml
+        | rust-toolchain\.toml
+        | rustfmt\.toml
+      )$
+    ''',
+    require_serial = true
+  },
+  {
+    id = "cargo-clippy-examples",
+    priority = "read-only",
+    name = "lint changed SIMT example crates",
+    language = "system",
+    entry = "bash scripts/check-changed-examples.sh clippy",
+    files = '''(?x)
+      ^crates/rustc-codegen-cuda/examples/.*(
+        \.rs
+        | Cargo\.(toml|lock)
+        | rust-toolchain\.toml
+        | clippy\.toml
+      )$
+    ''',
+    require_serial = true
+  },
+  {
+    id = "check-example-smoketest-contract",
+    priority = "read-only",
+    name = "check SIMT example smoketest contract",
+    language = "system",
+    entry = "bash scripts/check-example-smoketest-contract.sh",
+    files = '''(?x)
+      ^(
+        crates/rustc-codegen-cuda/examples/.*
+        | scripts/(smoketest|check-example-smoketest-contract)\.sh
+      )$
+    ''',
+    pass_filenames = false
+  },
+]

@@ -370,6 +370,24 @@ impl Context {
             cuda_bindings::CUdevice_attribute_enum_CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT,
         )
     }
+    /// Returns the number of locality domains of this device: the dies of a
+    /// multi-die GPU, each with its own memory (allocate in one with
+    /// [`vmm::MemLocation::LocalityDomain`](crate::vmm::MemLocation)).
+    ///
+    /// 1 on single-die GPUs, and also when the bindings or the driver predate
+    /// `CU_DEVICE_ATTRIBUTE_LOCALITY_DOMAIN_COUNT` (CUDA 13.4): the headers
+    /// lack the attribute, or the driver rejects it as
+    /// `CUDA_ERROR_INVALID_VALUE`.
+    pub fn locality_domain_count(&self) -> Result<u32, DriverError> {
+        let Some(attribute) = cuda_bindings::DEVICE_ATTRIBUTE_LOCALITY_DOMAIN_COUNT else {
+            return Ok(1);
+        };
+        match self.device_attribute(attribute) {
+            Ok(count) => Ok(count.max(1)),
+            Err(DriverError(cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_VALUE)) => Ok(1),
+            Err(error) => Err(error),
+        }
+    }
     /// Returns the maximum number of threads resident on one streaming
     /// multiprocessor.
     ///

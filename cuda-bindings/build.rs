@@ -362,6 +362,37 @@ fn emit_layout_cfgs(generated_source: &str) {
     if cu_mem_location_uses_anon_union(generated_source) {
         println!("cargo:rustc-cfg=cu_mem_location_anon_union");
     }
+    println!("cargo:rustc-check-cfg=cfg(cu_mem_location_locality_domain)");
+    if cu_mem_location_has_locality_domain(generated_source) {
+        println!("cargo:rustc-cfg=cu_mem_location_locality_domain");
+    }
+    // The device and pointer attributes of locality domains (CUDA 13.4+), for
+    // the `Option` constants in lib.rs.
+    println!("cargo:rustc-check-cfg=cfg(cuda_has_locality_domain_attributes)");
+    if generated_source.contains("CU_DEVICE_ATTRIBUTE_LOCALITY_DOMAIN_COUNT")
+        && generated_source.contains("CU_POINTER_ATTRIBUTE_LOCALITY_DOMAIN_ORDINAL")
+    {
+        println!("cargo:rustc-cfg=cuda_has_locality_domain_attributes");
+    }
+}
+
+// Detect whether the `CUmemLocation_st::id` union has the `localized` member
+// ({deviceId, localityDomainId}) of CU_MEM_LOCATION_TYPE_DEVICE_LOCALITY_DOMAIN
+// (CUDA 13.4+ headers), so lib.rs can offer the locality-domain helper.
+fn cu_mem_location_has_locality_domain(generated_source: &str) -> bool {
+    let Ok(file) = syn::parse_file(generated_source) else {
+        return false;
+    };
+    file.items.iter().any(|item| match item {
+        Item::Union(item_union) if item_union.ident == "CUmemLocation_st__bindgen_ty_1" => {
+            item_union
+                .fields
+                .named
+                .iter()
+                .any(|f| f.ident.as_ref().is_some_and(|i| i == "localized"))
+        }
+        _ => false,
+    })
 }
 
 fn cu_mem_location_uses_anon_union(generated_source: &str) -> bool {

@@ -144,7 +144,11 @@ impl Accesses {
 
         if !recording {
             if let Some(accesses) = self.streams.get_mut(&stream) {
-                let existing_id = accesses.writers.iter().next().or_else(|| accesses.readers.iter().next());
+                let existing_id = accesses
+                    .writers
+                    .iter()
+                    .next()
+                    .or_else(|| accesses.readers.iter().next());
 
                 if let Some(&id) = existing_id {
                     let access = self.active.get_mut(&id).unwrap();
@@ -191,6 +195,7 @@ impl Accesses {
         }
         Ok(id)
     }
+}
 
 enum Owner {
     Synchronous,

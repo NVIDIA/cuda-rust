@@ -646,6 +646,36 @@ impl Event {
         unsafe { crate::cudarc_shim::event::record(self.cu_event, stream.cu_stream()) }
     }
 
+    /// Records this event on `stream` with `CUevent_record_flags`
+    /// (`cuEventRecordWithFlags`).
+    ///
+    /// `CU_EVENT_RECORD_DEFAULT` is [`record`](Self::record).
+    /// `CU_EVENT_RECORD_EXTERNAL` is for a stream that is being captured: the
+    /// record becomes an event-record node of the graph, so each launch of the
+    /// graph records the event and the host can query or wait for that point of
+    /// the graph. A plain record during capture only marks a capture dependency
+    /// and records nothing at launch. The driver rejects
+    /// `CU_EVENT_RECORD_EXTERNAL` outside capture.
+    ///
+    /// Errors with `CUDA_ERROR_INVALID_VALUE` if the stream belongs to a
+    /// different device than the one this event was created on.
+    pub fn record_with_flags(
+        &self,
+        stream: &Stream,
+        flags: cuda_bindings::CUevent_record_flags,
+    ) -> Result<(), DriverError> {
+        if stream.context().as_ref() != self.context.as_ref() {
+            return Err(DriverError(
+                cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_VALUE,
+            ));
+        }
+        self.context.bind_to_thread()?;
+        // SAFETY: the handles have equal context identity and that context is current.
+        unsafe {
+            crate::cudarc_shim::event::record_with_flags(self.cu_event, stream.cu_stream(), flags)
+        }
+    }
+
     /// Blocks the calling thread until this event has completed.
     pub fn synchronize(&self) -> Result<(), DriverError> {
         self.context.bind_to_thread()?;
@@ -876,6 +906,34 @@ impl Stream {
                 cuda_bindings::CUevent_wait_flags_enum_CU_EVENT_WAIT_DEFAULT,
             )
         }
+    }
+
+    /// Makes subsequent work on this stream wait for `event` with
+    /// `CUevent_wait_flags` (`cuStreamWaitEvent`).
+    ///
+    /// `CU_EVENT_WAIT_DEFAULT` is [`wait_event`](Self::wait_event).
+    /// `CU_EVENT_WAIT_EXTERNAL` is for a stream that is being captured: the wait
+    /// becomes an event-wait node of the graph, so each launch of the graph
+    /// waits for the event's most recent record at launch time (for example one
+    /// made by other work or another graph). A plain wait during capture joins
+    /// the event's captured work instead and must name an event recorded in the
+    /// same capture.
+    ///
+    /// Errors with `CUDA_ERROR_INVALID_VALUE` if the event belongs to a
+    /// different device than this stream.
+    pub fn wait_event_with_flags(
+        &self,
+        event: &Event,
+        flags: cuda_bindings::CUevent_wait_flags,
+    ) -> Result<(), DriverError> {
+        if event.context.as_ref() != self.context.as_ref() {
+            return Err(DriverError(
+                cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_VALUE,
+            ));
+        }
+        self.context.bind_to_thread()?;
+        // SAFETY: the handles have equal context identity and that context is current.
+        unsafe { stream::wait_event(self.cu_stream, event.cu_event, flags) }
     }
 
     /// Enqueues a host-side callback to execute after all prior stream work completes.

@@ -11,6 +11,7 @@
 //! FMA, debug, input-order, validation, and provenance rules.
 
 mod diagnostics;
+mod entries;
 mod link;
 mod nvvm;
 mod options;
@@ -19,6 +20,10 @@ mod ptx;
 mod validation;
 
 pub use diagnostics::KernelResourceUsage;
+pub use entries::{
+    EXPECTED_KERNELS_SIDECAR_HEADER, cubin_entry_names, expected_kernels_sidecar_text,
+    parse_expected_kernels_sidecar, ptx_entry_names, require_expected_kernels,
+};
 pub use libnvvm_sys::{CudaArch, CudaArchParseError, LibdeviceNotFound, NvvmError, find_libdevice};
 pub use link::{LinkReport, LtoLinker};
 pub use nvjitlink_sys::NvJitLinkError;
@@ -130,6 +135,29 @@ pub enum FinalizerError {
     #[error("nvJitLink returned an empty PTX artifact")]
     EmptyPtx,
 
+    /// The linked image lacks kernels its inputs define. nvJitLink reports
+    /// success when it drops a module's kernels, so the finalizer checks the
+    /// output's entry points against the caller's expected kernels.
+    #[error(
+        "the linked {output:?} is missing expected kernel(s) {missing:?} ({present} entry point(s) present)"
+    )]
+    MissingKernels {
+        /// Requested output format.
+        output: FinalizerOutput,
+        /// Expected kernels that are not entry points of the output.
+        missing: Vec<String>,
+        /// Number of entry points the output does define.
+        present: usize,
+    },
+
+    /// The entry points of a linked image could not be read, so the expected
+    /// kernels could not be checked.
+    #[error("could not read the entry points of the linked {output:?}")]
+    UnreadableEntryInventory {
+        /// Requested output format.
+        output: FinalizerOutput,
+    },
+
     /// A pinned CUDA compilation tool changed around an operation. Its output can
     /// no longer be attributed to the provenance used by Cargo or a cache key.
     #[error(
@@ -188,12 +216,14 @@ impl Finalizer {
         ))
     }
 
-    /// Compile one NVVM IR module and return a validated target-specific cubin.
+    /// Compile one NVVM IR module and return a validated target-specific cubin
+    /// that defines every kernel in `expected_kernels`.
     pub fn materialize_nvvm_ir(
         &self,
         module_name: &str,
         nvvm_ir: &[u8],
         options: &FinalizationOptions,
+        expected_kernels: &[&str],
     ) -> Result<Vec<u8>, FinalizerError> {
         let ltoir = self
             .compiler
@@ -203,6 +233,7 @@ impl Finalizer {
             &[NamedInput::new(&ltoir_name, &ltoir)],
             options,
             FinalizerOutput::Cubin,
+            expected_kernels,
         )
     }
 
@@ -217,6 +248,7 @@ impl Finalizer {
         module_name: &str,
         nvvm_ir: &[u8],
         options: &FinalizationOptions,
+        expected_kernels: &[&str],
     ) -> Result<LinkReport, FinalizerError> {
         let ltoir = self
             .compiler
@@ -226,17 +258,21 @@ impl Finalizer {
             &[NamedInput::new(&ltoir_name, &ltoir)],
             options,
             FinalizerOutput::Cubin,
+            expected_kernels,
         )
     }
 
-    /// Link ordered LTOIR modules to cubin or PTX.
+    /// Link ordered LTOIR modules to cubin or PTX that defines every kernel in
+    /// `expected_kernels`.
     pub fn link_ltoir(
         &self,
         inputs: &[NamedInput<'_>],
         options: &FinalizationOptions,
         output: FinalizerOutput,
+        expected_kernels: &[&str],
     ) -> Result<Vec<u8>, FinalizerError> {
-        self.linker.link_ltoir(inputs, options, output)
+        self.linker
+            .link_ltoir(inputs, options, output, expected_kernels)
     }
 
     /// Link ordered LTOIR modules while collecting ptxas resource diagnostics.
@@ -250,8 +286,10 @@ impl Finalizer {
         inputs: &[NamedInput<'_>],
         options: &FinalizationOptions,
         output: FinalizerOutput,
+        expected_kernels: &[&str],
     ) -> Result<LinkReport, FinalizerError> {
-        self.linker.link_ltoir_with_report(inputs, options, output)
+        self.linker
+            .link_ltoir_with_report(inputs, options, output, expected_kernels)
     }
 
     /// Compiler component, including exact libdevice bytes and provenance.
@@ -408,7 +446,7 @@ entry:
             assert!(!ltoir.is_empty());
             let input = [NamedInput::new("kernel.ltoir", &ltoir)];
             let cubin = finalizer
-                .link_ltoir(&input, &options, FinalizerOutput::Cubin)
+                .link_ltoir(&input, &options, FinalizerOutput::Cubin, &["kernel"])
                 .unwrap();
             assert!(is_valid_cubin(&cubin));
             // A cubin whose kernel was stripped is still a well-formed ELF, so
@@ -421,7 +459,7 @@ entry:
                 cubin.len()
             );
             let ptx = finalizer
-                .link_ltoir(&input, &options, FinalizerOutput::Ptx)
+                .link_ltoir(&input, &options, FinalizerOutput::Ptx, &["kernel"])
                 .unwrap();
             assert!(
                 ptx.windows(b".version".len())
@@ -435,6 +473,39 @@ entry:
                 ptx_text.contains(".entry kernel"),
                 "linked PTX has no `.entry kernel` ({} bytes):\n{ptx_text}",
                 ptx.len()
+            );
+        }
+    }
+
+    /// The same kernel without `@llvm.used`: nvJitLink's link-time optimizer
+    /// strips it and still reports success with a well-formed, empty image.
+    /// The finalizer must refuse that image for both outputs.
+    #[test]
+    #[ignore = "requires discoverable CUDA Toolkit libNVVM, nvJitLink, and libdevice"]
+    fn live_link_fails_when_nvjitlink_drops_an_expected_kernel() {
+        let unrooted = String::from_utf8_lossy(LEGACY_NVVM_IR)
+            .lines()
+            .filter(|line| !line.starts_with("@llvm.used"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let finalizer = Finalizer::discover().unwrap();
+        let options = FinalizationOptions::new("sm_86".parse().unwrap());
+        let ltoir = finalizer
+            .compiler()
+            .compile_nvvm_ir_to_ltoir("dropped.ll", unrooted.as_bytes(), &options)
+            .unwrap();
+        let input = [NamedInput::new("dropped.ltoir", &ltoir)];
+        for output in [FinalizerOutput::Cubin, FinalizerOutput::Ptx] {
+            let error = finalizer
+                .link_ltoir(&input, &options, output, &["kernel"])
+                .unwrap_err();
+            assert!(
+                matches!(
+                    error,
+                    FinalizerError::MissingKernels { ref missing, present: 0, .. }
+                        if missing == &["kernel"]
+                ),
+                "{output:?}: {error}"
             );
         }
     }
@@ -515,7 +586,7 @@ entry:
         let input = [NamedInput::new("spill.ltoir", &ltoir)];
 
         let report = finalizer
-            .link_ltoir_with_report(&input, &options, FinalizerOutput::Cubin)
+            .link_ltoir_with_report(&input, &options, FinalizerOutput::Cubin, &["spill_kernel"])
             .unwrap();
         assert!(is_valid_cubin(&report.image));
 

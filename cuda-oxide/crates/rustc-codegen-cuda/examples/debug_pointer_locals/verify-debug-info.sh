@@ -400,6 +400,23 @@ require_pointer_local null_ptr '*const i32' i32
     && "${slots[1]}" != "${slots[2]}" ]] \
     || fail "pointer locals unexpectedly share one debug slot"
 
+# NVBug 7039124: references and raw pointers to structs (`&Params`, `*const Params`)
+# must point at the `Params` `DICompositeType` rather than `baseType: null`.
+params_struct_id="$(grep -E '^![0-9]+ = !DICompositeType\(tag: DW_TAG_structure_type, name: "Params", size: 64,' "${llvm_ir}" \
+    | sed -nE 's/^!([0-9]+) = .*/\1/p' | head -1)"
+[[ -n "${params_struct_id}" ]] || fail "Params DICompositeType missing from LLVM IR"
+grep -Eq "^![0-9]+ = !DIDerivedType\\(tag: DW_TAG_pointer_type, name: \"&Params\", baseType: !${params_struct_id}, size: 64\\)" "${llvm_ir}" \
+    || fail "&Params DIDerivedType does not point to Params DICompositeType"
+grep -Eq "^![0-9]+ = !DIDerivedType\\(tag: DW_TAG_pointer_type, name: \"\\*const Params\", baseType: !${params_struct_id}, size: 64\\)" "${llvm_ir}" \
+    || fail "*const Params DIDerivedType does not point to Params DICompositeType"
+
+# NVBug 7039104: deeply nested composite types (`Deep8` -> `L8` -> ... -> `L1`)
+# past depth 8 must retain all inner struct levels down to `L1`.
+for level in Deep8 L8 L7 L6 L5 L4 L3 L2 L1; do
+    grep -Eq "^![0-9]+ = !DICompositeType\\(tag: DW_TAG_structure_type, name: \"${level}\"," "${llvm_ir}" \
+        || fail "nested struct ${level} DICompositeType was dropped from LLVM IR"
+done
+
 # Verify with complete, version-matched LLVM tool pairs. LLVM 18 can return
 # success while diagnosing and stripping newer debug metadata, so accepting an
 # arbitrary unsuffixed llvm-as would turn this gate into a false assurance.

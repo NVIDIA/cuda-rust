@@ -17,12 +17,35 @@ use pliron::result::Result;
 use pliron::r#type::{TypeHandle, Typed};
 use pliron::value::Value;
 
-/// Name for the `index`-th counter-named module-scope global of one family
-/// (`__shared_mem`, `__device_global`). See
+/// Name for the `index`-th counter-named module-scope global of one family.
+/// Only a `mir.shared_alloc` without an `alloc_key` still takes this form;
+/// keyed globals use [`keyed_global_name`]. See
 /// [`crate::context::module_namespaced_symbol`] for why the module
 /// disambiguator is part of the name.
 pub(super) fn counter_named_global(ctx: &Context, family: &str, index: usize) -> String {
     crate::context::module_namespaced_symbol(ctx, family, &index.to_string())
+}
+
+/// Name for the module-scope global of one family (`__shared_mem`,
+/// `__device_global`) whose deduplication key is `key`: the family, the
+/// module disambiguator as for [`counter_named_global`], then the key's
+/// 64-bit FNV-1a hash as 16 hex digits.
+///
+/// The key is the global's own identity (a static's mangled symbol, or a
+/// promoted constant's content fingerprint), so the name does not move when
+/// an unrelated kernel or static is added, removed or reordered, and the
+/// other kernels' PTX stays byte-identical (#1477). The hash is spelled out
+/// here rather than taken from a hasher crate, whose output may change
+/// between versions, because the name ends up in committed PTX. A
+/// module-local counter never reaches sixteen digits, so the keyed and
+/// counter forms cannot clash.
+pub(super) fn keyed_global_name(ctx: &Context, family: &str, key: &str) -> String {
+    const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+    let hash = key.bytes().fold(FNV_OFFSET_BASIS, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(FNV_PRIME)
+    });
+    crate::context::module_namespaced_symbol(ctx, family, &format!("{hash:016x}"))
 }
 
 pub(super) fn anyhow_to_pliron(e: anyhow::Error) -> pliron::result::Error {

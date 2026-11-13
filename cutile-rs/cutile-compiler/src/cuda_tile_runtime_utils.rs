@@ -6,6 +6,7 @@
 //! Runtime utilities for compiling Tile IR modules to GPU cubins.
 //! Provides GPU detection and bytecode compilation helpers.
 
+use crate::compile_control::{CompileControl, CompileInterrupted};
 use crate::error::JITError;
 use crate::hints::CodegenMode;
 use cuda_core::{get_device_sm_name, Context};
@@ -582,6 +583,29 @@ impl Drop for ScopedTempFile {
     }
 }
 
+/// Isolate assembler intermediates so killing the process does not orphan them.
+struct ScopedTempDir(PathBuf);
+
+impl ScopedTempDir {
+    fn new() -> std::io::Result<Self> {
+        let path = env::temp_dir().join(format!("cutile-assembler-{}", Uuid::new_v4()));
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder.create(&path)?;
+        Ok(Self(path))
+    }
+}
+
+impl Drop for ScopedTempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 /// Serializes a `cutile_ir::Module` to Tile IR bytecode (the `.bc` image).
 ///
 /// Runs the module verifiers first, so bytecode returned here is what `tileiras`
@@ -767,7 +791,8 @@ fn tilelib_debug_info_error(opts: &TileirasOptions, stderr: &str) -> Option<Stri
 ///
 /// The temporary `.bc` and `.cubin` are removed before returning. The one
 /// exception is a `tileiras` run that fails or cannot be launched, which
-/// leaves the `.bc` on disk because the error message names it.
+/// leaves the `.bc` on disk because the error message names it. Cancellation
+/// and deadline expiry remove the bytecode and isolated assembler intermediates.
 pub fn run_tileiras(
     bytecode: &[u8],
     gpu_name: &str,
@@ -782,6 +807,19 @@ fn run_tileiras_at(
     gpu_name: &str,
     opts: &TileirasOptions,
 ) -> Result<Vec<u8>, JITError> {
+    run_tileiras_at_controlled(tileiras, bytecode, gpu_name, opts, None)
+}
+
+fn run_tileiras_at_controlled(
+    tileiras: &Path,
+    bytecode: &[u8],
+    gpu_name: &str,
+    opts: &TileirasOptions,
+    control: Option<&CompileControl>,
+) -> Result<Vec<u8>, JITError> {
+    if let Some(control) = control {
+        control.check().map_err(|e| JITError::Anyhow(e.into()))?;
+    }
     let base_filename = env::temp_dir().join(Uuid::new_v4().to_string());
     let bc_file = ScopedTempFile::new(base_filename.with_extension("bc"));
     let cubin_file = ScopedTempFile::new(base_filename.with_extension("cubin"));
@@ -818,12 +856,18 @@ fn run_tileiras_at(
     }
     args.extend(["-o", &cubin_filename, &bc_filename]);
     let toolkit = toolkit_root_for(tileiras);
-    let output = match tileiras_command(tileiras, toolkit.as_deref())
-        .args(&args)
-        .output()
-    {
+    let mut command = tileiras_command(tileiras, toolkit.as_deref());
+    command.args(&args);
+    let output = match controlled_output(&mut command, control) {
         Ok(output) => output,
         Err(e) => {
+            if let Some(interrupted) = e
+                .get_ref()
+                .and_then(|e| e.downcast_ref::<CompileInterrupted>())
+            {
+                let error = anyhow::Error::new(*interrupted).context("assembler interrupted");
+                return Err(JITError::Anyhow(error));
+            }
             // The message names the bytecode, so it has to outlive this call.
             let message = tileiras_launch_error(tileiras, &args, &bc_filename, e);
             bc_file.keep();
@@ -868,6 +912,56 @@ fn run_tileiras_at(
     }
     crate::jit_cache::record_backend_compile();
     Ok(cubin)
+}
+
+// Spool output to files so a noisy assembler cannot block on a full pipe while
+// we poll it. The uncontrolled path preserves the existing Command::output API.
+fn controlled_output(
+    command: &mut Command,
+    control: Option<&CompileControl>,
+) -> std::io::Result<std::process::Output> {
+    let Some(control) = control else {
+        return command.output();
+    };
+    control.check().map_err(std::io::Error::other)?;
+    let temporary = ScopedTempDir::new()?;
+    let base = temporary.0.join("output");
+    let stdout = ScopedTempFile::new(base.with_extension("stdout"));
+    let stderr = ScopedTempFile::new(base.with_extension("stderr"));
+    command.env("TMPDIR", &temporary.0);
+    command.env("TMP", &temporary.0);
+    command.env("TEMP", &temporary.0);
+    command.stdin(std::process::Stdio::null());
+    command.stdout(std::fs::File::create(stdout.path())?);
+    command.stderr(std::fs::File::create(stderr.path())?);
+    let mut child = command.spawn()?;
+    let status = loop {
+        if let Err(interrupted) = control.check() {
+            // Always reap the process before acknowledging cancellation.
+            if let Err(error) = child.kill() {
+                if child.try_wait()?.is_none() {
+                    return Err(error);
+                }
+            }
+            child.wait()?;
+            return Err(std::io::Error::other(interrupted));
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(5)),
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
+            }
+        }
+    };
+    control.check().map_err(std::io::Error::other)?;
+    Ok(std::process::Output {
+        status,
+        stdout: std::fs::read(stdout.path())?,
+        stderr: std::fs::read(stderr.path())?,
+    })
 }
 
 /// Where a stage-2 cubin came from.
@@ -920,6 +1014,23 @@ pub fn compile_bytecode_cached_with_toolkit(
     )
 }
 
+/// CPU-only compilation with cooperative cancellation and a killable assembler.
+pub fn compile_bytecode_cached_with_control(
+    bytecode: &[u8],
+    opts: &TileirasOptions,
+    capabilities: &ToolkitCapabilities,
+    control: &CompileControl,
+) -> Result<(Vec<u8>, Stage2Source), JITError> {
+    compile_bytecode_cached_at_controlled(
+        &capabilities.tileiras,
+        bytecode,
+        capabilities.target.bytecode_version,
+        &capabilities.target.architecture,
+        opts,
+        Some(control),
+    )
+}
+
 fn compile_bytecode_cached_at(
     tileiras: &Path,
     bytecode: &[u8],
@@ -927,12 +1038,27 @@ fn compile_bytecode_cached_at(
     gpu_name: &str,
     opts: &TileirasOptions,
 ) -> Result<(Vec<u8>, Stage2Source), JITError> {
+    compile_bytecode_cached_at_controlled(tileiras, bytecode, bc_version, gpu_name, opts, None)
+}
+
+fn compile_bytecode_cached_at_controlled(
+    tileiras: &Path,
+    bytecode: &[u8],
+    bc_version: BytecodeVersion,
+    gpu_name: &str,
+    opts: &TileirasOptions,
+    control: Option<&CompileControl>,
+) -> Result<(Vec<u8>, Stage2Source), JITError> {
     use crate::jit_cache::{self, EntryParams};
     use sha2::{Digest, Sha256};
     use std::sync::atomic::Ordering;
 
+    if let Some(control) = control {
+        control.check().map_err(|e| JITError::Anyhow(e.into()))?;
+    }
+
     let Some(store) = jit_cache::installed_store() else {
-        return run_tileiras_at(tileiras, bytecode, gpu_name, opts)
+        return run_tileiras_at_controlled(tileiras, bytecode, gpu_name, opts, control)
             .map(|c| (c, Stage2Source::Tileiras));
     };
 
@@ -984,7 +1110,7 @@ fn compile_bytecode_cached_at(
     }
 
     jit_cache::STATS.misses.fetch_add(1, Ordering::Relaxed);
-    let cubin = run_tileiras_at(tileiras, bytecode, gpu_name, opts)?;
+    let cubin = run_tileiras_at_controlled(tileiras, bytecode, gpu_name, opts, control)?;
 
     // A tile library rebuilt since it was hashed may be the build tileiras
     // linked, which `key` does not describe.
@@ -1051,6 +1177,31 @@ pub fn recompile_after_disk_rejection_with_toolkit(
         bytecode,
         &capabilities.target.architecture,
         opts,
+    )
+}
+
+/// Controlled recovery for a disk entry rejected by the CUDA driver.
+pub fn recompile_after_disk_rejection_with_control(
+    store: &dyn crate::jit_cache::JitStore,
+    key: &str,
+    bytecode: &[u8],
+    opts: &TileirasOptions,
+    capabilities: &ToolkitCapabilities,
+    control: &CompileControl,
+) -> Result<Vec<u8>, JITError> {
+    control.check().map_err(|e| JITError::Anyhow(e.into()))?;
+    if let Err(e) = store.delete(key) {
+        crate::jit_cache::STATS
+            .io_errors
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        crate::jit_cache::cache_log(format_args!("failed to evict entry {key}: {e}"));
+    }
+    run_tileiras_at_controlled(
+        &capabilities.tileiras,
+        bytecode,
+        &capabilities.target.architecture,
+        opts,
+        Some(control),
     )
 }
 
@@ -1299,6 +1450,143 @@ fn shell_display(value: &std::ffi::OsStr) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn controlled_process_does_not_spawn_after_cancellation() {
+        let control = CompileControl::default();
+        control.cancel();
+        let error = controlled_output(
+            &mut Command::new("nonexistent-cancelled-assembler"),
+            Some(&control),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error
+                .get_ref()
+                .unwrap()
+                .downcast_ref::<CompileInterrupted>(),
+            Some(&CompileInterrupted::Cancelled)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn controlled_process_drains_large_output_and_preserves_status() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "i=0; while [ \"$i\" -lt 10000 ]; do printf 'abcdefghij'; i=$((i+1)); done; printf diagnostic >&2; exit 7"]);
+        let output = controlled_output(&mut command, Some(&CompileControl::default())).unwrap();
+        assert_eq!(output.stdout.len(), 100_000);
+        assert_eq!(output.stderr, b"diagnostic");
+        assert_eq!(output.status.code(), Some(7));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn controlled_process_cancels_after_child_acknowledges_start() {
+        let marker = ScopedTempFile::new(
+            env::temp_dir().join(format!("compile-control-{}", Uuid::new_v4())),
+        );
+        let control = CompileControl::default();
+        std::thread::scope(|scope| {
+            let path = marker.path().to_owned();
+            let worker_control = control.clone();
+            let worker = scope.spawn(move || {
+                let mut command = Command::new("sh");
+                // No descendants: cancellation must kill and reap this shell.
+                command.args([
+                    "-c",
+                    "printf ready > \"$1\"; while :; do :; done",
+                    "control-test",
+                ]);
+                command.arg(path);
+                controlled_output(&mut command, Some(&worker_control))
+            });
+            let watchdog = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while !marker.path().exists() && std::time::Instant::now() < watchdog {
+                std::thread::yield_now();
+            }
+            let started = marker.path().exists();
+            control.cancel();
+            let error = worker.join().unwrap().unwrap_err();
+            assert!(started, "child did not acknowledge startup");
+            assert_eq!(
+                error
+                    .get_ref()
+                    .unwrap()
+                    .downcast_ref::<CompileInterrupted>(),
+                Some(&CompileInterrupted::Cancelled)
+            );
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn interrupted_assembler_removes_bytecode_output_and_intermediates() {
+        let fixture = ScopedTempDir::new().unwrap();
+        let marker = fixture.0.join("started");
+        let binary = fixture.0.join("tileiras");
+        write_fake_tileiras_script(
+            &binary,
+            &format!(
+                r#"
+output=
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = '-o' ]; then shift; output="$1"; fi
+    input="$1"
+    shift
+done
+printf partial > "$output"
+printf temporary > "$TMPDIR/intermediate"
+printf '%s\n%s\n%s\n' "$input" "$output" "$TMPDIR" > '{}'
+while :; do :; done
+"#,
+                marker.display()
+            ),
+        );
+        let control = CompileControl::default();
+        std::thread::scope(|scope| {
+            let child_control = control.clone();
+            let worker = scope.spawn(move || {
+                run_tileiras_at_controlled(
+                    &binary,
+                    b"bytecode",
+                    "sm_100",
+                    &TileirasOptions::default(),
+                    Some(&child_control),
+                )
+            });
+            let watchdog = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            let paths = loop {
+                let paths: Vec<PathBuf> = std::fs::read_to_string(&marker)
+                    .unwrap_or_default()
+                    .lines()
+                    .map(PathBuf::from)
+                    .collect();
+                if paths.len() == 3 {
+                    break paths;
+                }
+                if std::time::Instant::now() >= watchdog {
+                    break Vec::new();
+                }
+                std::thread::yield_now();
+            };
+            let existed = paths.iter().all(|p| p.exists());
+            control.cancel();
+            let error = worker.join().unwrap().unwrap_err();
+            assert_eq!(paths.len(), 3, "assembler startup watchdog");
+            assert!(existed);
+            let JITError::Anyhow(error) = error else {
+                panic!("expected typed interruption")
+            };
+            assert_eq!(
+                error.downcast_ref::<CompileInterrupted>(),
+                Some(&CompileInterrupted::Cancelled)
+            );
+            for path in paths {
+                assert!(!path.exists(), "orphaned {}", path.display());
+            }
+        });
+    }
 
     #[test]
     fn a_tile_library_without_debug_locations_is_explained() {
@@ -1583,7 +1871,7 @@ mod tests {
     fn tileiras_binary_defaults_to_path_lookup() {
         assert_eq!(
             resolve_tileiras_binary_with_candidates(None, None, &[]),
-            PathBuf::from("tileiras")
+            PathBuf::from(tileiras_executable_name())
         );
     }
 
@@ -1603,7 +1891,7 @@ mod tests {
     fn tileiras_binary_treats_empty_override_as_default() {
         assert_eq!(
             resolve_tileiras_binary_with_candidates(Some(OsString::new()), None, &[]),
-            PathBuf::from("tileiras")
+            PathBuf::from(tileiras_executable_name())
         );
     }
 

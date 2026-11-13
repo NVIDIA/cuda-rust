@@ -3,13 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-use cuda_core::{CudaContext, CudaStream, DeviceBuffer, DeviceRepr, DriverError, PinnedHostBuffer};
-use std::sync::{mpsc, Arc, Mutex, MutexGuard};
-use std::thread::JoinHandle;
+use cuda_core::{CudaContext, DeviceBuffer, DeviceRepr, DriverError, PinnedHostBuffer};
+use std::sync::{Arc, Mutex, MutexGuard};
+#[path = "support/stream_gate.rs"]
+mod stream_gate;
 use std::time::Duration;
+use stream_gate::StreamGate;
 
-const BLOCKED_TIMEOUT: Duration = Duration::from_millis(100);
-const COMPLETION_TIMEOUT: Duration = Duration::from_secs(1);
 static GATED_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn lock_gated_test() -> MutexGuard<'static, ()> {
@@ -18,68 +18,9 @@ fn lock_gated_test() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-enum CompletionObservation<T> {
-    Blocked,
-    Completed(T),
-    Disconnected,
-}
-
-fn observe_completion<T>(rx: &mpsc::Receiver<T>) -> CompletionObservation<T> {
-    match rx.recv_timeout(BLOCKED_TIMEOUT) {
-        Ok(value) => CompletionObservation::Completed(value),
-        Err(mpsc::RecvTimeoutError::Timeout) => CompletionObservation::Blocked,
-        Err(mpsc::RecvTimeoutError::Disconnected) => CompletionObservation::Disconnected,
-    }
-}
-
-fn finish_gated_worker<T>(
-    label: &str,
-    release_gate: mpsc::Sender<()>,
-    started_rx: mpsc::Receiver<()>,
-    completion_rx: mpsc::Receiver<T>,
-    worker: JoinHandle<()>,
-) -> T {
-    let started_result = started_rx.recv_timeout(COMPLETION_TIMEOUT);
-    let observation = observe_completion(&completion_rx);
-
-    // Release the CUDA callback and collect the worker before asserting the
-    // observation. A failing regression must not leave driver work blocked.
-    let release_result = release_gate.send(());
-    let (was_blocked, disconnected, completion_result) = match observation {
-        CompletionObservation::Blocked => {
-            (true, false, completion_rx.recv_timeout(COMPLETION_TIMEOUT))
-        }
-        CompletionObservation::Completed(value) => (false, false, Ok(value)),
-        CompletionObservation::Disconnected => {
-            (false, true, Err(mpsc::RecvTimeoutError::Disconnected))
-        }
-    };
-    let worker_result = worker.join();
-
-    started_result.unwrap_or_else(|error| panic!("{label} worker did not start: {error}"));
-    release_result.unwrap_or_else(|error| panic!("failed to release {label} gate: {error}"));
-    worker_result.unwrap_or_else(|_| panic!("{label} worker panicked"));
-    assert!(!disconnected, "{label} worker disconnected");
-    assert!(
-        was_blocked,
-        "{label} completed before the gated stream was released"
-    );
-    completion_result
-        .unwrap_or_else(|error| panic!("{label} did not complete after releasing gate: {error}"))
-}
-
-fn gate_stream(stream: &CudaStream) -> mpsc::Sender<()> {
-    let (tx, rx) = mpsc::channel();
-    stream
-        .launch_host_function(move || {
-            let _ = rx.recv();
-        })
-        .expect("failed to enqueue stream gate");
-    tx
-}
-
 #[test]
 fn device_buffer_from_host_roundtrip() {
+    let _gated_test_guard = lock_gated_test();
     let ctx = CudaContext::new(0).expect("failed to create CUDA context");
     let stream = ctx.new_stream().expect("failed to create CUDA stream");
 
@@ -99,6 +40,7 @@ fn device_buffer_from_host_roundtrip() {
 
 #[test]
 fn device_buffer_zeroed_initializes_with_zeros() {
+    let _gated_test_guard = lock_gated_test();
     let ctx = CudaContext::new(0).expect("failed to create CUDA context");
     let stream = ctx.new_stream().expect("failed to create CUDA stream");
 
@@ -115,31 +57,15 @@ fn device_buffer_zeroed_initializes_with_zeros() {
 }
 
 #[test]
-fn zeroed_waits_for_initialization_before_cross_stream_readback() {
+fn zeroed_is_ready_before_cross_stream_readback() {
     let _gated_test_guard = lock_gated_test();
     let ctx = CudaContext::new(0).expect("failed to create CUDA context");
     let writer = ctx.new_stream().expect("failed to create writer stream");
     let reader = ctx.new_stream().expect("failed to create reader stream");
-    let release_gate = gate_stream(&writer);
-    let (started_tx, started_rx) = mpsc::channel();
-    let (completion_tx, completion_rx) = mpsc::channel();
-    let worker_writer = writer.clone();
-    let worker = std::thread::spawn(move || {
-        worker_writer.context().bind_to_thread().unwrap();
-        started_tx.send(()).unwrap();
-        // Inspect byte storage, never potentially invalid Rust bool values,
-        // so a regression in initialization ordering cannot make this test UB.
-        let buffer = DeviceBuffer::<u8>::zeroed(&worker_writer, 1 << 20);
-        completion_tx.send(buffer).unwrap();
-    });
-    let buffer = finish_gated_worker(
-        "zeroed initialization",
-        release_gate,
-        started_rx,
-        completion_rx,
-        worker,
-    )
-    .expect("zeroed allocation failed");
+    // The GPU unit test `zeroed_records_a_completion_fence` also checks the
+    // actual driver synchronization call. Absence of a worker message cannot
+    // prove blocking: the worker may simply not have been scheduled.
+    let buffer = DeviceBuffer::<u8>::zeroed(&writer, 1 << 20).unwrap();
     assert!(writer.query().expect("writer query failed"));
     assert_eq!(buffer.to_host_vec(&reader).unwrap(), vec![0; 1 << 20]);
 
@@ -155,6 +81,7 @@ fn zeroed_waits_for_initialization_before_cross_stream_readback() {
 
 #[test]
 fn owned_wrapper_roundtrip_preserves_allocation_and_stream() {
+    let _gated_test_guard = lock_gated_test();
     #[repr(transparent)]
     struct Counter(std::cell::UnsafeCell<u32>);
     // SAFETY: UnsafeCell has u32's layout and valid initialized representations;
@@ -196,6 +123,7 @@ fn owned_wrapper_roundtrip_preserves_allocation_and_stream() {
 
 #[test]
 fn device_buffer_supports_empty_allocations() {
+    let _gated_test_guard = lock_gated_test();
     let ctx = CudaContext::new(0).expect("failed to create CUDA context");
     let stream = ctx.new_stream().expect("failed to create CUDA stream");
 
@@ -214,6 +142,7 @@ fn device_buffer_supports_empty_allocations() {
 
 #[test]
 fn device_buffer_rejects_allocation_size_overflow() {
+    let _gated_test_guard = lock_gated_test();
     let ctx = CudaContext::new(0).expect("failed to create CUDA context");
     let stream = ctx.new_stream().expect("failed to create CUDA stream");
     let overflowing_len = usize::MAX / std::mem::size_of::<u64>() + 1;
@@ -226,6 +155,7 @@ fn device_buffer_rejects_allocation_size_overflow() {
 
 #[test]
 fn device_buffer_async_compat_methods_roundtrip() {
+    let _gated_test_guard = lock_gated_test();
     let ctx = CudaContext::new(0).expect("failed to create CUDA context");
     let stream = ctx.new_stream().expect("failed to create CUDA stream");
 
@@ -284,27 +214,14 @@ fn async_allocation_ordinary_drop_retires_cross_stream_work() {
     use_stream
         .join(&allocation_stream)
         .expect("failed to order use stream after allocation stream");
-    let release_gate = gate_stream(&use_stream);
+    let gate = StreamGate::arm(&use_stream);
     dev.zero_async(&use_stream)
         .expect("failed to enqueue cross-stream use");
 
-    let (started_tx, started_rx) = mpsc::channel();
-    let (completion_tx, completion_rx) = mpsc::channel();
-    let drop_thread = std::thread::spawn(move || {
-        started_tx
-            .send(())
-            .expect("failed to send drop worker start");
-        drop(dev);
-        completion_tx
-            .send(())
-            .expect("failed to send drop completion");
-    });
-    started_rx.recv_timeout(COMPLETION_TIMEOUT).unwrap();
-    let completed = completion_rx.recv_timeout(COMPLETION_TIMEOUT);
-    // Release the gate even on failure so the test cannot strand the driver.
-    release_gate.send(()).unwrap();
-    drop_thread.join().unwrap();
-    completed.expect("ordinary buffer drop must not wait for GPU work");
+    drop(dev);
+    gate.assert_held();
+    assert!(!use_stream.query().unwrap(), "drop drained gated work");
+    drop(gate);
     ctx.synchronize().expect("context cleanup failed");
 }
 
@@ -319,7 +236,7 @@ fn async_allocation_drop_async_orders_free_after_allocation_stream() {
 
     let mut dev = unsafe { DeviceBuffer::<u32>::uninitialized_async(&allocation_stream, 4) }
         .expect("failed to allocate async device buffer");
-    let release_gate = gate_stream(&allocation_stream);
+    let gate = StreamGate::arm(&allocation_stream);
     dev.zero_async(&allocation_stream)
         .expect("failed to enqueue allocation-stream work");
 
@@ -328,25 +245,12 @@ fn async_allocation_drop_async_orders_free_after_allocation_stream() {
     // test observes.
     unsafe { dev.drop_async(&free_stream) }
         .expect("drop_async should order free after allocation stream");
-    let (started_tx, started_rx) = mpsc::channel();
-    let (completion_tx, completion_rx) = mpsc::channel();
-    let free_stream_for_thread = free_stream.clone();
-    let sync_thread = std::thread::spawn(move || {
-        started_tx
-            .send(())
-            .expect("failed to send free-stream sync worker start");
-        completion_tx
-            .send(free_stream_for_thread.synchronize())
-            .expect("failed to send free-stream sync result");
-    });
-    finish_gated_worker(
-        "cross-stream async free",
-        release_gate,
-        started_rx,
-        completion_rx,
-        sync_thread,
-    )
-    .expect("cross-stream async free failed");
+    // The driver-call trace unit test checks that the allocation stream's
+    // event is joined here; this exercises the real queued dependency too.
+    assert!(!free_stream.query().unwrap());
+    gate.assert_held();
+    drop(gate);
+    free_stream.synchronize().unwrap();
 }
 
 #[test]
@@ -357,36 +261,22 @@ fn sync_allocation_allows_async_drop_after_queued_work() {
 
     let mut dev = DeviceBuffer::<u32>::zeroed(&stream, 4)
         .expect("failed to allocate synchronous device buffer");
-    let release_gate = gate_stream(&stream);
+    let gate = StreamGate::arm(&stream);
     dev.zero_async(&stream)
         .expect("failed to enqueue work before async free");
     // SAFETY: all prior work on this buffer was enqueued on `stream` itself.
     unsafe { dev.drop_async(&stream) }
         .expect("synchronous allocation should support stream-ordered free");
 
-    let (started_tx, started_rx) = mpsc::channel();
-    let (completion_tx, completion_rx) = mpsc::channel();
-    let stream_for_thread = stream.clone();
-    let sync_thread = std::thread::spawn(move || {
-        started_tx
-            .send(())
-            .expect("failed to send stream sync worker start");
-        completion_tx
-            .send(stream_for_thread.synchronize())
-            .expect("failed to send stream sync result");
-    });
-    finish_gated_worker(
-        "synchronous allocation async free",
-        release_gate,
-        started_rx,
-        completion_rx,
-        sync_thread,
-    )
-    .expect("synchronous allocation async free failed");
+    assert!(!stream.query().unwrap());
+    gate.assert_held();
+    drop(gate);
+    stream.synchronize().unwrap();
 }
 
 #[test]
 fn drop_async_bind_error_preserves_ordinary_cleanup() {
+    let _gated_test_guard = lock_gated_test();
     let ctx = CudaContext::new(0).expect("failed to create CUDA context");
     let stream = ctx.new_stream().expect("failed to create CUDA stream");
     let dev = DeviceBuffer::<u8>::zeroed(&stream, 4096).expect("failed to allocate device buffer");
@@ -428,6 +318,7 @@ fn drop_async_bind_error_preserves_ordinary_cleanup() {
 
 #[test]
 fn from_host_with_pinned_source_allows_source_drop_after_return() {
+    let _gated_test_guard = lock_gated_test();
     let ctx = CudaContext::new(0).expect("failed to create CUDA context");
     let stream = ctx.new_stream().expect("failed to create CUDA stream");
 
@@ -447,6 +338,7 @@ fn from_host_with_pinned_source_allows_source_drop_after_return() {
 
 #[test]
 fn copy_from_host_with_pinned_source_allows_source_reuse_after_return() {
+    let _gated_test_guard = lock_gated_test();
     let ctx = CudaContext::new(0).expect("failed to create CUDA context");
     let stream = ctx.new_stream().expect("failed to create CUDA stream");
 
@@ -474,6 +366,7 @@ fn copy_from_host_with_pinned_source_allows_source_reuse_after_return() {
 // Run under `compute-sanitizer --tool memcheck` to catch a regression.
 #[test]
 fn uninitialized_async_implicit_drop_retains_pending_work() {
+    let _gated_test_guard = lock_gated_test();
     let ctx = CudaContext::new(0).expect("failed to create CUDA context");
     let stream = ctx.new_stream().expect("failed to create CUDA stream");
 
@@ -493,6 +386,7 @@ fn uninitialized_async_implicit_drop_retains_pending_work() {
 
 #[test]
 fn uninitialized_async_cast_elem_implicit_drop_is_stream_ordered() {
+    let _gated_test_guard = lock_gated_test();
     let ctx = CudaContext::new(0).expect("failed to create CUDA context");
     let stream = ctx.new_stream().expect("failed to create CUDA stream");
 

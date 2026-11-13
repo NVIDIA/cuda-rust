@@ -1,0 +1,20 @@
+[package]
+name = "oxide-tile-provider"
+version = "0.4.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Runtime for cuda-oxide tile libraries that are linkage providers: the callbacks a provider shared object answers the Tile IR assembler with"
+readme = "README.md"
+
+[dependencies]
+cuda-artifact-finalizer = { workspace = true }
+oxide-tile-provider-sys = { workspace = true }
+oxide-tile-export = { workspace = true }
+oxide-tilebc = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[lints.rust]
+missing_docs = { level = "deny" }

@@ -7,6 +7,9 @@
 //! `preview$call` at bytecode 13.5. Compile-only: needs neither a GPU nor
 //! the tile library, which `tileiras` loads only when assembling.
 
+#[path = "support/temp_dir.rs"]
+mod temp_dir;
+
 use cutile::compile_api::KernelCompiler;
 use cutile::tile_kernel::{CompileOptions, TileLibrarySpec};
 use cutile_ir::bytecode::BytecodeVersion;
@@ -341,8 +344,8 @@ fn tile_libraries_are_configured_on_the_host() {
             "{message}"
         );
 
-        let dir = std::env::temp_dir().join(format!("cutile_foreign_calls_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let directory = temp_dir::TempDir::new("cutile-foreign-calls");
+        let dir = directory.path();
         let missing = TileLibrarySpec::new(dir.join("missing.tilelib"));
         let message =
             scale_l2_key(CompileOptions::new().tile_library(missing)).expect_err("missing library");
@@ -366,7 +369,6 @@ fn tile_libraries_are_configured_on_the_host() {
             with(TileLibrarySpec::new(&library)),
             "contents are key material"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     });
 }
 

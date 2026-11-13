@@ -63,7 +63,7 @@ jobs:
           - package: dialect-nvvm
           - package: mir-importer
           # CuTe types, semantic IR, and MLIR export need no CUDA toolkit.
-          # cute-rs and ctm-rs compile host metadata through cuda-host, so
+          # cute-rs and cutlass-primitives compile host metadata through cuda-host, so
           # they run in rust-unit-tests-cuda.
           - package: cute-layout
           - package: dialect-cute
@@ -83,6 +83,12 @@ jobs:
           - package: oxide-tile-export
           # The Tile IR bytecode writer for those descriptions. Pure Rust.
           - package: oxide-tilebc
+          # The linkage provider ABI and runtime. The -sys crate generates its
+          # bindings from the Tile IR compiler's header, which the build reads
+          # from TILEIR_LINKAGE_PROVIDER_INCLUDE_DIR; without it the build fails
+          # with instructions, so these lanes need that directory provisioned.
+          - package: oxide-tile-provider-sys
+          - package: oxide-tile-provider
           - package: reserved-oxide-symbols
           # trybuild compile-fail suite for ThreadIndex / DisjointSlice safety
           - package: cuda-device
@@ -94,6 +100,8 @@ jobs:
           # pure and validates options, provenance, and cubin structure; the
           # live-toolkit smoke test remains explicitly ignored.
           - package: cuda-artifact-finalizer
+          # Shared, driverless CUDA Toolkit path and library discovery policy.
+          - package: cuda-toolkit-discovery
           # cargo subcommand wrapper; pure Rust, no CUDA toolkit required.
           # Running it on a runner with NO toolkit installed is the
           # regression gate for issue #87.
@@ -152,8 +160,8 @@ jobs:
           - package: cuda-oxide-codegen
           # Facade macro tests compile host metadata through cuda-host.
           - package: cute-rs
-          - package: ctm-rs
-          - package: ctm-rs
+          - package: cutlass-primitives
+          - package: cutlass-primitives
             test_args: --all-targets --features host
           # launch_requires_unsafe trybuild fixture dev-depends on
           # cuda-host/cuda-core, which transitively pull cuda-bindings.

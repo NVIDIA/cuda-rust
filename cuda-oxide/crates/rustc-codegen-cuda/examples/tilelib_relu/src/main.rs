@@ -5,10 +5,13 @@
 
 //! tilelib_relu: a tile library written in Rust, checked on the GPU.
 //!
-//! The device half is the three `#[tile_export]` functions below. Each one
+//! The device half is the five `#[tile_export]` functions below. Each one
 //! becomes an implementation a cuTile program calls through `foreign_call`,
 //! on the native SIMT ABI: `in` scalars by value, everything else behind a
-//! pointer, the return value as a trailing `out` pointer.
+//! pointer, the return value as a trailing `out` pointer. Three name a
+//! `tile_shape` and go into the static library; two leave the tile extent
+//! to the call and need the provider form of the library
+//! (`cargo oxide tilelib tilelib_relu --arch sm_120 --provider`).
 //!
 //! The host half proves that ABI without a CUDA 13.5 or newer tileiras. It reads the
 //! descriptions the backend wrote, generates `mock/caller.cu` with the
@@ -64,6 +67,20 @@ pub fn warp_sum(x: f32) -> f32 {
         offset /= 2;
     }
     total
+}
+
+/// `relu` again, at whatever tile extent the call supplies. No `tile_shape`:
+/// the declaration is `@relu_any<[N: index]>`, and the provider form of the
+/// library compiles one implementation symbol per extent a kernel uses.
+#[tile_export]
+pub fn relu_any(x: f32) -> f32 {
+    if x > 0.0 { x } else { 0.0 }
+}
+
+/// `warp_sum` at whatever extent the call supplies, a multiple of 32.
+#[tile_export(sync = "warp")]
+pub fn warp_sum_any(x: f32) -> f32 {
+    warp_sum(x)
 }
 
 // ============================================================================
@@ -127,6 +144,11 @@ fn run() -> Fallible<Outcome> {
     let caller_ltoir = compile_caller(&nvcc, &caller_cu, options.target())?;
     // Both halves are LTOIR, so nvJitLink resolves the implementation symbols
     // at link time, the same way a real tile library is consumed.
+    let expected_kernels: Vec<String> = exports
+        .iter()
+        .map(|desc| format!("call_{}", desc.decl))
+        .collect();
+    let expected_kernels: Vec<&str> = expected_kernels.iter().map(String::as_str).collect();
     let cubin = LtoLinker::discover()?.link_ltoir(
         &[
             NamedInput::new("tilelib_relu.ltoir", &rust_ltoir),
@@ -134,6 +156,7 @@ fn run() -> Fallible<Outcome> {
         ],
         &options,
         FinalizerOutput::Cubin,
+        &expected_kernels,
     )?;
     println!(
         "nvJitLink: {} bytes of cubin for {}",
@@ -213,6 +236,12 @@ fn read_descriptions(dir: &Path) -> Fallible<Vec<TileExportDesc>> {
 /// The target and compile policy recorded with the NVVM IR. The link must use
 /// the same architecture and FMA setting as the build, or nvJitLink rejects
 /// the input or changes the arithmetic.
+/// The tile extent the mock caller runs an export at: the one it names, or
+/// 128 for a parametric export, whose body is the same at every extent.
+fn demo_extent(desc: &TileExportDesc) -> i64 {
+    desc.static_extent().unwrap_or(128)
+}
+
 fn read_build_policy(dir: &Path) -> Fallible<FinalizationOptions> {
     let target_path = dir.join(format!("{CRATE}.target"));
     let text = std::fs::read_to_string(&target_path)
@@ -344,7 +373,7 @@ fn caller_source(exports: &[TileExportDesc]) -> Fallible<String> {
             out,
             "// {}: {} elements, footprint {footprint}, sync {}",
             desc.decl,
-            desc.shape[0],
+            demo_extent(desc),
             desc.sync.tile_ir_name()
         )?;
         writeln!(
@@ -470,13 +499,14 @@ struct HostCase {
 
 /// What the host feeds each export and what it expects back. Every case is
 /// exact in f32: relu copies or zeroes, 0.5 halves without rounding, and the
-/// warp sums are small integers.
+/// warp sums are small integers. The parametric exports compute what their
+/// static namesakes compute, so they share the model.
 fn host_model(desc: &TileExportDesc, n: usize) -> Fallible<HostCase> {
     // A ramp from -4 to 4 crosses zero without landing on it.
     let last = (n.max(2) - 1) as f32;
     let ramp: Vec<f32> = (0..n).map(|i| -4.0 + 8.0 * (i as f32) / last).collect();
     let case = match desc.decl.as_str() {
-        "relu" => HostCase {
+        "relu" | "relu_any" => HostCase {
             buffers: vec![ramp.clone(), vec![0.0; n]],
             checked: 1,
             expected: ramp
@@ -491,7 +521,7 @@ fn host_model(desc: &TileExportDesc, n: usize) -> Fallible<HostCase> {
             expected: ramp.iter().map(|x| x * 0.5).collect(),
             what: "the ramp scaled in place by 0.5",
         },
-        "warp_sum" => {
+        "warp_sum" | "warp_sum_any" => {
             let lanes: Vec<f32> = (0..n).map(|i| i as f32).collect();
             let expected = (0..n)
                 .map(|i| {
@@ -525,7 +555,7 @@ fn check_export(
     module: &Arc<CudaModule>,
     desc: &TileExportDesc,
 ) -> Fallible<()> {
-    let n = usize::try_from(desc.shape[0])?;
+    let n = usize::try_from(demo_extent(desc))?;
     let footprint = usize::try_from(desc.params[0].footprint)?;
     if n % footprint != 0 {
         return Err(format!(

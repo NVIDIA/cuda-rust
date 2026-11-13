@@ -170,6 +170,8 @@ fn acquire_key_lock(paths: &CachePaths) -> io::Result<File> {
         .write(true)
         .truncate(false)
         .open(&paths.lock)?;
+    #[cfg(test)]
+    tests::arrive_at_key_lock(&paths.lock);
     lock.lock()?;
     Ok(lock)
 }
@@ -292,13 +294,15 @@ fn read_regular_file_exact(path: &Path, expected_length: u64) -> io::Result<Vec<
         // prevent an aarch64 cache read from following a symlink.
         options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     let file = options.open(path).map_err(|error| {
-        #[cfg(any(target_os = "linux", target_os = "android"))]
         if error.raw_os_error() == Some(libc::ELOOP) {
             return io::Error::new(io::ErrorKind::InvalidData, "cache artifact is a symlink");
         }
         error
     })?;
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    let file = options.open(path)?;
     let metadata = file.metadata()?;
     if !metadata.is_file() || metadata.len() != expected_length {
         return Err(io::Error::new(
@@ -504,8 +508,15 @@ fn write_synced_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     file.sync_all()
 }
 
+#[cfg(unix)]
 fn sync_directory(path: &Path) -> io::Result<()> {
     File::open(path)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_directory(path: &Path) -> io::Result<()> {
+    let _ = fs::metadata(path)?;
+    Ok(())
 }
 
 fn remove_cache_path_if_present(path: &Path) -> io::Result<()> {
@@ -573,11 +584,40 @@ fn hex_digest(digest: &[u8; DIGEST_LENGTH]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Barrier};
+    use std::sync::{Arc, Condvar, Mutex};
     use std::thread;
     use std::time::Duration;
 
     static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
+
+    /// Lock paths, one entry per thread that has reached that key's lock.
+    static KEY_LOCK_ARRIVALS: (Mutex<Vec<PathBuf>>, Condvar) =
+        (Mutex::new(Vec::new()), Condvar::new());
+
+    pub(super) fn arrive_at_key_lock(lock: &Path) {
+        let (arrivals, arrived) = &KEY_LOCK_ARRIVALS;
+        arrivals.lock().unwrap().push(lock.to_path_buf());
+        arrived.notify_all();
+    }
+
+    /// Block until `count` threads have reached `lock`. The watchdog only
+    /// stops a hang; expiring fails the test with the number that arrived.
+    fn wait_for_key_lock_arrivals(lock: &Path, count: usize) {
+        let arrived_at = |arrivals: &Vec<PathBuf>| arrivals.iter().filter(|p| *p == lock).count();
+        let (arrivals, arrived) = &KEY_LOCK_ARRIVALS;
+        let (arrivals, wait) = arrived
+            .wait_timeout_while(
+                arrivals.lock().unwrap(),
+                Duration::from_secs(60),
+                |arrivals| arrived_at(arrivals) < count,
+            )
+            .unwrap();
+        assert!(
+            !wait.timed_out(),
+            "only {} of {count} threads reached the key lock",
+            arrived_at(&arrivals)
+        );
+    }
 
     struct TestDirectory(PathBuf);
 
@@ -900,19 +940,19 @@ mod tests {
     fn same_key_concurrency_builds_once() {
         let dir = Arc::new(TestDirectory::new("concurrent"));
         let key = test_key();
+        let lock = Arc::new(CachePaths::new(dir.path(), &key).lock);
         let builds = Arc::new(AtomicU64::new(0));
-        let barrier = Arc::new(Barrier::new(8));
         let mut threads = Vec::new();
 
         for _ in 0..8 {
             let dir = Arc::clone(&dir);
+            let lock = Arc::clone(&lock);
             let builds = Arc::clone(&builds);
-            let barrier = Arc::clone(&barrier);
             threads.push(thread::spawn(move || {
-                barrier.wait();
                 cache_or_build(dir.path(), &key, || {
                     builds.fetch_add(1, Ordering::Relaxed);
-                    thread::sleep(Duration::from_millis(30));
+                    // Publish nothing until every thread contends for the lock.
+                    wait_for_key_lock_arrivals(&lock, 8);
                     Ok::<_, ()>(artifacts(12))
                 })
                 .unwrap()

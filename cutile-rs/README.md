@@ -71,10 +71,15 @@ grid `(8, 1, 1)`: 1024÷128 = 8 tiles.
 
 - Run a similar example via `cargo run -p cutile-examples --example saxpy`.
 - [More kernel and host API examples](https://github.com/NVIDIA/cuda-rust/tree/main/cutile-rs/cutile-examples/examples).
+- [Reusable kernel catalog](cutile-kernels/README.md), including fused QKV and
+  NVFP4 MoE, with [runnable examples](cutile-examples/README.md).
 - For NVIDIA Nsight Compute, Nsight Systems, and cuda-gdb workflows, see
   [Debugging and Profiling](https://nvidia.github.io/cuda-rust/cutile/latest/guide/debugging-and-profiling.html).
 
 ## Setup
+
+Run the Cargo, Nix, and script commands below from `cutile-rs/`. It is a
+separate workspace from the shared host crates at the monorepo root.
 
 ### Requirements
 
@@ -95,7 +100,9 @@ GPU and emitted Tile IR requirements for cuTile Rust:
 For DGX Spark / GB10 (`sm_121`), see the
 [DGX Spark tutorial](https://nvidia.github.io/cuda-rust/cutile/latest/tutorials/12-dgx-spark-inference.html).
 
-CUDA **13.3 is recommended**. FP4 packing and block-scaled MMA require 13.3.
+CUDA **13.5 is recommended** for the latest Tile IR compiler optimizations.
+FP4 packing and block-scaled MMA require Tile IR 13.3 or newer; the minimum
+requirements in the tables remain unchanged.
 GPUs below `sm_80` (such as `sm_70` and `sm_75`) are unsupported.
 
 ### Feature requirements
@@ -117,7 +124,6 @@ JIT error before assembly.
 | Saturating float-to-int, `ptr_attr<none>`, load/store view `inbounds` | Tile IR 13.4 |
 | Unicast/multicast pointers and multicast view operations | Tile IR 13.5 and `sm_100` / `sm_103` / `sm_107`; NVLink SHARP-capable fabric |
 | Atomic view `inbounds` | Tile IR 13.5 |
-| TMA data-validity checks | Tile IR 13.5 and `sm_107` only |
 | Condition likelihood hints | Tile IR 13.5 |
 | Minimum CTAs per SM | Tile IR 13.5 |
 | `f8e5m3fnu` | Tile IR 13.4 and `sm_107+` |
@@ -142,12 +148,12 @@ rustup default stable
 
 #### CUDA
 
-Install CUDA 13.3 for your OS by following the official instructions:
+Install CUDA 13.5 for your OS by following the official instructions:
 https://developer.nvidia.com/cuda-downloads
 
 ### Configure Environment
 
-Set `CUDA_TOOLKIT_PATH` (or `CUDA_HOME`, consulted second) to your CUDA 13.3
+Set `CUDA_TOOLKIT_PATH` (or `CUDA_HOME`, consulted second) to your CUDA 13.5
 install directory for a reproducible setup. If neither is set, cuTile
 searches standard CUDA 13.5/13.4/13.3/13.2 install locations such as
 `/usr/local/cuda-13.5`, `/usr/local/cuda-13.4`, `/usr/local/cuda-13.3`, `/usr/local/cuda-13.2`, `/usr/local/cuda-13`,
@@ -197,6 +203,9 @@ nix develop
 ```
 
 The flake automatically locates host NVIDIA driver libraries on both NixOS and non-NixOS systems.
+It currently pins an older nightly and CUDA 13.3 independently of the workspace's
+stable `rust-toolchain.toml`. For CUDA 13.5 performance evaluation, use the
+explicit toolkit setup above and record the compiler selected in your environment.
 
 ## Tests
 - cuTile IR: `cargo test --package cutile-ir`

@@ -160,6 +160,7 @@ print_header "Running GPU tests"
 for test_target in \
     arange \
     autotune \
+    pipeline_preparation \
     do_bench \
     dtype_float_ops \
     gpu_execution_ops \
@@ -192,6 +193,10 @@ run_gpu_step \
 run_gpu_step \
     "cutile GPU warmup and disk-cache tests" \
     gpu_test tile cutile warmup_suite
+
+run_gpu_step \
+    "reusable split-prefill and persistent RMSNorm kernels" \
+    gpu_test tile cutile-kernels gpu --ignored --serial
 
 run_gpu_step \
     "cutile GPU aggregate tests" \
@@ -254,8 +259,16 @@ do
 done
 
 run_gpu_step \
+    "cuda-core driver fence unit tests" \
+    gpu_test host cuda-core lib --filter gpu_fence_tests --ignored
+
+run_gpu_step \
     "cuda-async unit tests (with live driver)" \
     gpu_test host cuda-async lib
+
+run_gpu_step \
+    "cuda-async execute-once contention unit test" \
+    gpu_test host cuda-async lib --filter execute_once_wait_tests --ignored
 
 # Include the GPU-requiring `cuda_tests` module that the CPU path skips.
 # The bindgen regression runs in run_cpu_tests.sh: it invokes libclang, which

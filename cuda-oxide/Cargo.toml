@@ -4,10 +4,11 @@ members = [
     # CuTe frontend and semantic IR shared by every CuTe backend.
     "cute-rs-preview/cute-layout",
     "cute-rs-preview/cute-rs",
-    "cute-rs-preview/ctm-rs",
+    "cute-rs-preview/cutlass-primitives",
     "cute-rs-preview/dialect-cute",
     # Core crates
     "crates/cuda-target-spec",
+    "crates/cuda-toolkit-discovery",
     "crates/cuda-intrinsics",
     "crates/cuda-intrinsics-gen",
     "crates/ptx-parse",
@@ -32,6 +33,8 @@ members = [
     "crates/oxide-artifacts",
     "crates/oxide-tile-export",
     "crates/oxide-tilebc",
+    "crates/oxide-tile-provider-sys",
+    "crates/oxide-tile-provider",
     # FFI bindings
     "crates/libnvvm-sys",
     "crates/nvjitlink-sys",
@@ -70,12 +73,13 @@ pliron-llvm = { version = "=0.20.0", default-features = false, features = [
 
 # Internal crates
 cuda-target-spec = { path = "crates/cuda-target-spec" }
+cuda-toolkit-discovery = { path = "crates/cuda-toolkit-discovery" }
 llvm-export = { path = "crates/llvm-export" }
 # Published printer; version-specific compatibility stays in the export adapter.
 pliron-mlir-interop = { version = "=0.1.0" }
 cuda-oxide-mlir-export = { path = "crates/cuda-oxide-mlir-export" }
 cute-layout = { path = "cute-rs-preview/cute-layout" }
-ctm-rs = { path = "cute-rs-preview/ctm-rs" }
+cutlass-primitives = { path = "cute-rs-preview/cutlass-primitives" }
 dialect-cute = { path = "cute-rs-preview/dialect-cute" }
 dialect-mir = { path = "crates/dialect-mir" }
 dialect-iket = { path = "crates/dialect-iket" }
@@ -120,6 +124,12 @@ oxide-tile-export = { path = "crates/oxide-tile-export" }
 # tile library's interface and implementation halves with it. Pure Rust, so
 # cargo-oxide stays toolkit-free.
 oxide-tilebc = { path = "crates/oxide-tilebc" }
+# Linkage provider: the Tile IR compiler's C ABI, bound at build time from a
+# header outside the tree (see crates/oxide-tile-provider-sys/README.md). The
+# runtime that uses it, crates/oxide-tile-provider, is not a dependency of any
+# member: `cargo oxide tilelib --provider` generates a crate that depends on
+# it by path.
+oxide-tile-provider-sys = { path = "crates/oxide-tile-provider-sys" }
 ptx-parse = { path = "crates/ptx-parse" }
 ptx-schedule = { path = "crates/ptx-schedule" }
 
@@ -138,6 +148,8 @@ half = "2.7"
 libloading = "0.8"
 object = { version = "0.36", default-features = false, features = ["read", "std", "write"] }
 sha2 = "0.10"
+# Build-time only: oxide-tile-provider-sys generates its bindings with it.
+bindgen = "0.72.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1"

@@ -81,6 +81,12 @@ pub struct GenerationConfig {
     /// Expected proportion of variables to be dumped
     #[serde(default = "var_dump_chance")]
     pub var_dump_chance: f32,
+
+    /// Number of scalar static allocations to make available to the generator.
+    ///
+    /// The default is zero so enabling static generation does not perturb existing seeds.
+    #[serde(default = "static_count")]
+    pub static_count: usize,
 }
 
 fn bb_max_len() -> usize {
@@ -109,6 +115,10 @@ fn max_args_count() -> usize {
 
 fn var_dump_chance() -> f32 {
     0.5
+}
+
+fn static_count() -> usize {
+    0
 }
 
 #[derive(Deserialize, Clone)]
@@ -177,4 +187,10 @@ impl Default for TyConfig {
 #[test]
 fn example_parses() {
     let _ = load("../config.toml.example");
+}
+
+#[test]
+fn static_count_defaults_to_zero() {
+    let config: Config = toml::from_str("[backends]\n").unwrap();
+    assert_eq!(config.generation.static_count, 0);
 }

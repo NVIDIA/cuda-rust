@@ -129,6 +129,28 @@ fn parse_cuda_tile_pointer_type() {
 }
 
 #[test]
+fn parse_simt_fragment_with_preview_enabled() {
+    unsafe {
+        let ctx = make_context();
+        assert!(mlirCudaTileContextSetPreviewFeatures(
+            ctx,
+            string_ref(b"simt")
+        ));
+        let ty = type_parse(
+            ctx,
+            "!cuda_tile.preview$fragment<1xf32, local, \
+             mem_layout = #cuda_tile.preview$layout<(1):(1)>, \
+             fragmap = #cuda_tile.preview$layout<(1, 32, 1):(0, 1, 0)>>",
+        )
+        .expect("SIMT fragment type should parse with preview enabled");
+        assert!(mlirCudaTileTypeIsAFragmentType(ty));
+        assert_eq!(mlirCudaTileFragmentTypeGetRank(ty), 1);
+        assert_eq!(mlirCudaTileFragmentTypeGetDimSize(ty, 0), 1);
+        mlirContextDestroy(ctx);
+    }
+}
+
+#[test]
 fn parse_integer_attribute() {
     unsafe {
         let ctx = make_context();

@@ -109,6 +109,26 @@ mod kernels {
 // HOST CODE
 // =============================================================================
 
+/// Queries the active CUDA device for `CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS`
+/// (system-allocated pageable host memory access via HMM).
+fn supports_pageable_host_memory() -> bool {
+    unsafe {
+        let mut device = 0;
+        if cuda_core::sys::cuCtxGetDevice(&mut device)
+            != cuda_core::sys::cudaError_enum_CUDA_SUCCESS
+        {
+            return false;
+        }
+        let mut value = 0i32;
+        cuda_core::sys::cuDeviceGetAttribute(
+            &mut value,
+            cuda_core::sys::CUdevice_attribute_enum_CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS,
+            device,
+        ) == cuda_core::sys::cudaError_enum_CUDA_SUCCESS
+            && value != 0
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== HMM (Heterogeneous Memory Management) Test ===");
     println!("=== GPU Direct Access to Host Memory ===\n");
@@ -116,16 +136,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ctx = CudaContext::new(0)?;
     let stream = ctx.default_stream();
 
-    println!("HMM Support: YES ✓ (verified via nvidia-smi)");
+    let module = kernels::load(&ctx)
+        .map_err(|err| format!("failed to load abi_hmm kernel module: {err}"))?;
+
+    if !supports_pageable_host_memory() {
+        println!(
+            "skipping: device/OS does not support pageable host memory access (CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS = 0)"
+        );
+        return Ok(());
+    }
+
+    println!("HMM Support: YES ✓ (CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS = 1)");
 
     println!("\nHost Layout for Extreme:");
     println!("  sizeof(Extreme)  = {}", std::mem::size_of::<Extreme>());
     println!("  alignof(Extreme) = {}", std::mem::align_of::<Extreme>());
     println!("  offsetof(a)      = {}", std::mem::offset_of!(Extreme, a));
     println!("  offsetof(b)      = {}", std::mem::offset_of!(Extreme, b));
-
-    let module = kernels::load(&ctx)
-        .map_err(|err| format!("failed to load abi_hmm kernel module: {err}"))?;
 
     let mut failed = false;
 

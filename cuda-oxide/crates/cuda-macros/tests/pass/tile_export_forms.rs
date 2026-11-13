@@ -52,6 +52,18 @@ pub fn widen(x: u8, y: i64) -> u64 {
     (x as u64).wrapping_add(y as u64)
 }
 
+// No tile_shape: the call supplies the extent, and only the provider form
+// of the library ships the implementation.
+#[tile_export]
+pub fn relu_any(x: f32) -> f32 {
+    if x > 0.0 { x } else { 0.0 }
+}
+
+#[tile_export(sync = "warp", name = "warp_sum_any")]
+pub fn warp_sum_parametric(x: f32) -> f32 {
+    x
+}
+
 mod nested {
     use cuda_device::tile_export;
 

@@ -9,7 +9,7 @@ description = "SM120a: FP16 prefill and FMHA with warp MMA and online softmax in
 
 [dependencies]
 cute-rs = { path = "../../cute-rs" }
-ctm-rs = { path = "../../ctm-rs" }
+cutlass-primitives = { path = "../../cutlass-primitives" }
 # CTM reexports kernel macros, whose expansions still name ::cuda_device.
 cuda-device = { path = "../../../crates/cuda-device" }
 cuda-host = { path = "../../../crates/cuda-host" }

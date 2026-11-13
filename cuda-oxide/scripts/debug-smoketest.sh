@@ -160,10 +160,18 @@ if [ "$EXAMPLE" = "debug_pointer_locals" ]; then
         -ex 'whatis fptr' \
         -ex 'echo CUDA_OXIDE_NULL_PTR_TYPE\n' \
         -ex 'whatis null_ptr' \
+        -ex 'echo CUDA_OXIDE_PARAM_REF_TYPE\n' \
+        -ex 'whatis param_ref' \
+        -ex 'echo CUDA_OXIDE_PARAM_PTR_TYPE\n' \
+        -ex 'whatis param_ptr' \
         -ex 'printf "CUDA_OXIDE_PTR_ADDRESS=%p\n", ptr' \
         -ex 'printf "CUDA_OXIDE_FPTR_ADDRESS=%p\n", fptr' \
         -ex 'printf "CUDA_OXIDE_PTR_POINTEE=%d\n", *ptr' \
         -ex 'printf "CUDA_OXIDE_FPTR_POINTEE=%g\n", *fptr' \
+        -ex 'printf "CUDA_OXIDE_PARAM_REF_SCALE=%g\n", param_ref.scale' \
+        -ex 'printf "CUDA_OXIDE_PARAM_PTR_OFFSET=%g\n", (*param_ptr).offset' \
+        -ex 'printf "CUDA_OXIDE_DEEP8_SIZE=%u\n", sizeof(b8)' \
+        -ex 'p b8' \
         -ex 'printf "CUDA_OXIDE_NULL_PTR=%p\n", null_ptr' \
         -ex 'backtrace' \
         -ex 'kill' \
@@ -313,6 +321,20 @@ if [ "$EXAMPLE" = "debug_pointer_locals" ]; then
     grep -A1 '^CUDA_OXIDE_NULL_PTR_TYPE$' "$GDB_LOG" \
         | grep -Eq '^type = (&i32|\*const i32|\*mut i32)$' \
         || { echo "debug-smoketest: FAIL (null_ptr is not a Rust pointer-shaped i32 type)"; fail=1; }
+    grep -A1 '^CUDA_OXIDE_PARAM_REF_TYPE$' "$GDB_LOG" \
+        | grep -Eq '^type = (&Params|\*const Params|\*mut Params)$' \
+        || { echo "debug-smoketest: FAIL (param_ref is not a Rust pointer-shaped Params type)"; fail=1; }
+    grep -A1 '^CUDA_OXIDE_PARAM_PTR_TYPE$' "$GDB_LOG" \
+        | grep -Eq '^type = (&Params|\*const Params|\*mut Params)$' \
+        || { echo "debug-smoketest: FAIL (param_ptr is not a Rust pointer-shaped Params type)"; fail=1; }
+    grep -Eq '^CUDA_OXIDE_PARAM_REF_SCALE=2([.]0*)?$' "$GDB_LOG" \
+        || { echo "debug-smoketest: FAIL (param_ref.scale is not 2.0)"; fail=1; }
+    grep -Eq '^CUDA_OXIDE_PARAM_PTR_OFFSET=3([.]0*)?$' "$GDB_LOG" \
+        || { echo "debug-smoketest: FAIL ((*param_ptr).offset is not 3.0)"; fail=1; }
+    grep -q '^CUDA_OXIDE_DEEP8_SIZE=8$' "$GDB_LOG" \
+        || { echo "debug-smoketest: FAIL (sizeof(b8) is not 8)"; fail=1; }
+    grep -Fq 'Deep8 {top: 7, nested: L8 {0: L7 {0: L6 {0: L5 {0: L4 {0: L3 {0: L2 {0: L1 {0: 21}}}}}}}}}' "$GDB_LOG" \
+        || { echo "debug-smoketest: FAIL (b8 did not preserve all 8 nested levels down to L1(21))"; fail=1; }
 elif [ "$EXAMPLE" = "device_global" ]; then
     grep -Fq 'The current source language is "auto; currently rust".' "$GDB_LOG" \
         || { echo "debug-smoketest: FAIL (device-global lookup is not using Rust language mode)"; fail=1; }

@@ -64,6 +64,9 @@ usage() {
 # Print every example Cargo.lock path (top-level workspaces and nested
 # device workspaces alike), one per line.
 all_locks() {
+    # Crates that tooling generates under an example's target directory
+    # (`cargo oxide tilelib --provider` writes one) are build products with
+    # their own locks, not example workspaces.
     find "${EXAMPLES_ROOTS[@]}" -type d \( -name target -o -name .oxide-artifacts \) -prune \
         -o -name Cargo.lock -print | sort
 }

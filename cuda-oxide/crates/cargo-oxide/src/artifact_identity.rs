@@ -140,22 +140,25 @@ fn normalize_features(features: Option<&str>) -> io::Result<Vec<&str>> {
 }
 
 fn parse_depfile(contents: &str) -> io::Result<Vec<PathBuf>> {
-    let Some((_, dependencies)) = contents.split_once(':') else {
+    let Some(dependencies) = split_depfile_target(contents) else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "artifact dependency file has no target separator",
         ));
     };
-    let dependencies = dependencies.replace("\\\n", "");
+    let dependencies = dependencies.replace("\\\r\n", "").replace("\\\n", "");
     let mut paths = Vec::new();
     let mut current = String::new();
-    let mut escaped = false;
-    for character in dependencies.chars() {
-        if escaped {
-            current.push(character);
-            escaped = false;
-        } else if character == '\\' {
-            escaped = true;
+    let mut chars = dependencies.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character == '\\' {
+            if let Some(&next) = chars.peek()
+                && (next.is_whitespace() || next == ':')
+            {
+                current.push(chars.next().unwrap());
+            } else {
+                current.push('\\');
+            }
         } else if character.is_whitespace() {
             if !current.is_empty() {
                 paths.push(PathBuf::from(std::mem::take(&mut current)));
@@ -164,13 +167,31 @@ fn parse_depfile(contents: &str) -> io::Result<Vec<PathBuf>> {
             current.push(character);
         }
     }
-    if escaped {
-        current.push('\\');
-    }
     if !current.is_empty() {
         paths.push(PathBuf::from(current));
     }
     Ok(paths)
+}
+
+/// Splits `<target>: <dependencies>` at the Makefile target separator without
+/// mistaking a Windows drive-letter prefix (`C:\...`) for the separator.
+fn split_depfile_target(contents: &str) -> Option<&str> {
+    let bytes = contents.as_bytes();
+    for (index, &byte) in bytes.iter().enumerate() {
+        if byte != b':' {
+            continue;
+        }
+        let next = bytes.get(index + 1).copied();
+        let is_drive_letter =
+            index == 1 && bytes[0].is_ascii_alphabetic() && matches!(next, Some(b'\\' | b'/'));
+        if is_drive_letter {
+            continue;
+        }
+        if next.is_none_or(|ch| ch.is_ascii_whitespace()) {
+            return Some(&contents[index + 1..]);
+        }
+    }
+    None
 }
 
 fn is_identity_source(path: &Path, cargo_target_dir: &Path) -> bool {
@@ -218,7 +239,7 @@ fn relative_path(base: &Path, target: &Path) -> PathBuf {
 }
 
 fn path_text(path: &Path) -> io::Result<String> {
-    path.to_str().map(str::to_owned).ok_or_else(|| {
+    path.to_str().map(|s| s.replace('\\', "/")).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             "artifact identity source path is not valid UTF-8",
@@ -268,6 +289,16 @@ mod tests {
                 PathBuf::from("src/lib.rs"),
                 PathBuf::from("../catalog/a.rs"),
                 PathBuf::from("path with spaces/b.rs"),
+            ]
+        );
+        let windows_paths = parse_depfile(
+            "C:\\repo\\target\\release\\deps\\foo.d: C:\\repo\\src\\lib.rs C:\\Program\\ Files\\mod.rs\r\n",
+        )?;
+        assert_eq!(
+            windows_paths,
+            vec![
+                PathBuf::from("C:\\repo\\src\\lib.rs"),
+                PathBuf::from("C:\\Program Files\\mod.rs"),
             ]
         );
         Ok(())

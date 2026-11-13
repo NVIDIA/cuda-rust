@@ -696,9 +696,9 @@ pub(crate) fn record_backend_compile() {
 /// processes that share one cache directory. With `cutile`'s in-memory cache in
 /// front, the invariant
 /// `jit_compile_count() == jit_backend_compile_count() + jit_disk_hit_count()`
-/// holds only within a single process and only when no cached cubin is rejected
-/// by the driver: on that fallback one in-memory miss both hits the disk and
-/// recompiles, so the right side runs one ahead. Across processes, two racing
+/// applies only without CPU-only preparation or failed installations and when
+/// no cached cubin is rejected by the driver: on that fallback one in-memory
+/// miss both hits the disk and recompiles, so the right side runs one ahead. Across processes, two racing
 /// on the same key each compile and store (last write wins, one entry remains),
 /// which over-counts backend compiles by one per race but never under-counts.
 /// Direct calls to `run_tileiras` / `compile_tile_ir_module` (tests, tools)

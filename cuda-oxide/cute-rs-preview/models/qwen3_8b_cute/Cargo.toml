@@ -12,7 +12,7 @@ cuda-core = { path = "../../../../cuda-core" }
 cuda-device = { path = "../../../crates/cuda-device" }
 cuda-host = { path = "../../../crates/cuda-host" }
 cuda-macros = { path = "../../../crates/cuda-macros" }
-ctm-rs = { path = "../../ctm-rs" }
+cutlass-primitives = { path = "../../cutlass-primitives" }
 cute-rs = { path = "../../cute-rs", features = ["host"] }
 safetensors = "0.7"
 serde = { version = "1", features = ["derive"] }

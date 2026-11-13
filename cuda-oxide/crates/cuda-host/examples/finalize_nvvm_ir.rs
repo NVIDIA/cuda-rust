@@ -68,7 +68,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let options = FinalizationOptions::new(target.clone());
     let finalizer = Finalizer::discover()?;
     let provenance = finalizer.provenance();
-    let cubin = finalizer.materialize_nvvm_ir("example.ll", EXAMPLE_NVVM_IR, &options)?;
+    let cubin =
+        finalizer.materialize_nvvm_ir("example.ll", EXAMPLE_NVVM_IR, &options, &["kernel"])?;
     std::fs::write(&output_path, &cubin)?;
 
     let e_ident_version = cubin[6];

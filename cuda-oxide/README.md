@@ -147,13 +147,15 @@ cargo oxide update
 
 ## Setup
 
+For native Windows (`x86_64-pc-windows-msvc`), see the [Windows Setup guide](cuda-oxide-book/getting-started/windows.md) for Visual Studio Build Tools, CUDA Toolkit, `libclang`, `vcpkg` (`libffi`), and PowerShell instructions.
+
 ### Requirements
 
 - **cargo-oxide** — cargo subcommand that drives the build pipeline (`cargo oxide run`, `build`, `sanitize`, `debug`, etc.)
 - **Rust 1.99.1 (stable)** with `rust-src`, `rustc-dev`, and `llvm-tools` components (pinned in `rust-toolchain.toml`)
 - **CUDA Toolkit** (13.0+, including the cuRAND headers; `libcurand-dev` on Ubuntu). The shared `cuda-bindings` crate loads `libcuda` at run time and needs a CUDA 13.x driver (R580+)
 - **Clang + libclang dev headers** (`clang-21` / `libclang-common-21-dev`) — needed by `bindgen` when building the host `cuda-bindings` crate
-- **Linux** (tested on Ubuntu 24.04)
+- **Linux** (tested on Ubuntu 24.04) or **Windows x86_64 MSVC** (Windows 10 22H2 / Windows 11)
 
 ### Install
 
@@ -289,6 +291,7 @@ compiles a Rust kernel to PTX, launches it on the GPU, and prints
 | `mathdx_ffi_test`         | cuFFTDx thread-level FFT + cuBLASDx block-level GEMM                     |
 | `device_ffi_test`         | Device FFI: Rust kernels calling C++ CCCL warp-level reductions via LTOIR|
 | `async_vecadd`            | Async GPU execution with `cuda-async` and `DeviceOperation`              |
+| `cuda_graph`              | SIMT launches captured into a `CudaGraph`, replayed vs eager launches    |
 | `cross_crate_kernel`      | Library crates defining kernels, bundled into binaries                   |
 | `cuda_module_in_lib`      | `#[cuda_module]` in a library crate, loaded by embedded bundle name      |
 
@@ -306,7 +309,7 @@ cargo oxide run gemm_sol_final
 | `cuda-device`       | Device intrinsics (`thread::*`, `warp::*`, barriers)                      |
 | `cute-layout`       | CuTe-style layout algebra and coordinate mapping |
 | `cute-rs`           | Typed CuTe tensors, tiles, copies, pipelines, and MMA operations |
-| `ctm-rs`            | Typed instruction-level CUDA primitives |
+| `cutlass-primitives`            | Typed instruction-level CUDA primitives |
 | `cuda-intrinsics`   | Generated low-level CUDA intrinsic declarations                           |
 | `cuda-host`         | Typed module loading, launch helpers, LTOIR loader                        |
 | `cuda-macros`       | Proc macros (`#[cuda_module]`, `#[kernel]`, `gpu_printf!`)                |
@@ -344,9 +347,12 @@ cargo oxide run gemm_sol_final
 | `cargo-oxide`             | Cargo subcommand (`cargo oxide run`, etc.)                     |
 | `cuda-intrinsics-gen`     | Extractor and deterministic source generator for the intrinsics |
 | `cuda-artifact-finalizer` | Driver-independent NVVM IR, LTOIR, and PTX finalization         |
+| `cuda-toolkit-discovery`  | Workspace-private CUDA Toolkit discovery for Linux and Windows |
 | `oxide-artifacts`         | Architecture-neutral embedded device artifact metadata         |
 | `oxide-tile-export`       | Export descriptions shared by `cuda-macros`, the backend and `cargo-oxide`; part of the Tile IR interop work, not released yet |
 | `oxide-tilebc`            | Tile IR bytecode writer for those export descriptions |
+| `oxide-tile-provider-sys` | Raw bindings to the Tile IR linkage provider C ABI, generated from the compiler's header at build time |
+| `oxide-tile-provider`     | Runtime of a tile library that is a linkage provider: answers the assembler's callbacks from embedded descriptions and device code |
 | `reserved-oxide-symbols`  | Workspace-private `cuda_oxide_*` symbol-name contract          |
 | `fuzzer`                  | Differential codegen fuzzer support (rustlantis adapter)       |
 | `ptx-schedule`            | PTX schedule-perturbation fuzzing (nanosleep injection campaigns) |

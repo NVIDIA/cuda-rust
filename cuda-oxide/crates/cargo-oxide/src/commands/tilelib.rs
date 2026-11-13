@@ -4,19 +4,27 @@
  */
 
 //! `cargo oxide tilelib`: package a crate's `#[tile_export]` functions as a
-//! cuTile tile library.
+//! cuTile tile library, static or as a linkage provider.
 //!
 //! ```text
 //! emit-ltoir ──> <crate>.ltoir   <crate>.ll   <crate>.tileexports.json
 //!                                   │                  │
 //!             define @<symbol>(...) checked against abi_params()
 //!                                                      │
-//!                           TileExportDesc ──> oxide-tilebc Declaration + Implementation
+//!                           TileExportDesc ──> oxide_tilebc::describe (Declaration + Implementation)
 //!                                                      │
 //!                <crate>.iface.tilebc   <crate>.impl.tilebc   <crate>.tilelib.mlir
 //!                                                      │
-//!          tileiras --preview-create-tile-lib (lists 13.5 or newer) ──> <crate>.tilelib
+//!   static:    tileiras --preview-create-tile-lib iface + impl + ltoir ──> <crate>.tilelib
+//!   --provider: lib<crate>_provider.so (oxide-tile-provider + the crate's .ll)
+//!               tileiras --preview-create-tile-lib iface + .so ──> <crate>.tilelib
 //! ```
+//!
+//! An export with `tile_shape` is a static declaration at that extent. One
+//! without is parametric: the call supplies the extent and the Tile compiler
+//! asks for one implementation symbol per extent, which only the provider
+//! form can answer. The static form leaves parametric exports out and says
+//! so; `--provider` ships every export.
 //!
 //! The descriptions are Tile IR public-preview content, which exists from
 //! bytecode 13.5 on and which an assembler reads only at the version it
@@ -34,13 +42,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use oxide_tile_export::{
-    AbiParamKind, DESCRIPTIONS_SUFFIX, TileAccess, TileElem, TileExportDesc, TileSync,
-};
-use oxide_tilebc::{
-    Access, BytecodeVersion, Declaration, FragmentArg, FragmentType, Implementation, Layout,
-    Library, MemorySpace, ScalarType, Synchronization, TileArg, TileType,
-};
+use oxide_tile_export::{AbiParamKind, DESCRIPTIONS_SUFFIX, TileExportDesc};
+use oxide_tilebc::{BytecodeVersion, Declaration, Implementation, Library, describe};
 
 use super::*;
 
@@ -92,9 +95,12 @@ pub(super) const LIBRARY_SKIPPED_MARKER: &str = "Tile library skipped";
 /// interface and implementation bytecode plus a readable dump, and asks
 /// `tileiras --preview-create-tile-lib` for the library when the installed
 /// assembler lists bytecode 13.5 or newer, writing the descriptions at its
-/// current version. Exits 1 on any error, including a tileiras that cannot
-/// be run; exits 2 when no library could be created and `library_optional`
-/// was not passed.
+/// current version. With `provider` the library is a linkage provider: a
+/// shared object built from the `oxide-tile-provider` runtime and the
+/// crate's NVVM IR, which the assembler loads while it compiles a kernel,
+/// so exports without `tile_shape` can be served at any extent. Exits 1 on
+/// any error, including a tileiras that cannot be run; exits 2 when no
+/// library could be created and `library_optional` was not passed.
 #[allow(clippy::too_many_arguments)]
 pub fn tilelib(
     ctx: &Context,
@@ -102,6 +108,7 @@ pub fn tilelib(
     arch: &str,
     features: Option<&str>,
     output: Option<&Path>,
+    provider: bool,
     library_optional: bool,
     print: bool,
     verbose: bool,
@@ -159,16 +166,34 @@ pub fn tilelib(
 
     // Step 3: descriptions to Tile IR, verified the way the consumer will.
     let stem = artifact_stem(example);
-    let library = TileLibrary::from_descriptions(&descriptions)
-        .unwrap_or_else(|error| {
+    let tile_library =
+        TileLibrary::from_descriptions(&descriptions, provider).unwrap_or_else(|error| {
             eprintln!("Error: {error}");
             std::process::exit(1);
-        })
-        .library(&stem);
+        });
+    let library = tile_library.library(&stem);
     library.verify().unwrap_or_else(|error| {
         eprintln!("Error: the tile library does not verify: {error}");
         std::process::exit(1);
     });
+    if !tile_library.skipped.is_empty() {
+        println!();
+        println!(
+            "Left out of the static library: {} (no tile_shape, so the call supplies the extent); \
+             `cargo oxide tilelib --provider` ships {}",
+            tile_library
+                .skipped
+                .iter()
+                .map(|name| format!("`{name}`"))
+                .collect::<Vec<_>>()
+                .join(", "),
+            if tile_library.skipped.len() == 1 {
+                "it"
+            } else {
+                "them"
+            }
+        );
+    }
 
     // The assembler decides the bytecode version. Preview content is read
     // only at the version an assembler calls current (the newest numbered
@@ -218,7 +243,7 @@ pub fn tilelib(
     println!();
     println!(
         "✓ {DESCRIPTIONS_WRITTEN_MARKER}: {} export(s), Tile IR {version} with the preview tag",
-        descriptions.len(),
+        library.declarations.len(),
     );
     println!(
         "    {} ({} bytes)",
@@ -232,13 +257,44 @@ pub fn tilelib(
     );
     println!("    {} (readable form of both)", paths.dump.display());
 
-    // Step 4: the library itself, when the installed assembler can build one.
+    // Step 4 (provider form): the shared object the assembler will load. It
+    // is built whether or not an assembler can pack it, so a later toolkit
+    // can; its catalogs are written at the same version as the interface.
+    let shared_object = if provider {
+        let built = build_provider(ctx, &example_dir, &stem, &paths, version, verbose)
+            .unwrap_or_else(|error| {
+                eprintln!("Error: {error}");
+                std::process::exit(1);
+            });
+        let size = std::fs::metadata(&built.shared_object)
+            .map(|meta| meta.len())
+            .unwrap_or(0);
+        println!();
+        println!(
+            "✓ {PROVIDER_BUILT_MARKER} {} ({size} bytes)",
+            built.shared_object.display()
+        );
+        println!("    generated crate: {}", built.crate_dir.display());
+        Some(built.shared_object)
+    } else {
+        None
+    };
+
+    // Step 5: the library itself, when the installed assembler can build one.
     let (Some(tileiras), Some(version)) = (tileiras.as_deref(), library_version) else {
-        explain_no_library(&paths, tileiras.as_deref(), &versions);
+        explain_no_library(
+            &paths,
+            shared_object.as_deref(),
+            tileiras.as_deref(),
+            &versions,
+        );
         std::process::exit(no_library_exit_code(library_optional));
     };
 
-    let command = create_tile_lib_command(tileiras, &paths);
+    let command = match &shared_object {
+        Some(shared_object) => provider_tile_lib_command(tileiras, &paths, shared_object),
+        None => create_tile_lib_command(tileiras, &paths),
+    };
     println!();
     println!(
         "tileiras {} lists bytecode {version} as its current version; creating the tile library:",
@@ -351,168 +407,55 @@ pub(super) struct TileLibrary {
     pub(super) funcs: Vec<Declaration>,
     /// One `preview$extern_impl` per export.
     pub(super) impls: Vec<Implementation>,
+    /// Exports a static library cannot hold: those without `tile_shape`,
+    /// whose extent the call supplies. Empty for the provider form.
+    pub(super) skipped: Vec<String>,
 }
 
 impl TileLibrary {
-    /// Map every description; the first one that cannot be described stops
-    /// the command with its reason.
-    pub(super) fn from_descriptions(descriptions: &[TileExportDesc]) -> Result<Self, String> {
+    /// Map every description through `oxide_tilebc::describe`; the first
+    /// one that cannot be described stops the command with its reason. The
+    /// static form (`provider == false`) leaves parametric exports out and
+    /// lists them in `skipped`; it is an error when nothing is left.
+    pub(super) fn from_descriptions(
+        descriptions: &[TileExportDesc],
+        provider: bool,
+    ) -> Result<Self, String> {
         let mut funcs = Vec::with_capacity(descriptions.len());
         let mut impls = Vec::with_capacity(descriptions.len());
+        let mut skipped = Vec::new();
         for description in descriptions {
-            let (func, implementation) = describe_export(description)
-                .map_err(|error| format!("export `{}`: {error}", description.decl))?;
+            if !provider && description.is_parametric() {
+                skipped.push(description.decl.clone());
+                continue;
+            }
+            let (func, implementation) =
+                describe::export(description).map_err(|error| error.to_string())?;
             funcs.push(func);
             impls.push(implementation);
         }
-        Ok(Self { funcs, impls })
+        if funcs.is_empty() {
+            return Err(format!(
+                "every export ({}) names no tile_shape, so the call supplies the extent and \
+                 only a linkage provider can serve it; build the provider form with \
+                 `cargo oxide tilelib --provider`",
+                skipped
+                    .iter()
+                    .map(|name| format!("`{name}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        Ok(Self {
+            funcs,
+            impls,
+            skipped,
+        })
     }
 
     /// Both halves under one module name, ready to verify and write.
     pub(super) fn library(&self, name: &str) -> Library {
         Library::new(name, self.funcs.clone(), self.impls.clone())
-    }
-}
-
-/// One export as its declaration and its implementation.
-///
-/// Every parameter becomes a tile of the export's shape on the declaration
-/// and a fragment on the implementation: a by-value scalar is the rank-0
-/// `():()` buffer, everything else a contiguous footprint `(F):(1)`. The
-/// fragmap is shared by all parameters, see [`fragmap`]. A `bf16` scalar
-/// passed by value needs the `bf16 = i16` frontend ABI entry because
-/// cuda-device's bf16 is a `u16` wrapper, so the LLVM parameter is `i16`
-/// while the tile element is `bf16`.
-pub(super) fn describe_export(
-    desc: &TileExportDesc,
-) -> Result<(Declaration, Implementation), String> {
-    desc.validate().map_err(|error| error.to_string())?;
-    let tile_size = desc.shape[0];
-    // Every parameter is a fragment of a tile of the same shape and the
-    // fragmaps of one implementation share their invocation count, so the
-    // footprints have to agree: a 4-element window beside a scalar would
-    // need 32 invocations for one argument and 128 for the other.
-    let footprint = desc.params[0].footprint;
-    if let Some(other) = desc
-        .params
-        .iter()
-        .find(|param| param.footprint != footprint)
-    {
-        return Err(format!(
-            "parameters `{}` (footprint {}) and `{}` (footprint {}) differ; every parameter \
-             of one export shares the invocation count, so all footprints must be equal",
-            desc.params[0].name, footprint, other.name, other.footprint
-        ));
-    }
-    let mut args = Vec::with_capacity(desc.params.len());
-    let mut fragments = Vec::with_capacity(desc.params.len());
-    for param in &desc.params {
-        let element = scalar_type(param.elem);
-        let access = access(param.access);
-        args.push(TileArg::new(
-            param.name.clone(),
-            TileType::new(desc.shape.clone(), element),
-            access,
-        ));
-        let footprint = i64::from(param.footprint);
-        let fragmap = fragmap(desc.sync, tile_size, footprint)
-            .map_err(|error| format!("parameter `{}`: {error}", param.name))?;
-        let (shape, mem_layout) = if param.by_value {
-            (vec![1], Layout::scalar_mem())
-        } else {
-            (vec![footprint], Layout::contiguous_mem(footprint))
-        };
-        fragments.push(FragmentArg::new(
-            param.name.clone(),
-            FragmentType::new(shape, element, MemorySpace::Local, mem_layout, fragmap),
-            access,
-        ));
-    }
-    let mut implementation = Implementation::new(desc.symbol.clone(), desc.decl.clone(), fragments);
-    implementation.synchronization = synchronization(desc.sync);
-    implementation.arch = desc.arch.clone();
-    if desc
-        .params
-        .iter()
-        .any(|param| param.by_value && param.elem == TileElem::BF16)
-    {
-        implementation.frontend_abi = vec![("bf16".to_string(), "i16".to_string())];
-    }
-    Ok((Declaration::new(desc.decl.clone(), args), implementation))
-}
-
-/// How one invocation's footprint maps onto the tile.
-///
-/// Without synchronization every invocation owns `footprint` contiguous
-/// elements: `(N, 1, 1):(1, 0, 0)` for a footprint of one, `(N/F, 1, F):(F,
-/// 0, 1)` otherwise. With `sync = warp` the 32 lanes of a warp are the
-/// participants of one invocation: `(N/32, 32, 1):(32, 1, 0)` for a footprint
-/// of one, and `(N/(32F), 32, F):(32F, F, 1)` for a footprint of `F`, so each
-/// lane keeps a contiguous footprint and adjacent lanes are adjacent in the
-/// tile. The footprint must divide the tile size in either case.
-pub(super) fn fragmap(sync: TileSync, tile_size: i64, footprint: i64) -> Result<Layout, String> {
-    if footprint <= 0 {
-        return Err(format!("footprint {footprint} must be positive"));
-    }
-    if tile_size % footprint != 0 {
-        return Err(format!(
-            "footprint {footprint} does not divide the tile size {tile_size}"
-        ));
-    }
-    match sync {
-        TileSync::None if footprint == 1 => Ok(Layout::elementwise(tile_size)),
-        TileSync::None => Ok(Layout::footprint_blocks(tile_size, footprint)),
-        TileSync::Warp => {
-            let per_warp = 32 * footprint;
-            if tile_size % per_warp != 0 {
-                return Err(format!(
-                    "sync = warp with footprint {footprint} needs a tile size that is a \
-                     multiple of {per_warp}, found {tile_size}"
-                ));
-            }
-            if footprint == 1 {
-                Ok(Layout::warp_lanes(tile_size))
-            } else {
-                Ok(Layout::flat(
-                    &[tile_size / per_warp, 32, footprint],
-                    &[per_warp, footprint, 1],
-                ))
-            }
-        }
-    }
-}
-
-/// Tile IR has no unsigned integers; the unsigned Rust types are the signless
-/// `iN` of the same width.
-fn scalar_type(elem: TileElem) -> ScalarType {
-    match elem {
-        TileElem::F16 => ScalarType::F16,
-        TileElem::BF16 => ScalarType::BF16,
-        TileElem::F32 => ScalarType::F32,
-        TileElem::F64 => ScalarType::F64,
-        TileElem::I8 | TileElem::U8 => ScalarType::I8,
-        TileElem::I16 | TileElem::U16 => ScalarType::I16,
-        TileElem::I32 | TileElem::U32 => ScalarType::I32,
-        TileElem::I64 | TileElem::U64 => ScalarType::I64,
-    }
-}
-
-fn access(access: TileAccess) -> Access {
-    match access {
-        TileAccess::In => Access::In,
-        TileAccess::Out => Access::Out,
-        TileAccess::InOut => Access::InOut,
-    }
-}
-
-/// The implementation's `synchronization` clause. An export without `sync`
-/// gets no clause at all rather than an explicit `synchronization<none>`:
-/// the two mean the same thing, and leaving it out keeps the printed and
-/// written form identical to an upstream module parsed without the clause.
-fn synchronization(sync: TileSync) -> Option<Synchronization> {
-    match sync {
-        TileSync::None => None,
-        TileSync::Warp => Some(Synchronization::Warp),
     }
 }
 
@@ -863,6 +806,24 @@ pub(super) fn create_tile_lib_command(tileiras: &Path, paths: &TileLibraryPaths)
     ]
 }
 
+/// The `tileiras --preview-create-tile-lib` invocation for the provider
+/// form: the interface and the shared object, which must be the only
+/// implementation input.
+pub(super) fn provider_tile_lib_command(
+    tileiras: &Path,
+    paths: &TileLibraryPaths,
+    shared_object: &Path,
+) -> Vec<String> {
+    vec![
+        tileiras.display().to_string(),
+        "--preview-create-tile-lib".to_string(),
+        format!("--preview-interface={}", paths.interface.display()),
+        format!("--preview-implementation={}", shared_object.display()),
+        "-o".to_string(),
+        paths.library.display().to_string(),
+    ]
+}
+
 fn render_command(command: &[String]) -> String {
     command.join(" ")
 }
@@ -872,6 +833,7 @@ fn render_command(command: &[String]) -> String {
 /// needs to finish the job on a newer toolkit.
 fn explain_no_library(
     paths: &TileLibraryPaths,
+    shared_object: Option<&Path>,
     tileiras: Option<&Path>,
     versions: &[BytecodeVersion],
 ) {
@@ -911,8 +873,13 @@ fn explain_no_library(
         }
     }
     println!(
-        "The LTOIR and the descriptions were written to {}; a capable tileiras turns them \
+        "The {} and the descriptions were written to {}; a capable tileiras turns them \
          into {} with:",
+        if shared_object.is_some() {
+            "provider"
+        } else {
+            "LTOIR"
+        },
         paths
             .interface
             .parent()
@@ -921,8 +888,9 @@ fn explain_no_library(
         paths.library.display()
     );
     let placeholder = Path::new("tileiras");
-    println!(
-        "  {}",
-        render_command(&create_tile_lib_command(placeholder, paths))
-    );
+    let command = match shared_object {
+        Some(shared_object) => provider_tile_lib_command(placeholder, paths, shared_object),
+        None => create_tile_lib_command(placeholder, paths),
+    };
+    println!("  {}", render_command(&command));
 }

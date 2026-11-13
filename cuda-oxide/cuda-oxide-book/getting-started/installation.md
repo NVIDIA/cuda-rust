@@ -23,7 +23,7 @@ major version is older than the toolkit's (a 12.x driver with a 13.x build)
 fails the same way with a "driver too old" message.
 
 :::{note}
-cuda-oxide currently targets **Linux only**. Windows is not supported.
+This page covers **Linux** setup. For native **Windows (`x86_64-pc-windows-msvc`)** setup, see [Windows Setup](windows.md).
 :::
 
 ---
@@ -358,6 +358,7 @@ The full set, as `cargo oxide --help` reports it:
 | `sanitize` | Build and run an example or project under NVIDIA Compute Sanitizer |
 | `build` | Build an example or project (compile only, don't run) |
 | `fuzz-schedule` | Find schedule-sensitive failures by perturbing an example's generated PTX |
+| `tilelib` | Package a crate's `#[tile_export]` functions as a cuTile tile library |
 | `test` | Run Cargo tests through the cuda-oxide backend |
 | `emit-ltoir` | Compile a crate's device code to a binary LTOIR artifact in one step |
 | `pipeline` | Show the full compilation pipeline (MIR -> PTX/NVVM IR) with verbose output |
@@ -398,6 +399,17 @@ cargo oxide emit-ltoir my_kernels --arch sm_90
 
 Every command takes `--help`, which lists the flags each one accepts.
 
+### Optional host linker (`CUDA_OXIDE_LINKER=wild`)
+
+To link host ELF binaries with the [Wild linker](https://github.com/wild-linker/wild) instead of `rustc`'s default linker (`rust-lld`), install `wild` and set `CUDA_OXIDE_LINKER=wild`:
+
+```bash
+cargo install wild-linker
+CUDA_OXIDE_LINKER=wild cargo oxide run vecadd
+```
+
+You can also set `[env] CUDA_OXIDE_LINKER = "wild"` in `.cargo/cuda-oxide.toml`. `cargo-oxide` resolves `wild` on `PATH` and appends `-Clinker=clang -Clink-arg=--ld-path=<wild>` after user `RUSTFLAGS`. Device code generation and `.oxart` payload finalization (`libNVVM` / `nvJitLink`) are unaffected. Unset, empty, or `default` keeps `rustc`'s default linker, and any other value is an error.
+
 ---
 
 ## Verifying your installation
@@ -410,7 +422,8 @@ cargo oxide doctor
 
 `cargo oxide doctor` validates your Rust toolchain, CUDA headers (`cuda.h`),
 CUDA toolkit (including libNVVM / nvJitLink / libdevice for kernels that use
-math intrinsics), LLVM installation, NVIDIA driver / GPU, and codegen backend
+math intrinsics), LLVM installation, NVIDIA driver / GPU, codegen backend, and
+optional tools (`cuda-gdb`, `compute-sanitizer`, and the `wild` host linker)
 in one shot.
 
 `cargo-oxide` itself does not need the CUDA toolkit or an NVIDIA driver to

@@ -4180,17 +4180,6 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 builder = builder.attr("optimization_hints", hints);
             }
         }
-        if params.iter().any(|p| p == "valid_check") {
-            let value = compile_value(module, ctx, "valid_check")?
-                .bounds
-                .filter(|b| b.start == b.end)
-                .ok_or_else(|| {
-                    self.jit_error(&call.span(), "valid_check must be a compile-time boolean")
-                })?;
-            if value.start != 0 {
-                builder = builder.attr("valid_check", Attribute::Bool(true));
-            }
-        }
         if params.iter().any(|p| p == "inbounds") {
             let flags = compile_value(module, ctx, "inbounds")?
                 .values

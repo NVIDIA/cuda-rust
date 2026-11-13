@@ -121,14 +121,17 @@ fn collect_overlay_toml_files(
         } else if file_type.is_file()
             && path.extension().and_then(|extension| extension.to_str()) == Some("toml")
         {
-            let Some(relative) = path
-                .strip_prefix(intrinsics_root)
-                .ok()
-                .and_then(|relative| relative.to_str())
+            let Some(relative) = path.strip_prefix(intrinsics_root).ok() else {
+                continue;
+            };
+            let Some(segments) = relative
+                .iter()
+                .map(|segment| segment.to_str())
+                .collect::<Option<Vec<_>>>()
             else {
                 continue;
             };
-            found.push(relative.to_string());
+            found.push(segments.join("/"));
         }
     }
     Ok(())

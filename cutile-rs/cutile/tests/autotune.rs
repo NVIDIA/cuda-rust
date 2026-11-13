@@ -7,6 +7,9 @@
 
 #![cfg(feature = "experimental-tune")]
 
+#[path = "support/temp_dir.rs"]
+mod temp_dir;
+
 use cuda_core::Context;
 use cutile::bench::BenchOptions;
 use cutile::prelude::*;
@@ -37,8 +40,8 @@ fn end_to_end_grid_tune_on_gpu() {
         .map(|n| Config::new([("N", ParamValue::Int(n as i64))]))
         .collect();
 
-    let log = std::env::temp_dir().join(format!("cutile_autotune_test_{}", std::process::id()));
-    let _ = std::fs::remove_file(&log);
+    let directory = temp_dir::TempDir::new("cutile-autotune");
+    let log = directory.path().join("trials.jsonl");
 
     let setup_calls = AtomicUsize::new(0);
     let run = |log_path: &std::path::Path| {
@@ -201,7 +204,8 @@ fn record_end_to_end_with_real_l2_verification() {
         samples: 3,
         l2_key: Some(cutile::tune::L2Key::current(winner_key.clone())),
     });
-    let path = std::env::temp_dir().join(format!("cutile_record_gpu_{}.json", std::process::id()));
+    let directory = temp_dir::TempDir::new("cutile-record-gpu");
+    let path = directory.path().join("record.json");
     record.save(&path).expect("save");
 
     // Honest workspace + real recomputation: accepted, no warnings.

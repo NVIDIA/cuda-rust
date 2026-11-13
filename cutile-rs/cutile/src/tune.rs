@@ -18,6 +18,12 @@
 //! runs through [`crate::bench::do_bench`] (CUDA events, warmup, L2
 //! clearing, medians).
 //!
+//! For bounded CPU preparation overlapped with serialized GPU evaluation, use
+//! [`pipeline`]. That API has separate interruption/infrastructure outcomes and
+//! supports Bayesian, random or declared-order selection. Its `run` returns
+//! provisional observations; `run_confirmed` validates replacements with fresh
+//! paired measurements. It does not use the synchronous resume log.
+//!
 //! Principles, in order:
 //! - **Explicit opt-in, no magic.** Nothing tunes behind the programmer's
 //!   back; the search space is declared, the objective is programmer-written,
@@ -41,6 +47,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+pub mod pipeline;
 
 // ── Config ──────────────────────────────────────────────────────────────────
 
@@ -256,7 +264,7 @@ pub trait Objective {
 ///
 /// Implementations must treat the objective's budget as authoritative and must
 /// tolerate [`TrialState::Invalid`] trials. The library ships [`GridSearch`]
-/// (the default); a TPE searcher is planned as an explicit opt-in.
+/// (the default). Additional strategies remain explicit opt-ins.
 pub trait Searcher {
     /// Runs the search, returning every trial visited (in visit order).
     fn search(&mut self, objective: &mut dyn Objective) -> Vec<Trial>;

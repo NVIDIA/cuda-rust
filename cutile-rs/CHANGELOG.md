@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Removed
+
+- Remove `cutile::tileir::load_view_tko_valid_check` and
+  `cutile_ir::requirements::Feature::ValidityCheck`: validity checking is
+  unsupported by the public CUDA 13.5 tooling. Low-level IR containing the
+  `valid_check` attribute now reports an error instead of emitting unsupported
+  bytecode. Callers that passed `false` can use `cutile::core::load_view_raw`
+  with the final boolean argument removed; there is no supported replacement
+  for `true`. The Tile workspace moves to 0.6.0 for this API removal; shared host
+  crates remain at 0.5.0. Remove the corresponding documentation claims below.
+
+### Added
+
+- Add opt-in B200 profiles to the fused QKV and NVFP4 MoE examples. Add public
+  CTK 13.5 setup instructions, explicit large MoE fixture selection, focused
+  correctness runs and raw timing samples; retain the original default profiles.
+- Add optional cheap screening and budget-reserved paired confirmation to the
+  preparation pipeline. Preparation stops before fresh incumbent comparisons;
+  incomplete confirmation retains the incumbent and records raw samples and
+  failures. The RMSNorm autotune example uses this path. Confirmation defaults
+  are configurable repeatability heuristics, not statistical guarantees.
+- Ordinary launches can join CPU preparation of the same specialization and
+  load its binary on the launching thread. Retained prepared binaries are
+  reusable without explicit installation. Waiting callers have independent
+  cancellation, and interrupted or abandoned compilation remains retryable.
+- Add an opt-in autotuning preparation pipeline under `experimental-tune`,
+  separating CPU CUBIN compilation from foreground loading, correctness checks
+  and measurement. It defaults to one candidate ahead, supports bounded workers
+  and cooperative deadlines, and reports invalidity separately from timeouts
+  and infrastructure failures. Results require independent finalist confirmation;
+  the existing synchronous tuner and resume-log format are unchanged.
+- Refresh `cutile-kernels` from Grout with split-K prefill/merge, persistent
+  RMSNorm, and the remaining baseline and single-token variants. NVFP4 MoE
+  routing, quantization, FC1/FC2, and finalization kernels now live in the
+  reusable corpus and are shared by the example. Peak performance requires
+  the CUDA Toolkit 13.5 Tile IR assembler (#1746).
+- Add a reusable fused QKV projection, Q/K RMSNorm, FP8 conversion and paged
+  KV-scatter kernel, with a correctness example and opt-in CUDA graph benchmark
+  sweep. The initial schedule is not B200-tuned (#1746).
+
+### Documentation
+
+- Link the Tile library provider catalog and CUDA Oxide export workflow;
+  refresh kernel/example discovery, workspace paths, CUDA 13.5 setup, and
+  bytecode-version negotiation instructions (#1746).
+
+### Fixed
+
+- Keep masked QKV tail-row slot pointers in bounds, retaining the original
+  M=67 fixture and numerical checks under compiler-instrumented memcheck.
+- Update the optional `cuda-tile-rs` bindings and `cuda-tile-translate` build
+  from CUDA Tile IR 13.2 to the public 13.5 release, including SIMT preview
+  support and translator round-trip tests.
+
 ## [0.5.0] - 2026-11-04
 
 CUDA 13.5 tile-library calls and GPU communication, a shared Tile/SIMT host
@@ -20,7 +74,7 @@ runtime, and stronger memory-safety contracts.
   branches, loops, and wrappers; cache keys include library contents and declared
   provider dependencies/settings. See the [tile-library guide](https://github.com/NVIDIA/cuda-rust/blob/9dc26c50a8c90026bcd0dfa7dc4b36f189126946/cutile-rs/cutile-book/guide/tile-libraries.md).
 - **Unsafe communication:** unicast/multicast pointer classification, multicast
-  load-reduce/reduce/store, atomic-view inbounds promises, and TMA validity checks
+  load-reduce/reduce/store and atomic-view inbounds promises
   in `cutile::tileir`. System-scope signaling and alias fences support explicit
   synchronization. The [communication reference](https://github.com/NVIDIA/cuda-rust/blob/9dc26c50a8c90026bcd0dfa7dc4b36f189126946/cutile-rs/cutile-book/reference/unsafe-comms.md)
   includes a runnable unicast/multicast example.
@@ -78,7 +132,7 @@ updated value while preserving the caller's original immutable tile.
 
 Unicast/multicast target `sm_100`, `sm_103`, and `sm_107`: unicast needs NVLink;
 multicast additionally needs NVLink SHARP-capable NVSwitch. Callers establish
-mappings and synchronization. TMA `valid_check=true` is `sm_107` only. See the
+mappings and synchronization. See the
 [compatibility matrix](https://github.com/NVIDIA/cuda-rust/blob/9dc26c50a8c90026bcd0dfa7dc4b36f189126946/cutile-rs/cutile-book/reference/compatibility.md).
 Rust 1.89+ is required; the library builds on 1.89, and runtime validation used 1.98.0.
 

@@ -33,6 +33,7 @@ struct Access {
     write: bool,
     recording: bool,
     completion: Option<Arc<crate::Event>>,
+    ref_count: usize,
 }
 
 #[derive(Default)]
@@ -97,12 +98,19 @@ impl Accesses {
     }
 
     fn release(&mut self, id: u64) {
-        let Some(access) = self.active.remove(&id) else {
+        let Some(access) = self.active.get_mut(&id) else {
             return;
         };
         if access.recording {
             return;
         }
+
+        if access.ref_count > 1 {
+            access.ref_count -= 1;
+            return;
+        }
+
+        let access = self.active.remove(&id).unwrap();
         let stream_accesses = self
             .streams
             .get_mut(&access.stream)
@@ -133,6 +141,30 @@ impl Accesses {
                 cuda_bindings::cudaError_enum_CUDA_ERROR_NOT_READY,
             ));
         }
+
+        if !recording {
+            if let Some(accesses) = self.streams.get_mut(&stream) {
+                let existing_id = accesses.writers.iter().next().or_else(|| accesses.readers.iter().next());
+
+                if let Some(&id) = existing_id {
+                    let access = self.active.get_mut(&id).unwrap();
+
+                    access.ref_count += 1;
+
+                    if access.write || !write {
+                        return Ok(id);
+                    } else {
+                        access.write = true;
+                        self.readers -= 1;
+                        self.writers += 1;
+                        accesses.readers.remove(&id);
+                        accesses.writers.insert(id);
+                        return Ok(id);
+                    }
+                }
+            }
+        }
+
         let id = self.next_id.checked_add(1).ok_or(DriverError(
             cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_VALUE,
         ))?;
@@ -144,6 +176,7 @@ impl Accesses {
                 write,
                 recording,
                 completion: None,
+                ref_count: 1,
             },
         );
         if !recording {
@@ -158,7 +191,6 @@ impl Accesses {
         }
         Ok(id)
     }
-}
 
 enum Owner {
     Synchronous,

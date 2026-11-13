@@ -23,7 +23,7 @@ sec5_exp2_execution_mode_overhead/
   plot_part_a.py                 # writes exp2_execmode_latency.pdf
   plot_part_b.py                 # writes exp2_async_throughput.pdf
   launch_overhead_rust/
-    Cargo.toml                   # depends on published cuTile Rust crates 0.2.0
+    Cargo.toml                   # depends on crates from this checkout
     src/main.rs                  # Part A: execution-mode schedules
     src/bin/async_throughput.rs  # Part B: sync/async overlap
     results_part_a.csv           # checked-in Part A data
@@ -124,8 +124,10 @@ PIN_CPU=8 ./run_part_b.sh
   result.
 - `../lock_clocks.sh` is retained as a local reproduction helper; its default
   lock target is 2.4 GHz.
-- The Rust crate depends on the published cuTile Rust crates at version
-  `0.2.0`.
+- The Rust crate uses relative paths to the Tile and shared host crates in this
+  checkout. Record the repository revision with new measurements; the checked-in
+  CSVs retain their original measurements. Use `cargo build --release --locked
+  --bins` from `launch_overhead_rust/` to build both binaries with its lockfile.
 - The plot scripts default to `python3`. Set `PY=/path/to/python` if the
   plotting dependencies live in another environment.
 - Use `RESULTS_DIR=/tmp/...` and `FIGURES_DIR=/tmp/...` for smoke tests that

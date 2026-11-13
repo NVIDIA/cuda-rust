@@ -14,6 +14,9 @@ mod tile_ir_13_4;
 #[path = "gpu/static_tilelib.rs"]
 mod static_tilelib;
 
+#[path = "gpu/block_tile_ptr.rs"]
+mod block_tile_ptr;
+
 #[path = "gpu/tensor.rs"]
 mod tensor;
 

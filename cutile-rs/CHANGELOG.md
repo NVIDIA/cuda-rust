@@ -46,6 +46,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Add a reusable fused QKV projection, Q/K RMSNorm, FP8 conversion and paged
   KV-scatter kernel, with a correctness example and opt-in CUDA graph benchmark
   sweep. The initial schedule is not B200-tuned (#1746).
+- Foreign functions take global-memory pointer operands: a `*const E` or
+  `*mut E` parameter is a rank-0 `tile<ptr<E>>` operand. `block_tile_ptr` on a
+  mutable tensor gives the address of the current tile block's tile, as
+  `load` and `store` see it, with an `i64` offset. Unlike `load` and
+  `store`, a write through it is not masked to the tensor's bounds (#1749).
 
 ### Documentation
 
@@ -60,6 +65,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Update the optional `cuda-tile-rs` bindings and `cuda-tile-translate` build
   from CUDA Tile IR 13.2 to the public 13.5 release, including SIMT preview
   support and translator round-trip tests.
+- A kernel's in-memory cache key no longer holds the tile-library list as
+  written, only the digest of the resolved, de-duplicated libraries. A launch
+  that names a default library again, or names a library through another
+  path, used to compile the kernel a second time and load a second module,
+  with its own copy of every `Global` (#1749).
 
 ## [0.5.0] - 2026-11-04
 

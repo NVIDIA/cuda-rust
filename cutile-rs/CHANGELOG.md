@@ -47,6 +47,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   KV-scatter kernel, with a correctness example and opt-in CUDA graph benchmark
   sweep. The initial schedule is not B200-tuned (#1746).
 
+### Fixed
+
+- A kernel that imports from `cutile` while `cutile::core` is missing from the
+  module registry fails with an error that names the cause, instead of a later
+  "unable to resolve generic type" error. On `x86_64-pc-windows-gnu`, GNU ld's
+  `--gc-sections` drops the registry entries (#1605).
+
 ### Documentation
 
 - Link the Tile library provider catalog and CUDA Oxide export workflow;

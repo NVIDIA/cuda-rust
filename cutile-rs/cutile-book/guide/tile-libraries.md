@@ -262,17 +262,31 @@ pub unsafe fn load_from(src: *const f32) -> Tile<f32, { [32] }>;
     to 3, and needs a static tile shape. Unlike them, it does not mask the
     out-of-bounds part of a partial tile (see below).
   - `x.as_ptr()` (`*const E`) is the base of the whole view; offset it
-    with `PointerTile::offset` to reach a chunk:
+    with `PointerTile::offset` to reach a chunk.
+
+  Neither pointer carries the tensor's extent, so a kernel that passes them
+  to a library relies on whole, contiguous tiles that its launcher must
+  guarantee. Declare that kernel `unsafe fn`: its generated launcher is
+  then `unsafe` too, and the caller of the launch states the obligations:
 
   ```rust
+  /// # Safety
+  ///
+  /// - `y`'s extent is a multiple of 32, so every block's tile of `y` holds
+  ///   32 elements.
+  /// - `x` holds at least as many elements as `y`.
+  /// - `x` and `y` have stride 1, so each 32-element chunk is contiguous.
   #[cutile::entry()]
-  fn round_trip(x: &Tensor<f32, { [-1] }>, y: &mut Tensor<f32, { [32] }>) {
+  unsafe fn round_trip(x: &Tensor<f32, { [-1] }>, y: &mut Tensor<f32, { [32] }>) {
       let pid: (i32, i32, i32) = get_tile_block_id();
       // This block's chunk of the input.
       let base: PointerTile<*const f32, { [] }> = pointer_to_tile(x.as_ptr());
       let chunk: PointerTile<*const f32, { [] }> = base.offset(pid.0 * 32i32);
+      // SAFETY: the caller guarantees `x` holds this block's 32 contiguous
+      // elements.
       let t = unsafe { load_from(tile_to_pointer(chunk)) };
-      // This block's tile of `y`.
+      // SAFETY: the caller guarantees this block's tile of `y` holds 32
+      // contiguous elements, and no other block writes it.
       unsafe { store_to(t, y.block_tile_ptr()) };
   }
   ```

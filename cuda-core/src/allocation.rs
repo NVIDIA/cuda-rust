@@ -101,7 +101,9 @@ impl Accesses {
         let Some(access) = self.active.get_mut(&id) else {
             return;
         };
+
         if access.recording {
+            self.active.remove(&id);
             return;
         }
 

@@ -12,8 +12,10 @@
 //!
 //! The switch-side reduction semantics can only be exercised from device
 //! code (`multimem.ld_reduce` / `multimem.st`); that lives in the
-//! `nvls_all_reduce` example. Host code must not dereference the multicast
-//! mapping, so this test only establishes and tears it down.
+//! `nvls_all_reduce` example
+//! (`cuda-oxide/crates/rustc-codegen-cuda/examples/nvls_all_reduce/`).
+//! Host code must not dereference the multicast mapping, so this test only
+//! establishes and tears it down.
 //!
 //! Requires an NVLink-switch system (e.g. HGX H100/B200); skips elsewhere.
 

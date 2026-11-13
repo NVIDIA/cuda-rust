@@ -62,6 +62,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `scan_sum` and `scan` now emit the caller's `dim` and `identity`; both were
+  silently hardcoded to zero, so scans along any non-leading dimension of a
+  multi-dimensional tile computed the wrong axis. The closure `reduce` form
+  still reduces along dimension 0 only; the `reduce_*` intrinsics were
+  unaffected.
 - Keep masked QKV tail-row slot pointers in bounds, retaining the original
   M=67 fixture and numerical checks under compiler-instrumented memcheck.
 - Update the optional `cuda-tile-rs` bindings and `cuda-tile-translate` build

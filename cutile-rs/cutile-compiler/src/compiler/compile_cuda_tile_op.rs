@@ -2533,17 +2533,74 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         });
         let elem_scalar_scan =
             super::_type::scalar_from_name(&elem_ty_str).unwrap_or(cutile_ir::ir::ScalarType::I32);
-        let identities_attr = if elem_scalar_scan.is_float() {
-            Attribute::Array(vec![Attribute::Float(
-                0.0,
-                cutile_ir::ir::Type::Scalar(elem_scalar_scan),
-            )])
-        } else {
-            Attribute::Array(vec![Attribute::Integer(
-                0,
-                cutile_ir::ir::Type::Scalar(elem_scalar_scan),
-            )])
+        let scalar_ir_ty = cutile_ir::ir::Type::Scalar(elem_scalar_scan);
+
+        let dim = parse_expr_as_i32(&call_expr.args[1], generic_args);
+        if let TypeInstance::StructuredType(structured_type) = &operand_value.ty.type_instance {
+            let rank = structured_type.shape.len() as i32;
+            if dim < 0 || dim >= rank {
+                return self.jit_error_result(
+                    &call_expr.args[1].span(),
+                    &format!("scan dimension {dim} is out of range for a rank-{rank} tile"),
+                );
+            }
+        }
+
+        // The identity must be a numeric literal (optionally negated), matching
+        // the element type; it fills the lanes the scan direction has not
+        // reached yet.
+        let identity_expr = &call_expr.args[3];
+        let (identity_negated, identity_lit) = match identity_expr {
+            Expr::Unary(unary) if matches!(unary.op, UnOp::Neg(_)) => match unary.expr.as_ref() {
+                Expr::Lit(lit) => (true, &lit.lit),
+                _ => {
+                    return self.jit_error_result(
+                        &identity_expr.span(),
+                        "the scan identity must be a numeric literal",
+                    )
+                }
+            },
+            Expr::Lit(lit) => (false, &lit.lit),
+            _ => {
+                return self.jit_error_result(
+                    &identity_expr.span(),
+                    "the scan identity must be a numeric literal",
+                )
+            }
         };
+        let identity_attr = if elem_scalar_scan.is_float() {
+            let value = match identity_lit {
+                Lit::Float(lit) => lit.base10_parse::<f64>().ok(),
+                Lit::Int(lit) => lit.base10_parse::<f64>().ok(),
+                _ => None,
+            };
+            let Some(value) = value else {
+                return self.jit_error_result(
+                    &identity_expr.span(),
+                    "the scan identity must be a floating-point literal",
+                );
+            };
+            Attribute::Float(
+                if identity_negated { -value } else { value },
+                scalar_ir_ty.clone(),
+            )
+        } else {
+            let value = match identity_lit {
+                Lit::Int(lit) => lit.base10_parse::<i64>().ok(),
+                _ => None,
+            };
+            let Some(value) = value else {
+                return self.jit_error_result(
+                    &identity_expr.span(),
+                    "the scan identity must be an integer literal",
+                );
+            };
+            Attribute::Integer(
+                if identity_negated { -value } else { value },
+                scalar_ir_ty.clone(),
+            )
+        };
+        let identities_attr = Attribute::Array(vec![identity_attr]);
         let reverse = super::shared_utils::extract_zst_type_name(&call_expr.args[2], "reverse")?;
         let reverse_value = match reverse.as_str() {
             "Forward" => false,
@@ -2560,7 +2617,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             .result(result_ir_ty)
             .operand(operand_tile)
             .region(region_id)
-            .attr("dim", Attribute::i32(0))
+            .attr("dim", Attribute::i32(dim as i64))
             .attr("reverse", Attribute::Bool(reverse_value))
             .attr("identities", identities_attr)
             .build(module);

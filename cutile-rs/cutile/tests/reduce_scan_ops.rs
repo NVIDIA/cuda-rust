@@ -89,6 +89,15 @@ mod reduce_scan_ops_module {
         // Store the result
         output.store(prefix_products);
     }
+
+    #[cutile::entry()]
+    fn scan_sum_2d_dim1_kernel<const N: i32, const K: i32>(output: &mut Tensor<i32, { [N, K] }>) {
+        // A scan along a non-leading dimension: dim and identity must survive
+        // into the emitted scan op instead of being hardcoded to 0.
+        let tile: Tile<i32, { [N, K] }> = output.load_tile(const_shape![N, K], [0i32, 0i32]);
+        let prefix: Tile<i32, { [N, K] }> = scan_sum(tile, 1i32, reverse::Forward, 7i32);
+        output.store(prefix);
+    }
 }
 
 use reduce_scan_ops_module::__module_ast_self;
@@ -137,6 +146,31 @@ fn compile_scan_sum_test() {
         );
 
         println!("\n✓ scan_sum operation verified (with prefix sum scan region)");
+    });
+}
+
+#[test]
+fn compile_scan_sum_2d_dim1_test() {
+    common::with_test_stack(|| {
+        let module_op_str = compile_ir(
+            "scan_sum_2d_dim1_kernel",
+            &[8.to_string(), 4.to_string()],
+            &[("output", &[4, 1])],
+        );
+        println!("\n=== SCAN_SUM 2D DIM=1 MLIR ===\n{}", module_op_str);
+
+        // The requested dimension reaches the op (it was once hardcoded to 0,
+        // silently scanning the wrong axis of multi-dimensional tiles).
+        assert!(
+            module_op_str.contains("dim=1") || module_op_str.contains("dim = 1"),
+            "Expected dim=1 in scan operation.\n{module_op_str}"
+        );
+
+        // The caller's identity reaches the op as well.
+        assert!(
+            module_op_str.contains("identities=[7]") || module_op_str.contains("identities = [7]"),
+            "Expected identities=[7] in scan operation.\n{module_op_str}"
+        );
     });
 }
 

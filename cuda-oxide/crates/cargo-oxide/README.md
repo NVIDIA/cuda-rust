@@ -550,9 +550,47 @@ extra-rustflags = ["--cfg", "my_device_cfg"]
 MY_BUILD_FLAG = "1"
 ```
 
+A `[target.<triple>]` table adds an `extra-rustflags` list for one target
+triple, for flags such as `-C target-cpu` that only suit one kind of machine:
+
+```toml
+extra-rustflags = ["--cfg", "my_device_cfg"]   # every triple
+
+[target.x86_64-unknown-linux-gnu]
+extra-rustflags = ["-C", "target-cpu=znver3"]
+
+[target.aarch64-unknown-linux-gnu]
+extra-rustflags = ["-C", "target-cpu=native"]
+```
+
+A build gets the top-level list, then the list of the triple it builds for; a
+triple with no table gets the top-level list alone. The table's flags come
+after the top-level ones, and rustc keeps the last of repeated `-C` options,
+so a table's `-C target-cpu` replaces a top-level one. The triple is found in
+this order:
+
+1. a `--target <triple>` or `--target=<triple>` among the Cargo arguments
+   (before any `--`);
+2. else `CARGO_BUILD_TARGET`;
+3. else the `host:` line of `rustc -vV`, run as the build would run it: the
+   compiler is `RUSTC`, else `CARGO_BUILD_RUSTC`, else `rustc`, in the
+   command's directory.
+
+`host-tuple` in steps 1 and 2 means the host triple from step 3. A
+`--target path/to/spec.json` selects the table named after the file stem
+(`[target.spec]`), as Cargo does. A config without target tables never runs
+the extra `rustc -vV`. Cargo's `[build] target` and `[build] rustc` config
+keys and `RUSTC_WRAPPER` are not consulted, so a cross build passes
+`--target`. A build stops with an error when the config has target tables and
+the command names two different targets, or the host triple is needed but
+`rustc -vV` fails. A table may hold only `extra-rustflags`; `cfg(...)` keys,
+a `host-tuple` key, other fields (Cargo's `rustflags`, `linker`, ...) and
+wrong types are config errors.
+
 `cargo oxide doctor` validates this file when present: malformed TOML,
-wrong-shaped fields, or a `default-arch` the CUDA arch parser rejects fail
-the check (doctor exits non-zero but still completes the full scan), while
+wrong-shaped fields or `[target.<triple>]` tables, or a `default-arch` the
+CUDA arch parser rejects fail the check (doctor exits non-zero but still
+completes the full scan), while
 ignored `[env]` keys such as `RUSTFLAGS` / `CARGO_ENCODED_RUSTFLAGS` and
 non-`sm_XX` `default-arch` spellings (`compute_90`, bare `90`) are reported
 as warnings. Build commands remain strict and refuse to run with an invalid
@@ -568,7 +606,8 @@ Configuration values are defaults. Precedence is:
 3. `.cargo/cuda-oxide.toml` defaults.
 
 Do not put `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS` in the `[env]` table; use
-`extra-rustflags` for project defaults. cargo-oxide combines configured flags,
+`extra-rustflags` (and `[target.<triple>]` tables) for project defaults.
+cargo-oxide combines configured flags,
 inherited user flags, explicit `--device-cfg` values, and its required compiler
 flags in boundary-preserving `CARGO_ENCODED_RUSTFLAGS`. Required compiler flags
 are applied last so inherited settings cannot replace the cuda-oxide backend or

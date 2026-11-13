@@ -4,6 +4,7 @@
  */
 
 #![feature(f16)]
+#![feature(core_float_math)]
 #![no_std]
 
 // Proc-macro expansions use the public crate path so the same expansion works
@@ -43,6 +44,7 @@ pub mod grid;
 pub mod i16x2;
 pub mod iket;
 pub mod int;
+pub mod math;
 pub mod mma_frag;
 pub mod prmt;
 pub mod ptx;

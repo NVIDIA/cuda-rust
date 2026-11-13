@@ -273,8 +273,8 @@ fn test_arch_satisfies_blackwell_matrix_family_targets() {
         );
     }
     for arch in [
-        "sm_100a", "sm_101a", "sm_110a", "sm_120a", "sm_100f", "sm_101f", "sm_103f", "sm_110f",
-        "sm_120f", "sm_121f",
+        "sm_100a", "sm_101a", "sm_103a", "sm_110a", "sm_120a", "sm_100f", "sm_101f", "sm_103f",
+        "sm_110f", "sm_120f", "sm_121f",
     ] {
         assert!(
             arch_satisfies(&arch.parse().unwrap(), DetectedFeatures::BlackwellFamily),
@@ -287,12 +287,12 @@ fn test_arch_satisfies_blackwell_matrix_family_targets() {
             DetectedFeatures::MatrixBlackwell
         ));
     }
-    for arch in ["sm_103a", "sm_121a"] {
-        assert!(!arch_satisfies(
-            &arch.parse().unwrap(),
-            DetectedFeatures::BlackwellFamily
-        ));
-    }
+    // sm_121a: ptxas and llc accept the instruction, but no sm_121 device has
+    // executed it yet, so it stays rejected.
+    assert!(!arch_satisfies(
+        &"sm_121a".parse().unwrap(),
+        DetectedFeatures::BlackwellFamily
+    ));
     for arch in [
         "sm_100a", "sm_101a", "sm_103a", "sm_110a", "sm_100f", "sm_103f", "sm_110f",
     ] {

@@ -91,7 +91,7 @@ fn supports_blackwell_accelerated_target(capability: u32, suffix: Option<char>) 
 
 fn supports_blackwell_family_target(capability: u32, suffix: Option<char>) -> bool {
     match suffix {
-        Some('a') => matches!(capability, 100 | 101 | 107 | 110 | 120),
+        Some('a') => matches!(capability, 100 | 101 | 103 | 107 | 110 | 120),
         Some('f') => matches!(capability, 100 | 101 | 103 | 107 | 110 | 120 | 121),
         _ => false,
     }

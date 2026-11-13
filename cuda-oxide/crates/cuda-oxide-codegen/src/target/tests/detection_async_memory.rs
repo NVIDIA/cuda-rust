@@ -443,18 +443,18 @@ fn related_cluster_mbarrier_and_clc_requirements_are_detected() {
         &"sm_120a".parse().unwrap(),
         requirements.features
     ));
-    for arch in ["sm_100f", "sm_101f", "sm_110f", "sm_121f"] {
+    for arch in [
+        "sm_103a", "sm_100f", "sm_101f", "sm_103f", "sm_110f", "sm_121f",
+    ] {
         assert!(
             arch_satisfies(&arch.parse().unwrap(), requirements.features),
             "{arch}"
         );
     }
-    for arch in ["sm_103a", "sm_121a"] {
-        assert!(
-            !arch_satisfies(&arch.parse().unwrap(), requirements.features),
-            "{arch}"
-        );
-    }
+    assert!(!arch_satisfies(
+        &"sm_121a".parse().unwrap(),
+        requirements.features
+    ));
 }
 
 #[test]

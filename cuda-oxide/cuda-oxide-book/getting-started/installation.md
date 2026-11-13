@@ -128,7 +128,7 @@ nvcc --version
 ```
 
 :::{tip}
-If you installed CUDA to a non-default location, set `CUDA_TOOLKIT_PATH` to its root directory (the one containing `include/cuda.h`). If neither `CUDA_TOOLKIT_PATH` nor `CUDA_HOME` is set, these roots are tried in order and the first one holding a `cuda.h` of CUDA 13.0 or newer wins: `/usr/local/cuda-13.3`, `/usr/local/cuda-13.2`, `/usr/local/cuda-13`, `/usr/local/cuda`. With more than one toolkit installed, that order decides — not the highest version, and not the `/usr/local/cuda` symlink, which is last. `cargo oxide doctor` reports which root it resolved and why any earlier one was turned down.
+If you installed CUDA to a non-default location, set `CUDA_TOOLKIT_PATH` to its root directory (the one containing `include/cuda.h`). If neither `CUDA_TOOLKIT_PATH` nor `CUDA_HOME` is set, these roots are tried in order and the first one holding a `cuda.h` of CUDA 13.0 or newer wins: `/usr/local/cuda-13.5`, `/usr/local/cuda-13.4`, `/usr/local/cuda-13.3`, `/usr/local/cuda-13.2`, `/usr/local/cuda-13.1`, `/usr/local/cuda-13.0`, `/usr/local/cuda-13`, `/usr/local/cuda`. With more than one toolkit installed, that order decides — not the highest version, and not the `/usr/local/cuda` symlink, which is last. `cargo oxide doctor` reports which root it resolved and why any earlier one was turned down.
 :::
 
 (installation-toolkit-driver-compatibility)=

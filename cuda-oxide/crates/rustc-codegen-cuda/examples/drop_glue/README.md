@@ -44,9 +44,9 @@ distinguish a destructor that ran from one that was correctly suppressed.
 
 ## Compile-only drop proof probes
 
-Three additional kernels guard the proof that lets the compiler erase a
-destructor call: two against erasing a non-terminating destructor (#1360),
-one against rejecting a destructor the proof should accept.
+Five additional kernels guard drop glue the compiler must keep: two against
+erasing a non-terminating destructor (#1360), one against rejecting a
+destructor the proof should accept, and two for zero-sized types (#1755).
 
 - `diverging_cfg_drop_probe`: the destructor contains `loop {}`.
 - `diverging_recursive_drop_probe`: the destructor calls an unconditionally
@@ -54,14 +54,21 @@ one against rejecting a destructor the proof should accept.
 - `reconverging_drop_probe`: the destructor is an effect-free `if`/`else`
   whose branches join back together. The proof must still accept it, so
   the drop lowers to a plain branch.
+- `zst_drop_probe` and `aligned_zst_drop_probe`: a zero-sized type, the
+  second `#[repr(align(64))]`, whose destructor contains `loop {}`. A
+  zero-sized local has no stack slot, so, as in rustc, its drop glue gets
+  the dangling address `align as *mut T` (`NonNull::dangling()`) instead of
+  storage.
 
 Each probe writes a sentinel before the drop and a different value after
 it. `verify-code-shape.sh` first asserts the importer's decision in the
-pre-opt `drop_glue.ll`: the two diverging probes keep a call to their drop
-glue in the kernel body, and the reconverging probe has none. It then
-checks the optimized PTX. For the diverging probes the pre-drop store
-remains and is immediately followed by an unconditional self-loop, while
-the unreachable post-drop store is absent. For the reconverging probe both
+pre-opt `drop_glue.ll`: the diverging and zero-sized probes keep a call to
+their drop glue in the kernel body, the zero-sized probes pass it the
+constant address `1` or `64`, and the reconverging probe has none. It then
+checks the optimized PTX. For the diverging and zero-sized probes the
+pre-drop store remains and is immediately followed by an unconditional
+self-loop, while the unreachable post-drop store is absent; the zero-sized
+probes also have no `.local` stack frame. For the reconverging probe both
 stores remain. The PTX adjacency holds because `opt -O2` inlines the
 retained glue and the destructors. They carry no inline attribute, since
 `#[inline(never)]` reaches LLVM as `noinline` and would keep them real PTX
@@ -69,9 +76,9 @@ functions; MIR inlining is off for this crate instead (`Cargo.toml`), so the
 importer still sees each destructor's own MIR.
 
 These kernels are compiled but **never launched by `main`**. Do not launch
-the diverging probes manually: their destructors intentionally never
-return. The existing runtime checks above continue to exercise terminating
-destructors only.
+the diverging or zero-sized probes manually: their destructors
+intentionally never return. The existing runtime checks above continue to
+exercise terminating destructors only.
 
 ## Usage
 

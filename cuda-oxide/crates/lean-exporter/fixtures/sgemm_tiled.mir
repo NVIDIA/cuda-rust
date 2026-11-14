@@ -91,6 +91,68 @@ builtin.module @safe_gemm_views {
         ty = nvvm.read_ptx_sreg_tid_y () [] []: <() -> (builtin.integer ui32)>;
         zero_f32 = mir.float_constant () [] [float_value: builtin.single 0]: <() -> (builtin.fp32)>;
         zero_u32 = mir.constant () [] [value: builtin.integer <0: ui32>]: <() -> (builtin.integer ui32)>;
+        u64_max = mir.constant () [] [value: builtin.integer <18446744073709551615: ui64>]: <() -> (builtin.integer ui64)>;
+        one_u64 = mir.constant () [] [value: builtin.integer <1: ui64>]: <() -> (builtin.integer ui64)>;
+        a_len = mir.extract_field (a) [] [index: mir.field_index 1]: <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>) -> (builtin.integer ui64)>;
+        b_len = mir.extract_field (b) [] [index: mir.field_index 1]: <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>) -> (builtin.integer ui64)>;
+        k_is_zero = mir.eq (k, zero_u32) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer i1)>;
+        mir.cond_br (k_is_zero) [^band_a_bad, ^band_a_check] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^band_a_check():
+        row_u64 = mir.cast (ty) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+        k_a_u64 = mir.cast (k) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+        a_band_raw = mir.mul (row_u64, k_a_u64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        k_minus_1 = mir.sub (k_a_u64, one_u64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        a_last = mir.add (a_band_raw, k_minus_1) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        a_fits = mir.lt (a_last, a_len) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        mir.cond_br (a_fits) [^band_a_ok, ^band_a_bad] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^band_a_ok():
+        mir.goto (a_band_raw) [^band_a_join] []: <(builtin.integer ui64) -> ()>
+
+      ^band_a_bad():
+        mir.goto (u64_max) [^band_a_join] []: <(builtin.integer ui64) -> ()>
+
+      ^band_a_join(a_start: builtin.integer ui64):
+        mir.cond_br (k_is_zero) [^band_b_bad, ^band_b_check] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^band_b_check():
+        k_b_u64 = mir.cast (k) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+        k_b_minus_1 = mir.sub (k_b_u64, one_u64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        n_b_u64 = mir.cast (n) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+        b_span = mir.mul (k_b_minus_1, n_b_u64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        col_u64 = mir.cast (tx) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+        b_last = mir.add (b_span, col_u64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        b_fits = mir.lt (b_last, b_len) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        mir.cond_br (b_fits) [^band_b_ok, ^band_b_bad] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^band_b_ok():
+        mir.goto (col_u64) [^band_b_join] []: <(builtin.integer ui64) -> ()>
+
+      ^band_b_bad():
+        mir.goto (u64_max) [^band_b_join] []: <(builtin.integer ui64) -> ()>
+
+      ^band_b_join(b_start: builtin.integer ui64):
+        a_is_bad = mir.eq (a_start, u64_max) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        mir.cond_br (a_is_bad) [^a_eff_zero, ^a_eff_k] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^a_eff_k():
+        mir.goto (k) [^a_eff_join] []: <(builtin.integer ui32) -> ()>
+
+      ^a_eff_zero():
+        mir.goto (zero_u32) [^a_eff_join] []: <(builtin.integer ui32) -> ()>
+
+      ^a_eff_join(a_eff: builtin.integer ui32):
+        b_is_bad = mir.eq (b_start, u64_max) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        mir.cond_br (b_is_bad) [^b_eff_zero, ^b_eff_k] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^b_eff_k():
+        mir.goto (k) [^b_eff_join] []: <(builtin.integer ui32) -> ()>
+
+      ^b_eff_zero():
+        mir.goto (zero_u32) [^b_eff_join] []: <(builtin.integer ui32) -> ()>
+
+      ^b_eff_join(b_eff: builtin.integer ui32):
         mir.goto (zero_f32, zero_u32) [^tile_header] []: <(builtin.fp32, builtin.integer ui32) -> ()>
 
       ^tile_header(sum_outer: builtin.fp32, tile: builtin.integer ui32):
@@ -105,23 +167,43 @@ builtin.module @safe_gemm_views {
         smem_u32 = mir.add (ty_scaled, tx) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;
         smem_idx = mir.cast (smem_u32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
         a_col = mir.add (tile_start, tx) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;
-        a_idx = mir.cast (a_col) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
-        a_len = mir.extract_field (a) [] [index: mir.field_index 1]: <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>) -> (builtin.integer ui64)>;
+        in_a = mir.lt (a_col, a_eff) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer i1)>;
+        mir.cond_br (in_a) [^load_a, ^skip_a] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^load_a():
+        a_col_u64 = mir.cast (a_col) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+        a_idx = mir.add (a_start, a_col_u64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
         ok_a_global = mir.lt (a_idx, a_len) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
         mir.assert (ok_a_global) [] []: <(builtin.integer i1) -> ()>;
         a_ptr = mir.extract_field (a) [] [index: mir.field_index 0]: <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>)>;
         a_elem = mir.ptr_offset (a_ptr, a_idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>)>;
-        a_val = mir.load (a_elem) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>) -> (builtin.fp32)>;
+        a_loaded = mir.load (a_elem) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>) -> (builtin.fp32)>;
+        mir.goto (a_loaded) [^after_a] []: <(builtin.fp32) -> ()>
+
+      ^skip_a():
+        mir.goto (zero_f32) [^after_a] []: <(builtin.fp32) -> ()>
+
+      ^after_a(a_val: builtin.fp32):
         b_row = mir.add (tile_start, ty) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;
+        in_b = mir.lt (b_row, b_eff) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer i1)>;
+        mir.cond_br (in_b) [^load_b, ^skip_b] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^load_b():
         b_row_u64 = mir.cast (b_row) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
         n_u64 = mir.cast (n) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
-        b_idx = mir.mul (b_row_u64, n_u64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
-        b_len = mir.extract_field (b) [] [index: mir.field_index 1]: <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>) -> (builtin.integer ui64)>;
+        b_row_scaled = mir.mul (b_row_u64, n_u64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        b_idx = mir.add (b_start, b_row_scaled) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
         ok_b_global = mir.lt (b_idx, b_len) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
         mir.assert (ok_b_global) [] []: <(builtin.integer i1) -> ()>;
         b_ptr = mir.extract_field (b) [] [index: mir.field_index 0]: <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>)>;
         b_elem = mir.ptr_offset (b_ptr, b_idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>)>;
-        b_val = mir.load (b_elem) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>) -> (builtin.fp32)>;
+        b_loaded = mir.load (b_elem) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>) -> (builtin.fp32)>;
+        mir.goto (b_loaded) [^after_b] []: <(builtin.fp32) -> ()>
+
+      ^skip_b():
+        mir.goto (zero_f32) [^after_b] []: <(builtin.fp32) -> ()>
+
+      ^after_b(b_val: builtin.fp32):
         tile_a_raw = mir.shared_alloc () [] [elem_type: builtin.type builtin.fp32, size: builtin.integer <256: i64>, alloc_key: builtin.string "TILE_A", source_name: builtin.string "gemm_views::kernels::sgemm_tiled_raw::TILE_A"]: <() -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>)>;
         tile_a_mut = mir.cast (tile_a_raw) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority Reborrow]: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>)>;
         c256_a = mir.constant () [] [value: builtin.integer <256: ui64>]: <() -> (builtin.integer ui64)>;
@@ -169,7 +251,6 @@ builtin.module @safe_gemm_views {
         val_b = mir.load (elem_b) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>) -> (builtin.fp32)>;
         prod = mir.mul (val_a, val_b) [] []: <(builtin.fp32, builtin.fp32) -> (builtin.fp32)>;
         next_sum = mir.add (sum_inner, prod) [] []: <(builtin.fp32, builtin.fp32) -> (builtin.fp32)>;
-        one_u64 = mir.constant () [] [value: builtin.integer <1: ui64>]: <() -> (builtin.integer ui64)>;
         next_i = mir.add (i, one_u64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
         mir.goto (next_sum, next_i) [^scan_header] []: <(builtin.fp32, builtin.integer ui64) -> ()>
 

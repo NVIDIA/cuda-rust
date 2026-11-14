@@ -593,7 +593,7 @@ fn verifies_2d_sgemm_tiled_views_and_rejects_shared_races_oob_and_divergent_barr
         "theorem verify_no_oob_idx_param4 (bufferLen : Nat) :\n    CudaOxide.Contracts.NoOobRowStrip bufferLen"
     ));
 
-    // Negative check: indexing global slice `a` by a non-strip index (`a_len` instead of `a_idx`)
+    // Negative check A: indexing global slice `a` by a non-strip index (`a_len` instead of `a_idx`)
     // must be rejected fail-closed by `translate.rs`.
     let bad_global_offset = SGEMM_TILED_FIXTURE.replace(
         "a_elem = mir.ptr_offset (a_ptr, a_idx)",
@@ -604,6 +604,58 @@ fn verifies_2d_sgemm_tiled_views_and_rejects_shared_races_oob_and_divergent_barr
         err.to_string()
             .contains("2D global slice pointer offset must use a row-strip"),
         "unexpected error for bad 2D global slice offset: {err}"
+    );
+
+    // Negative check B (Hole #2): missing Check 2 (`in_a = a_col < k` instead of `< a_eff`,
+    // ignoring `a_start == u64::MAX`) or missing Check 1 (`a_fits` not checking `< a_len`)
+    // must be rejected fail-closed before Lean!
+    let unguarded_row_strip =
+        SGEMM_TILED_FIXTURE.replace("in_a = mir.lt (a_col, a_eff)", "in_a = mir.lt (a_col, k)");
+    let err = export_named_source(&unguarded_row_strip, "sgemm_tiled_raw").unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("2D global slice pointer offset must use a row-strip"),
+        "missing `if a_col < a_eff` guard must be rejected fail-closed, got: {err}"
+    );
+
+    let missing_band_check = SGEMM_TILED_FIXTURE.replace(
+        "a_fits = mir.lt (a_last, a_len)",
+        "a_fits = mir.lt (zero_u32, k)",
+    );
+    let err = export_named_source(&missing_band_check, "sgemm_tiled_raw").unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("2D global slice pointer offset must use a row-strip"),
+        "missing `a_start + (k - 1) < a.len()` band check must be rejected fail-closed, got: {err}"
+    );
+
+    // Negative check C (Hole #2): wrong stride (`m` instead of `n`) on `b`'s column strip
+    // must be rejected fail-closed!
+    let wrong_col_stride = SGEMM_TILED_FIXTURE.replace(
+        "n_u64 = mir.cast (n) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;",
+        "n_u64 = mir.cast (m) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;",
+    );
+    let err = export_named_source(&wrong_col_stride, "sgemm_tiled_raw").unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("2D global slice pointer offset must use a row-strip"),
+        "mismatched column-strip stride must be rejected fail-closed, got: {err}"
+    );
+
+    // Negative check D (Hole #2): off-by-one `a[a_start + a_col + 1]` under valid strip guards
+    // extracts `offset = 1` (`NoOobRowStrip bufferLen 1`) and is rejected by Lean 4's `omega`!
+    let off_by_one_strip = SGEMM_TILED_FIXTURE.replace(
+        "a_elem = mir.ptr_offset (a_ptr, a_idx)",
+        "a_idx_p1 = mir.add (a_idx, one_u64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;\n        a_elem = mir.ptr_offset (a_ptr, a_idx_p1)",
+    );
+    let off_by_one_strip_lean =
+        export_named_source(&off_by_one_strip, "sgemm_tiled_raw").expect("exports offset=1 strip");
+    assert!(off_by_one_strip_lean.contains("CudaOxide.Contracts.NoOobRowStrip bufferLen 1"));
+    let err = lean_exporter::runner::check_generated_lean(&off_by_one_strip_lean, &lean_dir)
+        .expect_err("Lean must reject off-by-one `a[a_start + a_col + 1]` row-strip access");
+    assert!(
+        err.to_string().contains("omega could not prove the goal"),
+        "unexpected Lean error for off-by-one 2D row strip: {err}"
     );
 }
 
@@ -817,5 +869,118 @@ fn verifies_stage5_async_copy_and_mbarrier_token_ordering() {
     assert!(
         err.to_string().contains("omega could not prove the goal"),
         "unexpected Lean error for wrong mbarrier wait: {err}"
+    );
+}
+
+fn count_proven_asserts(source: &str, fn_name: &str) -> usize {
+    let mut ctx = Context::new();
+    dialect_mir::register(&mut ctx);
+    dialect_nvvm::register(&mut ctx);
+    let stripped = source
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let module = parse_from_str(
+        spaced(Operation::top_level_parser()).skip(combine::eof()),
+        &mut ctx,
+        &stripped,
+    )
+    .expect("parse module fixture");
+    let block = module
+        .deref(&ctx)
+        .get_region(0)
+        .deref(&ctx)
+        .get_head()
+        .expect("module block");
+    let func = block
+        .deref(&ctx)
+        .iter(&ctx)
+        .find(|&op| {
+            dialect_mir::ops::MirFuncOp::wrap(&ctx, op).is_some_and(|f| {
+                use pliron::builtin::op_interfaces::SymbolOpInterface;
+                f.get_symbol_name(&ctx).to_string() == fn_name
+            })
+        })
+        .expect("target function");
+    match lean_exporter::translate::translate_function(&ctx, func).expect("translate") {
+        lean_exporter::translate::TranslatedFunction::Kernel {
+            proven_assert_ops, ..
+        }
+        | lean_exporter::translate::TranslatedFunction::TiledKernel2D {
+            proven_assert_ops, ..
+        } => proven_assert_ops.len(),
+        lean_exporter::translate::TranslatedFunction::Scalar { .. } => 0,
+    }
+}
+
+#[test]
+fn elides_only_proven_shared_array_bounds_checks() {
+    // Baseline: `sgemm_tiled_views` verifies both `TILE_A` (0) and `TILE_B` (1),
+    // eliding all 4 `SharedArray` bounds checks (2 writes + 2 reads).
+    assert_eq!(
+        count_proven_asserts(SGEMM_TILED_FIXTURE, "sgemm_tiled_views"),
+        4
+    );
+
+    // 1. Unrelated `mir.assert(tx < 4)` (e.g. from indexing a 4-element local array
+    // `tmp[tx]` or `assert!(tx < 4)`) must NEVER be elided just because `TILE_A` is verified.
+    let with_local_array_check = SGEMM_TILED_FIXTURE.replace(
+        "^exit():\n        mir.return () [] []: <() -> ()>",
+        "^exit():\n        c4_tmp = mir.constant () [] [value: builtin.integer <4: ui32>]: <() -> (builtin.integer ui32)>;\n        ok_tmp = mir.lt (tx, c4_tmp) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer i1)>;\n        mir.assert (ok_tmp) [] []: <(builtin.integer i1) -> ()>;\n        mir.return () [] []: <() -> ()>",
+    );
+    assert_eq!(
+        count_proven_asserts(&with_local_array_check, "sgemm_tiled_views"),
+        4,
+        "must not elide unverified `tx < 4` bounds check"
+    );
+
+    // 2. Even a same-bound `mir.assert(smem_idx < 256)` in the SAME basic block that is NOT
+    // paired with a verified `SharedArray` `mir.ptr_offset` must be preserved.
+    let with_extra_256_check = SGEMM_TILED_FIXTURE.replace(
+        "mir.store (slot_b, beta) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>, builtin.fp32) -> ()>;",
+        "mir.store (slot_b, beta) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>, builtin.fp32) -> ()>;\n        c256_extra = mir.constant () [] [value: builtin.integer <256: ui64>]: <() -> (builtin.integer ui64)>;\n        ok_extra = mir.lt (smem_idx, c256_extra) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;\n        mir.assert (ok_extra) [] []: <(builtin.integer i1) -> ()>;",
+    );
+    assert_eq!(
+        count_proven_asserts(&with_extra_256_check, "sgemm_tiled_views"),
+        4,
+        "must not elide standalone `smem_idx < 256` assert without a paired verified SharedArray access"
+    );
+
+    // 3. When only `TILE_A` (`0`) is listed in `verify_no_oob_shared` (and `TILE_B` (`1`) is NOT),
+    // only `TILE_A`'s 2 bounds checks may be elided; `TILE_B`'s 2 bounds checks must stay intact.
+    let only_tile_a_oob = SGEMM_TILED_FIXTURE.replacen(
+        "verify_no_oob_shared: builtin.string \"0,1\"",
+        "verify_no_oob_shared: builtin.string \"0\"",
+        1,
+    );
+    assert_eq!(
+        count_proven_asserts(&only_tile_a_oob, "sgemm_tiled_views"),
+        2,
+        "must not elide `TILE_B`'s bounds checks when only `TILE_A` is in `no_oob_idx`"
+    );
+
+    // 4. An unused `&TILE_A[bad_idx]` pointer offset (never loaded or stored, so never
+    // emitted into Lean's `NoOobTileAccess` obligations) must NOT have its `mir.assert` elided.
+    let with_unused_oob_ref = SGEMM_TILED_FIXTURE.replace(
+        "mir.store (slot_b, beta) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>, builtin.fp32) -> ()>;",
+        "mir.store (slot_b, beta) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>, builtin.fp32) -> ()>;\n        c100 = mir.constant () [] [value: builtin.integer <100: ui64>]: <() -> (builtin.integer ui64)>;\n        bad_idx = mir.mul (smem_idx, c100) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;\n        ok_unused = mir.lt (bad_idx, c256_a) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;\n        mir.assert (ok_unused) [] []: <(builtin.integer i1) -> ()>;\n        _unused_slot = mir.ptr_offset (tile_a_mut, bad_idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>)>;",
+    );
+    assert_eq!(
+        count_proven_asserts(&with_unused_oob_ref, "sgemm_tiled_views"),
+        4,
+        "must not elide `mir.assert` on a SharedArray `ptr_offset` that is never loaded or stored"
+    );
+
+    // 5. Real `rustc` call-terminator layout: `mir.assert` + `mir.ptr_offset` in the call block,
+    // followed by `mir.goto` into the continuation block that executes `mir.store`.
+    let split_call_block = SGEMM_TILED_FIXTURE.replace(
+        "slot_a = mir.ptr_offset (tile_a_mut, smem_idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>)>;\n        mir.store (slot_a, alpha) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>, builtin.fp32) -> ()>;",
+        "slot_a = mir.ptr_offset (tile_a_mut, smem_idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>)>;\n        mir.goto () [^phase0_store_a] []: <() -> ()>\n\n      ^phase0_store_a():\n        mir.store (slot_a, alpha) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>, builtin.fp32) -> ()>;",
+    );
+    assert_eq!(
+        count_proven_asserts(&split_call_block, "sgemm_tiled_views"),
+        4,
+        "must elide `mir.assert` across `SharedArray::index` call-terminator block split"
     );
 }

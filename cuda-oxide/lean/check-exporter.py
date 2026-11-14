@@ -183,6 +183,39 @@ def main():
             raise RuntimeError(f"Expected non-strip 2D global slice access to be rejected:\n{rejected_strip.stderr}")
         print("REJECTED as expected: non-strip 2D global slice access is rejected before Lean.", flush=True)
 
+        # Mutate sgemm_tiled_raw MIR to check `a_col < k` instead of `a_col < a_eff` (ignoring band check):
+        unguarded_strip_mir = temporary / "sgemm_unguarded_strip.mir"
+        unguarded_strip_mir.write_text(
+            SGEMM_TILED_FIXTURE.read_text().replace(
+                "in_a = mir.lt (a_col, a_eff)",
+                "in_a = mir.lt (a_col, k)",
+                1,
+            )
+        )
+        rejected_unguarded_strip = export(unguarded_strip_mir, "sgemm_tiled_raw")
+        if rejected_unguarded_strip.returncode == 0 or "2D global slice pointer offset must use a row-strip" not in rejected_unguarded_strip.stderr:
+            raise RuntimeError(f"Expected unguarded 2D global slice strip access to be rejected:\n{rejected_unguarded_strip.stderr}")
+        print("REJECTED as expected: unguarded 2D global slice strip access is rejected before Lean.", flush=True)
+
+        # Mutate sgemm_tiled_raw MIR with off-by-one `a[a_start + a_col + 1]`:
+        oob_strip_mir = temporary / "sgemm_oob_strip.mir"
+        oob_strip_mir.write_text(
+            SGEMM_TILED_FIXTURE.read_text().replace(
+                "a_elem = mir.ptr_offset (a_ptr, a_idx)",
+                "a_idx_p1 = mir.add (a_idx, one_u64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;\n        a_elem = mir.ptr_offset (a_ptr, a_idx_p1)",
+                1,
+            )
+        )
+        oob_strip_lean = require_export(oob_strip_mir, "sgemm_tiled_raw")
+        oob_strip_file = temporary / "SgemmOobStrip.lean"
+        oob_strip_file.write_text(
+            "\n".join(line for line in oob_strip_lean.splitlines() if not line.startswith("#print axioms"))
+        )
+        res_oob_strip = run_lake("env", "lean", str(oob_strip_file))
+        if res_oob_strip.returncode == 0 or "error: omega could not prove the goal:" not in res_oob_strip.stdout:
+            raise RuntimeError(f"Expected off-by-one 2D strip `a[a_start + a_col + 1]` to fail NoOobRowStrip in Lean:\n{res_oob_strip.stdout}")
+        print("REJECTED as expected: off-by-one 2D row-strip `a[a_start + a_col + 1]` fails `no_oob_idx`.", flush=True)
+
         # Stage 3: Verified warp & 2-phase block reductions
         warp_source = WARP_REDUCE_FIXTURE.read_text()
         warp_lean = require_export(WARP_REDUCE_FIXTURE, "warp_reduce_sum")

@@ -122,24 +122,24 @@ def UniformBarriers (barriersUniform : Bool) (numBarriers : Nat) : Prop :=
   barriersUniform = true ∧                                -- Every barrier is outside thread-divergent branches, AND
   0 < numBarriers                                         -- at least one barrier synchronizes the phases.
 
-/-- **`no_oob_idx(a)` (2D row strip)**: Every element `start + col` with
+/-- **`no_oob_idx(a)` (2D row strip)**: Every element `start + col + offset` with
     `col < cols` is `< bufferLen` when the strip's last element
-    `start + (cols - 1) < bufferLen`. -/
-def NoOobRowStrip (bufferLen : Nat) : Prop :=
+    `start + (cols - 1) < bufferLen` (and `offset = 0`). -/
+def NoOobRowStrip (bufferLen : Nat) (offset : Nat := 0) : Prop :=
   ∀ start cols col : Nat,                                 -- Pick ANY row strip start, width `cols`, and offset `col`:
     0 < cols →                                            -- IF the strip is non-empty (`cols > 0`),
     start + (cols - 1) < bufferLen →                      -- AND the strip's last element fits in `bufferLen`,
     col < cols →                                          -- AND the thread's column offset `col < cols`,
-    start + col < bufferLen                               -- THEN `start + col` is strictly `< bufferLen`.
+    start + col + offset < bufferLen                      -- THEN `start + col + offset` is strictly `< bufferLen`.
 
 /-- **`no_oob_idx(b)` (2D column strip)**: Every strided element
-    `start + row * stride` with `row < rows` is `< bufferLen` when the
-    strip's last element `(rows - 1) * stride + start < bufferLen`. -/
-def NoOobColStrip (bufferLen : Nat) : Prop :=
+    `start + row * stride + offset` with `row < rows` is `< bufferLen` when the
+    strip's last element `(rows - 1) * stride + start < bufferLen` (and `offset = 0`). -/
+def NoOobColStrip (bufferLen : Nat) (offset : Nat := 0) : Prop :=
   ∀ start stride rows row : Nat,                          -- Pick ANY col strip start, row stride, height `rows`, and `row`:
     0 < rows →                                            -- IF the strip is non-empty (`rows > 0`),
     (rows - 1) * stride + start < bufferLen →             -- AND the strip's last strided element fits in `bufferLen`,
     row < rows →                                          -- AND the thread's row offset `row < rows`,
-    start + row * stride < bufferLen                      -- THEN `start + row * stride` is strictly `< bufferLen`.
+    start + row * stride + offset < bufferLen             -- THEN `start + row * stride + offset` is strictly `< bufferLen`.
 
 end CudaOxide.Contracts

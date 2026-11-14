@@ -466,18 +466,25 @@ pub enum SsaKind {
         /// Compositional index expression used to offset into the `SharedArray`.
         addr: IdxExpr,
     },
-    /// 2D global row-strip index `start + col` (derived from `tx` without runtime stride multiply).
-    StripColOffset,
-    /// 2D unscaled row coordinate `tile_start + ty` (before multiplying by runtime stride `n`).
-    StripRowOffset,
-    /// 2D global col-strip index `start + row * stride` (derived from `ty` scaled by runtime stride).
-    StripColStrided,
+    /// Verified 2D global strip index (`start + col + offset` or `start + row * stride + offset`)
+    /// proven in MIR to be dominated by both the strip's last-element `< slice.len()` check and
+    /// the per-element `< extent` check.
+    VerifiedGlobalStripIdx {
+        /// Target slice parameter index (`0..arity`).
+        param: usize,
+        /// Row-strip (`start + col`) vs. column-strip (`start + row * stride`) pattern.
+        kind: GlobalStripKind,
+        /// Constant element offset added to the strip index (`0` when exact).
+        offset: u64,
+    },
     /// Element pointer `&slice[strip_idx]` into a 2D global slice parameter.
     GlobalStripElementPtr {
         /// Target slice parameter index (`0..arity`).
         param: usize,
         /// Row-strip (`start + col`) vs. column-strip (`start + row * stride`) pattern.
         kind: GlobalStripKind,
+        /// Constant element offset added to the strip index (`0` when exact).
+        offset: u64,
     },
     /// Loaded element or arithmetic value that does not affect indexing.
     DataValue,

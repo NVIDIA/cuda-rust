@@ -65,15 +65,15 @@ theorem no_oob_tile_col_scan {blockDimX blockDimY bufferLen : Nat}
 /-- Proves `no_oob_idx(a)` for a 2D row access `a[start + col]`: in-bounds when
     the row's last element `start + (cols - 1) < bufferLen` and `col < cols`. -/
 theorem no_oob_row_strip {bufferLen : Nat} :
-    NoOobRowStrip bufferLen := by
+    NoOobRowStrip bufferLen 0 := by
   intro _start _cols _col _hpos _hlast _hcol              -- Unpack `start + (cols - 1) < bufferLen` and `col < cols`
-  omega                                                   -- Linear solver proves `start + col < bufferLen`
+  omega                                                   -- Linear solver proves `start + col + 0 < bufferLen`
 
 /-- Proves `no_oob_idx(b)` for a 2D column access `b[start + row * stride]`:
     in-bounds when the column's last element `(rows - 1) * stride + start < bufferLen`
     and `row < rows`. -/
 theorem no_oob_col_strip {bufferLen : Nat} :
-    NoOobColStrip bufferLen := by
+    NoOobColStrip bufferLen 0 := by
   intro _start stride rows row _hpos _hlast _hrow         -- Unpack `(rows - 1) * stride + start < bufferLen` and `row < rows`
   have hle : row ≤ rows - 1 := by omega                   -- Step 1: `row < rows` implies `row ≤ rows - 1`
   have _hmul := Nat.mul_le_mul_right stride hle           -- Step 2: Multiply both sides by `stride`

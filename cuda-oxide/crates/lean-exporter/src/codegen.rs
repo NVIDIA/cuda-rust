@@ -387,11 +387,31 @@ fn render_verified_tiled_2d_module(
                     "CudaOxide.Proofs.Bounds.no_oob_col_strip",
                 ),
             };
-            theorems.push(format!(
-                "theorem {thm_name} (bufferLen : Nat) :\n    \
-                 {contract} bufferLen := by\n  \
-                 exact {lemma}"
-            ));
+            if acc.offset == 0 {
+                theorems.push(format!(
+                    "theorem {thm_name} (bufferLen : Nat) :\n    \
+                     {contract} bufferLen := by\n  \
+                     exact {lemma}"
+                ));
+            } else {
+                let fallback_tactic = match acc.kind {
+                    GlobalStripKind::RowStrip => {
+                        "intro _start _cols _col _hpos _hlast _hcol\n  omega"
+                    }
+                    GlobalStripKind::ColStrip => {
+                        "intro _start stride rows row _hpos _hlast _hrow\n  \
+                         have hle : row ≤ rows - 1 := by omega\n  \
+                         have _hmul := Nat.mul_le_mul_right stride hle\n  \
+                         omega"
+                    }
+                };
+                theorems.push(format!(
+                    "theorem {thm_name} (bufferLen : Nat) :\n    \
+                     {contract} bufferLen {} := by\n  \
+                     {fallback_tactic}",
+                    acc.offset
+                ));
+            }
             axiom_prints.push(format!("#print axioms {thm_name}"));
         }
     }

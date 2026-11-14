@@ -23,7 +23,7 @@
 //!   • Returns `TranslatedFunction::Scalar`    • Returns `TranslatedFunction::Kernel`
 //! ```
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use pliron::{
     attribute::AttributeDict,
@@ -103,6 +103,8 @@ pub struct GlobalStripAccess2D {
     pub param: usize,
     /// Row-strip (`start + col`) vs. column-strip (`start + row * stride`) shape.
     pub kind: GlobalStripKind,
+    /// Constant element offset added to the strip index (`0` when exact).
+    pub offset: u64,
 }
 
 /// Output of the unified MIR translator before rendering to `.lean` text.
@@ -977,6 +979,529 @@ fn is_mbarrier_shared_alloc(ctx: &Context, op: &Operation) -> bool {
     })
 }
 
+/// Provenance of a hoisted 2D global slice band start (`a_start` or `b_start`),
+/// where valid incoming CFG paths checked the strip's last element `< slice.len()`
+/// under `extent != 0` and invalid incoming paths pass `u64::MAX`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BandStartProvenance {
+    /// Sentinel `u64::MAX` (`18446744073709551615`).
+    SentinelMax,
+    /// Row strip start `start` proven to satisfy `cols > 0` and `start + (cols - 1) < param.len()`
+    /// whenever not equal to `u64::MAX`.
+    RowBand {
+        /// Target slice parameter index.
+        param: usize,
+        /// Canonical SSA root of the row width `cols`.
+        cols_root: pliron::value::Value,
+    },
+    /// Column strip start `start` proven to satisfy `rows > 0` and
+    /// `(rows - 1) * stride + start < param.len()` whenever not equal to `u64::MAX`.
+    ColBand {
+        /// Target slice parameter index.
+        param: usize,
+        /// Canonical SSA root of the column height `rows`.
+        rows_root: pliron::value::Value,
+        /// Canonical SSA root of the row stride.
+        stride_root: pliron::value::Value,
+    },
+}
+
+/// Branch condition extracted on canonical integer SSA roots for 2D strip verification.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StripCond {
+    /// Unsigned value is strictly positive (`val != 0`).
+    NonZero(pliron::value::Value),
+    /// Unsigned value equals zero (`val == 0`).
+    IsZero(pliron::value::Value),
+    /// Value equals sentinel `u64::MAX`.
+    IsMax(pliron::value::Value),
+    /// Value does not equal sentinel `u64::MAX`.
+    NotMax(pliron::value::Value),
+    /// Strict inequality `lhs < rhs`.
+    Lt(pliron::value::Value, pliron::value::Value),
+    /// Negated strict inequality `!(lhs < rhs)`.
+    NotLt(pliron::value::Value, pliron::value::Value),
+}
+
+impl StripCond {
+    /// Invert this condition across `mir.not` or the false arm of `mir.cond_br`.
+    fn negate(self) -> Self {
+        match self {
+            Self::NonZero(v) => Self::IsZero(v),
+            Self::IsZero(v) => Self::NonZero(v),
+            Self::IsMax(v) => Self::NotMax(v),
+            Self::NotMax(v) => Self::IsMax(v),
+            Self::Lt(a, b) => Self::NotLt(a, b),
+            Self::NotLt(a, b) => Self::Lt(a, b),
+        }
+    }
+}
+
+/// Analyze 2D global slice strip guards (`checked_raw_row_band_start` /
+/// `checked_raw_col_band_start` + dominating `col < a_eff` / `row < b_eff` checks)
+/// and return a map from verified index SSA values to `(param, GlobalStripKind, offset)`.
+fn analyze_verified_2d_strips(
+    ctx: &Context,
+    blocks: &[Ptr<BasicBlock>],
+    succs: &[Vec<usize>],
+    env: &SsaEnv,
+) -> HashMap<pliron::value::Value, (usize, GlobalStripKind, u64)> {
+    let num_blocks = blocks.len();
+    let mut cast_parent: HashMap<pliron::value::Value, pliron::value::Value> = HashMap::new();
+    for &b_ptr in blocks {
+        for op_ptr in b_ptr.deref(ctx).iter(ctx) {
+            if Operation::get_opid(op_ptr, ctx).to_string() == "mir.cast" {
+                let op = op_ptr.deref(ctx);
+                if op.get_num_operands() == 1 && op.get_num_results() == 1 {
+                    let src = op.get_operand(0);
+                    let dst = op.get_result(0);
+                    let src_ty = src.get_type(ctx).deref(ctx);
+                    let dst_ty = dst.get_type(ctx).deref(ctx);
+                    if let (Some(si), Some(di)) = (
+                        src_ty.downcast_ref::<IntegerType>(),
+                        dst_ty.downcast_ref::<IntegerType>(),
+                    ) && si.is_unsigned()
+                        && di.is_unsigned()
+                        && si.width() <= di.width()
+                    {
+                        cast_parent.insert(dst, src);
+                    }
+                }
+            }
+        }
+    }
+    let root_of = |mut v: pliron::value::Value| -> pliron::value::Value {
+        let mut hops = 0usize;
+        while let Some(&p) = cast_parent.get(&v) {
+            v = p;
+            hops += 1;
+            if hops > 16 {
+                break;
+            }
+        }
+        v
+    };
+
+    let mut const_vals: HashMap<pliron::value::Value, u128> = HashMap::new();
+    let mut slice_lens: HashMap<pliron::value::Value, usize> = HashMap::new();
+    let mut sub_one_of: HashMap<pliron::value::Value, pliron::value::Value> = HashMap::new();
+    let mut add_ops: HashMap<pliron::value::Value, (pliron::value::Value, pliron::value::Value)> =
+        HashMap::new();
+    let mut mul_ops: HashMap<pliron::value::Value, (pliron::value::Value, pliron::value::Value)> =
+        HashMap::new();
+    let mut tx_derived: HashSet<pliron::value::Value> = HashSet::new();
+    let mut ty_derived: HashSet<pliron::value::Value> = HashSet::new();
+
+    for &b_ptr in blocks {
+        for op_ptr in b_ptr.deref(ctx).iter(ctx) {
+            let opid = Operation::get_opid(op_ptr, ctx).to_string();
+            let op = op_ptr.deref(ctx);
+            if op.get_num_results() == 1 {
+                let res = op.get_result(0);
+                if let Some(SsaKind::ConstInt { value, .. }) = env.get_kind(&res) {
+                    const_vals.insert(root_of(res), value);
+                }
+                if let Some(SsaKind::SliceLen(param)) = env.get_kind(&res) {
+                    slice_lens.insert(root_of(res), param);
+                }
+            }
+            match opid.as_str() {
+                "nvvm.read_ptx_sreg_tid_x" => {
+                    tx_derived.insert(root_of(op.get_result(0)));
+                }
+                "nvvm.read_ptx_sreg_tid_y" => {
+                    ty_derived.insert(root_of(op.get_result(0)));
+                }
+                "mir.add" if op.get_num_operands() == 2 && op.get_num_results() == 1 => {
+                    add_ops.insert(
+                        root_of(op.get_result(0)),
+                        (root_of(op.get_operand(0)), root_of(op.get_operand(1))),
+                    );
+                }
+                "mir.mul" if op.get_num_operands() == 2 && op.get_num_results() == 1 => {
+                    mul_ops.insert(
+                        root_of(op.get_result(0)),
+                        (root_of(op.get_operand(0)), root_of(op.get_operand(1))),
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+    for &b_ptr in blocks {
+        for op_ptr in b_ptr.deref(ctx).iter(ctx) {
+            if Operation::get_opid(op_ptr, ctx).to_string() == "mir.sub" {
+                let op = op_ptr.deref(ctx);
+                if op.get_num_operands() == 2 && op.get_num_results() == 1 {
+                    let rhs_r = root_of(op.get_operand(1));
+                    if const_vals.get(&rhs_r) == Some(&1) {
+                        sub_one_of.insert(root_of(op.get_result(0)), root_of(op.get_operand(0)));
+                    }
+                }
+            }
+        }
+    }
+    for _ in 0..8 {
+        let mut changed = false;
+        for (&res, &(a, b)) in &add_ops {
+            if (tx_derived.contains(&a) || tx_derived.contains(&b))
+                && !ty_derived.contains(&a)
+                && !ty_derived.contains(&b)
+                && tx_derived.insert(res)
+            {
+                changed = true;
+            }
+            if (ty_derived.contains(&a) || ty_derived.contains(&b))
+                && !tx_derived.contains(&a)
+                && !tx_derived.contains(&b)
+                && ty_derived.insert(res)
+            {
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    let mut cond_map: HashMap<pliron::value::Value, StripCond> = HashMap::new();
+    for _ in 0..4 {
+        for &b_ptr in blocks {
+            for op_ptr in b_ptr.deref(ctx).iter(ctx) {
+                let opid = Operation::get_opid(op_ptr, ctx).to_string();
+                let op = op_ptr.deref(ctx);
+                if op.get_num_results() != 1 {
+                    continue;
+                }
+                let res = op.get_result(0);
+                match opid.as_str() {
+                    "mir.eq" | "mir.ne" if op.get_num_operands() == 2 => {
+                        let a = root_of(op.get_operand(0));
+                        let b = root_of(op.get_operand(1));
+                        let is_eq = opid == "mir.eq";
+                        for (val_r, cst_r) in [(a, b), (b, a)] {
+                            if let Some(&c) = const_vals.get(&cst_r) {
+                                if c == 0 {
+                                    cond_map.insert(
+                                        res,
+                                        if is_eq {
+                                            StripCond::IsZero(val_r)
+                                        } else {
+                                            StripCond::NonZero(val_r)
+                                        },
+                                    );
+                                } else if c == u128::from(u64::MAX) {
+                                    cond_map.insert(
+                                        res,
+                                        if is_eq {
+                                            StripCond::IsMax(val_r)
+                                        } else {
+                                            StripCond::NotMax(val_r)
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    "mir.gt" if op.get_num_operands() == 2 => {
+                        let a = root_of(op.get_operand(0));
+                        let b = root_of(op.get_operand(1));
+                        if const_vals.get(&b) == Some(&0) {
+                            cond_map.insert(res, StripCond::NonZero(a));
+                        }
+                    }
+                    "mir.lt" if op.get_num_operands() == 2 => {
+                        let a = root_of(op.get_operand(0));
+                        let b = root_of(op.get_operand(1));
+                        if const_vals.get(&a) == Some(&0) {
+                            cond_map.insert(res, StripCond::NonZero(b));
+                        } else {
+                            cond_map.insert(res, StripCond::Lt(a, b));
+                        }
+                    }
+                    "mir.not" if op.get_num_operands() == 1 => {
+                        if let Some(&inner) = cond_map.get(&op.get_operand(0)) {
+                            cond_map.insert(res, inner.negate());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    let mut branch_preds: Vec<(usize, usize, usize, StripCond)> = Vec::new();
+    let mut goto_edges: Vec<(usize, usize, pliron::value::Value)> = Vec::new();
+    for (src_blk, &b_ptr) in blocks.iter().enumerate() {
+        for op_ptr in b_ptr.deref(ctx).iter(ctx) {
+            let opid = Operation::get_opid(op_ptr, ctx).to_string();
+            let op = op_ptr.deref(ctx);
+            if opid == "mir.cond_br" && op.get_num_operands() >= 1 && op.get_num_successors() == 2 {
+                if let Some(&cond) = cond_map.get(&op.get_operand(0))
+                    && let (Some(t_idx), Some(f_idx)) = (
+                        blocks.iter().position(|&b| b == op.get_successor(0)),
+                        blocks.iter().position(|&b| b == op.get_successor(1)),
+                    )
+                {
+                    branch_preds.push((src_blk, t_idx, f_idx, cond));
+                    branch_preds.push((src_blk, f_idx, t_idx, cond.negate()));
+                }
+            } else if opid == "mir.goto"
+                && op.get_num_operands() == 1
+                && op.get_num_successors() == 1
+                && let Some(dst_idx) = blocks.iter().position(|&b| b == op.get_successor(0))
+            {
+                goto_edges.push((src_blk, dst_idx, op.get_operand(0)));
+            }
+        }
+    }
+
+    let dominates_pred = |b_idx: usize, pred: StripCond| -> bool {
+        branch_preds.iter().any(|&(src_blk, in_dst, out_dst, p)| {
+            p == pred
+                && !can_reach_without(0, b_idx, in_dst, succs, num_blocks)
+                && !can_reach_without(out_dst, b_idx, src_blk, succs, num_blocks)
+        })
+    };
+
+    let mut band_vars: HashMap<pliron::value::Value, BandStartProvenance> = HashMap::new();
+    for _ in 0..num_blocks + 2 {
+        let mut changed = false;
+        for (dst_blk, &b_ptr) in blocks.iter().enumerate().skip(1) {
+            let blk = b_ptr.deref(ctx);
+            if blk.get_num_arguments() != 1 {
+                continue;
+            }
+            let arg_root = root_of(blk.get_argument(0));
+            let incoming: Vec<_> = goto_edges
+                .iter()
+                .filter(|&&(_, d, _)| d == dst_blk)
+                .collect();
+            if incoming.is_empty() {
+                continue;
+            }
+            let mut merged: Option<BandStartProvenance> = None;
+            let mut all_ok = true;
+            for &&(src_blk, _, in_val) in &incoming {
+                let in_r = root_of(in_val);
+                let prov = if const_vals.get(&in_r) == Some(&u128::from(u64::MAX)) {
+                    Some(BandStartProvenance::SentinelMax)
+                } else if let Some(&existing) = band_vars.get(&in_r) {
+                    Some(existing)
+                } else {
+                    let mut found = None;
+                    for &(_, _, _, pred) in &branch_preds {
+                        let StripCond::Lt(last_r, len_r) = pred else {
+                            continue;
+                        };
+                        let Some(&param) = slice_lens.get(&len_r) else {
+                            continue;
+                        };
+                        if !dominates_pred(src_blk, pred) {
+                            continue;
+                        }
+                        if let Some(&(x, y)) = add_ops.get(&last_r) {
+                            for (start_cand, rem_cand) in [(x, y), (y, x)] {
+                                if start_cand != in_r {
+                                    continue;
+                                }
+                                if let Some(&cols_root) = sub_one_of.get(&rem_cand)
+                                    && dominates_pred(src_blk, StripCond::NonZero(cols_root))
+                                {
+                                    found = Some(BandStartProvenance::RowBand { param, cols_root });
+                                    break;
+                                }
+                                if let Some(&(m1, m2)) = mul_ops.get(&rem_cand) {
+                                    for (sub_cand, stride_root) in [(m1, m2), (m2, m1)] {
+                                        if let Some(&rows_root) = sub_one_of.get(&sub_cand)
+                                            && dominates_pred(
+                                                src_blk,
+                                                StripCond::NonZero(rows_root),
+                                            )
+                                        {
+                                            found = Some(BandStartProvenance::ColBand {
+                                                param,
+                                                rows_root,
+                                                stride_root,
+                                            });
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if found.is_some() {
+                            break;
+                        }
+                    }
+                    found
+                };
+                match prov {
+                    Some(BandStartProvenance::SentinelMax) => {}
+                    Some(concrete) => match merged {
+                        None => merged = Some(concrete),
+                        Some(prev) if prev == concrete => {}
+                        Some(_) => {
+                            all_ok = false;
+                            break;
+                        }
+                    },
+                    None => {
+                        all_ok = false;
+                        break;
+                    }
+                }
+            }
+            if all_ok
+                && let Some(valid_prov) = merged
+                && band_vars.get(&arg_root) != Some(&valid_prov)
+            {
+                band_vars.insert(arg_root, valid_prov);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    let mut band_effs: HashMap<pliron::value::Value, pliron::value::Value> = HashMap::new();
+    for (dst_blk, &b_ptr) in blocks.iter().enumerate().skip(1) {
+        let blk = b_ptr.deref(ctx);
+        if blk.get_num_arguments() != 1 {
+            continue;
+        }
+        let eff_root = root_of(blk.get_argument(0));
+        let incoming: Vec<_> = goto_edges
+            .iter()
+            .filter(|&&(_, d, _)| d == dst_blk)
+            .collect();
+        if incoming.is_empty() {
+            continue;
+        }
+        for (&band_root, &prov) in &band_vars {
+            let extent_root = match prov {
+                BandStartProvenance::RowBand { cols_root, .. } => cols_root,
+                BandStartProvenance::ColBand { rows_root, .. } => rows_root,
+                BandStartProvenance::SentinelMax => continue,
+            };
+            let mut saw_extent = false;
+            let all_valid = incoming.iter().all(|&&(src_blk, _, op0)| {
+                let r = root_of(op0);
+                if const_vals.get(&r) == Some(&0) {
+                    true
+                } else if r == extent_root && dominates_pred(src_blk, StripCond::NotMax(band_root))
+                {
+                    saw_extent = true;
+                    true
+                } else {
+                    false
+                }
+            });
+            if all_valid && saw_extent {
+                band_effs.insert(eff_root, band_root);
+                break;
+            }
+        }
+    }
+
+    let step_is_guarded = |b_idx: usize,
+                           step_root: pliron::value::Value,
+                           band_root: pliron::value::Value,
+                           extent_root: pliron::value::Value|
+     -> bool {
+        let via_eff = band_effs.iter().any(|(&eff_r, &b_r)| {
+            b_r == band_root && dominates_pred(b_idx, StripCond::Lt(step_root, eff_r))
+        });
+        via_eff
+            || (dominates_pred(b_idx, StripCond::NotMax(band_root))
+                && dominates_pred(b_idx, StripCond::Lt(step_root, extent_root)))
+    };
+
+    let peel_const_add = |r: pliron::value::Value| -> Vec<(pliron::value::Value, u64)> {
+        let mut candidates = vec![(r, 0u64)];
+        if let Some(&(a, b)) = add_ops.get(&r) {
+            if let Some(&c) = const_vals.get(&b)
+                && let Ok(off) = u64::try_from(c)
+            {
+                candidates.push((a, off));
+            }
+            if let Some(&c) = const_vals.get(&a)
+                && let Ok(off) = u64::try_from(c)
+            {
+                candidates.push((b, off));
+            }
+        }
+        candidates
+    };
+
+    let mut verified_indices: HashMap<pliron::value::Value, (usize, GlobalStripKind, u64)> =
+        HashMap::new();
+    for (b_idx, &b_ptr) in blocks.iter().enumerate() {
+        for op_ptr in b_ptr.deref(ctx).iter(ctx) {
+            let op = op_ptr.deref(ctx);
+            for res in op.results() {
+                let idx_root = root_of(res);
+                let mut matched = None;
+                for (core_root, outer_off) in peel_const_add(idx_root) {
+                    let Some(&(lhs, rhs)) = add_ops.get(&core_root) else {
+                        continue;
+                    };
+                    for (band_cand, step_part) in [(lhs, rhs), (rhs, lhs)] {
+                        match band_vars.get(&band_cand) {
+                            Some(&BandStartProvenance::RowBand { param, cols_root }) => {
+                                for (step_root, inner_off) in peel_const_add(step_part) {
+                                    if tx_derived.contains(&step_root)
+                                        && step_is_guarded(b_idx, step_root, band_cand, cols_root)
+                                    {
+                                        matched = Some((
+                                            param,
+                                            GlobalStripKind::RowStrip,
+                                            outer_off.saturating_add(inner_off),
+                                        ));
+                                        break;
+                                    }
+                                }
+                            }
+                            Some(&BandStartProvenance::ColBand {
+                                param,
+                                rows_root,
+                                stride_root,
+                            }) => {
+                                if let Some(&(m1, m2)) = mul_ops.get(&step_part) {
+                                    for (row_cand, st_cand) in [(m1, m2), (m2, m1)] {
+                                        if st_cand == stride_root
+                                            && ty_derived.contains(&row_cand)
+                                            && step_is_guarded(
+                                                b_idx, row_cand, band_cand, rows_root,
+                                            )
+                                        {
+                                            matched =
+                                                Some((param, GlobalStripKind::ColStrip, outer_off));
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                        if matched.is_some() {
+                            break;
+                        }
+                    }
+                    if matched.is_some() {
+                        break;
+                    }
+                }
+                if let Some(info) = matched {
+                    verified_indices.insert(res, info);
+                }
+            }
+        }
+    }
+    verified_indices
+}
+
 /// Check if `start` can reach `target` in `succs` without passing through `forbidden`.
 fn can_reach_without(
     start: usize,
@@ -1465,17 +1990,6 @@ fn translate_verified_2d_tiled_kernel(
                         ) && (a.has_coord() || b.has_coord())
                         {
                             SsaKind::Index(IdxExpr::Mul(Box::new(a), Box::new(b)))
-                        } else if matches!(
-                            (&lhs, &rhs),
-                            (
-                                Some(SsaKind::Index(IdxExpr::Ty) | SsaKind::StripRowOffset),
-                                Some(SsaKind::DataValue | SsaKind::BufferParam(_)),
-                            ) | (
-                                Some(SsaKind::DataValue | SsaKind::BufferParam(_)),
-                                Some(SsaKind::Index(IdxExpr::Ty) | SsaKind::StripRowOffset),
-                            )
-                        ) {
-                            SsaKind::StripColStrided
                         } else {
                             SsaKind::DataValue
                         };
@@ -1490,34 +2004,6 @@ fn translate_verified_2d_tiled_kernel(
                         ) && (a.has_coord() || b.has_coord())
                         {
                             SsaKind::Index(IdxExpr::Add(Box::new(a), Box::new(b)))
-                        } else if matches!(
-                            (&lhs, &rhs),
-                            (
-                                Some(SsaKind::Index(IdxExpr::Tx) | SsaKind::StripColOffset),
-                                Some(SsaKind::DataValue),
-                            ) | (
-                                Some(SsaKind::DataValue),
-                                Some(SsaKind::Index(IdxExpr::Tx) | SsaKind::StripColOffset),
-                            )
-                        ) {
-                            SsaKind::StripColOffset
-                        } else if matches!(
-                            (&lhs, &rhs),
-                            (
-                                Some(SsaKind::Index(IdxExpr::Ty) | SsaKind::StripRowOffset),
-                                Some(SsaKind::DataValue),
-                            ) | (
-                                Some(SsaKind::DataValue),
-                                Some(SsaKind::Index(IdxExpr::Ty) | SsaKind::StripRowOffset),
-                            )
-                        ) {
-                            SsaKind::StripRowOffset
-                        } else if matches!(
-                            (&lhs, &rhs),
-                            (Some(SsaKind::StripColStrided), Some(SsaKind::DataValue))
-                                | (Some(SsaKind::DataValue), Some(SsaKind::StripColStrided))
-                        ) {
-                            SsaKind::StripColStrided
                         } else {
                             SsaKind::DataValue
                         };
@@ -1543,9 +2029,12 @@ fn translate_verified_2d_tiled_kernel(
                         {
                             SsaKind::Guard(GuardExpr::Lt(a, b))
                         } else if let (
-                            Some(SsaKind::StripColOffset | SsaKind::StripColStrided),
+                            Some(SsaKind::VerifiedGlobalStripIdx {
+                                param, offset: 0, ..
+                            }),
                             Some(SsaKind::SliceLen(guard_param)),
                         ) = (lhs, rhs)
+                            && param == guard_param
                         {
                             SsaKind::IndexLtLen { guard_param }
                         } else {
@@ -1573,28 +2062,21 @@ fn translate_verified_2d_tiled_kernel(
                             );
                         } else if let (
                             Some(SsaKind::SlicePtr(param)),
-                            Some(SsaKind::StripColOffset),
-                        ) = (base.clone(), idx.clone())
-                        {
-                            update(
-                                &mut env,
-                                op.get_result(0),
-                                SsaKind::GlobalStripElementPtr {
-                                    param,
-                                    kind: GlobalStripKind::RowStrip,
-                                },
-                            );
-                        } else if let (
-                            Some(SsaKind::SlicePtr(param)),
-                            Some(SsaKind::StripColStrided),
+                            Some(SsaKind::VerifiedGlobalStripIdx {
+                                param: strip_param,
+                                kind,
+                                offset,
+                            }),
                         ) = (base, idx)
+                            && param == strip_param
                         {
                             update(
                                 &mut env,
                                 op.get_result(0),
                                 SsaKind::GlobalStripElementPtr {
                                     param,
-                                    kind: GlobalStripKind::ColStrip,
+                                    kind,
+                                    offset,
                                 },
                             );
                         } else if op.get_num_results() == 1 {
@@ -1611,6 +2093,91 @@ fn translate_verified_2d_tiled_kernel(
         }
         if !changed {
             break;
+        }
+    }
+
+    // 4a. Verify 2D global slice strip bounds (`checked_raw_row_band_start` /
+    //     `checked_raw_col_band_start` + dominating `col < a_eff` / `row < b_eff`)
+    //     and populate `VerifiedGlobalStripIdx`, `IndexLtLen`, and `GlobalStripElementPtr`.
+    if !spec.no_oob_idx.is_empty() {
+        let verified_strips = analyze_verified_2d_strips(ctx, &blocks, &succs, &env);
+        for (val, (param, kind, offset)) in verified_strips {
+            env.bind_result(
+                val,
+                SsaKind::VerifiedGlobalStripIdx {
+                    param,
+                    kind,
+                    offset,
+                },
+            );
+        }
+        for _ in 0..num_blocks + 2 {
+            let mut changed = false;
+            for &b_ptr in &blocks {
+                for op_ptr in b_ptr.deref(ctx).iter(ctx) {
+                    let opid = Operation::get_opid(op_ptr, ctx).to_string();
+                    let op = op_ptr.deref(ctx);
+                    match opid.as_str() {
+                        "mir.cast" if op.get_num_operands() == 1 && op.get_num_results() == 1 => {
+                            if let Some(kind @ SsaKind::VerifiedGlobalStripIdx { .. }) =
+                                env.get_kind(&op.get_operand(0))
+                                && env.get_kind(&op.get_result(0)).as_ref() != Some(&kind)
+                            {
+                                env.bind_result(op.get_result(0), kind);
+                                changed = true;
+                            }
+                        }
+                        "mir.lt" if op.get_num_operands() == 2 && op.get_num_results() == 1 => {
+                            if let (
+                                Some(SsaKind::VerifiedGlobalStripIdx {
+                                    param, offset: 0, ..
+                                }),
+                                Some(SsaKind::SliceLen(guard_param)),
+                            ) = (
+                                env.get_kind(&op.get_operand(0)),
+                                env.get_kind(&op.get_operand(1)),
+                            ) && param == guard_param
+                            {
+                                let next = SsaKind::IndexLtLen { guard_param };
+                                if env.get_kind(&op.get_result(0)).as_ref() != Some(&next) {
+                                    env.bind_result(op.get_result(0), next);
+                                    changed = true;
+                                }
+                            }
+                        }
+                        "mir.ptr_offset"
+                            if op.get_num_operands() == 2 && op.get_num_results() == 1 =>
+                        {
+                            if let (
+                                Some(SsaKind::SlicePtr(param)),
+                                Some(SsaKind::VerifiedGlobalStripIdx {
+                                    param: strip_param,
+                                    kind,
+                                    offset,
+                                }),
+                            ) = (
+                                env.get_kind(&op.get_operand(0)),
+                                env.get_kind(&op.get_operand(1)),
+                            ) && param == strip_param
+                            {
+                                let next = SsaKind::GlobalStripElementPtr {
+                                    param,
+                                    kind,
+                                    offset,
+                                };
+                                if env.get_kind(&op.get_result(0)).as_ref() != Some(&next) {
+                                    env.bind_result(op.get_result(0), next);
+                                    changed = true;
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
         }
     }
 
@@ -1718,10 +2285,108 @@ fn translate_verified_2d_tiled_kernel(
         }
     }
 
-    // 5. Collect 2D global strip accesses, phased shared-memory accesses, and
-    //    proven `mir.assert` nodes (rejecting any verified global slice or
-    //    shared-memory `mir.ptr_offset` that did not resolve to a recognized
-    //    coordinate expression).
+    // 5. Pair each in-block `mir.assert(mir.lt(idx, size))` with the `SharedElementPtr`
+    //    produced by its verified `mir.ptr_offset(shared_base, idx)` in that block, and
+    //    only elide the assert once a `mir.load` or `mir.store` on that pointer is
+    //    recorded as a Lean `NoOobTileAccess` obligation (preserving `SharedArray::index`
+    //    call-terminator splits where `mir.ptr_offset` and `mir.load`/`mir.store` live in
+    //    adjacent blocks).
+    let mut lt_const_bounds: HashMap<pliron::value::Value, (pliron::value::Value, u64)> =
+        HashMap::new();
+    for &b_ptr in &blocks {
+        for op_ptr in b_ptr.deref(ctx).iter(ctx) {
+            if Operation::get_opid(op_ptr, ctx).to_string() == "mir.lt" {
+                let op = op_ptr.deref(ctx);
+                if op.get_num_operands() == 2 && op.get_num_results() == 1 {
+                    let idx_val = op.get_operand(0);
+                    let bound_val = op.get_operand(1);
+                    if matches!(env.get_kind(&idx_val), Some(SsaKind::Index(_)))
+                        && let Some(SsaKind::ConstInt { value, .. }) = env.get_kind(&bound_val)
+                        && let Ok(bound) = u64::try_from(value)
+                    {
+                        lt_const_bounds.insert(op.get_result(0), (idx_val, bound));
+                    }
+                }
+            }
+        }
+    }
+
+    let mut ptr_asserts: HashMap<pliron::value::Value, Ptr<Operation>> = HashMap::new();
+    for &b_ptr in &blocks {
+        let mut pending_shared_asserts: Vec<(Ptr<Operation>, pliron::value::Value, u64)> =
+            Vec::new();
+        for op_ptr in b_ptr.deref(ctx).iter(ctx) {
+            let opid = Operation::get_opid(op_ptr, ctx).to_string();
+            let op = op_ptr.deref(ctx);
+            match opid.as_str() {
+                "mir.assert" if op.get_num_operands() == 1 => {
+                    if let Some(&(idx_val, bound)) = lt_const_bounds.get(&op.get_operand(0)) {
+                        pending_shared_asserts.push((op_ptr, idx_val, bound));
+                    }
+                }
+                "mir.array_element_addr" if op.get_num_operands() >= 2 => {
+                    let idx_val = op.get_operand(1);
+                    if let Some(pos) = pending_shared_asserts
+                        .iter()
+                        .rposition(|&(_, p_idx, _)| p_idx == idx_val)
+                    {
+                        pending_shared_asserts.remove(pos);
+                    }
+                }
+                "mir.ptr_offset" if op.get_num_operands() >= 2 && op.get_num_results() == 1 => {
+                    let base_val = op.get_operand(0);
+                    let idx_val = op.get_operand(1);
+                    match env.get_kind(&base_val) {
+                        Some(SsaKind::SharedBasePtr { shared_id, size }) => {
+                            if let Some(pos) =
+                                pending_shared_asserts
+                                    .iter()
+                                    .rposition(|&(_, p_idx, p_bound)| {
+                                        p_idx == idx_val && p_bound == size
+                                    })
+                            {
+                                let (assert_op, _, _) = pending_shared_asserts.remove(pos);
+                                if spec.no_oob_shared.contains(&shared_id) {
+                                    ptr_asserts.insert(op.get_result(0), assert_op);
+                                }
+                            }
+                        }
+                        _ => {
+                            if let Some(pos) = pending_shared_asserts
+                                .iter()
+                                .rposition(|&(_, p_idx, _)| p_idx == idx_val)
+                            {
+                                pending_shared_asserts.remove(pos);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    for _pass in 0..num_blocks + 2 {
+        let mut changed = false;
+        for &b_ptr in &blocks {
+            for op_ptr in b_ptr.deref(ctx).iter(ctx) {
+                if Operation::get_opid(op_ptr, ctx).to_string() == "mir.cast" {
+                    let op = op_ptr.deref(ctx);
+                    if op.get_num_operands() == 1
+                        && op.get_num_results() == 1
+                        && let Some(&assert_op) = ptr_asserts.get(&op.get_operand(0))
+                        && !ptr_asserts.contains_key(&op.get_result(0))
+                    {
+                        ptr_asserts.insert(op.get_result(0), assert_op);
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
     let mut global_strip_accesses = Vec::new();
     let mut shared_accesses = Vec::new();
     let mut proven_assert_ops = Vec::new();
@@ -1795,20 +2460,13 @@ fn translate_verified_2d_tiled_kernel(
                     }
                 }
                 "mir.assert" => {
-                    if op.get_num_operands() == 1 {
-                        match env.get_kind(&op.get_operand(0)) {
-                            Some(SsaKind::Guard(GuardExpr::Lt(_, _)))
-                                if !spec.no_oob_shared.is_empty() =>
-                            {
-                                proven_assert_ops.push(op_ptr);
-                            }
-                            Some(SsaKind::IndexLtLen {
-                                guard_param: checked_param,
-                            }) if spec.no_oob_idx.contains(&checked_param) => {
-                                proven_assert_ops.push(op_ptr);
-                            }
-                            _ => {}
-                        }
+                    if op.get_num_operands() == 1
+                        && let Some(SsaKind::IndexLtLen {
+                            guard_param: checked_param,
+                        }) = env.get_kind(&op.get_operand(0))
+                        && spec.no_oob_idx.contains(&checked_param)
+                    {
+                        proven_assert_ops.push(op_ptr);
                     }
                 }
                 "mir.load" => match env.get_kind(&op.get_operand(0)) {
@@ -1817,6 +2475,11 @@ fn translate_verified_2d_tiled_kernel(
                         size,
                         addr,
                     }) => {
+                        if let Some(assert_op) = ptr_asserts.remove(&op.get_operand(0))
+                            && !proven_assert_ops.contains(&assert_op)
+                        {
+                            proven_assert_ops.push(assert_op);
+                        }
                         let mut phase = base_phase;
                         if let Some(&bar_id) = async_bar_for_shared.get(&shared_id)
                             && is_stage_ready(b_idx, bar_id)
@@ -1850,8 +2513,16 @@ fn translate_verified_2d_tiled_kernel(
                             guard,
                         });
                     }
-                    Some(SsaKind::GlobalStripElementPtr { param, kind }) => {
-                        global_strip_accesses.push(GlobalStripAccess2D { param, kind });
+                    Some(SsaKind::GlobalStripElementPtr {
+                        param,
+                        kind,
+                        offset,
+                    }) => {
+                        global_strip_accesses.push(GlobalStripAccess2D {
+                            param,
+                            kind,
+                            offset,
+                        });
                     }
                     _ => {}
                 },
@@ -1862,6 +2533,11 @@ fn translate_verified_2d_tiled_kernel(
                         addr,
                     }) = env.get_kind(&op.get_operand(0))
                     {
+                        if let Some(assert_op) = ptr_asserts.remove(&op.get_operand(0))
+                            && !proven_assert_ops.contains(&assert_op)
+                        {
+                            proven_assert_ops.push(assert_op);
+                        }
                         let mut phase = base_phase;
                         if let Some(&bar_id) = async_bar_for_shared.get(&shared_id)
                             && is_stage_ready(b_idx, bar_id)

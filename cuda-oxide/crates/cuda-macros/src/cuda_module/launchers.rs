@@ -288,7 +288,9 @@ pub(super) fn generate_cuda_module_launch_contract_impl(
 pub(super) fn generate_cuda_module_prepare_launch_methods(
     kernel: &CudaModuleKernel,
 ) -> Option<TokenStream2> {
-    kernel.launch_contract.as_ref()?;
+    if kernel.launch_contract.is_none() {
+        return Some(generate_cuda_module_missing_contract_prepare_method(kernel));
+    }
     let vis = &kernel.vis;
     let cfg_attrs = &kernel.cfg_attrs;
     let fn_name = &kernel.fn_name;
@@ -360,6 +362,70 @@ pub(super) fn generate_cuda_module_prepare_launch_methods(
         }
 
         #prepare_for
+    })
+}
+
+/// Emits a hidden `prepare_<kernel>` method for an uncontracted kernel.
+///
+/// The method exists only to replace the confusing missing-method error with
+/// a diagnostic that explains how to opt into prepared launches. Its bound is
+/// intentionally unsatisfied, so the body cannot be called.
+fn generate_cuda_module_missing_contract_prepare_method(kernel: &CudaModuleKernel) -> TokenStream2 {
+    let vis = &kernel.vis;
+    let cfg_attrs = &kernel.cfg_attrs;
+    let fn_name = &kernel.fn_name;
+    let prepare_name = format_ident!("prepare_{}", fn_name);
+    let diagnostic_trait = cuda_module_prepare_contract_trait_name(kernel);
+    let config = internal_ident("__cuda_oxide_config");
+
+    quote! {
+        #(#cfg_attrs)*
+        #[doc = "A diagnostic stub; this kernel needs a launch contract before it can be prepared."]
+        #[doc(hidden)]
+        #vis fn #prepare_name<__CudaOxideConfig>(
+            &self,
+            #config: __CudaOxideConfig,
+        ) -> !
+        where
+            __CudaOxideConfig: #diagnostic_trait,
+        {
+            unreachable!("an uncontracted kernel cannot be prepared")
+        }
+    }
+}
+
+/// Names the hidden trait that gives each kernel a specific prepare diagnostic.
+pub(super) fn cuda_module_prepare_contract_trait_name(kernel: &CudaModuleKernel) -> syn::Ident {
+    let name = kernel.fn_name.to_string();
+    let name = name.strip_prefix("r#").unwrap_or(&name);
+    format_ident!("__cuda_oxide_prepare_contract_required_for_{}", name)
+}
+
+/// Emits a sealed, per-kernel trait carrying the call-site diagnostic.
+pub(super) fn generate_cuda_module_prepare_contract_diagnostic(
+    kernel: &CudaModuleKernel,
+) -> Option<TokenStream2> {
+    if kernel.launch_contract.is_some() {
+        return None;
+    }
+
+    let cfg_attrs = &kernel.cfg_attrs;
+    let fn_name = kernel.fn_name.to_string();
+    let diagnostic_trait = cuda_module_prepare_contract_trait_name(kernel);
+    let message =
+        format!("kernel `{fn_name}` has no `#[launch_contract]`, so it has no `prepare_*` method");
+
+    Some(quote! {
+        #(#cfg_attrs)*
+        #[doc = "Compiler diagnostic support for the hidden prepare-method stub."]
+        #[doc(hidden)]
+        #[allow(non_camel_case_types)]
+        #[diagnostic::on_unimplemented(
+            message = #message,
+            note = "add `#[launch_contract(...)]` to the kernel to get a prepared launch",
+            note = "or launch it directly with the unsafe `module.<kernel>(stream, LaunchConfig, args...)` method",
+        )]
+        pub trait #diagnostic_trait: ::cuda_host::PrepareLaunchRequiresContract {}
     })
 }
 

@@ -871,6 +871,24 @@ fn requires_relations_generate_overflow_safe_checks_in_checked_launchers_only() 
     );
 }
 
+#[test]
+fn writes_all_elems_generates_host_grid_coverage_check_in_checked_launchers() {
+    let module: ItemMod = parse_quote! {
+        mod kernels {
+            #[kernel]
+            #[launch_contract(domain = 1, block = (256, 1, 1))]
+            #[verify(no_oob_idx(c), disjoint_writes(c), writes_all_elems(c))]
+            pub fn fill_all(mut c: DisjointSlice<f32>) {}
+        }
+    };
+    let expanded = expand_to_compact_string(module);
+    assert!(
+        expanded.contains("\"c.len()<=grid.x*block.x(writes_all_elems)\""),
+        "expected writes_all_elems grid coverage check in host launcher: {expanded}"
+    );
+    assert!(expanded.contains("saturating_mul"), "{expanded}");
+}
+
 #[cfg(feature = "async")]
 #[test]
 fn requires_relations_wrap_async_launchers_in_result() {

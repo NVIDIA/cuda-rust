@@ -431,6 +431,20 @@ fn exports_safe_vecadd_kernel_and_rejects_unguarded_accesses() {
             .contains("pointer offset must index a kernel slice parameter by the 1D thread index"),
         "unexpected error: {err}"
     );
+
+    // Scenario 5d (Hole #7): Conditional inner branch inside `^active` that can skip
+    // writing `c` when `idx < c.len()` must fail `writes_all_elems(c)`!
+    let conditional_skip_write = VECADD_FIXTURE.replace(
+        "    mir.store (c_elem, sum) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:RawMut>, builtin.fp32) -> ()>;\n    mir.goto () [^exit] []: <() -> ()>",
+        "    skip_flag = mir.lt (c_len, idx) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;\n    mir.cond_br (skip_flag) [^do_write, ^exit] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>\n\n  ^do_write():\n    mir.store (c_elem, sum) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:RawMut>, builtin.fp32) -> ()>;\n    mir.goto () [^exit] []: <() -> ()>",
+    );
+    let err = export_named_source(&conditional_skip_write, "vecadd")
+        .expect_err("conditional inner branch skipping `c` write must fail `writes_all_elems`");
+    assert!(
+        err.to_string()
+            .contains("conditional branch can skip writing it when `idx < len`"),
+        "unexpected error for conditional write under `writes_all_elems`: {err}"
+    );
 }
 
 #[test]

@@ -141,6 +141,20 @@ def main():
             raise RuntimeError("Expected inclusive `idx <= c.len()` guard to be rejected by exporter")
         print("REJECTED as expected: inclusive `idx <= c.len()` guard is rejected before Lean.", flush=True)
 
+        # Mutate vecadd MIR with an inner conditional branch that can skip writing `c` under `idx < c_len`:
+        skip_write_mir = temporary / "vecadd_skip_write.mir"
+        skip_write_mir.write_text(
+            vecadd_source.replace(
+                "    mir.store (c_elem, sum) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:RawMut>, builtin.fp32) -> ()>;\n    mir.goto () [^exit] []: <() -> ()>",
+                "    skip_flag = mir.lt (c_len, idx) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;\n    mir.cond_br (skip_flag) [^do_write, ^exit] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>\n\n  ^do_write():\n    mir.store (c_elem, sum) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:RawMut>, builtin.fp32) -> ()>;\n    mir.goto () [^exit] []: <() -> ()>",
+                1,
+            )
+        )
+        rejected_skip = export(skip_write_mir, "vecadd")
+        if rejected_skip.returncode == 0 or "conditional branch can skip writing it" not in rejected_skip.stderr:
+            raise RuntimeError(f"Expected conditional skip under writes_all_elems to be rejected:\n{rejected_skip.stderr}")
+        print("REJECTED as expected: conditional branch skipping output write fails `writes_all_elems`.", flush=True)
+
         # Verified 2D phased shared-memory SGEMM checks
         sgemm_source = SGEMM_TILED_FIXTURE.read_text()
         sgemm_lean = require_export(SGEMM_TILED_FIXTURE, "sgemm_tiled_views")

@@ -476,6 +476,126 @@ fn translate_verified_kernel(
         )?;
     }
 
+    if !spec.writes_all_elems.is_empty() {
+        let num_blocks = blocks.len();
+        let mut succs_1d: Vec<Vec<usize>> = vec![Vec::new(); num_blocks];
+        let mut return_blocks_1d: Vec<usize> = Vec::new();
+        let mut write_blocks_per_param: HashMap<usize, Vec<usize>> = HashMap::new();
+        let mut option_some_targets: HashMap<usize, Vec<usize>> = HashMap::new();
+        let mut direct_lt_targets: HashMap<usize, Vec<usize>> = HashMap::new();
+
+        for (b_idx, &b_ptr) in blocks.iter().enumerate() {
+            if !reachable.contains(&b_idx) {
+                continue;
+            }
+            for op_ptr in b_ptr.deref(ctx).iter(ctx) {
+                let opid = Operation::get_opid(op_ptr, ctx).to_string();
+                let op = op_ptr.deref(ctx);
+                match opid.as_str() {
+                    "mir.return" => return_blocks_1d.push(b_idx),
+                    "mir.store" if op.get_num_operands() >= 1 => {
+                        if let Some(SsaKind::ElementPtr { param, offset: 0 }) =
+                            env.get_kind(&op.get_operand(0))
+                        {
+                            write_blocks_per_param.entry(param).or_default().push(b_idx);
+                        }
+                    }
+                    "mir.goto" => {
+                        if op.get_num_successors() == 1
+                            && let Some(dst) = blocks.iter().position(|&b| b == op.get_successor(0))
+                            && !succs_1d[b_idx].contains(&dst)
+                        {
+                            succs_1d[b_idx].push(dst);
+                        }
+                    }
+                    "mir.cond_br" if op.get_num_operands() >= 1 && op.get_num_successors() == 2 => {
+                        let t_opt = blocks.iter().position(|&b| b == op.get_successor(0));
+                        let f_opt = blocks.iter().position(|&b| b == op.get_successor(1));
+                        for dst in [t_opt, f_opt].into_iter().flatten() {
+                            if !succs_1d[b_idx].contains(&dst) {
+                                succs_1d[b_idx].push(dst);
+                            }
+                        }
+                        match env.get_kind(&op.get_operand(0)) {
+                            Some(SsaKind::OptionIsSome {
+                                param,
+                                offset: 0,
+                                guard_param,
+                            }) if param == guard_param => {
+                                if let Some(t_idx) = t_opt {
+                                    option_some_targets.entry(param).or_default().push(t_idx);
+                                }
+                            }
+                            Some(SsaKind::IndexLtLen { guard_param }) => {
+                                if let Some(t_idx) = t_opt {
+                                    direct_lt_targets
+                                        .entry(guard_param)
+                                        .or_default()
+                                        .push(t_idx);
+                                }
+                            }
+                            Some(SsaKind::IndexGeLen { guard_param }) => {
+                                if let Some(f_idx) = f_opt {
+                                    direct_lt_targets
+                                        .entry(guard_param)
+                                        .or_default()
+                                        .push(f_idx);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        for &param in &spec.writes_all_elems {
+            let entry_blocks = option_some_targets
+                .get(&param)
+                .or_else(|| direct_lt_targets.get(&param));
+            let Some(entries) = entry_blocks.filter(|v| !v.is_empty()) else {
+                return Err(reject(
+                    "writes_all_elems",
+                    format!(
+                        "parameter {param} in `writes_all_elems` requires a direct `idx < param.len()` or `get_mut(idx)` guard"
+                    ),
+                ));
+            };
+            let write_blks = write_blocks_per_param
+                .get(&param)
+                .cloned()
+                .unwrap_or_default();
+            if write_blks.is_empty() {
+                continue;
+            }
+            for &entry_blk in entries {
+                let mut visited = vec![false; num_blocks];
+                let mut stack = Vec::new();
+                if !write_blks.contains(&entry_blk) {
+                    visited[entry_blk] = true;
+                    stack.push(entry_blk);
+                }
+                while let Some(curr) = stack.pop() {
+                    if return_blocks_1d.contains(&curr) {
+                        return Err(reject(
+                            "writes_all_elems",
+                            format!(
+                                "parameter {param} is listed in `writes_all_elems`, but a conditional branch can skip writing it when `idx < len`"
+                            ),
+                        ));
+                    }
+                    for &next in &succs_1d[curr] {
+                        if !write_blks.contains(&next) && !visited[next] {
+                            visited[next] = true;
+                            stack.push(next);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     Ok(TranslatedFunction::Kernel {
         arity,
         spec,

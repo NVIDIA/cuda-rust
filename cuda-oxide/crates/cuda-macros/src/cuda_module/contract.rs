@@ -677,9 +677,11 @@ fn render_requires_expr(expr: &Expr) -> String {
 pub(super) fn generate_requires_checks(
     kernel: &CudaModuleKernel,
     access: RequiresLenAccess,
+    prepared_ident: &Ident,
 ) -> Option<TokenStream2> {
     let contract = kernel.launch_contract.as_ref()?;
-    if contract.requires.is_empty() {
+    let has_coverage = contract.domain == 1 && !kernel.writes_all_elems_params.is_empty();
+    if contract.requires.is_empty() && !has_coverage {
         return None;
     }
     let kernel_name = kernel.fn_name.to_string();
@@ -710,7 +712,46 @@ pub(super) fn generate_requires_checks(
             }
         }
     });
-    Some(quote! { #(#checks)* })
+    let coverage_checks = has_coverage
+        .then(|| {
+            kernel.writes_all_elems_params.iter().map(|param_ident| {
+                let len_expr = match access {
+                    RequiresLenAccess::SyncBuffer => quote! { (#param_ident.len() as u64) },
+                    RequiresLenAccess::AsyncRef => {
+                        quote! { (::cuda_host::KernelSliceArg::len(#param_ident) as u64) }
+                    }
+                    RequiresLenAccess::OwnedValue => {
+                        quote! { (::cuda_host::KernelSliceArg::len(&#param_ident) as u64) }
+                    }
+                };
+                let relation_text =
+                    format!("{param_ident}.len() <= grid.x * block.x (writes_all_elems)");
+                quote! {
+                    {
+                        let #lhs_binding: u64 = #len_expr;
+                        let __cuda_oxide_raw_cfg = #prepared_ident.__raw_config();
+                        let #rhs_binding: u64 = (__cuda_oxide_raw_cfg.grid_dim.0 as u64)
+                            .saturating_mul(__cuda_oxide_raw_cfg.block_dim.0 as u64);
+                        if !(#lhs_binding <= #rhs_binding) {
+                            return ::core::result::Result::Err(
+                                ::cuda_core::LaunchContractError::SizeRequirementViolated {
+                                    kernel: #kernel_name,
+                                    relation: #relation_text,
+                                    lhs: #lhs_binding,
+                                    rhs: #rhs_binding,
+                                },
+                            );
+                        }
+                    }
+                }
+            })
+        })
+        .into_iter()
+        .flatten();
+    Some(quote! {
+        #(#checks)*
+        #(#coverage_checks)*
+    })
 }
 
 /// Transliterates one validated side of a `requires` comparison into a `u64`

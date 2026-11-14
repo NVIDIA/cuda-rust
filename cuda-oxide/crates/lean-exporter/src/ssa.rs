@@ -528,6 +528,8 @@ pub enum SsaKind {
         shared_id: usize,
         /// Number of elements in the `SharedArray`.
         size: u64,
+        /// Byte size of one element `T` (`0` if unrecognized).
+        elem_bytes: u64,
     },
     /// Pointer to a static `Barrier` (`mbarrier`) allocation in shared memory.
     MbarrierPtr {

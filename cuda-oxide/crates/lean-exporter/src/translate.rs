@@ -990,6 +990,32 @@ fn as_idx_expr(kind: &SsaKind) -> Option<IdxExpr> {
     }
 }
 
+/// Compute the byte size of one element in a `mir.shared_alloc` operation from its
+/// `elem_type` attribute (`0` if `elem_type` is absent or unrecognized).
+fn shared_alloc_elem_bytes(ctx: &Context, op: &Operation) -> u64 {
+    use pliron::printable::Printable;
+    op.attributes
+        .0
+        .iter()
+        .find(|(k, _)| k.to_string() == "elem_type")
+        .and_then(|(_, v)| v.downcast_ref::<TypeAttr>())
+        .map(|ta| {
+            let ty_handle = ta.get_type(ctx);
+            let ty_ref = ty_handle.deref(ctx);
+            if let Some(int_ty) = ty_ref.downcast_ref::<IntegerType>() {
+                u64::from(int_ty.width()).div_ceil(8)
+            } else {
+                match ty_handle.disp(ctx).to_string().trim() {
+                    "builtin.fp16" | "builtin.bf16" => 2,
+                    "builtin.fp32" => 4,
+                    "builtin.fp64" => 8,
+                    _ => 0,
+                }
+            }
+        })
+        .unwrap_or(0)
+}
+
 /// Return true if `op` is a `mir.shared_alloc` for a 64-bit hardware `Barrier` (`mbarrier`).
 fn is_mbarrier_shared_alloc(ctx: &Context, op: &Operation) -> bool {
     let size = int_attr_u64(&op.attributes, "size").unwrap_or(0);
@@ -1975,6 +2001,7 @@ fn translate_verified_2d_tiled_kernel(
                             update(&mut env, op.get_result(0), SsaKind::MbarrierPtr { bar_id });
                         } else {
                             let size = int_attr_u64(&op.attributes, "size").unwrap_or(0);
+                            let elem_bytes = shared_alloc_elem_bytes(ctx, &op);
                             let shared_id = shared_raw_list
                                 .iter()
                                 .position(|(n, _)| n == &short)
@@ -1982,7 +2009,11 @@ fn translate_verified_2d_tiled_kernel(
                             update(
                                 &mut env,
                                 op.get_result(0),
-                                SsaKind::SharedBasePtr { shared_id, size },
+                                SsaKind::SharedBasePtr {
+                                    shared_id,
+                                    size,
+                                    elem_bytes,
+                                },
                             );
                         }
                     }
@@ -2142,7 +2173,9 @@ fn translate_verified_2d_tiled_kernel(
                         let base = env.get_kind(&op.get_operand(0));
                         let idx = env.get_kind(&op.get_operand(1));
                         if let (
-                            Some(SsaKind::SharedBasePtr { shared_id, size }),
+                            Some(SsaKind::SharedBasePtr {
+                                shared_id, size, ..
+                            }),
                             Some(SsaKind::Index(addr)),
                         ) = (base.clone(), idx.clone())
                             && addr.has_coord()
@@ -2281,6 +2314,7 @@ fn translate_verified_2d_tiled_kernel(
     //     token chains (`StageProduced` -> `StageReady`) from `mir.cond_br`.
     let mut branch_guards: Vec<(usize, usize, GuardExpr)> = Vec::new();
     let mut arrived_expect_tx_bars: BTreeSet<usize> = BTreeSet::new();
+    let mut arrived_tx_bytes_per_bar: HashMap<usize, u64> = HashMap::new();
     let mut async_bar_for_shared: HashMap<usize, usize> = HashMap::new();
     let mut mbarrier_wait_edges: Vec<(usize, usize, usize)> = Vec::new();
     for (w_blk, &b_ptr) in blocks.iter().enumerate() {
@@ -2290,21 +2324,58 @@ fn translate_verified_2d_tiled_kernel(
             if matches!(
                 opid.as_str(),
                 "nvvm.mbarrier_arrive_expect_tx_shared" | "nvvm.mbarrier_arrive_expect_tx_cluster"
-            ) && op.get_num_operands() >= 1
-                && let Some(SsaKind::MbarrierPtr { bar_id }) = env.get_kind(&op.get_operand(0))
-            {
+            ) {
+                let (
+                    Some(SsaKind::MbarrierPtr { bar_id }),
+                    Some(SsaKind::ConstInt { value: raw_tx, .. }),
+                ) = (
+                    (op.get_num_operands() >= 1)
+                        .then(|| env.get_kind(&op.get_operand(0)))
+                        .flatten(),
+                    (op.get_num_operands() >= 2)
+                        .then(|| env.get_kind(&op.get_operand(1)))
+                        .flatten(),
+                )
+                else {
+                    return Err(reject(
+                        &opid,
+                        "mbarrier_arrive_expect_tx requires a static Barrier pointer and non-zero constant byte count",
+                    ));
+                };
+                let tx_bytes = u64::try_from(raw_tx).unwrap_or(u64::MAX);
+                if tx_bytes == 0 {
+                    return Err(reject(
+                        &opid,
+                        "mbarrier_arrive_expect_tx byte count must be greater than zero",
+                    ));
+                }
                 arrived_expect_tx_bars.insert(bar_id);
-            } else if opid.starts_with("nvvm.cp_async_bulk_tensor_g2s")
-                && op.get_num_operands() >= 2
-                && let (
+                let entry = arrived_tx_bytes_per_bar.entry(bar_id).or_insert(0);
+                *entry = entry.saturating_add(tx_bytes);
+            } else if opid.starts_with("nvvm.cp_async_bulk_tensor_g2s") {
+                let (
                     Some(SsaKind::SharedBasePtr { shared_id, .. }),
                     Some(SsaKind::MbarrierPtr { bar_id }),
                 ) = (
-                    env.get_kind(&op.get_operand(0)),
-                    env.get_kind(&op.get_operand(1)),
+                    (op.get_num_operands() >= 1)
+                        .then(|| env.get_kind(&op.get_operand(0)))
+                        .flatten(),
+                    (op.get_num_operands() >= 2)
+                        .then(|| env.get_kind(&op.get_operand(1)))
+                        .flatten(),
                 )
-            {
+                else {
+                    return Err(reject(
+                        &opid,
+                        "cp_async_bulk_tensor_g2s requires a static SharedArray destination and static Barrier",
+                    ));
+                };
                 async_bar_for_shared.insert(shared_id, bar_id);
+            } else if opid.starts_with("nvvm.cp_async_bulk") {
+                return Err(reject(
+                    &opid,
+                    format!("unsupported async bulk operation `{opid}` in verified kernel"),
+                ));
             } else if opid == "mir.cond_br"
                 && op.get_num_operands() >= 1
                 && op.get_num_successors() == 2
@@ -2433,7 +2504,9 @@ fn translate_verified_2d_tiled_kernel(
                     let base_val = op.get_operand(0);
                     let idx_val = op.get_operand(1);
                     match env.get_kind(&base_val) {
-                        Some(SsaKind::SharedBasePtr { shared_id, size }) => {
+                        Some(SsaKind::SharedBasePtr {
+                            shared_id, size, ..
+                        }) => {
                             if let Some(pos) =
                                 pending_shared_asserts
                                     .iter()
@@ -2503,13 +2576,27 @@ fn translate_verified_2d_tiled_kernel(
             if opid.starts_with("nvvm.cp_async_bulk_tensor_g2s") {
                 if op.get_num_operands() >= 2
                     && let (
-                        Some(SsaKind::SharedBasePtr { shared_id, size }),
-                        Some(SsaKind::MbarrierPtr { .. }),
+                        Some(SsaKind::SharedBasePtr {
+                            shared_id,
+                            size,
+                            elem_bytes,
+                        }),
+                        Some(SsaKind::MbarrierPtr { bar_id }),
                     ) = (
                         env.get_kind(&op.get_operand(0)),
                         env.get_kind(&op.get_operand(1)),
                     )
                 {
+                    if elem_bytes == 0 {
+                        return Err(reject(
+                            &opid,
+                            "cannot determine SharedArray element byte size for async bulk copy",
+                        ));
+                    }
+                    let copied_elems = match arrived_tx_bytes_per_bar.get(&bar_id) {
+                        Some(&tx_bytes) => tx_bytes.div_ceil(elem_bytes),
+                        None => size,
+                    };
                     let shared_name = shared_raw_list
                         .get(shared_id)
                         .map(|(n, _)| n.clone())
@@ -2521,7 +2608,7 @@ fn translate_verified_2d_tiled_kernel(
                         buffer_len: size,
                         phase: base_phase,
                         pattern: TileAccessPatternKind::LinearScan,
-                        loop_bound: size,
+                        loop_bound: copied_elems,
                         leader_only,
                         active_threads,
                         guard: GuardExpr::True,

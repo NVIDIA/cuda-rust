@@ -365,6 +365,25 @@ def main():
             raise RuntimeError(f"Expected bypassing mbarrier_try_wait_parity to fail NoDataRace in Lean:\n{res_no_wait.stdout}")
         print("REJECTED as expected: reading `TILE` without `mbarrier_try_wait_parity` fails `no_data_race`.", flush=True)
 
+        # Mutate async_copy_stage MIR with oversized 32 KB TMA byte count into 16 KB `TILE`:
+        oversized_tma_mir = temporary / "async_copy_oversized.mir"
+        oversized_tma_mir.write_text(
+            async_source.replace(
+                "c16384_u32 = mir.constant () [] [value: builtin.integer <16384: ui32>]",
+                "c16384_u32 = mir.constant () [] [value: builtin.integer <32768: ui32>]",
+                1,
+            )
+        )
+        oversized_tma_lean = require_export(oversized_tma_mir, "async_copy_stage")
+        oversized_tma_file = temporary / "AsyncCopyOversized.lean"
+        oversized_tma_file.write_text(
+            "\n".join(line for line in oversized_tma_lean.splitlines() if not line.startswith("#print axioms"))
+        )
+        res_oversized = run_lake("env", "lean", str(oversized_tma_file))
+        if res_oversized.returncode == 0 or "error: omega could not prove the goal:" not in res_oversized.stdout:
+            raise RuntimeError(f"Expected oversized 32 KB TMA transfer into 16 KB TILE to fail NoOobTileAccess in Lean:\n{res_oversized.stdout}")
+        print("REJECTED as expected: oversized TMA `expect_tx` byte count fails `no_oob_idx(TILE)`.", flush=True)
+
     print("Exporter checks passed for scalar, 1D vecadd, 2D SGEMM, Stage 3 warp/block reductions, Stage 4 sub-warp multi-buffer, and Stage 5 async mbarrier fixtures.")
 
 

@@ -185,12 +185,35 @@ fn resolve_and_inject_verify_markers(
     Ok(())
 }
 
-/// AST visitor that wraps index reads and writes on Lean-verified `SharedArray`
-/// statics (`no_oob_idx` + `no_data_race` + `uniform_barriers`) in `unsafe` blocks
+/// AST visitor that wraps index reads/writes and verified async TMA / `mbarrier`
+/// calls on Lean-verified `SharedArray` and `Barrier` statics in `unsafe` blocks
 /// so the kernel body can be written in safe Rust with explicit phase scopes.
 struct VerifiedSharedArrayRewriter {
     verified_shared: Vec<Ident>,
+    barrier_statics: Vec<Ident>,
     in_unsafe: bool,
+}
+
+/// Peel casts, raw-address-of, references, parens, and `.as_ptr()` / `.as_mut_ptr()`
+/// to check whether `expr` directly targets a static identifier in `allowed`.
+fn expr_targets_static(expr: &Expr, allowed: &[Ident]) -> bool {
+    match expr {
+        Expr::Path(path_expr) => path_expr
+            .path
+            .get_ident()
+            .is_some_and(|id| allowed.iter().any(|v| v == id)),
+        Expr::Cast(cast) => expr_targets_static(&cast.expr, allowed),
+        Expr::RawAddr(raw) => expr_targets_static(&raw.expr, allowed),
+        Expr::Reference(refer) => expr_targets_static(&refer.expr, allowed),
+        Expr::Paren(paren) => expr_targets_static(&paren.expr, allowed),
+        Expr::Group(group) => expr_targets_static(&group.expr, allowed),
+        Expr::MethodCall(mc)
+            if mc.args.is_empty() && (mc.method == "as_ptr" || mc.method == "as_mut_ptr") =>
+        {
+            expr_targets_static(&mc.receiver, allowed)
+        }
+        _ => false,
+    }
 }
 
 impl VerifiedSharedArrayRewriter {
@@ -206,7 +229,8 @@ impl VerifiedSharedArrayRewriter {
             .get_ident()
             .is_some_and(|id| self.verified_shared.iter().any(|v| v == id))
     }
-    fn is_verified_async_barrier_call(expr: &Expr) -> bool {
+
+    fn is_verified_async_barrier_call(&self, expr: &Expr) -> bool {
         let Expr::Call(call_expr) = expr else {
             return false;
         };
@@ -217,17 +241,32 @@ impl VerifiedSharedArrayRewriter {
             return false;
         };
         let name = last.ident.to_string();
-        matches!(
-            name.as_str(),
+        match name.as_str() {
+            "fence_proxy_async_shared_cta" => {
+                call_expr.args.is_empty() && !self.barrier_statics.is_empty()
+            }
             "mbarrier_init"
-                | "mbarrier_inval"
-                | "mbarrier_arrive"
-                | "mbarrier_arrive_expect_tx"
-                | "mbarrier_try_wait"
-                | "mbarrier_try_wait_parity"
-                | "mbarrier_test_wait"
-                | "fence_proxy_async_shared_cta"
-        ) || name.starts_with("cp_async_bulk_tensor_")
+            | "mbarrier_inval"
+            | "mbarrier_arrive"
+            | "mbarrier_arrive_expect_tx"
+            | "mbarrier_try_wait"
+            | "mbarrier_try_wait_parity"
+            | "mbarrier_test_wait" => call_expr
+                .args
+                .first()
+                .is_some_and(|arg| expr_targets_static(arg, &self.barrier_statics)),
+            _ if name.starts_with("cp_async_bulk_tensor_") && name.contains("_g2s") => {
+                call_expr
+                    .args
+                    .first()
+                    .is_some_and(|dst| expr_targets_static(dst, &self.verified_shared))
+                    && call_expr
+                        .args
+                        .iter()
+                        .any(|bar| expr_targets_static(bar, &self.barrier_statics))
+            }
+            _ => false,
+        }
     }
 }
 
@@ -261,7 +300,7 @@ impl VisitMut for VerifiedSharedArrayRewriter {
                 *expr = parse_quote! { unsafe { #inner } };
                 return;
             }
-            if Self::is_verified_async_barrier_call(expr) {
+            if self.is_verified_async_barrier_call(expr) {
                 if let Expr::Call(call_expr) = expr {
                     for arg in &mut call_expr.args {
                         visit_mut::visit_expr_mut(self, arg);
@@ -296,13 +335,34 @@ fn rewrite_verified_shared_accesses(
     if verified_shared.is_empty() {
         return;
     }
+    let barrier_statics = collect_barrier_statics(stmts);
     let mut rewriter = VerifiedSharedArrayRewriter {
         verified_shared,
+        barrier_statics,
         in_unsafe: false,
     };
     for stmt in stmts {
         rewriter.visit_stmt_mut(stmt);
     }
+}
+
+/// Collect in-body `static mut NAME: Barrier` declarations for verified `mbarrier` scoping.
+fn collect_barrier_statics(stmts: &[Stmt]) -> Vec<Ident> {
+    let mut names = Vec::new();
+    for stmt in stmts {
+        if let Stmt::Item(Item::Static(item_static)) = stmt
+            && let Type::Path(type_path) = &*item_static.ty
+            && type_path
+                .path
+                .segments
+                .last()
+                .is_some_and(|seg| seg.ident == "Barrier")
+        {
+            names.push(item_static.ident.clone());
+        }
+    }
+    names.sort_by_key(|a| a.to_string());
+    names
 }
 
 /// Collect in-body `static mut NAME: SharedArray<T, N>` declarations sorted by
@@ -476,5 +536,26 @@ mod tests {
             syn::parse_str("no_oob_idx(TILE_A), no_data_race(TILE_A), uniform_barriers").unwrap();
         let markers = build_verify_marker_stmts(&tiled_args, &params, &shared).unwrap();
         assert_eq!(markers.len(), 3);
+
+        // `rewrite_verified_shared_accesses` must wrap `g2s` TMA copies on verified `TILE_A`
+        // + `BAR`, while leaving unverified `OTHER_TILE` and `s2g` TMA copies unwrapped.
+        let mut async_fn: ItemFn = parse_quote! {
+            pub fn async_k(a: &[f32], mut c: DisjointSlice<f32>) {
+                static mut TILE_A: SharedArray<f32, 4096, 128> = SharedArray::UNINIT;
+                static mut OTHER_TILE: SharedArray<f32, 64, 128> = SharedArray::UNINIT;
+                static mut BAR: Barrier = Barrier::UNINIT;
+                cp_async_bulk_tensor_2d_g2s_cta(&raw mut TILE_A as *mut u8, tmap, 0, 0, &raw mut BAR);
+                cp_async_bulk_tensor_2d_g2s_cta(&raw mut OTHER_TILE as *mut u8, tmap, 0, 0, &raw mut BAR);
+                cp_async_bulk_tensor_2d_s2g(&raw const TILE_A as *const u8, tmap, 0, 0);
+            }
+        };
+        let shared_all = collect_shared_array_statics(&async_fn.block.stmts);
+        rewrite_verified_shared_accesses(&tiled_args, &shared_all, &mut async_fn.block.stmts);
+        let rendered = quote!(#async_fn).to_string();
+        assert_eq!(
+            rendered.matches("unsafe").count(),
+            1,
+            "only verified g2s TMA copy on TILE_A should be wrapped in unsafe: {rendered}"
+        );
     }
 }

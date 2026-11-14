@@ -870,6 +870,37 @@ fn verifies_stage5_async_copy_and_mbarrier_token_ordering() {
         err.to_string().contains("omega could not prove the goal"),
         "unexpected Lean error for wrong mbarrier wait: {err}"
     );
+
+    // 5. Negative check D (Hole #4): TMA `tx_bytes` (`32768` bytes = `8192` floats) exceeding
+    // `TILE`'s declared `4096`-float capacity must emit `loopBound := 8192` vs `bufferLen := 4096`
+    // and fail `NoOobTileAccess` in Lean 4's `omega`!
+    let oversized_tma = ASYNC_COPY_FIXTURE.replace(
+        "c16384_u32 = mir.constant () [] [value: builtin.integer <16384: ui32>]",
+        "c16384_u32 = mir.constant () [] [value: builtin.integer <32768: ui32>]",
+    );
+    let oversized_lean =
+        export_named_source(&oversized_tma, "async_copy_stage").expect("exports oversized TMA OOB");
+    assert!(oversized_lean.contains("loopBound := 8192"));
+    let err = lean_exporter::runner::check_generated_lean(&oversized_lean, &lean_dir)
+        .expect_err("Lean must reject 32 KB TMA transfer into 16 KB (4096-float) TILE");
+    assert!(
+        err.to_string().contains("omega could not prove the goal"),
+        "unexpected Lean error for oversized TMA transfer: {err}"
+    );
+
+    // 6. Negative check E (Hole #4): Unmodeled `s2g` TMA copy (`nvvm.cp_async_bulk_tensor_s2g_tile_2d`)
+    // must be rejected fail-closed rather than silently ignored!
+    let unmodeled_s2g = ASYNC_COPY_FIXTURE.replace(
+        "mir.goto () [^exit] []: <() -> ()>",
+        "nvvm.cp_async_bulk_tensor_s2g_tile_2d (tile_r_raw, tmap, tile_x, tile_y) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>, mir.ptr <builtin.integer ui8,mutable:false,addrspace:0,kind:SharedRef>, builtin.integer si32, builtin.integer si32) -> ()>;\n        mir.goto () [^exit] []: <() -> ()>",
+    );
+    let err = export_named_source(&unmodeled_s2g, "async_copy_stage")
+        .expect_err("unmodeled `cp_async_bulk_tensor_s2g` must be rejected fail-closed");
+    assert!(
+        err.to_string()
+            .contains("unsupported async bulk operation `nvvm.cp_async_bulk_tensor_s2g_tile_2d`"),
+        "unexpected error for s2g TMA copy: {err}"
+    );
 }
 
 fn count_proven_asserts(source: &str, fn_name: &str) -> usize {

@@ -199,6 +199,10 @@ run_gpu_step \
     gpu_test tile cutile-kernels gpu --ignored --serial
 
 run_gpu_step \
+    "tile-level rank-by-key and stable sort kernels" \
+    gpu_test tile cutile-kernels rank_sort_gpu --ignored --serial
+
+run_gpu_step \
     "cutile GPU aggregate tests" \
     gpu_test tile cutile gpu
 

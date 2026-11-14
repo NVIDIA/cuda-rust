@@ -246,6 +246,55 @@ fn smoke_compile_argmax_embedding_pointwise_and_norms() {
 }
 
 #[test]
+fn smoke_compile_sort() {
+    compile_cases(vec![
+        SmokeCase {
+            name: "rank_by_key_probe",
+            module_ast: cutile_kernels::sort::sort_kernels::__module_ast_self,
+            module_name: "sort_kernels",
+            function_name: "rank_by_key_probe",
+            generics: g(&["1024", "16"]),
+            strides: vec![("digit", vec![1]), ("rank", vec![1]), ("counts", vec![1])],
+            grid: Some((1, 1, 1)),
+        },
+        // The hand-checkable GPU test's small shape. The device JIT rejects
+        // non-power-of-two tile dimensions, so the small case is 8/4.
+        SmokeCase {
+            name: "rank_by_key_probe_small",
+            module_ast: cutile_kernels::sort::sort_kernels::__module_ast_self,
+            module_name: "sort_kernels",
+            function_name: "rank_by_key_probe",
+            generics: g(&["8", "4"]),
+            strides: vec![("digit", vec![1]), ("rank", vec![1]), ("counts", vec![1])],
+            grid: Some((1, 1, 1)),
+        },
+        SmokeCase {
+            name: "rank_by_key_loop",
+            module_ast: cutile_kernels::sort::sort_kernels::__module_ast_self,
+            module_name: "sort_kernels",
+            function_name: "rank_by_key_loop",
+            generics: g(&["1024", "16"]),
+            strides: vec![("digit", vec![1]), ("rank", vec![1]), ("counts", vec![1])],
+            grid: Some((1, 1, 1)),
+        },
+        SmokeCase {
+            name: "sort_by_key",
+            module_ast: cutile_kernels::sort::sort_kernels::__module_ast_self,
+            module_name: "sort_kernels",
+            function_name: "sort_by_key",
+            generics: g(&["256", "16"]),
+            strides: vec![
+                ("keys", vec![1]),
+                ("payload", vec![1]),
+                ("sorted_keys", vec![1]),
+                ("sorted_payload", vec![1]),
+            ],
+            grid: Some((1, 1, 1)),
+        },
+    ]);
+}
+
+#[test]
 fn smoke_compile_positional_and_kv_cache() {
     compile_cases(vec![
         SmokeCase {

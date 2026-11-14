@@ -45,7 +45,9 @@ use crate::{
         KernelVerificationSpec, get_string_attr, has_verification_attributes,
         parse_kernel_verification_spec,
     },
-    ssa::{GlobalStripKind, GuardExpr, IdxExpr, SsaEnv, SsaKind, TileAccessPatternKind},
+    ssa::{
+        GlobalStripKind, GuardExpr, IdxExpr, LoopScopeCheck, SsaEnv, SsaKind, TileAccessPatternKind,
+    },
 };
 
 /// Direction of an extracted buffer access.
@@ -1849,21 +1851,67 @@ fn translate_verified_2d_tiled_kernel(
                     update(&mut env, arg, SsaKind::DataValue);
                 }
             }
-            // Detect inner scan loop counter `i < bound` on block arguments.
-            for step_arg in block.arguments() {
-                for op_ptr in block.iter(ctx) {
-                    if Operation::get_opid(op_ptr, ctx).to_string() == "mir.lt" {
-                        let op = op_ptr.deref(ctx);
-                        if op.get_num_operands() == 2
-                            && op.get_operand(0) == step_arg
-                            && let Some(SsaKind::ConstInt { value: bound, .. }) =
-                                env.get_kind(&op.get_operand(1))
-                        {
+            // Detect inner scan loop counter `i < bound` ONLY when `mir.lt(step_arg, bound)`
+            // (or `mir.not(mir.lt(step_arg, bound))`) drives this header block's `mir.cond_br`
+            // into a cyclic loop body.
+            let mut lt_in_blk: HashMap<pliron::value::Value, (pliron::value::Value, u64)> =
+                HashMap::new();
+            let mut not_in_blk: HashMap<pliron::value::Value, pliron::value::Value> =
+                HashMap::new();
+            let mut term_cond_br: Option<(pliron::value::Value, usize, usize)> = None;
+            for op_ptr in block.iter(ctx) {
+                let opid = Operation::get_opid(op_ptr, ctx).to_string();
+                let op = op_ptr.deref(ctx);
+                if opid == "mir.lt"
+                    && op.get_num_operands() == 2
+                    && op.get_num_results() == 1
+                    && let Some(SsaKind::ConstInt { value: bound, .. }) =
+                        env.get_kind(&op.get_operand(1))
+                {
+                    lt_in_blk.insert(
+                        op.get_result(0),
+                        (op.get_operand(0), u64::try_from(bound).unwrap_or(u64::MAX)),
+                    );
+                } else if opid == "mir.not"
+                    && op.get_num_operands() == 1
+                    && op.get_num_results() == 1
+                {
+                    not_in_blk.insert(op.get_result(0), op.get_operand(0));
+                } else if opid == "mir.cond_br"
+                    && op.get_num_operands() >= 1
+                    && op.get_num_successors() == 2
+                    && let (Some(t_idx), Some(f_idx)) = (
+                        blocks.iter().position(|&b| b == op.get_successor(0)),
+                        blocks.iter().position(|&b| b == op.get_successor(1)),
+                    )
+                {
+                    term_cond_br = Some((op.get_operand(0), t_idx, f_idx));
+                }
+            }
+            if let Some((cond_val, t_idx, f_idx)) = term_cond_br {
+                let decoded = if let Some(&(lhs_val, bound)) = lt_in_blk.get(&cond_val) {
+                    Some((lhs_val, bound, t_idx, f_idx))
+                } else if let Some(&inner_val) = not_in_blk.get(&cond_val)
+                    && let Some(&(lhs_val, bound)) = lt_in_blk.get(&inner_val)
+                {
+                    Some((lhs_val, bound, f_idx, t_idx))
+                } else {
+                    None
+                };
+                if let Some((lhs_val, bound, body_blk, exit_blk)) = decoded
+                    && can_reach(body_blk, b_idx, &succs, num_blocks)
+                {
+                    for (arg_pos, step_arg) in block.arguments().enumerate() {
+                        if step_arg == lhs_val {
                             update(
                                 &mut env,
                                 step_arg,
                                 SsaKind::Index(IdxExpr::LoopVar {
-                                    bound: u64::try_from(bound).unwrap_or(u64::MAX),
+                                    loop_id: b_idx * 16 + arg_pos,
+                                    header_block: b_idx,
+                                    body_block: body_blk,
+                                    exit_block: exit_blk,
+                                    bound,
                                 }),
                             );
                         }
@@ -2174,7 +2222,12 @@ fn translate_verified_2d_tiled_kernel(
                             rhs.as_ref().and_then(as_idx_expr),
                         ) && (a.has_coord() || b.has_coord())
                         {
-                            SsaKind::Index(IdxExpr::Mul(Box::new(a), Box::new(b)))
+                            let prod = IdxExpr::Mul(Box::new(a), Box::new(b));
+                            if prod.single_loop_scope().is_valid() {
+                                SsaKind::Index(prod)
+                            } else {
+                                SsaKind::DataValue
+                            }
                         } else {
                             SsaKind::DataValue
                         };
@@ -2188,7 +2241,12 @@ fn translate_verified_2d_tiled_kernel(
                             rhs.as_ref().and_then(as_idx_expr),
                         ) && (a.has_coord() || b.has_coord())
                         {
-                            SsaKind::Index(IdxExpr::Add(Box::new(a), Box::new(b)))
+                            let sum = IdxExpr::Add(Box::new(a), Box::new(b));
+                            if sum.single_loop_scope().is_valid() {
+                                SsaKind::Index(sum)
+                            } else {
+                                SsaKind::DataValue
+                            }
                         } else {
                             SsaKind::DataValue
                         };
@@ -2203,6 +2261,7 @@ fn translate_verified_2d_tiled_kernel(
                         ) && (a.has_coord() || b.has_coord())
                             && let Some(disjoint_sum) =
                                 IdxExpr::disjoint_bitor(a, b, spec.block_size, spec.block_y)
+                            && disjoint_sum.single_loop_scope().is_valid()
                         {
                             SsaKind::Index(disjoint_sum)
                         } else {
@@ -2254,15 +2313,34 @@ fn translate_verified_2d_tiled_kernel(
                         ) = (base.clone(), idx.clone())
                             && addr.has_coord()
                         {
-                            update(
-                                &mut env,
-                                op.get_result(0),
-                                SsaKind::SharedElementPtr {
-                                    shared_id,
-                                    size,
-                                    addr,
-                                },
-                            );
+                            let loop_in_scope = match addr.single_loop_scope() {
+                                LoopScopeCheck::None => true,
+                                LoopScopeCheck::Single {
+                                    header_block: hdr_blk,
+                                    body_block: body_blk,
+                                    exit_block: exit_blk,
+                                    ..
+                                } => {
+                                    !can_reach_without(0, b_idx, body_blk, &succs, num_blocks)
+                                        && !can_reach_without(
+                                            exit_blk, b_idx, hdr_blk, &succs, num_blocks,
+                                        )
+                                }
+                                LoopScopeCheck::Conflict => false,
+                            };
+                            if loop_in_scope {
+                                update(
+                                    &mut env,
+                                    op.get_result(0),
+                                    SsaKind::SharedElementPtr {
+                                        shared_id,
+                                        size,
+                                        addr,
+                                    },
+                                );
+                            } else if op.get_num_results() == 1 {
+                                update(&mut env, op.get_result(0), SsaKind::DataValue);
+                            }
                         } else if let (
                             Some(SsaKind::SlicePtr(param)),
                             Some(SsaKind::VerifiedGlobalStripIdx {
@@ -2784,6 +2862,21 @@ fn translate_verified_2d_tiled_kernel(
                     _ => {}
                 },
                 "mir.store" => {
+                    if op.get_num_operands() >= 2
+                        && matches!(
+                            env.get_kind(&op.get_operand(1)),
+                            Some(
+                                SsaKind::SharedBasePtr { .. }
+                                    | SsaKind::SharedElementPtr { .. }
+                                    | SsaKind::MbarrierPtr { .. }
+                            )
+                        )
+                    {
+                        return Err(reject(
+                            "mir.store",
+                            "verified shared-memory or mbarrier pointer cannot escape by being stored to memory",
+                        ));
+                    }
                     if let Some(SsaKind::SharedElementPtr {
                         shared_id,
                         size,
@@ -2829,7 +2922,46 @@ fn translate_verified_2d_tiled_kernel(
                         });
                     }
                 }
-                _ => {}
+                "mir.cast"
+                | "nvvm.mbarrier_init_shared"
+                | "nvvm.mbarrier_inval_shared"
+                | "nvvm.mbarrier_arrive_shared"
+                | "nvvm.mbarrier_arrive_expect_tx_shared"
+                | "nvvm.mbarrier_arrive_expect_tx_cluster"
+                | "nvvm.mbarrier_try_wait_parity_shared"
+                | "nvvm.mbarrier_try_wait_shared"
+                | "nvvm.mbarrier_test_wait_shared"
+                | "nvvm.mbarrier_try_wait_parity_cluster"
+                | "nvvm.mbarrier_try_wait_parity_cluster_relaxed"
+                | "nvvm.fence_proxy_async_shared_cta" => {}
+                _ => {
+                    for operand in op.operands() {
+                        match env.get_kind(&operand) {
+                            Some(
+                                SsaKind::SharedBasePtr { shared_id, .. }
+                                | SsaKind::SharedElementPtr { shared_id, .. },
+                            ) if spec.no_oob_shared.contains(&shared_id)
+                                || spec.no_data_race.contains(&shared_id) =>
+                            {
+                                return Err(reject(
+                                    &opid,
+                                    format!(
+                                        "verified shared-memory pointer cannot escape into unmodeled operation `{opid}`"
+                                    ),
+                                ));
+                            }
+                            Some(SsaKind::MbarrierPtr { .. }) => {
+                                return Err(reject(
+                                    &opid,
+                                    format!(
+                                        "verified mbarrier pointer cannot escape into unmodeled operation `{opid}`"
+                                    ),
+                                ));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
             }
         }
     }

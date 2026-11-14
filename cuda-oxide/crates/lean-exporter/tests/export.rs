@@ -1157,3 +1157,59 @@ fn verifies_cyclic_loop_phases_with_init_barrier_and_reordered_blocks() {
     lean_exporter::runner::check_generated_lean(&reordered_lean, &lean_dir)
         .expect("reordered barrier blocks must pass Lean 4 verification");
 }
+
+#[test]
+fn rejects_post_loop_loopvar_leak_conflicting_loop_counters_and_escaping_shared_ptrs() {
+    // 1. Post-loop `LoopVar` leak (Hole #6): Indexing `WARP_SUMS[w]` in `^exit` AFTER
+    // `while w < 8` has terminated (`w == 8`!) must be rejected fail-closed!
+    let post_loop_oob = WARP_REDUCE_FIXTURE.replace(
+        "      ^exit():\n        mir.return () [] []: <() -> ()>\n    }\n}",
+        "      ^exit():\n        bad_ws_raw = mir.shared_alloc () [] [elem_type: builtin.type builtin.fp32, size: builtin.integer <8: i64>, alloc_key: builtin.string \"WARP_SUMS\", source_name: builtin.string \"safe_warp_reduce::kernels::block_reduce_sum::WARP_SUMS\"]: <() -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>)>;\n        bad_ws_ref = mir.cast (bad_ws_raw) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority Reborrow]: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>)>;\n        bad_post_ptr = mir.ptr_offset (bad_ws_ref, w) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>)>;\n        _bad_post_val = mir.load (bad_post_ptr) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>) -> (builtin.fp32)>;\n        mir.return () [] []: <() -> ()>\n    }\n}",
+    );
+    let err = export_named_source(&post_loop_oob, "block_reduce_sum")
+        .expect_err("post-loop `WARP_SUMS[w]` access (`w == 8`) must be rejected fail-closed");
+    assert!(
+        err.to_string()
+            .contains("shared memory pointer offset must use a recognized 2D tile coordinate"),
+        "unexpected error for post-loop `LoopVar` access: {err}"
+    );
+
+    // 2. Conflicting nested loop counters (`w + g` mixing two distinct `LoopVar`s):
+    // must be rejected fail-closed rather than aliasing both counters to `.loopVar`!
+    let nested_conflict = SUBWARP_MULTIBUF_FIXTURE.replace(
+        "      ^phase1_body():\n        c16_x = mir.constant () [] [value: builtin.integer <16: ui64>]: <() -> (builtin.integer ui64)>;",
+        "      ^phase1_body():\n        c16_x = mir.constant () [] [value: builtin.integer <16: ui64>]: <() -> (builtin.integer ui64)>;\n        mir.goto (zero_g) [^inner_h] []: <(builtin.integer ui64) -> ()>\n\n      ^inner_h(g2: builtin.integer ui64):\n        in_g2 = mir.lt (g2, c4_g) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;\n        mir.cond_br (in_g2) [^inner_b, ^phase1_leader_check] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>\n\n      ^inner_b():",
+    ).replace(
+        "x_read_idx = mir.add (x_lane_base, g)",
+        "mixed_loops = mir.add (g, g2) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;\n        x_read_idx = mir.add (x_lane_base, mixed_loops)",
+    );
+    let err = export_named_source(&nested_conflict, "multibuf_subwarp_stage")
+        .expect_err("combining two distinct loop counters `g + g2` must be rejected fail-closed");
+    assert!(
+        err.to_string()
+            .contains("shared memory pointer offset must use a recognized 2D tile coordinate"),
+        "unexpected error for mixed loop counters: {err}"
+    );
+
+    // 3. Escaping verified `SharedArray` pointer into an unmodeled `mir.call`:
+    // must be rejected fail-closed!
+    let escaping_shared = SGEMM_TILED_FIXTURE
+        .replacen(
+            "  ^entry():\n",
+            "  ^entry():\n    mir.func @external_clobber_tile: builtin.function <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>) -> ()> [] { ^entry(p: mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>): mir.return () [] []: <() -> ()> };\n",
+            1,
+        )
+        .replacen(
+            "mir.store (slot_a, alpha) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>, builtin.fp32) -> ()>;",
+            "mir.store (slot_a, alpha) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>, builtin.fp32) -> ()>;\n        mir.call (tile_a_mut) [] [callee: builtin.string \"external_clobber_tile\"]: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>) -> ()>;",
+            1,
+        );
+    let err = export_named_source(&escaping_shared, "sgemm_tiled_views")
+        .expect_err("verified SharedArray pointer escaping into `mir.call` must fail closed");
+    assert!(
+        err.to_string().contains(
+            "verified shared-memory pointer cannot escape into unmodeled operation `mir.call`"
+        ),
+        "unexpected error for escaping shared pointer: {err}"
+    );
+}

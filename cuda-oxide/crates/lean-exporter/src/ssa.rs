@@ -27,6 +27,35 @@ use pliron::value::Value;
 
 use crate::{ExportError, reject};
 
+/// Result of checking whether an [`IdxExpr`] references zero, one, or conflicting
+/// inner loop induction variables.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoopScopeCheck {
+    /// Expression does not reference any `LoopVar`.
+    None,
+    /// Expression references a single `LoopVar` with its active CFG scope.
+    Single {
+        /// Unique loop variable identifier.
+        loop_id: usize,
+        /// Header block index of the loop.
+        header_block: usize,
+        /// Active in-loop target block of `< bound`.
+        body_block: usize,
+        /// Loop-exit target block of `>= bound`.
+        exit_block: usize,
+    },
+    /// Expression combines two distinct `LoopVar`s (`i` and `j`), which cannot be
+    /// represented faithfully by a single `.loopVar` in Lean.
+    Conflict,
+}
+
+impl LoopScopeCheck {
+    /// Return true unless two distinct loop counters were combined.
+    pub fn is_valid(self) -> bool {
+        !matches!(self, Self::Conflict)
+    }
+}
+
 /// Compositional symbolic index expression over thread coordinates `(tx, ty)` and loop step `i`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum IdxExpr {
@@ -36,6 +65,15 @@ pub enum IdxExpr {
     Ty,
     /// Inner scan loop induction variable `i` (`0 <= i < bound`).
     LoopVar {
+        /// Unique loop variable identifier (`header_block * 16 + arg_pos`) so two distinct
+        /// loop counters cannot silently collapse into the single `.loopVar` in Lean.
+        loop_id: usize,
+        /// Basic block index of the loop header that defines this counter.
+        header_block: usize,
+        /// In-loop target block of the `< bound` branch on `header_block`.
+        body_block: usize,
+        /// Loop-exit target block of the `>= bound` branch on `header_block`.
+        exit_block: usize,
         /// Exclusive upper bound on `i` from `while i < bound`.
         bound: u64,
     },
@@ -67,10 +105,47 @@ impl IdxExpr {
     /// (`1` if the expression does not reference an inner loop counter).
     pub fn loop_bound(&self) -> u64 {
         match self {
-            Self::LoopVar { bound } => *bound,
+            Self::LoopVar { bound, .. } => *bound,
             Self::Tx | Self::Ty | Self::Const(_) => 1,
             Self::Add(a, b) | Self::Mul(a, b) => a.loop_bound().max(b.loop_bound()),
             Self::Div(a, _) | Self::Mod(a, _) => a.loop_bound(),
+        }
+    }
+
+    /// Validate that at most one distinct `LoopVar` (`loop_id`) appears in this expression,
+    /// returning its [`LoopScopeCheck`] scope.
+    pub fn single_loop_scope(&self) -> LoopScopeCheck {
+        match self {
+            Self::LoopVar {
+                loop_id,
+                header_block,
+                body_block,
+                exit_block,
+                ..
+            } => LoopScopeCheck::Single {
+                loop_id: *loop_id,
+                header_block: *header_block,
+                body_block: *body_block,
+                exit_block: *exit_block,
+            },
+            Self::Tx | Self::Ty | Self::Const(_) => LoopScopeCheck::None,
+            Self::Div(a, _) | Self::Mod(a, _) => a.single_loop_scope(),
+            Self::Add(a, b) | Self::Mul(a, b) => {
+                match (a.single_loop_scope(), b.single_loop_scope()) {
+                    (LoopScopeCheck::Conflict, _) | (_, LoopScopeCheck::Conflict) => {
+                        LoopScopeCheck::Conflict
+                    }
+                    (LoopScopeCheck::None, other) => other,
+                    (some, LoopScopeCheck::None) => some,
+                    (
+                        sa @ LoopScopeCheck::Single { loop_id: id_a, .. },
+                        LoopScopeCheck::Single { loop_id: id_b, .. },
+                    ) if id_a == id_b => sa,
+                    (LoopScopeCheck::Single { .. }, LoopScopeCheck::Single { .. }) => {
+                        LoopScopeCheck::Conflict
+                    }
+                }
+            }
         }
     }
 
@@ -97,7 +172,7 @@ impl IdxExpr {
         match self {
             Self::Tx => Some(u64::from(block_x)),
             Self::Ty => Some(u64::from(block_y)),
-            Self::LoopVar { bound } => Some(*bound),
+            Self::LoopVar { bound, .. } => Some(*bound),
             Self::Const(c) => c.checked_add(1),
             Self::Mod(_, m) if *m > 0 => Some(*m),
             Self::Mod(_, _) => None,
@@ -183,7 +258,7 @@ impl IdxExpr {
                 },
                 1,
             ),
-            Self::LoopVar { bound } => (TileAccessPatternKind::LinearScan, *bound),
+            Self::LoopVar { bound, .. } => (TileAccessPatternKind::LinearScan, *bound),
             Self::Div(inner, group_size) if **inner == Self::Tx && *group_size > 0 => (
                 TileAccessPatternKind::GroupSlot {
                     group_size: *group_size,
@@ -223,13 +298,13 @@ impl IdxExpr {
                                 (Self::Ty, Self::Tx) => {
                                     return (TileAccessPatternKind::ThreadSlot { stride }, 1);
                                 }
-                                (Self::Ty, Self::LoopVar { bound }) => {
+                                (Self::Ty, Self::LoopVar { bound, .. }) => {
                                     return (TileAccessPatternKind::RowScan { stride }, *bound);
                                 }
-                                (Self::LoopVar { bound }, Self::Tx) => {
+                                (Self::LoopVar { bound, .. }, Self::Tx) => {
                                     return (TileAccessPatternKind::ColScan { stride }, *bound);
                                 }
-                                (Self::Tx, Self::LoopVar { bound }) => {
+                                (Self::Tx, Self::LoopVar { bound, .. }) => {
                                     return (
                                         TileAccessPatternKind::PackedSlot { pack: stride },
                                         *bound,
@@ -241,7 +316,7 @@ impl IdxExpr {
                                         c.saturating_add(1),
                                     );
                                 }
-                                (Self::Mod(b, group_size), Self::LoopVar { bound })
+                                (Self::Mod(b, group_size), Self::LoopVar { bound, .. })
                                     if **b == Self::Tx =>
                                 {
                                     return (

@@ -273,6 +273,20 @@ def main():
             raise RuntimeError(f"Expected missing `lane == 0` guard to fail NoDataRace in Lean:\n{res_no_leader.stdout}")
         print("REJECTED as expected: missing `lane == 0` guard before `WARP_SUMS[tid / 32]` fails `no_data_race`.", flush=True)
 
+        # Mutate block_reduce_sum MIR to read `WARP_SUMS[w]` in `^exit` AFTER `while w < 8` exits:
+        post_loop_mir = temporary / "block_reduce_post_loop.mir"
+        post_loop_mir.write_text(
+            warp_source.replace(
+                "      ^exit():\n        mir.return () [] []: <() -> ()>\n    }\n}",
+                "      ^exit():\n        bad_ws_raw = mir.shared_alloc () [] [elem_type: builtin.type builtin.fp32, size: builtin.integer <8: i64>, alloc_key: builtin.string \"WARP_SUMS\", source_name: builtin.string \"safe_warp_reduce::kernels::block_reduce_sum::WARP_SUMS\"]: <() -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>)>;\n        bad_ws_ref = mir.cast (bad_ws_raw) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority Reborrow]: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>)>;\n        bad_post_ptr = mir.ptr_offset (bad_ws_ref, w) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>)>;\n        _bad_post_val = mir.load (bad_post_ptr) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>) -> (builtin.fp32)>;\n        mir.return () [] []: <() -> ()>\n    }\n}",
+                1,
+            )
+        )
+        rejected_post_loop = export(post_loop_mir, "block_reduce_sum")
+        if rejected_post_loop.returncode == 0 or "shared memory pointer offset must use a recognized 2D tile coordinate" not in rejected_post_loop.stderr:
+            raise RuntimeError(f"Expected post-loop `WARP_SUMS[w]` access to be rejected:\n{rejected_post_loop.stderr}")
+        print("REJECTED as expected: post-loop `WARP_SUMS[w]` access (`w == 8`) is rejected before Lean.", flush=True)
+
         # Stage 4: Sub-warp bitwise coordinate splits & multi-buffer shared staging
         subwarp_source = SUBWARP_MULTIBUF_FIXTURE.read_text()
         split_lean = require_export(SUBWARP_MULTIBUF_FIXTURE, "subwarp_bit_split_stage")

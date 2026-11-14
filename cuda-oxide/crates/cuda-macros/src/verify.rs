@@ -189,8 +189,11 @@ fn resolve_and_inject_verify_markers(
 /// calls on Lean-verified `SharedArray` and `Barrier` statics in `unsafe` blocks
 /// so the kernel body can be written in safe Rust with explicit phase scopes.
 struct VerifiedSharedArrayRewriter {
+    /// In-body `SharedArray` statics listed in both `no_oob_idx` and `no_data_race`.
     verified_shared: Vec<Ident>,
+    /// In-body `Barrier` (`mbarrier`) statics declared inside the kernel function.
     barrier_statics: Vec<Ident>,
+    /// True while traversing inside an existing `unsafe { ... }` block.
     in_unsafe: bool,
 }
 
@@ -217,6 +220,7 @@ fn expr_targets_static(expr: &Expr, allowed: &[Ident]) -> bool {
 }
 
 impl VerifiedSharedArrayRewriter {
+    /// Return true when `expr` indexes a `SharedArray` static in `self.verified_shared`.
     fn is_verified_shared_index(&self, expr: &Expr) -> bool {
         let Expr::Index(index_expr) = expr else {
             return false;
@@ -230,6 +234,9 @@ impl VerifiedSharedArrayRewriter {
             .is_some_and(|id| self.verified_shared.iter().any(|v| v == id))
     }
 
+    /// Return true when `expr` is a verified `mbarrier` op on `self.barrier_statics`
+    /// or a `g2s` TMA bulk copy targeting `self.verified_shared` + `self.barrier_statics`
+    /// (leaving unverified `SharedArray`s and `s2g` TMA stores unwrapped).
     fn is_verified_async_barrier_call(&self, expr: &Expr) -> bool {
         let Expr::Call(call_expr) = expr else {
             return false;
@@ -316,6 +323,8 @@ impl VisitMut for VerifiedSharedArrayRewriter {
     }
 }
 
+/// Wrap Lean-verified `SharedArray` index operations and scoped async `mbarrier` /
+/// `g2s` TMA calls in `unsafe` blocks when `uniform_barriers` is also present.
 fn rewrite_verified_shared_accesses(
     args: &VerifyArgs,
     shared_statics: &[Ident],

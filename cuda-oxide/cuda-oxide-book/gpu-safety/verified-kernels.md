@@ -59,6 +59,7 @@ The compiler pauses in memory at `PostMem2Reg`, proves the kernel's obligations 
 | Verification clauses  | Proves bounds, race freedom, and barriers   | Nothing                             | Bounds checks removed     |
 | Block dimensions      | Taken as a given fact; stamped into PTX     | Checked once when preparing launch  | Hardware enforces block   |
 | Length requirements   | Taken as a given assumption in the proof    | Checked once right before launch    | Nothing (already checked) |
+| Grid coverage         | Assumed in `writes_all_elems` proof         | Checks `out.len() <= grid * block`  | Nothing (already checked) |
 
 ### What Rust Proves vs. What Lean 4 Proves
 
@@ -485,6 +486,7 @@ pub fn async_copy_stage(
 
 How `lean-exporter` and Lean 4 verify the asynchronous token chain:
 - **Single-leader producer (`no_data_race_single_leader`)**: Because the TMA copy is guarded by `if tid == 0`, Lean 4 proves only thread 0 issues the write to `TILE`.
+- **Transfer byte bounds (`no_oob_idx(TILE)`)**: The exporter extracts the expected byte count from `mbarrier_arrive_expect_tx` (`16384` bytes = `4096` floats) and proves in Lean 4 that the transfer fits inside `TILE`'s capacity.
 - **Token-ordered phase separation (`StageProduced` -> `StageReady`)**: The exporter checks that `BAR` is armed by `mbarrier_arrive_expect_tx`, bound to `TILE` by `cp_async_bulk_tensor_2d_g2s_cta`, and awaited on all paths to `TILE[tid]` via `mbarrier_try_wait_parity(&raw const BAR, 0)`. Omitting `mbarrier_arrive_expect_tx`, skipping the wait, or waiting on a different barrier leaves `TILE[tid]` in the producer phase and is rejected by Lean 4 at compile time.
 
 Inspect the exported Lean proof or run the TMA copy on the GPU with:

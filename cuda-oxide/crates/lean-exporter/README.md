@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # `dialect-mir` to Lean 4 Exporter (`lean-exporter`)
 
-Turns `cuda-oxide`'s `dialect-mir` into Lean 4 code so Lean can prove kernel safety properties (`no_oob_idx`, `disjoint_writes`, `writes_all_elems`) before the compiler emits PTX.
+Turns `cuda-oxide`'s `dialect-mir` into Lean 4 code so Lean can prove kernel safety properties (`no_oob_idx`, `no_data_race`, `disjoint_writes`, `writes_all_elems`, `uniform_barriers`) before the compiler emits PTX.
 
 ---
 

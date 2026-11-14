@@ -57,11 +57,13 @@
       └── Launch.lean           `disjoint_writes_1d`, `writes_all_elems_1d`
 ```
 
-| Rust `#[verify(...)]` Clause | Lean Contract (`CudaOxide.Contracts`) | Reusable Proof (`CudaOxide.Proofs`)     |
-|:-----------------------------|:--------------------------------------|:----------------------------------------|
-| `no_oob_idx(buf)`            | `NoOobIdx`                            | `Bounds.no_oob_idx_of_guard_le`         |
-| `disjoint_writes(buf)`       | `DisjointWrites`                      | `Launch.disjoint_writes_1d`             |
-| `writes_all_elems(buf)`      | `WritesAllElems`                      | `Launch.writes_all_elems_1d`            |
+| Rust `#[verify(...)]` Clause | Lean Contract (`CudaOxide.Contracts`)     | Reusable Proof (`CudaOxide.Proofs`)            |
+|:-----------------------------|:------------------------------------------|:-----------------------------------------------|
+| `no_oob_idx(buf)`            | `NoOobIdx` / `NoOobTileAccess`            | `Bounds.no_oob_idx_*` / `Bounds.no_oob_tile_*` |
+| `no_data_race(buf)`          | `NoDataRace`                              | `Launch.no_data_race_*`                        |
+| `disjoint_writes(buf)`       | `DisjointWrites` / `DisjointGroupWrites`  | `Launch.disjoint_writes_1d`                    |
+| `writes_all_elems(buf)`      | `WritesAllElems`                          | `Launch.writes_all_elems_1d`                   |
+| `uniform_barriers`           | `UniformBarriers`                         | `Launch.uniform_barriers_of_checked`           |
 
 ## Commands
 

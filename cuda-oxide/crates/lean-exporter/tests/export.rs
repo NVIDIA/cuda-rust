@@ -917,6 +917,8 @@ fn verifies_stage5_async_copy_and_mbarrier_token_ordering() {
     );
 }
 
+/// Parse `source` and return the number of `mir.assert` operations marked proven
+/// redundant by `translate_function` on `fn_name`.
 fn count_proven_asserts(source: &str, fn_name: &str) -> usize {
     let mut ctx = Context::new();
     dialect_mir::register(&mut ctx);

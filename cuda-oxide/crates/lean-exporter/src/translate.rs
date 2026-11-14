@@ -476,6 +476,9 @@ fn translate_verified_kernel(
         )?;
     }
 
+    // Verify post-dominance for `writes_all_elems`: treating every block that stores
+    // to `param` at offset 0 as a roadblock, no CFG path from the `idx < param.len()`
+    // or `get_mut(idx)` guard entry may reach `mir.return` without writing `param`.
     if !spec.writes_all_elems.is_empty() {
         let num_blocks = blocks.len();
         let mut succs_1d: Vec<Vec<usize>> = vec![Vec::new(); num_blocks];
@@ -1932,6 +1935,9 @@ fn translate_verified_2d_tiled_kernel(
                         }
                     })
                     .count();
+                // Wrap in-loop phases modulo `k` (`passed % k`) so the tail after the
+                // last in-loop barrier reconnects to the head before the first in-loop
+                // barrier (collapsing 1-barrier loops to `0 % 1 = 0` to catch WAR/WAW races).
                 return base_loop_phase + (passed % k);
             }
             if can_reach(hdr, b_idx, &succs, num_blocks) {
@@ -2260,6 +2266,9 @@ fn translate_verified_2d_tiled_kernel(
                         }
                     }
                     "mir.cast" => {
+                        // Preserve `IdxExpr` across widening unsigned casts (`u32 -> u64`),
+                        // and wrap narrowing unsigned casts (`u64 -> u8`) in `Mod(..., 2^w)`
+                        // whenever the expression's upper bound can wrap around `2^w`.
                         if op.get_num_operands() == 1
                             && op.get_num_results() == 1
                             && let Some(kind) = env.get_kind(&op.get_operand(0))
@@ -2373,6 +2382,8 @@ fn translate_verified_2d_tiled_kernel(
                         update(&mut env, op.get_result(0), mapped);
                     }
                     "mir.bitor" => {
+                        // Lower `a | b` to `Add(a, b)` only when power-of-two alignment and
+                        // exclusive upper bounds prove disjoint bit ranges (`(a & b) == 0`).
                         let lhs = env.get_kind(&op.get_operand(0));
                         let rhs = env.get_kind(&op.get_operand(1));
                         let mapped = if let (Some(a), Some(b)) = (
@@ -2433,6 +2444,9 @@ fn translate_verified_2d_tiled_kernel(
                         ) = (base.clone(), idx.clone())
                             && addr.has_coord()
                         {
+                            // `LoopVar { bound }` (`i < bound`) only holds inside blocks
+                            // dominated by the loop header's `< bound` branch; post-loop
+                            // blocks (`i >= bound`) fall back to `DataValue` and fail closed.
                             let loop_in_scope = match addr.single_loop_scope() {
                                 LoopScopeCheck::None => true,
                                 LoopScopeCheck::Single {

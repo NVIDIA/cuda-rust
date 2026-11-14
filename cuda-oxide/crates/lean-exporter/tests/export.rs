@@ -984,3 +984,75 @@ fn elides_only_proven_shared_array_bounds_checks() {
         "must elide `mir.assert` across `SharedArray::index` call-terminator block split"
     );
 }
+
+#[test]
+fn verifies_disjoint_bitor_and_rejects_overlapping_bitor_and_narrowing_cast_collisions() {
+    let lean_dir = lean_exporter::runner::default_lean_package_dir();
+
+    // 1. Positive disjoint `mir.bitor`: `(m_local * 16) | (tid & 15)` has disjoint bit
+    // ranges (`row_off` aligned to 16, `k_lane < 16`), so it lowers to `.bitSplitSlot 16 16`
+    // and passes Lean 4 verification.
+    let disjoint_bitor = SUBWARP_MULTIBUF_FIXTURE.replacen(
+        "split_idx = mir.add (row_off, k_lane)",
+        "split_idx = mir.bitor (row_off, k_lane)",
+        1,
+    );
+    let disjoint_lean = export_named_source(&disjoint_bitor, "subwarp_bit_split_stage")
+        .expect("disjoint `(m_local * 16) | (tid & 15)` must export cleanly");
+    assert!(disjoint_lean.contains(".bitSplitSlot 16 16"));
+    lean_exporter::runner::check_generated_lean(&disjoint_lean, &lean_dir)
+        .expect("Lean must prove disjoint `(m_local * 16) | (tid & 15)` safe");
+
+    // 2. Negative overlapping `mir.bitor`: `SUBWARP_TILE[tid | 1] = 0.0` collides between
+    // threads 0 and 1 (`0 | 1 == 1 | 1 == 1`) and must be rejected fail-closed!
+    let overlapping_bitor = SUBWARP_MULTIBUF_FIXTURE.replacen(
+        "split_idx = mir.add (row_off, k_lane)",
+        "c1_bad = mir.constant () [] [value: builtin.integer <1: ui64>]: <() -> (builtin.integer ui64)>;\n        split_idx = mir.bitor (tid, c1_bad)",
+        1,
+    );
+    let err = export_named_source(&overlapping_bitor, "subwarp_bit_split_stage")
+        .expect_err("overlapping `tid | 1` must be rejected fail-closed");
+    assert!(
+        err.to_string()
+            .contains("shared memory pointer offset must use a recognized 2D tile coordinate"),
+        "unexpected error for overlapping `tid | 1`: {err}"
+    );
+
+    // 3. Negative narrowing integer cast (`((tid * 2) as u8) as u64`): wraps modulo 256 so
+    // thread `0` and thread `128` both write `SUBWARP_TILE[0]`. Must emit `Mod(..., 256)`
+    // and fail `NoDataRace` in Lean 4's `omega`!
+    let narrowing_cast_race = SUBWARP_MULTIBUF_FIXTURE
+        .replacen(
+            "size: builtin.integer <256: i64>",
+            "size: builtin.integer <512: i64>",
+            2,
+        )
+        .replacen(
+            "split_idx = mir.add (row_off, k_lane) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;",
+            "c2_u64 = mir.constant () [] [value: builtin.integer <2: ui64>]: <() -> (builtin.integer ui64)>;\n        tid_x2 = mir.mul (tid, c2_u64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;\n        trunc_u8 = mir.cast (tid_x2) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui64) -> (builtin.integer ui8)>;\n        split_idx = mir.cast (trunc_u8) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui8) -> (builtin.integer ui64)>;",
+            1,
+        );
+    let narrowing_lean = export_named_source(&narrowing_cast_race, "subwarp_bit_split_stage")
+        .expect("narrowing `as u8` exports modulo-256 index expression");
+    assert!(narrowing_lean.contains(".mod (.mul .tx (.const 2)) 256"));
+    let err = lean_exporter::runner::check_generated_lean(&narrowing_lean, &lean_dir)
+        .expect_err("Lean must reject `((tid * 2) as u8) as usize` wraparound collision");
+    assert!(
+        err.to_string().contains("omega could not prove the goal"),
+        "unexpected Lean error for narrowing `as u8` collision: {err}"
+    );
+
+    // 4. Negative 1D narrowing cast (`a[(idx as u8) as u64]` in `vecadd`): must be rejected
+    // fail-closed because `idx` spans dynamic blocks and wraps modulo 256.
+    let vecadd_narrow_cast = VECADD_FIXTURE.replace(
+        "a_elem = mir.ptr_offset (a_ptr, idx)",
+        "idx_u8 = mir.cast (idx) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui64) -> (builtin.integer ui8)>;\n    idx_wrapped = mir.cast (idx_u8) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui8) -> (builtin.integer ui64)>;\n    a_elem = mir.ptr_offset (a_ptr, idx_wrapped)",
+    );
+    let err = export_named_source(&vecadd_narrow_cast, "vecadd")
+        .expect_err("1D narrowing `(idx as u8) as usize` must be rejected fail-closed");
+    assert!(
+        err.to_string()
+            .contains("pointer offset must index a kernel slice parameter by the 1D thread index"),
+        "unexpected error for 1D narrowing cast: {err}"
+    );
+}

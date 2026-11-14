@@ -564,7 +564,37 @@ fn translate_kernel_block_ops(
                     && op.get_num_results() == 1
                     && let Some(kind) = env.get_kind(&op.get_operand(0))
                 {
-                    env.bind_result(op.get_result(0), kind);
+                    let src_ty = op.get_operand(0).get_type(ctx).deref(ctx);
+                    let dst_ty = op.get_result(0).get_type(ctx).deref(ctx);
+                    let mapped = match (
+                        src_ty.downcast_ref::<IntegerType>(),
+                        dst_ty.downcast_ref::<IntegerType>(),
+                    ) {
+                        (Some(si), Some(di)) => {
+                            if si.is_unsigned() && di.is_unsigned() {
+                                if di.width() >= si.width() {
+                                    kind
+                                } else if let SsaKind::ConstInt { value, .. } = kind {
+                                    let mask = if di.width() >= 128 {
+                                        u128::MAX
+                                    } else {
+                                        (1u128 << di.width()) - 1
+                                    };
+                                    SsaKind::ConstInt {
+                                        width: di.width(),
+                                        value: value & mask,
+                                    }
+                                } else {
+                                    SsaKind::DataValue
+                                }
+                            } else {
+                                SsaKind::DataValue
+                            }
+                        }
+                        (None, None) => kind,
+                        _ => SsaKind::DataValue,
+                    };
+                    env.bind_result(op.get_result(0), mapped);
                 }
             }
             "mir.call" => {
@@ -1961,7 +1991,57 @@ fn translate_verified_2d_tiled_kernel(
                             && op.get_num_results() == 1
                             && let Some(kind) = env.get_kind(&op.get_operand(0))
                         {
-                            update(&mut env, op.get_result(0), kind);
+                            let src_ty = op.get_operand(0).get_type(ctx).deref(ctx);
+                            let dst_ty = op.get_result(0).get_type(ctx).deref(ctx);
+                            let mapped = match (
+                                src_ty.downcast_ref::<IntegerType>(),
+                                dst_ty.downcast_ref::<IntegerType>(),
+                            ) {
+                                (Some(si), Some(di)) => {
+                                    if si.is_unsigned() && di.is_unsigned() {
+                                        if di.width() >= si.width() {
+                                            kind
+                                        } else {
+                                            match kind {
+                                                SsaKind::ConstInt { value, .. } => {
+                                                    let mask = if di.width() >= 128 {
+                                                        u128::MAX
+                                                    } else {
+                                                        (1u128 << di.width()) - 1
+                                                    };
+                                                    SsaKind::ConstInt {
+                                                        width: di.width(),
+                                                        value: value & mask,
+                                                    }
+                                                }
+                                                SsaKind::Index(expr) if di.width() < 64 => {
+                                                    let modulus = 1u64 << di.width();
+                                                    if expr
+                                                        .exclusive_upper_bound(
+                                                            spec.block_size,
+                                                            spec.block_y,
+                                                        )
+                                                        .is_some_and(|ub| ub <= modulus)
+                                                    {
+                                                        SsaKind::Index(expr)
+                                                    } else {
+                                                        SsaKind::Index(IdxExpr::Mod(
+                                                            Box::new(expr),
+                                                            modulus,
+                                                        ))
+                                                    }
+                                                }
+                                                _ => SsaKind::DataValue,
+                                            }
+                                        }
+                                    } else {
+                                        SsaKind::DataValue
+                                    }
+                                }
+                                (None, None) => kind,
+                                _ => SsaKind::DataValue,
+                            };
+                            update(&mut env, op.get_result(0), mapped);
                         }
                     }
                     "mir.shl" => {
@@ -1995,7 +2075,7 @@ fn translate_verified_2d_tiled_kernel(
                         };
                         update(&mut env, op.get_result(0), mapped);
                     }
-                    "mir.add" | "mir.bitor" => {
+                    "mir.add" => {
                         let lhs = env.get_kind(&op.get_operand(0));
                         let rhs = env.get_kind(&op.get_operand(1));
                         let mapped = if let (Some(a), Some(b)) = (
@@ -2004,6 +2084,22 @@ fn translate_verified_2d_tiled_kernel(
                         ) && (a.has_coord() || b.has_coord())
                         {
                             SsaKind::Index(IdxExpr::Add(Box::new(a), Box::new(b)))
+                        } else {
+                            SsaKind::DataValue
+                        };
+                        update(&mut env, op.get_result(0), mapped);
+                    }
+                    "mir.bitor" => {
+                        let lhs = env.get_kind(&op.get_operand(0));
+                        let rhs = env.get_kind(&op.get_operand(1));
+                        let mapped = if let (Some(a), Some(b)) = (
+                            lhs.as_ref().and_then(as_idx_expr),
+                            rhs.as_ref().and_then(as_idx_expr),
+                        ) && (a.has_coord() || b.has_coord())
+                            && let Some(disjoint_sum) =
+                                IdxExpr::disjoint_bitor(a, b, spec.block_size, spec.block_y)
+                        {
+                            SsaKind::Index(disjoint_sum)
                         } else {
                             SsaKind::DataValue
                         };

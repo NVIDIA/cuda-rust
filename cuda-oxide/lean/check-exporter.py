@@ -301,6 +301,43 @@ def main():
             raise RuntimeError(f"Expected missing second barrier to fail NoDataRace on S_ACT_DIRECT in Lean:\n{res_missing_bar2.stdout}")
         print("REJECTED as expected: missing second `sync_threads()` before Phase 2 read of `S_ACT_DIRECT` fails `no_data_race`.", flush=True)
 
+        # Mutate subwarp_bit_split_stage MIR with overlapping `tid | 1` (`mir.bitor`):
+        bad_bitor_mir = temporary / "subwarp_bad_bitor.mir"
+        bad_bitor_mir.write_text(
+            subwarp_source.replace(
+                "split_idx = mir.add (row_off, k_lane)",
+                "c1_bad = mir.constant () [] [value: builtin.integer <1: ui64>]: <() -> (builtin.integer ui64)>;\n        split_idx = mir.bitor (tid, c1_bad)",
+                1,
+            )
+        )
+        rejected_bitor = export(bad_bitor_mir, "subwarp_bit_split_stage")
+        if rejected_bitor.returncode == 0 or "shared memory pointer offset must use a recognized 2D tile coordinate" not in rejected_bitor.stderr:
+            raise RuntimeError(f"Expected overlapping `tid | 1` bitor to be rejected:\n{rejected_bitor.stderr}")
+        print("REJECTED as expected: overlapping `tid | 1` bitwise OR is rejected before Lean.", flush=True)
+
+        # Mutate subwarp_bit_split_stage MIR with narrowing `((tid * 2) as u8) as u64` wraparound:
+        narrow_cast_mir = temporary / "subwarp_narrow_cast.mir"
+        narrow_cast_mir.write_text(
+            subwarp_source.replace(
+                "size: builtin.integer <256: i64>",
+                "size: builtin.integer <512: i64>",
+                2,
+            ).replace(
+                "split_idx = mir.add (row_off, k_lane) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;",
+                "c2_u64 = mir.constant () [] [value: builtin.integer <2: ui64>]: <() -> (builtin.integer ui64)>;\n        tid_x2 = mir.mul (tid, c2_u64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;\n        trunc_u8 = mir.cast (tid_x2) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui64) -> (builtin.integer ui8)>;\n        split_idx = mir.cast (trunc_u8) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui8) -> (builtin.integer ui64)>;",
+                1,
+            )
+        )
+        narrow_cast_lean = require_export(narrow_cast_mir, "subwarp_bit_split_stage")
+        narrow_cast_file = temporary / "SubwarpNarrowCast.lean"
+        narrow_cast_file.write_text(
+            "\n".join(line for line in narrow_cast_lean.splitlines() if not line.startswith("#print axioms"))
+        )
+        res_narrow = run_lake("env", "lean", str(narrow_cast_file))
+        if res_narrow.returncode == 0 or "error: omega could not prove the goal:" not in res_narrow.stdout:
+            raise RuntimeError(f"Expected narrowing `((tid * 2) as u8)` cast collision to fail NoDataRace in Lean:\n{res_narrow.stdout}")
+        print("REJECTED as expected: narrowing `((tid * 2) as u8)` cast wraparound fails `no_data_race`.", flush=True)
+
         # Stage 5: Async TMA copy + mbarrier token ordering
         async_source = ASYNC_COPY_FIXTURE.read_text()
         async_lean = require_export(ASYNC_COPY_FIXTURE, "async_copy_stage")

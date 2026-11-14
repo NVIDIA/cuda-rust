@@ -74,6 +74,93 @@ impl IdxExpr {
         }
     }
 
+    /// Return the largest power of two (`1`, `2`, `4`, `8`, ...) guaranteed to divide
+    /// every runtime valuation of this expression.
+    pub fn guaranteed_pow2_align(&self) -> u64 {
+        match self {
+            Self::Const(0) => 1u64 << 63,
+            Self::Const(n) => 1u64 << n.trailing_zeros(),
+            Self::Mul(a, b) => {
+                let shift = (a.guaranteed_pow2_align().trailing_zeros()
+                    + b.guaranteed_pow2_align().trailing_zeros())
+                .min(63);
+                1u64 << shift
+            }
+            Self::Add(a, b) => a.guaranteed_pow2_align().min(b.guaranteed_pow2_align()),
+            Self::Tx | Self::Ty | Self::LoopVar { .. } | Self::Div(_, _) | Self::Mod(_, _) => 1,
+        }
+    }
+
+    /// Return a strict exclusive upper bound `U` (`self < U`) over all valid
+    /// `(tx < block_x, ty < block_y, i < loop_bound)`, or `None` on `u64` overflow.
+    pub fn exclusive_upper_bound(&self, block_x: u32, block_y: u32) -> Option<u64> {
+        match self {
+            Self::Tx => Some(u64::from(block_x)),
+            Self::Ty => Some(u64::from(block_y)),
+            Self::LoopVar { bound } => Some(*bound),
+            Self::Const(c) => c.checked_add(1),
+            Self::Mod(_, m) if *m > 0 => Some(*m),
+            Self::Mod(_, _) => None,
+            Self::Div(inner, d) if *d > 0 => {
+                let ub = inner.exclusive_upper_bound(block_x, block_y)?;
+                if ub == 0 {
+                    Some(0)
+                } else {
+                    ((ub - 1) / *d).checked_add(1)
+                }
+            }
+            Self::Div(_, _) => None,
+            Self::Add(a, b) => {
+                let ua = a.exclusive_upper_bound(block_x, block_y)?;
+                let ub = b.exclusive_upper_bound(block_x, block_y)?;
+                if ua == 0 || ub == 0 {
+                    Some(0)
+                } else {
+                    (ua - 1).checked_add(ub - 1)?.checked_add(1)
+                }
+            }
+            Self::Mul(a, b) => {
+                let ua = a.exclusive_upper_bound(block_x, block_y)?;
+                let ub = b.exclusive_upper_bound(block_x, block_y)?;
+                if ua == 0 || ub == 0 {
+                    Some(0)
+                } else if ua == 1 || ub == 1 {
+                    Some(1)
+                } else {
+                    (ua - 1).checked_mul(ub - 1)?.checked_add(1)
+                }
+            }
+        }
+    }
+
+    /// Convert `lhs | rhs` into `Add(lhs, rhs)` if and only if the active bit ranges
+    /// of `lhs` and `rhs` are provably disjoint (`(lhs & rhs) == 0`).
+    pub fn disjoint_bitor(lhs: Self, rhs: Self, block_x: u32, block_y: u32) -> Option<Self> {
+        if lhs == Self::Const(0) {
+            return Some(rhs);
+        }
+        if rhs == Self::Const(0) {
+            return Some(lhs);
+        }
+        let lhs_align = lhs.guaranteed_pow2_align();
+        if lhs_align > 1
+            && rhs
+                .exclusive_upper_bound(block_x, block_y)
+                .is_some_and(|ub| ub <= lhs_align)
+        {
+            return Some(Self::Add(Box::new(lhs), Box::new(rhs)));
+        }
+        let rhs_align = rhs.guaranteed_pow2_align();
+        if rhs_align > 1
+            && lhs
+                .exclusive_upper_bound(block_x, block_y)
+                .is_some_and(|ub| ub <= rhs_align)
+        {
+            return Some(Self::Add(Box::new(lhs), Box::new(rhs)));
+        }
+        None
+    }
+
     /// Match `self` against `coord * stride` or `stride * coord`, returning `(coord, stride)`.
     fn as_scaled(expr: &Self) -> Option<(&Self, u64)> {
         match expr {

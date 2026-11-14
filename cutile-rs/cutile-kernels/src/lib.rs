@@ -24,6 +24,7 @@ pub mod kv_cache;
 pub mod norms;
 pub mod pointwise;
 pub mod positional;
+pub mod sort;
 
 pub use argmax::{argmax_blocks_f16, argmax_reduce_blocks_to_u32, lm_head_argmax_blocks_f16};
 pub use attention::{
@@ -36,6 +37,7 @@ pub use kv_cache::{kv_cache_update_f16, kv_cache_update_seq_dynpos_f16, kv_cache
 pub use norms::{add_rms_norm_f16, qk_norm_f16, rms_norm_f16};
 pub use pointwise::{add_2d_f16, add_vec_f16, gather_row_f16, silu_mul_2d_f16, silu_mul_vec_f16};
 pub use positional::{qk_rope_dynpos_f16, rope_f16, rope_seq_dynpos_f16, rope_seq_f16};
+pub use sort::{rank_by_key_loop, rank_by_key_probe, sort_by_key};
 
 // Kinds that fire during a normal transformer inference path (decode CUDA graph
 // + step-graph prefill) and therefore may need warmup to pre-pay JIT cost.

@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Add `cutile_kernels::sort` with the tile-level `rank_by_key_probe` and
+  stable `sort_by_key` kernels for small keys (#1658): a one-hot `[N, K]`
+  prefix sum ranks each element within its key, and the sort composes that
+  with an exclusive scan of the per-key counts and a pointer-tile scatter.
+  A `rank_by_key_loop` variant computes the same ranks with one scan per
+  key value for larger `K`, with an opt-in A/B benchmark comparing the two.
 - Add optional cheap screening and budget-reserved paired confirmation to the
   preparation pipeline. Preparation stops before fresh incumbent comparisons;
   incomplete confirmation retains the incumbent and records raw samples and

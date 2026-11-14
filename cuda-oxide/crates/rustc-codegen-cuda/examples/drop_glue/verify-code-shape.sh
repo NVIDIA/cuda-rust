@@ -139,6 +139,47 @@ for name, type_name, before, after in diverging:
         "pre-drop store followed by non-returning self-loop in drop_glue.ptx PASS"
     )
 
+# A zero-sized value has no stack slot, so its retained drop glue must get
+# rustc's dangling address for the type (`align as *mut T`) rather than
+# storage: no alloca in the kernel feeds the call, and the PTX entry keeps no
+# `.local` frame.
+def require_dangling_glue_argument(body, type_name, align, name):
+    call = re.search(
+        rf"call void @\S*drop_glue\d+{type_name}\S*\(ptr (%[\w.]+)\)", body
+    )
+    if call is None:
+        raise SystemExit(
+            f"error: {name} lost the drop_glue::<{type_name}> call in {ll_path}"
+        )
+    argument = re.escape(call.group(1))
+    if re.search(rf"^\s*{argument} = inttoptr i64 {align} to ptr\s*$", body, flags=re.M) is None:
+        raise SystemExit(
+            f"error: {name} does not pass the dangling address {align} to "
+            f"drop_glue::<{type_name}>"
+        )
+
+def reject_local_frame(body, name):
+    if "__local_depot" in body:
+        raise SystemExit(f"error: {name} allocates a .local stack frame")
+
+zero_sized = (
+    ("zst_drop_probe", "ZstLoopingDrop", 1, 0x12121212, 0x13131313),
+    ("aligned_zst_drop_probe", "AlignedZstLoopingDrop", 64, 0x14141414, 0x15151515),
+)
+
+for name, type_name, align, before, after in zero_sized:
+    require_dangling_glue_argument(kernel_body(name), type_name, align, name)
+    body = entry_body(name)
+    after_store = require_store(body, before, name)
+    reject_store(body, after, name)
+    require_nonreturning_loop(body, after_store, name)
+    reject_local_frame(body, name)
+    print(
+        f"{name}: drop_glue::<{type_name}> gets dangling address {align} in "
+        "drop_glue.ll, no .local frame and a non-returning self-loop in "
+        "drop_glue.ptx PASS"
+    )
+
 # Precision control: an effect-free destructor whose branches join back
 # together must still be proven a no-op, so no glue call may appear in the
 # kernel and both of its stores survive.

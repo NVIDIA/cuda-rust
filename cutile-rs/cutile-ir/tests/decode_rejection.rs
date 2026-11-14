@@ -10,6 +10,7 @@
 //! on valid minimal modules.
 
 use cutile_ir::builder::{append_op, build_single_block_region, OpBuilder};
+use cutile_ir::bytecode::encoding::EncodingWriter;
 use cutile_ir::bytecode::{BytecodeVersion, Opcode, Section, MAGIC};
 use cutile_ir::ir::*;
 use cutile_ir::{decode_bytecode, write_bytecode};
@@ -122,6 +123,44 @@ fn reject_invalid_section_marker() {
         result.is_err(),
         "should reject invalid/oversized section marker"
     );
+}
+
+#[test]
+fn reject_section_length_overflow() {
+    let mut buf = minimal_bytecode();
+    buf.pop();
+    buf.push(Section::String as u8);
+    let mut length = EncodingWriter::new();
+    length.write_varint(usize::MAX as u64);
+    buf.extend_from_slice(length.as_bytes());
+    buf.push(Section::EndOfBytecode as u8);
+
+    assert!(
+        decode_bytecode(&buf).is_err(),
+        "an oversized section length should return an error"
+    );
+}
+
+#[test]
+fn reject_section_length_varint_overflow() {
+    // The tenth byte has only one payload bit available in a u64 varint.
+    // Without an overflow check, each of these lengths wraps to 1 and the
+    // empty string table below appears to be a valid section.
+    for last_byte in [0x02, 0x04, 0x7e] {
+        let mut buf = minimal_bytecode();
+        buf.pop();
+        buf.push(Section::String as u8);
+        buf.push(0x81);
+        buf.extend_from_slice(&[0x80; 8]);
+        buf.push(last_byte);
+        buf.push(0); // Empty string table.
+        buf.push(Section::EndOfBytecode as u8);
+
+        assert!(
+            decode_bytecode(&buf).is_err(),
+            "an overflowing varint ending in {last_byte:#04x} should be rejected"
+        );
+    }
 }
 
 #[test]

@@ -73,9 +73,9 @@ pub(super) fn has_device_prefix(name: &str) -> bool {
 /// Plain device symbols drop the reserved MIR-detection prefix in the
 /// final LLVM IR / PTX / LTOIR output. Returns
 /// `name` unchanged for non-device symbols, Rust-mangled symbols, and
-/// device-extern declarations (those keep their original-name `link_name`
-/// attribute). A mangling may contain a device marker in a generic argument
-/// or closure's parent path; stripping it would discard instance identity.
+/// device-extern symbols. A mangling may contain a device marker in a generic
+/// argument or closure's parent path; stripping it would discard instance
+/// identity.
 pub(super) fn strip_device_prefix(name: &str) -> String {
     // The collector deliberately uses rustc manglings for generic instances
     // and name collisions. Keep the entire symbol, including any device

@@ -61,7 +61,8 @@ pub mod intrinsics;
 use super::types;
 use crate::error::{TranslationErr, TranslationResult};
 use crate::translator::facts::{
-    eval_usize_const, is_cuda_device_fn, is_std_precondition_check, self_ty_is_shared_array,
+    eval_usize_const, is_cuda_device_fn, is_external_declaration, is_std_precondition_check,
+    self_ty_is_shared_array,
 };
 use crate::translator::location::span_to_location;
 use crate::translator::rvalue;
@@ -1464,10 +1465,11 @@ fn translate_call(
     )
 }
 
-/// Translate the exact signature of a resolved Rust foreign item.
+/// Translate the exact signature of a resolved external declaration (see
+/// [`is_external_declaration`]).
 ///
 /// Ordinary Rust callees are independently typed by their `mir.func` op and
-/// therefore return `None`. Foreign declarations have no MIR body, so this
+/// therefore return `None`. External declarations have no `mir.func`, so this
 /// `FunctionType` is attached to the call with `AbiBoundary` authority and is
 /// checked again by the final dialect verifier.
 fn translate_foreign_callee_type(
@@ -1490,7 +1492,7 @@ fn translate_foreign_callee_type(
     let Some(instance) = Instance::resolve(fn_def, &substs).ok() else {
         return Ok(None);
     };
-    if !instance.is_foreign_item() {
+    if !is_external_declaration(&instance) {
         return Ok(None);
     }
 
@@ -2196,7 +2198,7 @@ fn extract_function_item_target(
     Ok(Some(FunctionItemTarget {
         name: function_item_call_name(instance),
         requires_direct_dispatch: fn_def.is_intrinsic()
-            || instance.is_foreign_item()
+            || is_external_declaration(&instance)
             || !instance.has_body()
             || matches!(crate_name.as_str(), "cuda_device" | "cuda-device" | "libm")
             || super::cute::function_item_requires_direct_dispatch(&fn_def)

@@ -217,13 +217,17 @@ fn generate_device_function(mut input: ItemFn) -> TokenStream {
 /// Generate device extern block declarations (for FFI with external LTOIR).
 ///
 /// For each function in the extern block:
-/// 1. Rename it into the reserved `cuda_oxide_device_extern_<hash>_` namespace
-///    (for collector detection)
+/// 1. Replace it with a host stub in the reserved
+///    `cuda_oxide_device_extern_<hash>_` namespace (for collector detection)
 /// 2. Generate a wrapper function with the original name (for user code)
 ///
 /// User code calls `foo()` while the collector sees the hash-suffixed reserved
-/// form. The `#[link_name]` attribute restores the original name in the binary
-/// so external LTOIR resolves correctly.
+/// form and declares `foo` in the device module for external LTOIR to resolve.
+///
+/// The stub is a definition, not a foreign declaration: `foo` exists only in
+/// device LTOIR, so a host reference to it stays undefined wherever the link
+/// keeps its callers, e.g. the `#[no_mangle]` `#[kernel]` and `#[device]` host
+/// copies that every cdylib exports.
 fn generate_device_extern_block(mut input: ItemForeignMod) -> TokenStream {
     // Device extern declarations use CUDA's C calling convention. Reject
     // other Rust ABIs because their argument and return conventions may differ.
@@ -241,10 +245,20 @@ fn generate_device_extern_block(mut input: ItemForeignMod) -> TokenStream {
         .into();
     }
 
+    // Lint levels set on the block covered its declarations; the stubs leave
+    // the block, so they carry those levels themselves.
+    let block_lints: Vec<_> = input
+        .attrs
+        .iter()
+        .filter(|attr| is_lint_level(attr))
+        .map(as_definition_lints)
+        .collect();
+
+    let mut stubs = Vec::new();
     let mut wrappers = Vec::new();
 
     // Process each item in the extern block
-    for item in &mut input.items {
+    for item in &input.items {
         if let ForeignItem::Fn(foreign_fn) = item {
             if let Some(err) = reject_reserved_name(&foreign_fn.sig.ident) {
                 return err;
@@ -272,16 +286,6 @@ fn generate_device_extern_block(mut input: ItemForeignMod) -> TokenStream {
             let original_sig = foreign_fn.sig.clone();
 
             let new_name = format_ident!("{}{}", DEVICE_EXTERN_PREFIX, original_name);
-            foreign_fn.sig.ident = new_name.clone();
-
-            // Store original name as link_name for the linker
-            let original_name_str = original_name.to_string();
-            foreign_fn.attrs.push(syn::parse_quote! {
-                #[doc(hidden)]
-            });
-            foreign_fn.attrs.push(syn::parse_quote! {
-                #[link_name = #original_name_str]
-            });
 
             // Generate wrapper function with the original name. User code
             // calls `foo()`; the wrapper forwards to the reserved internal
@@ -302,6 +306,33 @@ fn generate_device_extern_block(mut input: ItemForeignMod) -> TokenStream {
             let return_type = &original_sig.output;
             let inputs = &original_sig.inputs;
 
+            // A declaration answers to `improper_ctypes`, a definition to
+            // `improper_ctypes_definitions`; carry the user's levels across.
+            let stub_attrs = original_attrs.iter().map(|attr| {
+                if is_lint_level(attr) {
+                    as_definition_lints(attr)
+                } else {
+                    attr.clone()
+                }
+            });
+            let vis = &foreign_fn.vis;
+            let message =
+                format!("#[device] extern `{original_name}` executed outside device compilation");
+            // The collector keys on the reserved name and never reads this
+            // body; `inline(never)` keeps rustc's MIR inliner from splicing
+            // the panic into device callers in place of the call.
+            stubs.push(quote! {
+                #(#block_lints)*
+                #(#stub_attrs)*
+                #[doc(hidden)]
+                #[inline(never)]
+                #[allow(non_snake_case)]
+                #vis unsafe extern "C" fn #new_name(#inputs) #return_type {
+                    let _ = (#(#params,)*);
+                    ::core::unreachable!(#message)
+                }
+            });
+
             // Keep user's attributes (like #[convergent]) on the wrapper
             let wrapper = quote! {
                 #(#original_attrs)*
@@ -315,11 +346,42 @@ fn generate_device_extern_block(mut input: ItemForeignMod) -> TokenStream {
         }
     }
 
+    input
+        .items
+        .retain(|item| !matches!(item, ForeignItem::Fn(_)));
+
     let expanded = quote! {
         #input
+
+        #(#stubs)*
 
         #(#wrappers)*
     };
 
     TokenStream::from(expanded)
+}
+
+/// `#[allow]`, `#[warn]`, `#[deny]`, `#[forbid]` or `#[expect]`.
+fn is_lint_level(attr: &syn::Attribute) -> bool {
+    ["allow", "warn", "deny", "forbid", "expect"]
+        .iter()
+        .any(|level| attr.path().is_ident(level))
+}
+
+/// The lint-level `attr` with `improper_ctypes` renamed to its definition
+/// counterpart `improper_ctypes_definitions`.
+fn as_definition_lints(attr: &syn::Attribute) -> syn::Attribute {
+    let mut attr = attr.clone();
+    if let syn::Meta::List(list) = &mut attr.meta {
+        list.tokens = std::mem::take(&mut list.tokens)
+            .into_iter()
+            .map(|token| match token {
+                proc_macro2::TokenTree::Ident(ident) if ident == "improper_ctypes" => {
+                    proc_macro2::Ident::new("improper_ctypes_definitions", ident.span()).into()
+                }
+                other => other,
+            })
+            .collect();
+    }
+    attr
 }

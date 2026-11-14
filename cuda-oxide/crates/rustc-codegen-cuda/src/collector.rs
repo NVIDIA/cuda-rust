@@ -1583,7 +1583,6 @@ impl<'tcx> DeviceCollector<'tcx> {
         }
 
         // Extract the original function name (strip the prefix)
-        // The #[link_name] attribute on the extern fn has the original name.
         // `device_extern_base_name` returns the part after DEVICE_EXTERN_PREFIX
         // and works for both bare and FQDN forms.
         let export_name = device_extern_base_name(full_name)

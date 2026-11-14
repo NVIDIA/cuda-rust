@@ -471,14 +471,17 @@ fn is_convergent_intrinsic(name: &str) -> bool {
 }
 ```
 
-If your new intrinsic is convergent, add it here. If you forget, LLVM might
-hoist it out of an `if` block, and your warp-level code will produce wrong
-results or deadlock. Not great.
+If your new intrinsic is convergent, add it here. The same check decides
+whether the `declare` line and every call to the intrinsic carry `#0`, so if
+you forget, LLVM might hoist it out of an `if` block, and your warp-level code
+will produce wrong results or deadlock. Not great. For catalog intrinsics, an
+`llvm-export` test fails when one whose semantics say `convergent` can lower
+to an LLVM call this check does not cover.
 
 **Final output:**
 
 ```llvm
-declare i32 @llvm.nvvm.shfl.sync.bfly.i32(i32, i32, i32, i32)
+declare i32 @llvm.nvvm.shfl.sync.bfly.i32(i32, i32, i32, i32) #0
 
 %v8 = call i32 @llvm.nvvm.shfl.sync.bfly.i32(
     i32 -1, i32 %v3, i32 %v4, i32 31) #0

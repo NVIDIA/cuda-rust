@@ -271,11 +271,11 @@ declare i32 @llvm.nvvm.read.ptx.sreg.ctaid.x()
 
 define ptx_kernel void @vecadd(ptr addrspace(1) %v0, i64 %v1,
                                 ptr addrspace(1) %v2, i64 %v3,
-                                ptr addrspace(1) %v4, i64 %v5) {
+                                ptr addrspace(1) %v4, i64 %v5) #0 {
 entry:
-    %v6 = call i32 @llvm.nvvm.read.ptx.sreg.tid.x() #0
-    %v7 = call i32 @llvm.nvvm.read.ptx.sreg.ntid.x() #0
-    %v8 = call i32 @llvm.nvvm.read.ptx.sreg.ctaid.x() #0
+    %v6 = call i32 @llvm.nvvm.read.ptx.sreg.tid.x()
+    %v7 = call i32 @llvm.nvvm.read.ptx.sreg.ntid.x()
+    %v8 = call i32 @llvm.nvvm.read.ptx.sreg.ctaid.x()
     %v9 = mul i32 %v8, %v7
     %v10 = add i32 %v9, %v6
     ; ... bounds check, load, add, store ...
@@ -290,6 +290,11 @@ attributes #0 = { convergent }
 Notice the slices have been scalarized: each Rust `&[f32]` becomes a
 `ptr addrspace(1)` and an `i64` length. That happened in the lowering pass;
 by the time the LLVM dialect sees them, they are flat arguments.
+
+The kernel itself is `convergent` (`#0`), as is every device function and
+every call to one. The special-register reads are not: a call to an LLVM
+intrinsic carries `#0` only when the intrinsic is a collective such as a
+barrier or warp shuffle, the same rule its `declare` line follows.
 
 ---
 
@@ -430,7 +435,7 @@ Rust source:   let tid = thread::threadIdx_x();
                 ↓  (mir-importer matches "cuda_device::thread::threadIdx_x")
 dialect-nvvm:  %v2 = nvvm.read_ptx_sreg_tid_x : i32
                 ↓  (mir-lower, then llvm-export)
-LLVM IR:       %v2 = call i32 @llvm.nvvm.read.ptx.sreg.tid.x() #0
+LLVM IR:       %v2 = call i32 @llvm.nvvm.read.ptx.sreg.tid.x()
                 ↓  (llc)
 PTX:           mov.u32 %r1, %tid.x;
 ```

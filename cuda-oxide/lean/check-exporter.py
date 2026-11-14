@@ -162,6 +162,30 @@ def main():
             raise RuntimeError(f"Expected missing `sync_threads()` to fail NoDataRace in Lean:\n{res_race.stdout}")
         print("REJECTED as expected: missing `sync_threads()` between write and read fails `no_data_race`.", flush=True)
 
+        # Mutate sgemm_tiled_views MIR to add an init `nvvm.barrier0` before the loop while
+        # dropping the second in-loop `nvvm.barrier0` (`^phase1_end`):
+        init_one_bar_mir = temporary / "sgemm_init_one_loop_bar.mir"
+        init_one_bar_mir.write_text(
+            sgemm_source.replace(
+                "mir.goto (zero_f32, zero_u32) [^tile_header] []: <(builtin.fp32, builtin.integer ui32) -> ()>",
+                "nvvm.barrier0 () [] []: <() -> ()>;\n        mir.goto (zero_f32, zero_u32) [^tile_header] []: <(builtin.fp32, builtin.integer ui32) -> ()>",
+                1,
+            ).replace(
+                "      ^phase1_end():\n        nvvm.barrier0 () [] []: <() -> ()>;",
+                "      ^phase1_end():",
+                1,
+            )
+        )
+        init_one_bar_lean = require_export(init_one_bar_mir, "sgemm_tiled_views")
+        init_one_bar_file = temporary / "SgemmInitOneBar.lean"
+        init_one_bar_file.write_text(
+            "\n".join(line for line in init_one_bar_lean.splitlines() if not line.startswith("#print axioms"))
+        )
+        res_init_one = run_lake("env", "lean", str(init_one_bar_file))
+        if res_init_one.returncode == 0 or "error: omega could not prove the goal:" not in res_init_one.stdout:
+            raise RuntimeError(f"Expected 1-barrier loop after init sync_threads() to fail NoDataRace in Lean:\n{res_init_one.stdout}")
+        print("REJECTED as expected: 1-barrier loop after init `sync_threads()` fails `no_data_race`.", flush=True)
+
         # Verified 2D sgemm_tiled_raw global strip checks (RowStrip on `a`, ColStrip on `b`)
         sgemm_raw_lean = require_export(SGEMM_TILED_FIXTURE, "sgemm_tiled_raw")
         sgemm_raw_valid = temporary / "SgemmRawValid.lean"

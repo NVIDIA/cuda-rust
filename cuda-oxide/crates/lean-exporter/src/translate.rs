@@ -1558,15 +1558,16 @@ fn analyze_verified_2d_strips(
     verified_indices
 }
 
-/// Check if `start` can reach `target` in `succs` without passing through `forbidden`.
-fn can_reach_without(
+/// Check if `start` can reach `target` in `succs` without passing through either `avoid1` or `avoid2`.
+fn can_reach_avoiding_two(
     start: usize,
     target: usize,
-    forbidden: usize,
+    avoid1: usize,
+    avoid2: usize,
     succs: &[Vec<usize>],
     num_blocks: usize,
 ) -> bool {
-    if start == forbidden {
+    if start == avoid1 || start == avoid2 {
         return false;
     }
     let mut visited = vec![false; num_blocks];
@@ -1577,13 +1578,24 @@ fn can_reach_without(
             return true;
         }
         for &next in &succs[curr] {
-            if next != forbidden && !visited[next] {
+            if next != avoid1 && next != avoid2 && !visited[next] {
                 visited[next] = true;
                 stack.push(next);
             }
         }
     }
     false
+}
+
+/// Check if `start` can reach `target` in `succs` without passing through `forbidden`.
+fn can_reach_without(
+    start: usize,
+    target: usize,
+    forbidden: usize,
+    succs: &[Vec<usize>],
+    num_blocks: usize,
+) -> bool {
+    can_reach_avoiding_two(start, target, forbidden, usize::MAX, succs, num_blocks)
 }
 
 /// Check if `start` can reach `target` in `succs`.
@@ -1635,19 +1647,21 @@ fn translate_verified_2d_tiled_kernel(
     shared_raw_list.sort_by(|a, b| a.0.cmp(&b.0));
     bar_raw_list.sort();
 
-    // 2. Build the block adjacency list, locate `nvvm.barrier0` blocks, and
-    //    find `mir.return` blocks.
+    // 2. Build the block adjacency list, locate `nvvm.barrier0` sites `(block_idx, ord_in_block)`,
+    //    and find `mir.return` blocks.
     let num_blocks = blocks.len();
     let mut succs: Vec<Vec<usize>> = vec![Vec::new(); num_blocks];
-    let mut barrier_blocks: Vec<usize> = Vec::new();
+    let mut barrier_sites: Vec<(usize, usize)> = Vec::new();
     let mut return_blocks: Vec<usize> = Vec::new();
 
     for (b_idx, &b_ptr) in blocks.iter().enumerate() {
+        let mut ord_in_blk = 0usize;
         for op_ptr in b_ptr.deref(ctx).iter(ctx) {
             let opid = Operation::get_opid(op_ptr, ctx).to_string();
             let op = op_ptr.deref(ctx);
             if opid == "nvvm.barrier0" {
-                barrier_blocks.push(b_idx);
+                barrier_sites.push((b_idx, ord_in_blk));
+                ord_in_blk += 1;
             } else if opid == "mir.return" {
                 return_blocks.push(b_idx);
             } else if opid == "mir.goto" || opid == "mir.cond_br" {
@@ -1663,86 +1677,146 @@ fn translate_verified_2d_tiled_kernel(
         }
     }
 
-    // 3. Check barrier uniformity and assign a barrier phase to each block.
-    //    - In a 2-barrier tile loop (`Phase 0 -> barrier0 -> Phase 1 -> barrier1 -> backedge`),
-    //      blocks before `barrier0` are in Phase 0, and blocks after `barrier0` that cannot
-    //      be reached without crossing `barrier0` (and sit before `barrier1`) are in Phase 1.
-    //    - If a barrier is missing (`barrier_blocks.len() < 2`), the phases collapse into Phase 0
-    //      because either there is no barrier between write and read, or the read wraps around
-    //      the loop backedge into the next iteration's write without a barrier!
-    let mut barriers_uniform = !barrier_blocks.is_empty();
-    let mut enclosing_loop_header = None;
-    if let Some(&first_barrier) = barrier_blocks.first() {
-        // Find the loop header that controls the barrier loop (a block that reaches
-        // `first_barrier` and is also reachable from `first_barrier`).
-        let loop_header = (0..num_blocks).find(|&h| {
-            h != first_barrier
-                && can_reach(h, first_barrier, &succs, num_blocks)
-                && can_reach(first_barrier, h, &succs, num_blocks)
-                && !can_reach_without(0, first_barrier, h, &succs, num_blocks)
-        });
-        enclosing_loop_header = loop_header;
-        if let Some(header) = loop_header {
-            // Condition A: Entry block 0 must not be able to reach any `mir.return`
-            // without passing through `header` (catches early `if row >= m { return; }`).
-            for &ret_blk in &return_blocks {
-                if can_reach_without(0, ret_blk, header, &succs, num_blocks) {
-                    barriers_uniform = false;
-                }
-            }
-            // Condition B: Every barrier in the loop must lie on ALL paths from the
-            // loop body entry back to `header` (catches `if tx == 0 { sync_threads() }`).
-            for &b_blk in &barrier_blocks {
-                for &body_start in &succs[header] {
-                    if can_reach(body_start, header, &succs, num_blocks)
-                        && can_reach_without(body_start, header, b_blk, &succs, num_blocks)
-                    {
-                        barriers_uniform = false;
-                    }
-                }
-            }
+    // 3. Separate acyclic (`init` / `epilogue`) barriers from cyclic (`in-loop`) barriers,
+    //    verify barrier uniformity across all paths, and assign cyclic `passed % K` phases
+    //    inside loops regardless of MIR block list ordering.
+    let is_cyclic_block = |b: usize| -> bool {
+        succs[b]
+            .iter()
+            .any(|&s| can_reach(s, b, &succs, num_blocks))
+    };
+    let mut acyclic_barriers: Vec<(usize, usize)> = Vec::new();
+    let mut cyclic_barriers: Vec<(usize, usize)> = Vec::new();
+    for &site in &barrier_sites {
+        if is_cyclic_block(site.0) {
+            cyclic_barriers.push(site);
         } else {
-            // No enclosing loop: every barrier must lie on all paths from entry `0` to `return`.
-            for &b_blk in &barrier_blocks {
-                for &ret_blk in &return_blocks {
-                    if can_reach_without(0, ret_blk, b_blk, &succs, num_blocks) {
-                        barriers_uniform = false;
-                    }
-                }
+            acyclic_barriers.push(site);
+        }
+    }
+
+    let mut barriers_uniform = !barrier_sites.is_empty();
+    for &(ab_blk, _) in &acyclic_barriers {
+        for &ret_blk in &return_blocks {
+            if can_reach_without(0, ret_blk, ab_blk, &succs, num_blocks) {
+                barriers_uniform = false;
             }
         }
     }
 
-    let block_phase = |b_idx: usize, seen_barriers_in_block: usize| -> usize {
-        if !barriers_uniform || barrier_blocks.is_empty() {
-            return 0;
-        }
-        let b0 = barrier_blocks[0];
-        if enclosing_loop_header.is_some() {
-            if barrier_blocks.len() >= 2 {
-                let b1 = barrier_blocks[1];
-                if b_idx == b0 {
-                    return usize::from(seen_barriers_in_block > 0);
-                }
-                if can_reach_without(b0, b_idx, b1, &succs, num_blocks) {
-                    return 1;
+    let mut enclosing_loop_header: Option<usize> = None;
+    if let Some(&(sample_bar, _)) = cyclic_barriers.first() {
+        let candidates: Vec<usize> = (0..num_blocks)
+            .filter(|&h| {
+                can_reach(h, sample_bar, &succs, num_blocks)
+                    && can_reach(sample_bar, h, &succs, num_blocks)
+                    && !can_reach_without(0, sample_bar, h, &succs, num_blocks)
+            })
+            .collect();
+        let header = candidates.iter().copied().find(|&h| {
+            candidates
+                .iter()
+                .all(|&other| other == h || !can_reach_without(0, other, h, &succs, num_blocks))
+        });
+        enclosing_loop_header = header;
+        if let Some(hdr) = header {
+            for &ret_blk in &return_blocks {
+                if can_reach_without(0, ret_blk, hdr, &succs, num_blocks) {
+                    barriers_uniform = false;
                 }
             }
-            0
+            for &body_start in &succs[hdr] {
+                if can_reach(body_start, hdr, &succs, num_blocks) {
+                    for &(cb_blk, _) in &cyclic_barriers {
+                        if can_reach_without(body_start, hdr, cb_blk, &succs, num_blocks) {
+                            barriers_uniform = false;
+                        }
+                    }
+                    for &ret_blk in &return_blocks {
+                        if can_reach_without(body_start, ret_blk, hdr, &succs, num_blocks) {
+                            barriers_uniform = false;
+                        }
+                    }
+                }
+            }
+            cyclic_barriers.sort_by(|&(blk_a, ord_a), &(blk_b, ord_b)| {
+                if blk_a == blk_b {
+                    return ord_a.cmp(&ord_b);
+                }
+                let a_before_b = succs[hdr]
+                    .iter()
+                    .filter(|&&s| can_reach(s, hdr, &succs, num_blocks))
+                    .all(|&s| !can_reach_avoiding_two(s, blk_b, blk_a, hdr, &succs, num_blocks));
+                if a_before_b {
+                    std::cmp::Ordering::Less
+                } else {
+                    std::cmp::Ordering::Greater
+                }
+            });
         } else {
-            // Acyclic N-barrier kernel (`Phase 0 -> sync_threads() -> Phase 1 -> ... -> Phase N`):
-            // Count every barrier in a distinct block `bk` that strictly dominates `b_idx`
-            // from entry `0`, plus any `nvvm.barrier0` ops already passed inside `b_idx`.
-            let dominating_barriers = barrier_blocks
-                .iter()
-                .filter(|&&bk| {
-                    bk != b_idx
-                        && can_reach(bk, b_idx, &succs, num_blocks)
-                        && !can_reach_without(0, b_idx, bk, &succs, num_blocks)
-                })
-                .count();
-            dominating_barriers + seen_barriers_in_block
+            barriers_uniform = false;
         }
+    }
+
+    let acyclic_dom_count = |target_blk: usize, seen_in_blk: usize| -> usize {
+        let strict = acyclic_barriers
+            .iter()
+            .filter(|&&(ab_blk, _)| {
+                ab_blk != target_blk
+                    && can_reach(ab_blk, target_blk, &succs, num_blocks)
+                    && !can_reach_without(0, target_blk, ab_blk, &succs, num_blocks)
+            })
+            .count();
+        let in_same = if !is_cyclic_block(target_blk) {
+            seen_in_blk
+        } else {
+            0
+        };
+        strict + in_same
+    };
+
+    let block_phase = |b_idx: usize, seen_barriers_in_block: usize| -> usize {
+        if !barriers_uniform || barrier_sites.is_empty() {
+            return 0;
+        }
+        if let Some(hdr) = enclosing_loop_header {
+            let base_loop_phase = acyclic_dom_count(hdr, 0);
+            let k = cyclic_barriers.len();
+            let in_loop = b_idx == hdr
+                || (can_reach(hdr, b_idx, &succs, num_blocks)
+                    && can_reach(b_idx, hdr, &succs, num_blocks));
+            if in_loop {
+                if k <= 1 || b_idx == hdr {
+                    return base_loop_phase;
+                }
+                let passed = cyclic_barriers
+                    .iter()
+                    .filter(|&&(bar_blk, bar_ord)| {
+                        if bar_blk == b_idx {
+                            bar_ord < seen_barriers_in_block
+                        } else {
+                            let body_starts: Vec<usize> = succs[hdr]
+                                .iter()
+                                .copied()
+                                .filter(|&s| can_reach(s, hdr, &succs, num_blocks))
+                                .collect();
+                            !body_starts.is_empty()
+                                && body_starts.iter().all(|&s| {
+                                    can_reach_without(s, b_idx, hdr, &succs, num_blocks)
+                                        && !can_reach_avoiding_two(
+                                            s, b_idx, bar_blk, hdr, &succs, num_blocks,
+                                        )
+                                })
+                        }
+                    })
+                    .count();
+                return base_loop_phase + (passed % k);
+            }
+            if can_reach(hdr, b_idx, &succs, num_blocks) {
+                return acyclic_dom_count(b_idx, seen_barriers_in_block) + k;
+            }
+        }
+        acyclic_dom_count(b_idx, seen_barriers_in_block)
     };
 
     // 4. Fixed-point SSA propagation over the function blocks.
@@ -2434,7 +2508,7 @@ fn translate_verified_2d_tiled_kernel(
                     && can_reach(ready_dst, b_idx, &succs, num_blocks)
             })
     };
-    let mut effective_num_barriers = barrier_blocks.len();
+    let mut effective_num_barriers = barrier_sites.len();
     let mut final_barriers_uniform = barriers_uniform;
     for &(_w_blk, ready_dst, bar_id) in &mbarrier_wait_edges {
         if arrived_expect_tx_bars.contains(&bar_id) {

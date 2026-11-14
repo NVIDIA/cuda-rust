@@ -1087,3 +1087,73 @@ fn verifies_disjoint_bitor_and_rejects_overlapping_bitor_and_narrowing_cast_coll
         "unexpected error for 1D narrowing cast: {err}"
     );
 }
+
+#[test]
+fn verifies_cyclic_loop_phases_with_init_barrier_and_reordered_blocks() {
+    let lean_dir = lean_exporter::runner::default_lean_package_dir();
+
+    // 1. Adding an acyclic init `nvvm.barrier0` BEFORE `^tile_header` while keeping BOTH
+    // in-loop barriers (`^phase0_stage` + `^phase1_end`) advances in-loop phases to `1` and `2`
+    // and passes Lean 4 verification.
+    let init_plus_two_loop_bars = SGEMM_TILED_FIXTURE.replacen(
+        "mir.goto (zero_f32, zero_u32) [^tile_header] []: <(builtin.fp32, builtin.integer ui32) -> ()>",
+        "nvvm.barrier0 () [] []: <() -> ()>;\n        mir.goto (zero_f32, zero_u32) [^tile_header] []: <(builtin.fp32, builtin.integer ui32) -> ()>",
+        1,
+    );
+    let valid_init_lean = export_named_source(&init_plus_two_loop_bars, "sgemm_tiled_views")
+        .expect("init barrier + 2-barrier loop must export cleanly");
+    assert!(valid_init_lean.contains("numBarriers := 3"));
+    lean_exporter::runner::check_generated_lean(&valid_init_lean, &lean_dir)
+        .expect("init barrier + 2-barrier loop must pass Lean 4 verification");
+
+    // 2. Negative check (Hole #5): Init `nvvm.barrier0` BEFORE `^tile_header`, but removing the
+    // second in-loop `nvvm.barrier0` (`^phase1_end`) leaves ONLY 1 barrier inside the loop.
+    // `passed % 1 == 0` wraps the post-barrier read into the pre-barrier write's phase (`1`),
+    // and Lean 4's `omega` rejects the loop-carried WAR/WAW data race!
+    let init_plus_one_loop_bar = init_plus_two_loop_bars.replacen(
+        "      ^phase1_end():\n        nvvm.barrier0 () [] []: <() -> ()>;",
+        "      ^phase1_end():",
+        1,
+    );
+    let bad_loop_lean = export_named_source(&init_plus_one_loop_bar, "sgemm_tiled_views")
+        .expect("exports wrapped 1-barrier loop phase obligation");
+    let err = lean_exporter::runner::check_generated_lean(&bad_loop_lean, &lean_dir)
+        .expect_err("Lean must reject 1-barrier loop even when preceded by an init sync_threads()");
+    assert!(
+        err.to_string().contains("omega could not prove the goal"),
+        "unexpected Lean error for 1-barrier loop after init sync: {err}"
+    );
+
+    // 3. Reordering MIR basic blocks so `^phase1_end` (the 2nd barrier) appears BEFORE
+    // `^phase0_stage` (the 1st barrier) in the block list must still sort barriers by
+    // CFG dominance and pass Lean 4 verification!
+    let reordered_blocks = SGEMM_TILED_FIXTURE
+        .replacen(
+            "      ^phase0_stage():",
+            "      ^phase1_end():\n        nvvm.barrier0 () [] []: <() -> ()>;\n        one_u32 = mir.constant () [] [value: builtin.integer <1: ui32>]: <() -> (builtin.integer ui32)>;\n        next_tile = mir.add (tile, one_u32) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;\n        mir.goto (sum_inner, next_tile) [^tile_header] []: <(builtin.fp32, builtin.integer ui32) -> ()>\n\n      ^phase0_stage():",
+            1,
+        )
+        .replacen(
+            "      ^phase1_end():\n        nvvm.barrier0 () [] []: <() -> ()>;\n        one_u32 = mir.constant () [] [value: builtin.integer <1: ui32>]: <() -> (builtin.integer ui32)>;\n        next_tile = mir.add (tile, one_u32) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;\n        mir.goto (sum_inner, next_tile) [^tile_header] []: <(builtin.fp32, builtin.integer ui32) -> ()>\n\n      ^exit():",
+            "      ^exit():",
+            1,
+        );
+    // Move `^phase1_end` after `^scan_header` so `sum_inner` still dominates `^phase1_end` while
+    // `^phase1_end` still sits before `^phase1_read` (and swap `^phase0_stage` after `^phase1_end`).
+    let _ = reordered_blocks;
+    let reordered_valid = SGEMM_TILED_FIXTURE
+        .replacen(
+            "      ^phase1_read():",
+            "      ^phase1_end():\n        nvvm.barrier0 () [] []: <() -> ()>;\n        one_u32 = mir.constant () [] [value: builtin.integer <1: ui32>]: <() -> (builtin.integer ui32)>;\n        next_tile = mir.add (tile, one_u32) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;\n        mir.goto (sum_inner, next_tile) [^tile_header] []: <(builtin.fp32, builtin.integer ui32) -> ()>\n\n      ^phase1_read():",
+            1,
+        )
+        .replacen(
+            "      ^phase1_end():\n        nvvm.barrier0 () [] []: <() -> ()>;\n        one_u32 = mir.constant () [] [value: builtin.integer <1: ui32>]: <() -> (builtin.integer ui32)>;\n        next_tile = mir.add (tile, one_u32) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;\n        mir.goto (sum_inner, next_tile) [^tile_header] []: <(builtin.fp32, builtin.integer ui32) -> ()>\n\n      ^exit():",
+            "      ^exit():",
+            1,
+        );
+    let reordered_lean = export_named_source(&reordered_valid, "sgemm_tiled_views")
+        .expect("reordered barrier blocks must export cleanly");
+    lean_exporter::runner::check_generated_lean(&reordered_lean, &lean_dir)
+        .expect("reordered barrier blocks must pass Lean 4 verification");
+}

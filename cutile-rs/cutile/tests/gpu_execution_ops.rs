@@ -109,11 +109,47 @@ mod gpu_exec_module {
         let transposed: Tile<f32, { [16, 8] }> = permute(tile, perm);
         output.store(transposed);
     }
+
+    // 9. 2D scans: prefix sums along each axis of an [8, 16] tile, plus a
+    // reverse (suffix-sum) scan. Value tests, not just shape tests: the
+    // scan dim was once hardcoded to 0 in lowering, which scans preserve
+    // shape through, so only executed values can catch a wrong axis.
+    #[cutile::entry()]
+    fn scan_sum_2d_kernel(
+        input: &mut Tensor<i32, { [8, 16] }>,
+        out_dim0: &mut Tensor<i32, { [8, 16] }>,
+        out_dim1: &mut Tensor<i32, { [8, 16] }>,
+        out_dim1_rev: &mut Tensor<i32, { [8, 16] }>,
+    ) {
+        let tile: Tile<i32, { [8, 16] }> = load_tile_mut(input);
+        let d0: Tile<i32, { [8, 16] }> = scan_sum(tile, 0i32, reverse::Forward, 0i32);
+        let d1: Tile<i32, { [8, 16] }> = scan_sum(tile, 1i32, reverse::Forward, 0i32);
+        let d1r: Tile<i32, { [8, 16] }> = scan_sum(tile, 1i32, reverse::Reverse, 0i32);
+        out_dim0.store(d0);
+        out_dim1.store(d1);
+        out_dim1_rev.store(d1r);
+    }
+
+    // 10. 2D reductions along each axis of an [8, 16] tile (the reduce_sum
+    // intrinsic drops the reduced axis from the result shape).
+    #[cutile::entry()]
+    fn reduce_sum_2d_kernel(
+        input: &mut Tensor<i32, { [8, 16] }>,
+        out_cols: &mut Tensor<i32, { [16] }>,
+        out_rows: &mut Tensor<i32, { [8] }>,
+    ) {
+        let tile: Tile<i32, { [8, 16] }> = load_tile_mut(input);
+        let cols: Tile<i32, { [16] }> = reduce_sum(tile, 0i32);
+        let rows: Tile<i32, { [8] }> = reduce_sum(tile, 1i32);
+        out_cols.store(cols);
+        out_rows.store(rows);
+    }
 }
 
 use gpu_exec_module::{
     broadcast_add_kernel, cat_kernel, iota_kernel, permute_kernel, reduce_accumulate_kernel,
-    reduce_max_kernel, reduce_sum_kernel, scan_prefix_sum_kernel,
+    reduce_max_kernel, reduce_sum_2d_kernel, reduce_sum_kernel, scan_prefix_sum_kernel,
+    scan_sum_2d_kernel,
 };
 
 // ---------------------------------------------------------------------------
@@ -398,6 +434,111 @@ fn execute_permute() {
                     host[out_idx]
                 );
             }
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// 9. 2D scan values along both axes, forward and reverse
+// ---------------------------------------------------------------------------
+
+#[test]
+fn execute_scan_sum_2d_both_dims() {
+    common::with_test_stack(|| {
+        let rows = 8usize;
+        let cols = 16usize;
+        // Distinct values so a wrong-axis scan cannot alias the right one.
+        let input_host: Vec<i32> = (0..rows * cols).map(|i| i as i32 % 7 + 1).collect();
+
+        let up = |values: Vec<i32>, shape: &[usize]| {
+            api::copy_host_vec_to_device(&Arc::new(values))
+                .sync()
+                .expect("alloc")
+                .reshape(shape)
+                .expect("reshape")
+        };
+        let input = up(input_host.clone(), &[rows, cols]);
+        let d0 = up(vec![0i32; rows * cols], &[rows, cols]);
+        let d1 = up(vec![0i32; rows * cols], &[rows, cols]);
+        let d1r = up(vec![0i32; rows * cols], &[rows, cols]);
+
+        let (_, d0, d1, d1r) = scan_sum_2d_kernel(
+            input.partition([rows, cols]),
+            d0.partition([rows, cols]),
+            d1.partition([rows, cols]),
+            d1r.partition([rows, cols]),
+        )
+        .sync()
+        .expect("scan_sum_2d_kernel failed");
+
+        let read =
+            |t: Partition<Tensor<i32>>| t.unpartition().to_host_vec().sync().expect("to_host");
+        let (d0, d1, d1r) = (read(d0), read(d1), read(d1r));
+
+        for r in 0..rows {
+            for c in 0..cols {
+                let at = |rr: usize, cc: usize| input_host[rr * cols + cc];
+                let idx = r * cols + c;
+                let want_d0: i32 = (0..=r).map(|rr| at(rr, c)).sum();
+                let want_d1: i32 = (0..=c).map(|cc| at(r, cc)).sum();
+                let want_d1r: i32 = (c..cols).map(|cc| at(r, cc)).sum();
+                assert_eq!(d0[idx], want_d0, "dim-0 scan at [{r}][{c}]");
+                assert_eq!(d1[idx], want_d1, "dim-1 scan at [{r}][{c}]");
+                assert_eq!(d1r[idx], want_d1r, "dim-1 reverse scan at [{r}][{c}]");
+            }
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// 10. 2D reduction values along both axes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn execute_reduce_sum_2d_both_dims() {
+    common::with_test_stack(|| {
+        let rows = 8usize;
+        let cols = 16usize;
+        let input_host: Vec<i32> = (0..rows * cols).map(|i| i as i32 % 5 + 1).collect();
+
+        let input = api::copy_host_vec_to_device(&Arc::new(input_host.clone()))
+            .sync()
+            .expect("alloc input")
+            .reshape(&[rows, cols])
+            .expect("reshape input");
+        let out_cols = api::copy_host_vec_to_device(&Arc::new(vec![0i32; cols]))
+            .sync()
+            .expect("alloc cols");
+        let out_rows = api::copy_host_vec_to_device(&Arc::new(vec![0i32; rows]))
+            .sync()
+            .expect("alloc rows");
+
+        let (_, out_cols, out_rows) = reduce_sum_2d_kernel(
+            input.partition([rows, cols]),
+            out_cols.partition([cols]),
+            out_rows.partition([rows]),
+        )
+        .sync()
+        .expect("reduce_sum_2d_kernel failed");
+
+        let cols_host: Vec<i32> = out_cols
+            .unpartition()
+            .to_host_vec()
+            .sync()
+            .expect("to_host cols");
+        let rows_host: Vec<i32> = out_rows
+            .unpartition()
+            .to_host_vec()
+            .sync()
+            .expect("to_host rows");
+
+        for c in 0..cols {
+            let want: i32 = (0..rows).map(|r| input_host[r * cols + c]).sum();
+            assert_eq!(cols_host[c], want, "dim-0 reduction, column {c}");
+        }
+        for r in 0..rows {
+            let want: i32 = (0..cols).map(|c| input_host[r * cols + c]).sum();
+            assert_eq!(rows_host[r], want, "dim-1 reduction, row {r}");
         }
     });
 }

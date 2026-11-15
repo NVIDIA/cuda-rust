@@ -1129,7 +1129,7 @@ pub fn generate_device_code<'tcx>(
             let rustc_public::mir::mono::MonoItem::Static(static_def) = stable_item else {
                 unreachable!("internal static MonoItem must remain a stable static MonoItem")
             };
-            let static_ty = static_def.ty();
+            let static_ty = mir_importer::device_static_ty(&static_def);
             let info = match owned.storage {
                 StaticDebugStorage::SharedArrayAs3 => {
                     mir_importer::build_debug_shared_array_variable_info(

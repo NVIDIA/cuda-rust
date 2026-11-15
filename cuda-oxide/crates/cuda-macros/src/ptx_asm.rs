@@ -11,7 +11,9 @@ use syn::{
     punctuated::Punctuated,
 };
 
-const MAX_PTX_ASM_INPUTS: usize = 16;
+// OptiX cooperative vectors are single `call`s with up to 197 scalar inputs
+// (`_optix_vector_op3_64xi32`: 5 + 3 x 64); 256 covers every `_optix_*` intrinsic.
+const MAX_PTX_ASM_INPUTS: usize = 256;
 // Blackwell tensor-memory loads expose up to 64 scalar destination registers
 // in one indivisible PTX instruction. Keeping the public inline-PTX surface at
 // 16 forces those results through an aggregate-return shim and defeats register

@@ -1,4 +1,4 @@
-error: ptx_asm! supports at most 16 input operands
+error: ptx_asm! supports at most 256 input operands
   --> tests/compile_fail/ptx_asm_input_limit.rs:12:13
    |
 12 |             "add.u32 %0, %1, %1;",

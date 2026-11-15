@@ -439,6 +439,53 @@ impl GuardExpr {
             other => other.clone(),
         }
     }
+
+    /// Return true if this guard restricts execution to a sub-warp subset of lanes
+    /// (such as `tx == 0`, `tx % G == c`, or `tx < k` where `k % 32 != 0`), which
+    /// cannot satisfy warp-synchronous `.sync.aligned` instructions like `tcgen05.alloc`.
+    pub fn has_subwarp_lane_filter(&self) -> bool {
+        match self {
+            Self::True => false,
+            Self::Lt(IdxExpr::Tx, IdxExpr::Const(bound)) => *bound != 32,
+            Self::Eq(IdxExpr::Div(b, 32), IdxExpr::Const(_))
+            | Self::Eq(IdxExpr::Const(_), IdxExpr::Div(b, 32))
+                if **b == IdxExpr::Tx =>
+            {
+                false
+            }
+            Self::And(p, q) => p.has_subwarp_lane_filter() || q.has_subwarp_lane_filter(),
+            _ => true,
+        }
+    }
+
+    /// Return `Some(warp_idx)` when this dominating guard selects exactly one full
+    /// 32-lane hardware warp (`32 * (warp_idx + 1) <= block_size` in a 1D block)
+    /// with no intra-warp lane divergence.
+    pub fn selects_single_full_warp(&self, block_size: u32, block_y: u32) -> Option<u64> {
+        if block_y != 1 || self.has_subwarp_lane_filter() {
+            return None;
+        }
+        let bx = u64::from(block_size);
+        match self {
+            Self::True if bx == 32 => Some(0),
+            Self::Lt(IdxExpr::Tx, IdxExpr::Const(32)) if bx >= 32 => Some(0),
+            Self::Eq(IdxExpr::Div(b, 32), IdxExpr::Const(w))
+            | Self::Eq(IdxExpr::Const(w), IdxExpr::Div(b, 32))
+                if **b == IdxExpr::Tx && w.checked_add(1).is_some_and(|n| n * 32 <= bx) =>
+            {
+                Some(*w)
+            }
+            Self::And(p, q) => match (
+                p.selects_single_full_warp(block_size, block_y),
+                q.selects_single_full_warp(block_size, block_y),
+            ) {
+                (Some(w1), Some(w2)) if w1 == w2 => Some(w1),
+                (Some(w), None) | (None, Some(w)) => Some(w),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
 }
 
 /// How threads in a block index into a shared-memory array (`SharedArray`).
@@ -649,6 +696,46 @@ pub enum SsaKind {
         kind: GlobalStripKind,
         /// Constant element offset added to the strip index (`0` when exact).
         offset: u64,
+    },
+    /// `.shared::cta` byte offset returned by `nvvm.cvta_generic_to_shared_offset(&SMEM)`.
+    SmemSharedOffset {
+        /// Index of the verified `SharedArray` static (`0`, `1`, ...).
+        shared_id: usize,
+        /// Declared element count of the `SharedArray`.
+        size: u64,
+        /// Byte width of one element in the `SharedArray`.
+        elem_bytes: u64,
+    },
+    /// 64-bit `tcgen05` shared-memory matrix descriptor derived from [`Self::SmemSharedOffset`].
+    SmemDesc {
+        /// Index of the verified `SharedArray` static backing this descriptor.
+        shared_id: usize,
+        /// Declared element count of the `SharedArray`.
+        size: u64,
+        /// Byte width of one element in the `SharedArray`.
+        elem_bytes: u64,
+    },
+    /// 32-bit Blackwell Tensor Memory (`TMEM`) address (`base + (lane << 16) + col`)
+    /// derived from an allocated `TMEM_ADDR` shared-memory slot.
+    TmemAddr {
+        /// Number of `TMEM` columns allocated by `tcgen05_alloc`.
+        alloc_cols: u64,
+        /// Compositional `TMEM` lane offset expression (`0..128`).
+        lane_expr: IdxExpr,
+        /// Compositional `TMEM` column offset expression (`0..alloc_cols`).
+        col_expr: IdxExpr,
+    },
+    /// Field-wise SSA provenance of a `mir.construct_struct` value (such as
+    /// `Tcgen05SmemDescriptor` or `Tcgen05SmemDescriptorBuilder`).
+    StructFields(Vec<SsaKind>),
+    /// Local stack allocation (`mir.alloca`) tracked flow-sensitively for aggregate builders.
+    StackAlloca(Value),
+    /// Pointer to field `field` of a local [`Self::StackAlloca`] (`mir.field_addr`).
+    StackFieldPtr {
+        /// Base `mir.alloca` SSA [`Value`].
+        alloca: Value,
+        /// Zero-based struct field index.
+        field: usize,
     },
     /// Loaded element or arithmetic value that does not affect indexing.
     DataValue,

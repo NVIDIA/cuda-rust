@@ -18,6 +18,8 @@ REJECTED = (
     ("RejectedLaneOnly.lean", "duplicate writers across blocks"),
     ("RejectedMissingLength.lean", "missing input-length precondition"),
     ("RejectedCoverage.lean", "insufficient launch coverage"),
+    ("RejectedTmemColOverflow.lean", "TMEM column range overflow"),
+    ("RejectedTmemWarpSlice.lean", "TMEM warpgroup lane-slice violation"),
 )
 
 

@@ -59,6 +59,8 @@ pub struct KernelVerificationSpec {
     pub no_data_race: Vec<usize>,
     /// Whether `#[verify(uniform_barriers)]` was requested.
     pub uniform_barriers: bool,
+    /// Whether `#[verify(tmem_lifecycle)]` was requested for Blackwell `tcgen05` / `TMEM`.
+    pub tmem_lifecycle: bool,
 }
 
 /// Returns true if `function` carries any `verify_*` obligation attribute.
@@ -73,6 +75,7 @@ pub fn has_verification_attributes(ctx: &Context, function: Ptr<Operation>) -> b
                 | "verify_no_oob_shared"
                 | "verify_no_data_race"
                 | "verify_uniform_barriers"
+                | "verify_tmem_lifecycle"
         )
     })
 }
@@ -262,9 +265,10 @@ pub(crate) fn parse_kernel_verification_spec(
     };
     let uniform_barriers =
         get_string_attr(attrs, "verify_uniform_barriers").as_deref() == Some("true");
+    let tmem_lifecycle = get_string_attr(attrs, "verify_tmem_lifecycle").as_deref() == Some("true");
 
     let is_phased_shared =
-        !no_oob_shared.is_empty() || !no_data_race.is_empty() || uniform_barriers;
+        !no_oob_shared.is_empty() || !no_data_race.is_empty() || uniform_barriers || tmem_lifecycle;
     let mut writable_params = BTreeSet::new();
     for (idx, ty) in inputs.iter().enumerate() {
         let ty_ref = ty.deref(ctx);
@@ -304,6 +308,7 @@ pub(crate) fn parse_kernel_verification_spec(
             no_oob_shared,
             no_data_race,
             uniform_barriers,
+            tmem_lifecycle,
         },
     ))
 }

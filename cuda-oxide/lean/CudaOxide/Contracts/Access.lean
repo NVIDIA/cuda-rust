@@ -15,11 +15,12 @@ by a kernel author in Rust's `#[verify(...)]` attribute:
 ```text
   Rust `#[verify(...)]` Clause           Lean Proposition (`CudaOxide.Contracts`)
   ──────────────────────────────────     ──────────────────────────────────────────
-  `no_oob_idx(buf)`                      `NoOobIdx` / `NoOobTileAccess`
+  `no_oob_idx(buf)`                      `NoOobIdx` / `NoOobTileAccess` / `NoOobTmemAccess`
   `disjoint_writes(buf)`                 `DisjointWrites blockSize offset`
   `writes_all_elems(buf)`                `WritesAllElems blocks blockSize outLen`
   `no_data_race(buf)`                    `NoDataRace blockDimX blockDimY a₁ a₂`
   `uniform_barriers`                     `UniformBarriers barriersUniform numBarriers`
+  `tmem_lifecycle`                       `TmemLifecycle allocCols deallocCols balanced`
 ```
 
 Each proposition states a mathematical obligation over the kernel's exported
@@ -141,5 +142,42 @@ def NoOobColStrip (bufferLen : Nat) (offset : Nat := 0) : Prop :=
     (rows - 1) * stride + start < bufferLen →             -- AND the strip's last strided element fits in `bufferLen`,
     row < rows →                                          -- AND the thread's row offset `row < rows`,
     start + row * stride + offset < bufferLen             -- THEN `start + row * stride + offset` is strictly `< bufferLen`.
+
+/-- Valid non-exclusive Blackwell `tcgen05.alloc` column counts (PTX ISA Table 58:
+    power of two in `[32, 512]`). -/
+def TmemValidCols (nCols : Nat) : Prop :=
+  nCols = 32 ∨                                            -- 32 columns (minimum allocation unit), OR
+  nCols = 64 ∨                                            -- 64 columns, OR
+  nCols = 128 ∨                                           -- 128 columns, OR
+  nCols = 256 ∨                                           -- 256 columns, OR
+  nCols = 512                                             -- 512 columns (full per-SM TMEM capacity).
+
+/-- **`tmem_lifecycle`**: Blackwell Tensor Memory (`TMEM`) is allocated with a
+    valid power-of-two column count in `[32, 512]`, token-ordered across async
+    `tcgen05` operations, and deallocated with the exact same column count on
+    every kernel exit path. -/
+def TmemLifecycle (allocCols deallocCols : Nat) (balanced : Bool) : Prop :=
+  TmemValidCols allocCols ∧                               -- Allocated column count is a power of two in [32, 512], AND
+  allocCols = deallocCols ∧                               -- `tcgen05.dealloc` frees the exact `allocCols`, AND
+  balanced = true                                         -- Alloc/commit/wait/dealloc CFG lifecycle holds on all exit paths.
+
+/-- **`tmem_lifecycle` / `no_oob_idx` (`TMEM` bounds & warpgroup slice)**:
+    Every active thread `(tx, ty)` and loop step `i < a.loopBound` accesses
+    `TMEM` strictly within `128` lanes, within `allocCols ≤ 512` columns, and
+    (for `tcgen05.ld` / `tcgen05.st`) within its warp's 32-lane warpgroup slice. -/
+def NoOobTmemAccess (blockDimX blockDimY allocCols : Nat)
+    (a : TmemAccess) : Prop :=
+  ∀ tx ty i : Nat,                                        -- Pick ANY 2D thread (tx, ty) and loop step `i`:
+    tx < blockDimX →                                      -- IF `tx` is within the block X dimension,
+    ty < blockDimY →                                      -- AND `ty` is within the block Y dimension,
+    i < a.loopBound →                                     -- AND `i` is within the loop bound,
+    a.guard.eval tx ty i →                                -- AND `(tx, ty, i)` satisfies the dominating branch guard,
+    a.laneExpr.eval tx ty i + a.heightLanes ≤ 128 ∧       -- THEN (1) lane span fits inside the 128 TMEM lanes, AND
+    a.colExpr.eval tx ty i + a.widthCols ≤ allocCols ∧    --      (2) column span fits inside `allocCols`, AND
+    allocCols ≤ 512 ∧                                     --      (3) `allocCols` fits inside the 512-column SM limit, AND
+    (a.warpRestricted = true →                            --      (4) for warp-restricted `tcgen05.ld` / `tcgen05.st` ops,
+      ((tx / 32) % 4) * 32 ≤ a.laneExpr.eval tx ty i ∧    --          starting lane ≥ this warp's 32-lane slice base, AND
+      a.laneExpr.eval tx ty i + a.heightLanes ≤           --          ending lane ≤ this warp's 32-lane slice ceiling
+        ((tx / 32) % 4) * 32 + 32)                        --          (PTX ISA 9.7.18.8.1 warpgroup lane restriction).
 
 end CudaOxide.Contracts

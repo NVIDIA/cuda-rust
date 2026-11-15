@@ -18,6 +18,7 @@ SGEMM_TILED_FIXTURE = REPO / "crates/lean-exporter/fixtures/sgemm_tiled.mir"
 WARP_REDUCE_FIXTURE = REPO / "crates/lean-exporter/fixtures/warp_reduce.mir"
 SUBWARP_MULTIBUF_FIXTURE = REPO / "crates/lean-exporter/fixtures/subwarp_multibuf.mir"
 ASYNC_COPY_FIXTURE = REPO / "crates/lean-exporter/fixtures/async_copy_stage.mir"
+TCGEN05_MATMUL_FIXTURE = REPO / "crates/lean-exporter/fixtures/tcgen05_matmul.mir"
 PROOFS = """
 namespace CudaOxide.Generated
 
@@ -436,7 +437,46 @@ def main():
             raise RuntimeError(f"Expected oversized 32 KB TMA transfer into 16 KB TILE to fail NoOobTileAccess in Lean:\n{res_oversized.stdout}")
         print("REJECTED as expected: oversized TMA `expect_tx` byte count fails `no_oob_idx(TILE)`.", flush=True)
 
-    print("Exporter checks passed for scalar, 1D vecadd, 2D SGEMM, Stage 3 warp/block reductions, Stage 4 sub-warp multi-buffer, and Stage 5 async mbarrier fixtures.")
+        # Stage 6: Blackwell tcgen05 + TMEM + PTX proxy coherence + mbarrier lifecycle
+        tcgen05_source = TCGEN05_MATMUL_FIXTURE.read_text()
+        tcgen05_lean = require_export(TCGEN05_MATMUL_FIXTURE, "tcgen05_matmul_verified")
+        tcgen05_valid = temporary / "Tcgen05MatmulValid.lean"
+        tcgen05_valid.write_text(tcgen05_lean)
+        require_success("env", "lean", str(tcgen05_valid))
+        print("PASS: exported tcgen05_matmul_verified MIR proves TMEM lifecycle, TMEM/SMEM bounds, warpgroup slices, and token ordering.", flush=True)
+
+        # Stage 6 negative check 1: Missing `fence_proxy_async_shared_cta()` after `mbarrier_init`:
+        no_proxy_mir = temporary / "tcgen05_no_proxy_fence.mir"
+        no_proxy_mir.write_text(
+            "\n".join(line for line in tcgen05_source.splitlines() if "fence_proxy_async_shared_cta" not in line)
+        )
+        rejected_proxy = export(no_proxy_mir, "tcgen05_matmul_verified")
+        if rejected_proxy.returncode == 0 or "fence_proxy_async_shared_cta" not in rejected_proxy.stderr:
+            raise RuntimeError(f"Expected missing fence_proxy_async_shared_cta to be rejected:\n{rejected_proxy.stderr}")
+        print("REJECTED as expected: missing `fence_proxy_async_shared_cta()` before async TMA / tcgen05_commit is rejected.", flush=True)
+
+        # Stage 6 negative check 2: 64-column TMEM allocation with 128-column MMA/ld overflows in Lean:
+        tmem_overflow_mir = temporary / "tcgen05_col_overflow.mir"
+        tmem_overflow_mir.write_text(
+            tcgen05_source.replace(
+                "c128_cols = mir.constant () [] [value: builtin.integer <128: ui32>]",
+                "c128_cols = mir.constant () [] [value: builtin.integer <64: ui32>]",
+            ).replace(
+                "c128_dealloc = mir.constant () [] [value: builtin.integer <128: ui32>]",
+                "c128_dealloc = mir.constant () [] [value: builtin.integer <64: ui32>]",
+            )
+        )
+        tmem_overflow_lean = require_export(tmem_overflow_mir, "tcgen05_matmul_verified")
+        tmem_overflow_file = temporary / "Tcgen05ColOverflow.lean"
+        tmem_overflow_file.write_text(
+            "\n".join(line for line in tmem_overflow_lean.splitlines() if not line.startswith("#print axioms"))
+        )
+        res_tmem_overflow = run_lake("env", "lean", str(tmem_overflow_file))
+        if res_tmem_overflow.returncode == 0 or "error: omega could not prove the goal:" not in res_tmem_overflow.stdout:
+            raise RuntimeError(f"Expected 128-col MMA/ld on 64-col TMEM allocation to fail NoOobTmemAccess in Lean:\n{res_tmem_overflow.stdout}")
+        print("REJECTED as expected: 128-column `tcgen05` MMA/ld on 64-column `TMEM` fails `NoOobTmemAccess`.", flush=True)
+
+    print("Exporter checks passed for scalar, 1D vecadd, 2D SGEMM, Stage 3 warp/block reductions, Stage 4 sub-warp multi-buffer, Stage 5 async mbarrier, and Stage 6 Blackwell tcgen05/TMEM fixtures.")
 
 
 if __name__ == "__main__":

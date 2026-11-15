@@ -17,7 +17,8 @@ use crate::{
     spec::KernelVerificationSpec,
     ssa::{GlobalStripKind, GuardExpr, IdxExpr, TileAccessPatternKind},
     translate::{
-        AccessKind, ExtractedAccess, GlobalStripAccess2D, PhasedSharedAccess, TranslatedFunction,
+        AccessKind, ExtractedAccess, ExtractedTmemAccess, ExtractedTmemLifecycle,
+        GlobalStripAccess2D, PhasedSharedAccess, TranslatedFunction,
     },
 };
 
@@ -52,6 +53,8 @@ pub fn render_lean_module(translated: &TranslatedFunction) -> Result<String, Exp
             barriers_uniform,
             global_strip_accesses,
             shared_accesses,
+            tmem_lifecycle,
+            tmem_accesses,
             ..
         } => render_verified_tiled_2d_module(
             spec,
@@ -59,6 +62,8 @@ pub fn render_lean_module(translated: &TranslatedFunction) -> Result<String, Exp
             *barriers_uniform,
             global_strip_accesses,
             shared_accesses,
+            tmem_lifecycle.as_ref(),
+            tmem_accesses,
         ),
     }
 }
@@ -107,6 +112,12 @@ pub fn proved_obligation_descriptions(
     }
     if spec.uniform_barriers {
         items.push("uniform_barriers -> CudaOxide.Contracts.UniformBarriers".to_string());
+    }
+    if spec.tmem_lifecycle {
+        items.push(
+            "tmem_lifecycle -> CudaOxide.Contracts.TmemLifecycle + CudaOxide.Contracts.NoOobTmemAccess"
+                .to_string(),
+        );
     }
     items
 }
@@ -338,15 +349,35 @@ fn format_phased_access(a: &PhasedSharedAccess) -> String {
     )
 }
 
+/// Format an [`ExtractedTmemAccess`] into a Lean `CudaOxide.Mir.Kernel.TmemAccess` record literal.
+fn format_tmem_access(a: &ExtractedTmemAccess) -> String {
+    let guard_suffix = if a.guard != GuardExpr::True {
+        format!(", guard := {}", format_guard_expr(&a.guard))
+    } else {
+        String::new()
+    };
+    format!(
+        "{{ laneExpr := {}, colExpr := {}, heightLanes := {}, widthCols := {}, loopBound := {}, warpRestricted := {}{guard_suffix} }}",
+        format_idx_expr(&a.lane_expr),
+        format_idx_expr(&a.col_expr),
+        a.height_lanes,
+        a.width_cols,
+        a.loop_bound,
+        a.warp_restricted,
+    )
+}
+
 /// Render a phased shared-memory or 2D tiled kernel (`TiledKernelSummary2D`)
 /// and its `NoOobRowStrip`, `NoOobColStrip`, `NoOobTileAccess`, `NoDataRace`,
-/// and `UniformBarriers` theorem obligations into Lean 4.
+/// `UniformBarriers`, `TmemLifecycle`, and `NoOobTmemAccess` obligations into Lean 4.
 fn render_verified_tiled_2d_module(
     spec: &KernelVerificationSpec,
     num_barriers: usize,
     barriers_uniform: bool,
     global_strip_accesses: &[GlobalStripAccess2D],
     shared_accesses: &[PhasedSharedAccess],
+    tmem_lifecycle: Option<&ExtractedTmemLifecycle>,
+    tmem_accesses: &[ExtractedTmemAccess],
 ) -> Result<String, ExportError> {
     let bx = u64::from(spec.block_size);
     let by = u64::from(spec.block_y);
@@ -627,6 +658,76 @@ fn render_verified_tiled_2d_module(
              {proof_line}"
         ));
         axiom_prints.push(format!("#print axioms {thm_name}"));
+    }
+
+    if spec.tmem_lifecycle {
+        let Some(lc) = tmem_lifecycle else {
+            return Err(reject(
+                "tmem_lifecycle",
+                "`tmem_lifecycle` was requested, but no `tcgen05_alloc` / `tcgen05_dealloc` pair was found in the kernel",
+            ));
+        };
+        let lc_thm = "verify_tmem_lifecycle";
+        let valid_pow2 = matches!(lc.alloc_cols, 32 | 64 | 128 | 256 | 512);
+        let lc_proof = if valid_pow2 && lc.alloc_cols == lc.dealloc_cols && lc.balanced {
+            "exact CudaOxide.Proofs.Launch.tmem_lifecycle_of_checked (by unfold CudaOxide.Contracts.TmemValidCols; omega)"
+        } else {
+            "unfold CudaOxide.Contracts.TmemLifecycle CudaOxide.Contracts.TmemValidCols\n  omega"
+        };
+        theorems.push(format!(
+            "theorem {lc_thm} :\n    \
+             CudaOxide.Contracts.TmemLifecycle {} {} {} := by\n  \
+             {lc_proof}",
+            lc.alloc_cols, lc.dealloc_cols, lc.balanced
+        ));
+        axiom_prints.push(format!("#print axioms {lc_thm}"));
+
+        for (idx, acc) in tmem_accesses.iter().enumerate() {
+            let thm_name = format!("verify_no_oob_tmem_{idx}");
+            let acc_str = format_tmem_access(acc);
+            let is_warp_lane_32 = matches!(
+                &acc.lane_expr,
+                IdxExpr::Mul(lhs, rhs)
+                    if matches!(lhs.as_ref(), IdxExpr::Div(inner, 32) if **inner == IdxExpr::Tx)
+                        && **rhs == IdxExpr::Const(32)
+            );
+            let proof_line = if !acc.warp_restricted
+                && let (IdxExpr::Const(lane_off), IdxExpr::Const(col_off)) =
+                    (&acc.lane_expr, &acc.col_expr)
+                && lane_off + acc.height_lanes <= 128
+                && col_off + acc.width_cols <= lc.alloc_cols
+                && lc.alloc_cols <= 512
+            {
+                "exact CudaOxide.Proofs.Bounds.no_oob_tmem_mma (by decide) (by decide) (by decide)"
+                    .to_string()
+            } else if acc.warp_restricted
+                && acc.guard == GuardExpr::True
+                && bx <= 128
+                && acc.height_lanes == 32
+                && acc.loop_bound > 0
+                && is_warp_lane_32
+                && matches!(acc.col_expr, IdxExpr::LoopVar { .. })
+                && (acc.loop_bound - 1) + acc.width_cols <= lc.alloc_cols
+                && lc.alloc_cols <= 512
+            {
+                "exact CudaOxide.Proofs.Bounds.no_oob_tmem_warp_ld_unit_scan (by decide) (by decide) (by decide) (by decide)"
+                    .to_string()
+            } else {
+                "intro tx ty i htx hty hi hguard\n  \
+                 simp only [CudaOxide.Mir.Kernel.IdxExpr.eval, CudaOxide.Mir.Kernel.GuardExpr.eval] at *\n  \
+                 refine ⟨by omega, by omega, by omega, ?_⟩\n  \
+                 intro _hwarp\n  \
+                 omega"
+                    .to_string()
+            };
+            theorems.push(format!(
+                "theorem {thm_name} :\n    \
+                 CudaOxide.Contracts.NoOobTmemAccess {bx} {by} {}\n      {acc_str} := by\n  \
+                 {proof_line}",
+                lc.alloc_cols
+            ));
+            axiom_prints.push(format!("#print axioms {thm_name}"));
+        }
     }
 
     Ok(format!(

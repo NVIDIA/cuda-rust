@@ -53,6 +53,8 @@ pub(crate) const VERIFICATION_METADATA_MARKERS: &[&str] = &[
     "cuda_device::thread::__verify_no_data_race_config",
     "cuda_device::__verify_uniform_barriers_config",
     "cuda_device::thread::__verify_uniform_barriers_config",
+    "cuda_device::__verify_tmem_lifecycle_config",
+    "cuda_device::thread::__verify_tmem_lifecycle_config",
 ];
 
 /// Map a callee path to its canonical marker leaf name when it is a
@@ -81,6 +83,8 @@ pub(crate) fn verification_marker_leaf(path: &str) -> Option<&'static str> {
         | "cuda_device::thread::__verify_uniform_barriers_config" => {
             "__verify_uniform_barriers_config"
         }
+        "cuda_device::__verify_tmem_lifecycle_config"
+        | "cuda_device::thread::__verify_tmem_lifecycle_config" => "__verify_tmem_lifecycle_config",
         _ => return None,
     })
 }
@@ -105,6 +109,8 @@ struct DetectedVerificationMetadata {
     no_data_race: Vec<usize>,
     /// Whether `#[verify(uniform_barriers)]` was requested.
     uniform_barriers: bool,
+    /// Whether `#[verify(tmem_lifecycle)]` was requested.
+    tmem_lifecycle: bool,
 }
 
 impl DetectedVerificationMetadata {
@@ -116,6 +122,7 @@ impl DetectedVerificationMetadata {
             || !self.no_oob_shared.is_empty()
             || !self.no_data_race.is_empty()
             || self.uniform_barriers
+            || self.tmem_lifecycle
     }
 }
 
@@ -208,6 +215,10 @@ fn detect_verification_metadata(
             || fn_name.ends_with("::__verify_uniform_barriers_config")
         {
             meta.uniform_barriers = true;
+        } else if fn_name == "__verify_tmem_lifecycle_config"
+            || fn_name.ends_with("::__verify_tmem_lifecycle_config")
+        {
+            meta.tmem_lifecycle = true;
         }
     }
     meta
@@ -269,6 +280,10 @@ pub(crate) fn attach_verification_attributes(
         }
         if verification_meta.uniform_barriers {
             let key: Identifier = "verify_uniform_barriers".try_into().unwrap();
+            op_mut.attributes.set(key, StringAttr::new("true".into()));
+        }
+        if verification_meta.tmem_lifecycle {
+            let key: Identifier = "verify_tmem_lifecycle".try_into().unwrap();
             op_mut.attributes.set(key, StringAttr::new("true".into()));
         }
     }

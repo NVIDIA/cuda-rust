@@ -109,6 +109,37 @@ pub struct GlobalStripAccess2D {
     pub offset: u64,
 }
 
+/// Extracted Blackwell Tensor Memory (`TMEM`) lifecycle summary (`tcgen05.alloc` / `tcgen05.dealloc`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExtractedTmemLifecycle {
+    /// Number of `TMEM` columns allocated by `tcgen05_alloc`.
+    pub alloc_cols: u64,
+    /// Number of `TMEM` columns freed by `tcgen05_dealloc`.
+    pub dealloc_cols: u64,
+    /// True when alloc/commit/wait/load_wait/dealloc CFG invariants hold on all exit paths.
+    pub balanced: bool,
+}
+
+/// One Blackwell `TMEM` operand or epilogue access (`tcgen05.mma`, `tcgen05.cp`, `tcgen05.ld`)
+/// extracted from `PostMem2Reg` `dialect-mir`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExtractedTmemAccess {
+    /// Starting `TMEM` lane expression (`0..128`).
+    pub lane_expr: IdxExpr,
+    /// Starting `TMEM` column expression (`0..alloc_cols`).
+    pub col_expr: IdxExpr,
+    /// Number of `TMEM` lanes touched (`16`, `32`, `64`, or `128`).
+    pub height_lanes: u64,
+    /// Number of 32-bit `TMEM` columns touched (`1..256`).
+    pub width_cols: u64,
+    /// Exclusive upper bound on loop counter `i` (`1` outside a loop).
+    pub loop_bound: u64,
+    /// True for `tcgen05.ld` / `tcgen05.st`, which must stay inside the warp's 32-lane slice.
+    pub warp_restricted: bool,
+    /// Dominating thread guard (`GuardExpr::True` when unguarded).
+    pub guard: GuardExpr,
+}
+
 /// Output of the unified MIR translator before rendering to `.lean` text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TranslatedFunction {
@@ -146,6 +177,10 @@ pub enum TranslatedFunction {
         global_strip_accesses: Vec<GlobalStripAccess2D>,
         /// Phased shared-memory reads and writes extracted from the kernel CFG.
         shared_accesses: Vec<PhasedSharedAccess>,
+        /// Extracted Blackwell `TMEM` allocation/deallocation lifecycle when `tmem_lifecycle` is active.
+        tmem_lifecycle: Option<ExtractedTmemLifecycle>,
+        /// Extracted Blackwell `TMEM` accesses (`tcgen05.mma`, `tcgen05.cp`, `tcgen05.ld`).
+        tmem_accesses: Vec<ExtractedTmemAccess>,
         /// `mir.assert` bounds-check operations proven redundant by `no_oob_idx`.
         proven_assert_ops: Vec<Ptr<Operation>>,
     },
@@ -362,6 +397,7 @@ fn translate_verified_kernel(
         || !spec.no_oob_shared.is_empty()
         || !spec.no_data_race.is_empty()
         || spec.uniform_barriers
+        || spec.tmem_lifecycle
     {
         return translate_verified_2d_tiled_kernel(ctx, function, spec);
     }
@@ -1728,6 +1764,204 @@ fn can_reach(start: usize, target: usize, succs: &[Vec<usize>], num_blocks: usiz
     can_reach_without(start, target, usize::MAX, succs, num_blocks)
 }
 
+/// Check if `start` can reach `target` in `succs` without entering any block in `forbidden`.
+fn can_reach_without_set(
+    start: usize,
+    target: usize,
+    forbidden: &BTreeSet<usize>,
+    succs: &[Vec<usize>],
+    num_blocks: usize,
+) -> bool {
+    if forbidden.contains(&start) {
+        return false;
+    }
+    let mut visited = vec![false; num_blocks];
+    let mut stack = vec![start];
+    visited[start] = true;
+    while let Some(curr) = stack.pop() {
+        if curr == target {
+            return true;
+        }
+        for &next in &succs[curr] {
+            if !forbidden.contains(&next) && !visited[next] {
+                visited[next] = true;
+                stack.push(next);
+            }
+        }
+    }
+    false
+}
+
+/// Return true if `expr` references at most one `LoopVar` and `b_idx` lies inside
+/// that loop's active `< bound` body.
+fn is_loop_expr_in_scope(
+    expr: &IdxExpr,
+    b_idx: usize,
+    succs: &[Vec<usize>],
+    num_blocks: usize,
+) -> bool {
+    match expr.single_loop_scope() {
+        LoopScopeCheck::None => true,
+        LoopScopeCheck::Single {
+            header_block,
+            body_block,
+            exit_block,
+            ..
+        } => {
+            !can_reach_without(0, b_idx, body_block, succs, num_blocks)
+                && !can_reach_without(exit_block, b_idx, header_block, succs, num_blocks)
+        }
+        LoopScopeCheck::Conflict => false,
+    }
+}
+
+/// Simplify `IdxExpr::Add(a, b)` when either operand is `Const(0)`.
+fn simplify_add_idx(a: IdxExpr, b: IdxExpr) -> IdxExpr {
+    match (&a, &b) {
+        (IdxExpr::Const(0), _) => b,
+        (_, IdxExpr::Const(0)) => a,
+        (IdxExpr::Const(x), IdxExpr::Const(y)) => IdxExpr::Const(x.saturating_add(*y)),
+        _ => IdxExpr::Add(Box::new(a), Box::new(b)),
+    }
+}
+
+/// Extract `(shared_id, size, elem_bytes)` from a shared-memory offset or `tcgen05` descriptor.
+fn as_smem_desc_source(kind: &SsaKind) -> Option<(usize, u64, u64)> {
+    match *kind {
+        SsaKind::SmemSharedOffset {
+            shared_id,
+            size,
+            elem_bytes,
+        }
+        | SsaKind::SmemDesc {
+            shared_id,
+            size,
+            elem_bytes,
+        } => Some((shared_id, size, elem_bytes)),
+        _ => None,
+    }
+}
+
+/// Combine a `TmemAddr` with an offset operand `(lane << 16)` or `col` (`< 65536`).
+fn combine_tmem_addr(
+    base: &SsaKind,
+    delta: &SsaKind,
+    block_x: u32,
+    block_y: u32,
+) -> Option<SsaKind> {
+    let SsaKind::TmemAddr {
+        alloc_cols,
+        lane_expr,
+        col_expr,
+    } = base
+    else {
+        return None;
+    };
+    let delta_idx = match delta {
+        SsaKind::ConstInt { value, .. } => IdxExpr::Const(u64::try_from(*value).ok()?),
+        SsaKind::Index(expr) => expr.clone(),
+        _ => return None,
+    };
+    let (d_lane, d_col) = match delta_idx {
+        IdxExpr::Const(c) => (IdxExpr::Const(c >> 16), IdxExpr::Const(c & 0xFFFF)),
+        IdxExpr::Mul(lhs, rhs) if *rhs == IdxExpr::Const(65536) => (*lhs, IdxExpr::Const(0)),
+        IdxExpr::Mul(lhs, rhs) if *lhs == IdxExpr::Const(65536) => (*rhs, IdxExpr::Const(0)),
+        other => {
+            let ub = other.exclusive_upper_bound(block_x, block_y)?;
+            if ub > 65536 {
+                return None;
+            }
+            (IdxExpr::Const(0), other)
+        }
+    };
+    let next_lane = simplify_add_idx(lane_expr.clone(), d_lane);
+    let next_col = simplify_add_idx(col_expr.clone(), d_col);
+    if !next_lane.single_loop_scope().is_valid() || !next_col.single_loop_scope().is_valid() {
+        return None;
+    }
+    Some(SsaKind::TmemAddr {
+        alloc_cols: *alloc_cols,
+        lane_expr: next_lane,
+        col_expr: next_col,
+    })
+}
+
+/// Parse `(height_lanes, width_cols)` from a `dialect-nvvm` `nvvm.tcgen05_ld_*` op name.
+fn parse_tcgen05_ld_shape(opid: &str) -> Option<(u64, u64)> {
+    let rest = opid.strip_prefix("nvvm.tcgen05_ld_")?;
+    let (height_lanes, cols_per_x, tail) = if let Some(t) = rest.strip_prefix("32x32b_") {
+        (32u64, 1u64, t)
+    } else if let Some(t) = rest.strip_prefix("16x32bx2_") {
+        (16u64, 2u64, t)
+    } else if let Some(t) = rest.strip_prefix("16x64b_") {
+        (16u64, 2u64, t)
+    } else if let Some(t) = rest.strip_prefix("16x128b_") {
+        (16u64, 4u64, t)
+    } else {
+        let t = rest.strip_prefix("16x256b_")?;
+        (16u64, 8u64, t)
+    };
+    let mult = if let Some(after_x) = tail.strip_prefix('x') {
+        let digits: String = after_x.chars().take_while(char::is_ascii_digit).collect();
+        digits.parse::<u64>().ok()?
+    } else {
+        1u64
+    };
+    Some((height_lanes, cols_per_x.checked_mul(mult)?))
+}
+
+/// Parse `(height_lanes, width_cols)` from a `dialect-nvvm` `nvvm.tcgen05_cp_*` op name.
+fn parse_tcgen05_cp_shape(opid: &str) -> Option<(u64, u64)> {
+    let rest = opid.strip_prefix("nvvm.tcgen05_cp_")?;
+    if rest.starts_with("smem_to_tmem") || rest.starts_with("128x128b") {
+        Some((128, 4))
+    } else if rest.starts_with("128x256b") {
+        Some((128, 8))
+    } else if rest.starts_with("64x128b") {
+        Some((64, 4))
+    } else if rest.starts_with("32x128b") {
+        Some((32, 4))
+    } else if rest.starts_with("4x256b") {
+        Some((4, 8))
+    } else {
+        None
+    }
+}
+
+/// Decode `(height_lanes, width_cols)` from a constant 32-bit `Tcgen05InstructionDescriptor`.
+fn decode_tcgen05_idesc_shape(raw: u128, is_cg2: bool) -> Option<(u64, u64)> {
+    let raw32 = u32::try_from(raw).ok()?;
+    let n_dim = u64::from((raw32 >> 17) & 0x3F) * 8;
+    let m_dim = u64::from((raw32 >> 24) & 0x1F) * 16;
+    if m_dim == 0 || n_dim == 0 {
+        return None;
+    }
+    let height_lanes = if is_cg2 && m_dim >= 256 {
+        m_dim / 2
+    } else {
+        m_dim
+    };
+    Some((height_lanes, n_dim))
+}
+
+/// Shared-memory resource tracked across the `generic` -> `async` PTX proxy boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum ProxyResource {
+    /// Static `SharedArray` index (`0..N`).
+    Shared(usize),
+    /// Static `Barrier` (`mbarrier`) index (`0..M`).
+    Barrier(usize),
+}
+
+/// Unflushed `generic`-proxy write state on a [`ProxyResource`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum ProxyDirtyState {
+    /// Written by a single leader thread; requires `fence_proxy_async_shared_cta()` before async use.
+    NeedsFence,
+    /// Written across multiple threads; requires `sync_threads()` then `fence_proxy_async_shared_cta()`.
+    NeedsSyncAndFence,
+}
+
 /// Translate a 2D phased shared-memory kernel (`sgemm_tiled_views`) using `SsaEnv`.
 fn translate_verified_2d_tiled_kernel(
     ctx: &Context,
@@ -1744,6 +1978,7 @@ fn translate_verified_2d_tiled_kernel(
     // 1. Discover all static `SharedArray` and `Barrier` (`mbarrier`) allocations
     //    (`mir.shared_alloc`) and assign deterministic `0..N` IDs sorted by short name.
     let mut shared_raw_list: Vec<(String, u64)> = Vec::new();
+    let mut shared_elem_bytes_map: HashMap<String, u64> = HashMap::new();
     let mut bar_raw_list: Vec<String> = Vec::new();
     for &b_ptr in &blocks {
         for op_ptr in b_ptr.deref(ctx).iter(ctx) {
@@ -1762,6 +1997,10 @@ fn translate_verified_2d_tiled_kernel(
                     }
                 } else {
                     let size = int_attr_u64(&op.attributes, "size").unwrap_or(0);
+                    let elem_bytes = shared_alloc_elem_bytes(ctx, &op);
+                    shared_elem_bytes_map
+                        .entry(short.clone())
+                        .or_insert(elem_bytes);
                     if !shared_raw_list.iter().any(|(n, _)| n == &short) {
                         shared_raw_list.push((short, size));
                     }
@@ -1957,8 +2196,11 @@ fn translate_verified_2d_tiled_kernel(
             env.bind_arg(arg, idx, SsaKind::BufferParam(idx));
         }
     }
-    for _pass in 0..num_blocks + 3 {
+    let mut tmem_addr_shared_slots: HashMap<usize, u64> = HashMap::new();
+    let mut stack_struct_fields: HashMap<pliron::value::Value, Vec<SsaKind>> = HashMap::new();
+    for _pass in 0..num_blocks + 4 {
         let mut changed = false;
+        let mut stack_changed = false;
         let mut update = |env: &mut SsaEnv, val: pliron::value::Value, kind: SsaKind| {
             let old = env.get_kind(&val);
             if old.as_ref() != Some(&kind) {
@@ -1973,8 +2215,60 @@ fn translate_verified_2d_tiled_kernel(
         for (b_idx, &b_ptr) in blocks.iter().enumerate() {
             let block = b_ptr.deref(ctx);
             if b_idx != 0 {
-                for arg in block.arguments() {
-                    update(&mut env, arg, SsaKind::DataValue);
+                for (arg_pos, arg) in block.arguments().enumerate() {
+                    let mut incoming_uniform: Option<SsaKind> = None;
+                    let mut all_agree = true;
+                    for &pred_ptr in &blocks {
+                        for pred_op_ptr in pred_ptr.deref(ctx).iter(ctx) {
+                            let pred_opid = Operation::get_opid(pred_op_ptr, ctx).to_string();
+                            let pred_op = pred_op_ptr.deref(ctx);
+                            if pred_opid == "mir.goto"
+                                && pred_op.get_num_successors() == 1
+                                && pred_op.get_successor(0) == b_ptr
+                                && arg_pos < pred_op.get_num_operands()
+                            {
+                                let k = env
+                                    .get_kind(&pred_op.get_operand(arg_pos))
+                                    .unwrap_or(SsaKind::DataValue);
+                                match &incoming_uniform {
+                                    None => incoming_uniform = Some(k),
+                                    Some(prev) if *prev != k => all_agree = false,
+                                    _ => {}
+                                }
+                            } else if pred_opid == "mir.cond_br"
+                                && pred_op.get_num_successors() == 2
+                            {
+                                let t_len = pred_op.get_successor(0).deref(ctx).get_num_arguments();
+                                if pred_op.get_successor(0) == b_ptr && arg_pos < t_len {
+                                    let k = env
+                                        .get_kind(&pred_op.get_operand(1 + arg_pos))
+                                        .unwrap_or(SsaKind::DataValue);
+                                    match &incoming_uniform {
+                                        None => incoming_uniform = Some(k),
+                                        Some(prev) if *prev != k => all_agree = false,
+                                        _ => {}
+                                    }
+                                }
+                                if pred_op.get_successor(1) == b_ptr
+                                    && 1 + t_len + arg_pos < pred_op.get_num_operands()
+                                {
+                                    let k = env
+                                        .get_kind(&pred_op.get_operand(1 + t_len + arg_pos))
+                                        .unwrap_or(SsaKind::DataValue);
+                                    match &incoming_uniform {
+                                        None => incoming_uniform = Some(k),
+                                        Some(prev) if *prev != k => all_agree = false,
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    let arg_kind = match incoming_uniform {
+                        Some(k) if all_agree => k,
+                        _ => SsaKind::DataValue,
+                    };
+                    update(&mut env, arg, arg_kind);
                 }
             }
             // Detect inner scan loop counter `i < bound` ONLY when `mir.lt(step_arg, bound)`
@@ -2069,8 +2363,58 @@ fn translate_verified_2d_tiled_kernel(
                                 op.get_result(0),
                                 SsaKind::Index(IdxExpr::Mod(Box::new(IdxExpr::Tx), 32)),
                             );
+                        } else if (callee.contains("Tcgen05SmemDescriptorBuilder")
+                            || callee.contains("Tcgen05SmemDescriptor"))
+                            && op.get_num_operands() >= 1
+                            && op.get_num_results() == 1
+                        {
+                            let src = env.get_kind(&op.get_operand(0)).and_then(|k| match k {
+                                SsaKind::StructFields(fields) => {
+                                    fields.iter().find_map(as_smem_desc_source)
+                                }
+                                other => as_smem_desc_source(&other),
+                            });
+                            if let Some((shared_id, size, elem_bytes)) = src {
+                                let desc_kind = SsaKind::SmemDesc {
+                                    shared_id,
+                                    size,
+                                    elem_bytes,
+                                };
+                                let ret_ty = op.get_result(0).get_type(ctx).deref(ctx);
+                                let mapped = if ret_ty.downcast_ref::<IntegerType>().is_some() {
+                                    desc_kind
+                                } else {
+                                    SsaKind::StructFields(vec![desc_kind])
+                                };
+                                update(&mut env, op.get_result(0), mapped);
+                            } else {
+                                update(&mut env, op.get_result(0), SsaKind::DataValue);
+                            }
                         } else if op.get_num_results() == 1 {
                             update(&mut env, op.get_result(0), SsaKind::DataValue);
+                        }
+                    }
+                    "mir.alloca" => {
+                        if op.get_num_results() == 1 {
+                            let res = op.get_result(0);
+                            update(&mut env, res, SsaKind::StackAlloca(res));
+                        }
+                    }
+                    "mir.field_addr" => {
+                        if op.get_num_operands() == 1 && op.get_num_results() == 1 {
+                            let base = env.get_kind(&op.get_operand(0));
+                            let field = attribute_field_index(&op.attributes, "field_index")
+                                .or_else(|| attribute_field_index(&op.attributes, "index"));
+                            let mapped = match (base, field) {
+                                (Some(SsaKind::StackAlloca(alloca)), Some(idx)) => {
+                                    SsaKind::StackFieldPtr {
+                                        alloca,
+                                        field: idx as usize,
+                                    }
+                                }
+                                _ => SsaKind::DataValue,
+                            };
+                            update(&mut env, op.get_result(0), mapped);
                         }
                     }
                     "mir.div" => {
@@ -2093,9 +2437,18 @@ fn translate_verified_2d_tiled_kernel(
                     "mir.shr" => {
                         let lhs = env.get_kind(&op.get_operand(0));
                         let rhs = env.get_kind(&op.get_operand(1));
-                        let mapped = if let (Some(a), Some(SsaKind::ConstInt { value: sh, .. })) =
+                        let mapped = if let Some((shared_id, size, elem_bytes)) =
+                            lhs.as_ref().and_then(as_smem_desc_source)
+                            && matches!(rhs, Some(SsaKind::ConstInt { .. }))
+                        {
+                            SsaKind::SmemDesc {
+                                shared_id,
+                                size,
+                                elem_bytes,
+                            }
+                        } else if let (Some(a), Some(SsaKind::ConstInt { value: sh, .. })) =
                             (lhs.as_ref().and_then(as_idx_expr), rhs)
-                            && sh < 16
+                            && sh <= 32
                             && a.has_coord()
                         {
                             SsaKind::Index(IdxExpr::Div(Box::new(a), 1u64 << sh))
@@ -2125,6 +2478,17 @@ fn translate_verified_2d_tiled_kernel(
                         let lhs = env.get_kind(&op.get_operand(0));
                         let rhs = env.get_kind(&op.get_operand(1));
                         let mapped = match (&lhs, &rhs) {
+                            (Some(l), Some(SsaKind::ConstInt { .. }))
+                            | (Some(SsaKind::ConstInt { .. }), Some(l))
+                                if as_smem_desc_source(l).is_some() =>
+                            {
+                                let (shared_id, size, elem_bytes) = as_smem_desc_source(l).unwrap();
+                                SsaKind::SmemDesc {
+                                    shared_id,
+                                    size,
+                                    elem_bytes,
+                                }
+                            }
                             (Some(l), Some(SsaKind::ConstInt { value: m, .. }))
                             | (Some(SsaKind::ConstInt { value: m, .. }), Some(l))
                                 if *m > 0 && (*m + 1).is_power_of_two() =>
@@ -2329,9 +2693,31 @@ fn translate_verified_2d_tiled_kernel(
                     "mir.shl" => {
                         let lhs = env.get_kind(&op.get_operand(0));
                         let rhs = env.get_kind(&op.get_operand(1));
-                        let mapped = if let (Some(a), Some(SsaKind::ConstInt { value: sh, .. })) =
+                        let mapped = if let Some((shared_id, size, elem_bytes)) =
+                            lhs.as_ref().and_then(as_smem_desc_source)
+                            && matches!(rhs, Some(SsaKind::ConstInt { .. }))
+                        {
+                            SsaKind::SmemDesc {
+                                shared_id,
+                                size,
+                                elem_bytes,
+                            }
+                        } else if let (
+                            Some(SsaKind::ConstInt {
+                                width,
+                                value: v_lhs,
+                            }),
+                            Some(SsaKind::ConstInt { value: sh, .. }),
+                        ) = (&lhs, &rhs)
+                            && *sh < 64
+                        {
+                            SsaKind::ConstInt {
+                                width: *width,
+                                value: v_lhs << *sh,
+                            }
+                        } else if let (Some(a), Some(SsaKind::ConstInt { value: sh, .. })) =
                             (lhs.as_ref().and_then(as_idx_expr), rhs)
-                            && sh < 16
+                            && sh <= 32
                             && a.has_coord()
                         {
                             SsaKind::Index(IdxExpr::Mul(
@@ -2365,7 +2751,26 @@ fn translate_verified_2d_tiled_kernel(
                     "mir.add" => {
                         let lhs = env.get_kind(&op.get_operand(0));
                         let rhs = env.get_kind(&op.get_operand(1));
-                        let mapped = if let (Some(a), Some(b)) = (
+                        let mapped = if let (Some(l), Some(r)) = (&lhs, &rhs)
+                            && let Some(tmem) =
+                                combine_tmem_addr(l, r, spec.block_size, spec.block_y).or_else(
+                                    || combine_tmem_addr(r, l, spec.block_size, spec.block_y),
+                                ) {
+                            tmem
+                        } else if let (Some(l), Some(r)) = (&lhs, &rhs)
+                            && let Some((shared_id, size, elem_bytes)) = as_smem_desc_source(l)
+                                .filter(|_| matches!(r, SsaKind::ConstInt { .. }))
+                                .or_else(|| {
+                                    as_smem_desc_source(r)
+                                        .filter(|_| matches!(l, SsaKind::ConstInt { .. }))
+                                })
+                        {
+                            SsaKind::SmemDesc {
+                                shared_id,
+                                size,
+                                elem_bytes,
+                            }
+                        } else if let (Some(a), Some(b)) = (
                             lhs.as_ref().and_then(as_idx_expr),
                             rhs.as_ref().and_then(as_idx_expr),
                         ) && (a.has_coord() || b.has_coord())
@@ -2383,10 +2788,35 @@ fn translate_verified_2d_tiled_kernel(
                     }
                     "mir.bitor" => {
                         // Lower `a | b` to `Add(a, b)` only when power-of-two alignment and
-                        // exclusive upper bounds prove disjoint bit ranges (`(a & b) == 0`).
+                        // exclusive upper bounds prove disjoint bit ranges (`(a & b) == 0`),
+                        // or propagate `SmemDesc` across descriptor bit-packing (`desc | flags`).
                         let lhs = env.get_kind(&op.get_operand(0));
                         let rhs = env.get_kind(&op.get_operand(1));
-                        let mapped = if let (Some(a), Some(b)) = (
+                        let mapped = if let (Some(l), Some(r)) = (&lhs, &rhs)
+                            && let Some((shared_id, size, elem_bytes)) = as_smem_desc_source(l)
+                                .filter(|_| matches!(r, SsaKind::ConstInt { .. }))
+                                .or_else(|| {
+                                    as_smem_desc_source(r)
+                                        .filter(|_| matches!(l, SsaKind::ConstInt { .. }))
+                                }) {
+                            SsaKind::SmemDesc {
+                                shared_id,
+                                size,
+                                elem_bytes,
+                            }
+                        } else if let (
+                            Some(SsaKind::ConstInt {
+                                width,
+                                value: v_lhs,
+                            }),
+                            Some(SsaKind::ConstInt { value: v_rhs, .. }),
+                        ) = (&lhs, &rhs)
+                        {
+                            SsaKind::ConstInt {
+                                width: *width,
+                                value: v_lhs | v_rhs,
+                            }
+                        } else if let (Some(a), Some(b)) = (
                             lhs.as_ref().and_then(as_idx_expr),
                             rhs.as_ref().and_then(as_idx_expr),
                         ) && (a.has_coord() || b.has_coord())
@@ -2400,15 +2830,166 @@ fn translate_verified_2d_tiled_kernel(
                         };
                         update(&mut env, op.get_result(0), mapped);
                     }
+                    "mir.construct_struct" => {
+                        if op.get_num_results() == 1 {
+                            let fields: Vec<SsaKind> = op
+                                .operands()
+                                .map(|v| env.get_kind(&v).unwrap_or(SsaKind::DataValue))
+                                .collect();
+                            update(&mut env, op.get_result(0), SsaKind::StructFields(fields));
+                        }
+                    }
+                    "mir.insert_field" => {
+                        if op.get_num_operands() == 2 && op.get_num_results() == 1 {
+                            let base = env.get_kind(&op.get_operand(0));
+                            let val_kind = env
+                                .get_kind(&op.get_operand(1))
+                                .unwrap_or(SsaKind::DataValue);
+                            let field = attribute_field_index(&op.attributes, "field_index")
+                                .or_else(|| attribute_field_index(&op.attributes, "index"));
+                            let mapped = match (base, field) {
+                                (Some(SsaKind::StructFields(mut fields)), Some(idx))
+                                    if (idx as usize) < fields.len() =>
+                                {
+                                    fields[idx as usize] = val_kind;
+                                    SsaKind::StructFields(fields)
+                                }
+                                _ => SsaKind::DataValue,
+                            };
+                            update(&mut env, op.get_result(0), mapped);
+                        }
+                    }
                     "mir.extract_field" => {
                         let base = env.get_kind(&op.get_operand(0));
                         let field = attribute_field_index(&op.attributes, "index");
                         let mapped = match (base, field) {
                             (Some(SsaKind::BufferParam(p)), Some(0)) => SsaKind::SlicePtr(p),
                             (Some(SsaKind::BufferParam(p)), Some(1)) => SsaKind::SliceLen(p),
+                            (Some(SsaKind::StructFields(fields)), Some(idx)) => fields
+                                .get(idx as usize)
+                                .cloned()
+                                .unwrap_or(SsaKind::DataValue),
                             _ => SsaKind::DataValue,
                         };
                         update(&mut env, op.get_result(0), mapped);
+                    }
+                    "nvvm.cvta_generic_to_shared_offset" => {
+                        if op.get_num_operands() >= 1 && op.get_num_results() == 1 {
+                            let mapped = match env.get_kind(&op.get_operand(0)) {
+                                Some(SsaKind::SharedBasePtr {
+                                    shared_id,
+                                    size,
+                                    elem_bytes,
+                                }) if spec.no_oob_shared.contains(&shared_id)
+                                    && spec.no_data_race.contains(&shared_id) =>
+                                {
+                                    SsaKind::SmemSharedOffset {
+                                        shared_id,
+                                        size,
+                                        elem_bytes,
+                                    }
+                                }
+                                Some(SsaKind::SharedElementPtr {
+                                    shared_id,
+                                    size,
+                                    addr: IdxExpr::Const(0),
+                                }) if spec.no_oob_shared.contains(&shared_id)
+                                    && spec.no_data_race.contains(&shared_id) =>
+                                {
+                                    let elem_bytes = shared_raw_list
+                                        .get(shared_id)
+                                        .and_then(|(n, _)| shared_elem_bytes_map.get(n).copied())
+                                        .unwrap_or(0);
+                                    SsaKind::SmemSharedOffset {
+                                        shared_id,
+                                        size,
+                                        elem_bytes,
+                                    }
+                                }
+                                _ => SsaKind::DataValue,
+                            };
+                            update(&mut env, op.get_result(0), mapped);
+                        }
+                    }
+                    "nvvm.tcgen05_alloc" | "nvvm.tcgen05_alloc_cg2" => {
+                        if op.get_num_operands() >= 2
+                            && let Some(SsaKind::ConstInt { value: cols, .. }) =
+                                env.get_kind(&op.get_operand(1))
+                            && let Ok(alloc_cols) = u64::try_from(cols)
+                            && let Some(
+                                SsaKind::SharedBasePtr { shared_id, .. }
+                                | SsaKind::SharedElementPtr {
+                                    shared_id,
+                                    addr: IdxExpr::Const(0),
+                                    ..
+                                },
+                            ) = env.get_kind(&op.get_operand(0))
+                        {
+                            tmem_addr_shared_slots.insert(shared_id, alloc_cols);
+                        }
+                    }
+                    "mir.store" => {
+                        if op.get_num_operands() >= 2 {
+                            let dst_kind = env.get_kind(&op.get_operand(0));
+                            let val_kind = env
+                                .get_kind(&op.get_operand(1))
+                                .unwrap_or(SsaKind::DataValue);
+                            match (dst_kind, val_kind) {
+                                (
+                                    Some(SsaKind::StackAlloca(alloca)),
+                                    SsaKind::StructFields(fields),
+                                ) => {
+                                    if stack_struct_fields.get(&alloca) != Some(&fields) {
+                                        stack_struct_fields.insert(alloca, fields);
+                                        stack_changed = true;
+                                    }
+                                }
+                                (Some(SsaKind::StackFieldPtr { alloca, field }), rhs_kind) => {
+                                    let entry = stack_struct_fields.entry(alloca).or_default();
+                                    if entry.len() <= field {
+                                        entry.resize(field + 1, SsaKind::DataValue);
+                                    }
+                                    if entry[field] != rhs_kind {
+                                        entry[field] = rhs_kind;
+                                        stack_changed = true;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    "mir.load" => {
+                        if op.get_num_operands() >= 1 && op.get_num_results() == 1 {
+                            let mapped = match env.get_kind(&op.get_operand(0)) {
+                                Some(
+                                    SsaKind::SharedBasePtr { shared_id, .. }
+                                    | SsaKind::SharedElementPtr {
+                                        shared_id,
+                                        addr: IdxExpr::Const(0),
+                                        ..
+                                    },
+                                ) if tmem_addr_shared_slots.contains_key(&shared_id) => {
+                                    SsaKind::TmemAddr {
+                                        alloc_cols: tmem_addr_shared_slots[&shared_id],
+                                        lane_expr: IdxExpr::Const(0),
+                                        col_expr: IdxExpr::Const(0),
+                                    }
+                                }
+                                Some(SsaKind::StackAlloca(alloca)) => stack_struct_fields
+                                    .get(&alloca)
+                                    .cloned()
+                                    .map(SsaKind::StructFields)
+                                    .unwrap_or(SsaKind::DataValue),
+                                Some(SsaKind::StackFieldPtr { alloca, field }) => {
+                                    stack_struct_fields
+                                        .get(&alloca)
+                                        .and_then(|fs| fs.get(field).cloned())
+                                        .unwrap_or(SsaKind::DataValue)
+                                }
+                                _ => SsaKind::DataValue,
+                            };
+                            update(&mut env, op.get_result(0), mapped);
+                        }
                     }
                     "mir.lt" => {
                         let lhs = env.get_kind(&op.get_operand(0));
@@ -2436,33 +3017,24 @@ fn translate_verified_2d_tiled_kernel(
                     "mir.ptr_offset" => {
                         let base = env.get_kind(&op.get_operand(0));
                         let idx = env.get_kind(&op.get_operand(1));
+                        let resolved_shared_idx = match &idx {
+                            Some(SsaKind::Index(addr)) => Some(addr.clone()),
+                            Some(SsaKind::ConstInt { value, .. }) => {
+                                u64::try_from(*value).ok().map(IdxExpr::Const)
+                            }
+                            _ => None,
+                        };
                         if let (
                             Some(SsaKind::SharedBasePtr {
                                 shared_id, size, ..
                             }),
-                            Some(SsaKind::Index(addr)),
-                        ) = (base.clone(), idx.clone())
-                            && addr.has_coord()
+                            Some(addr),
+                        ) = (base.clone(), resolved_shared_idx)
                         {
                             // `LoopVar { bound }` (`i < bound`) only holds inside blocks
                             // dominated by the loop header's `< bound` branch; post-loop
                             // blocks (`i >= bound`) fall back to `DataValue` and fail closed.
-                            let loop_in_scope = match addr.single_loop_scope() {
-                                LoopScopeCheck::None => true,
-                                LoopScopeCheck::Single {
-                                    header_block: hdr_blk,
-                                    body_block: body_blk,
-                                    exit_block: exit_blk,
-                                    ..
-                                } => {
-                                    !can_reach_without(0, b_idx, body_blk, &succs, num_blocks)
-                                        && !can_reach_without(
-                                            exit_blk, b_idx, hdr_blk, &succs, num_blocks,
-                                        )
-                                }
-                                LoopScopeCheck::Conflict => false,
-                            };
-                            if loop_in_scope {
+                            if is_loop_expr_in_scope(&addr, b_idx, &succs, num_blocks) {
                                 update(
                                     &mut env,
                                     op.get_result(0),
@@ -2506,7 +3078,7 @@ fn translate_verified_2d_tiled_kernel(
                 }
             }
         }
-        if !changed {
+        if !changed && !stack_changed {
             break;
         }
     }
@@ -2596,18 +3168,61 @@ fn translate_verified_2d_tiled_kernel(
         }
     }
 
-    // 4b. Collect thread-coordinate branch guards (`GuardExpr`) and async `mbarrier`
-    //     token chains (`StageProduced` -> `StageReady`) from `mir.cond_br`.
+    // 4b. Collect thread-coordinate branch guards (`GuardExpr`), `mbarrier` lifecycle sites,
+    //     and async `mbarrier` token chains (`StageProduced` / `TmemProduced` -> `Ready`).
     let mut branch_guards: Vec<(usize, usize, GuardExpr)> = Vec::new();
+    let mut mbarrier_init_sites: Vec<(usize, usize, usize)> = Vec::new();
+    let mut arrived_plain_bars: BTreeSet<usize> = BTreeSet::new();
     let mut arrived_expect_tx_bars: BTreeSet<usize> = BTreeSet::new();
+    let mut committed_tmem_bars: BTreeSet<usize> = BTreeSet::new();
     let mut arrived_tx_bytes_per_bar: HashMap<usize, u64> = HashMap::new();
     let mut async_bar_for_shared: HashMap<usize, usize> = HashMap::new();
+    let mut async_prod_blocks_for_shared: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
     let mut mbarrier_wait_edges: Vec<(usize, usize, usize)> = Vec::new();
     for (w_blk, &b_ptr) in blocks.iter().enumerate() {
-        for op_ptr in b_ptr.deref(ctx).iter(ctx) {
+        for (op_idx, op_ptr) in b_ptr.deref(ctx).iter(ctx).enumerate() {
             let opid = Operation::get_opid(op_ptr, ctx).to_string();
             let op = op_ptr.deref(ctx);
-            if matches!(
+            if opid == "nvvm.mbarrier_init_shared" {
+                let (
+                    Some(SsaKind::MbarrierPtr { bar_id }),
+                    Some(SsaKind::ConstInt { value: raw_cnt, .. }),
+                ) = (
+                    (op.get_num_operands() >= 1)
+                        .then(|| env.get_kind(&op.get_operand(0)))
+                        .flatten(),
+                    (op.get_num_operands() >= 2)
+                        .then(|| env.get_kind(&op.get_operand(1)))
+                        .flatten(),
+                )
+                else {
+                    return Err(reject(
+                        &opid,
+                        "mbarrier_init requires a static Barrier pointer and non-zero constant arrival count",
+                    ));
+                };
+                if raw_cnt == 0 {
+                    return Err(reject(
+                        &opid,
+                        "mbarrier_init arrival count must be greater than zero",
+                    ));
+                }
+                mbarrier_init_sites.push((w_blk, op_idx, bar_id));
+            } else if matches!(
+                opid.as_str(),
+                "nvvm.mbarrier_arrive_shared" | "nvvm.mbarrier_arrive_cluster"
+            ) {
+                let Some(SsaKind::MbarrierPtr { bar_id }) = (op.get_num_operands() >= 1)
+                    .then(|| env.get_kind(&op.get_operand(0)))
+                    .flatten()
+                else {
+                    return Err(reject(
+                        &opid,
+                        "mbarrier_arrive requires a static Barrier pointer",
+                    ));
+                };
+                arrived_plain_bars.insert(bar_id);
+            } else if matches!(
                 opid.as_str(),
                 "nvvm.mbarrier_arrive_expect_tx_shared" | "nvvm.mbarrier_arrive_expect_tx_cluster"
             ) {
@@ -2638,6 +3253,23 @@ fn translate_verified_2d_tiled_kernel(
                 arrived_expect_tx_bars.insert(bar_id);
                 let entry = arrived_tx_bytes_per_bar.entry(bar_id).or_insert(0);
                 *entry = entry.saturating_add(tx_bytes);
+            } else if opid.starts_with("nvvm.tcgen05_commit") {
+                if !spec.tmem_lifecycle {
+                    return Err(reject(
+                        &opid,
+                        "tcgen05 operations in a #[verify] kernel require `tmem_lifecycle`",
+                    ));
+                }
+                let Some(SsaKind::MbarrierPtr { bar_id }) = (op.get_num_operands() >= 1)
+                    .then(|| env.get_kind(&op.get_operand(0)))
+                    .flatten()
+                else {
+                    return Err(reject(
+                        &opid,
+                        "tcgen05_commit requires a static Barrier pointer",
+                    ));
+                };
+                committed_tmem_bars.insert(bar_id);
             } else if opid.starts_with("nvvm.cp_async_bulk_tensor_g2s") {
                 let (
                     Some(SsaKind::SharedBasePtr { shared_id, .. }),
@@ -2657,6 +3289,10 @@ fn translate_verified_2d_tiled_kernel(
                     ));
                 };
                 async_bar_for_shared.insert(shared_id, bar_id);
+                async_prod_blocks_for_shared
+                    .entry(shared_id)
+                    .or_default()
+                    .push((w_blk, bar_id));
             } else if opid.starts_with("nvvm.cp_async_bulk") {
                 return Err(reject(
                     &opid,
@@ -2711,19 +3347,25 @@ fn translate_verified_2d_tiled_kernel(
         }
         guard
     };
-    let is_stage_ready = |b_idx: usize, bar_id: usize| -> bool {
-        arrived_expect_tx_bars.contains(&bar_id)
-            && mbarrier_wait_edges.iter().any(|&(w_blk, ready_dst, b_id)| {
-                b_id == bar_id
-                    && b_idx != w_blk
-                    && !can_reach_without(0, b_idx, ready_dst, &succs, num_blocks)
-                    && can_reach(ready_dst, b_idx, &succs, num_blocks)
-            })
+    let is_bar_ready_at = |b_idx: usize, bar_id: usize| -> bool {
+        mbarrier_wait_edges.iter().any(|&(w_blk, ready_dst, b_id)| {
+            b_id == bar_id
+                && b_idx != w_blk
+                && !can_reach_without(0, b_idx, ready_dst, &succs, num_blocks)
+                && can_reach(ready_dst, b_idx, &succs, num_blocks)
+        })
     };
+    let is_stage_ready = |b_idx: usize, bar_id: usize| -> bool {
+        arrived_expect_tx_bars.contains(&bar_id) && is_bar_ready_at(b_idx, bar_id)
+    };
+    let is_tmem_ready = |b_idx: usize, bar_id: usize| -> bool {
+        committed_tmem_bars.contains(&bar_id) && is_bar_ready_at(b_idx, bar_id)
+    };
+    let mut uniform_mbar_ready_blocks: BTreeSet<usize> = BTreeSet::new();
     let mut effective_num_barriers = barrier_sites.len();
     let mut final_barriers_uniform = barriers_uniform;
     for &(_w_blk, ready_dst, bar_id) in &mbarrier_wait_edges {
-        if arrived_expect_tx_bars.contains(&bar_id) {
+        if arrived_expect_tx_bars.contains(&bar_id) || committed_tmem_bars.contains(&bar_id) {
             let uniform_wait = return_blocks
                 .iter()
                 .all(|&ret_blk| !can_reach_without(0, ret_blk, ready_dst, &succs, num_blocks));
@@ -2732,9 +3374,242 @@ fn translate_verified_2d_tiled_kernel(
                     final_barriers_uniform = true;
                 }
                 effective_num_barriers += 1;
+                uniform_mbar_ready_blocks.insert(ready_dst);
             } else {
                 final_barriers_uniform = false;
             }
+        }
+    }
+    let effective_phase = |b_idx: usize, seen_sync_in_blk: usize| -> usize {
+        let sync_phase = block_phase(b_idx, seen_sync_in_blk);
+        let mbar_phase = uniform_mbar_ready_blocks
+            .iter()
+            .filter(|&&rd| {
+                can_reach(rd, b_idx, &succs, num_blocks)
+                    && !can_reach_without(0, b_idx, rd, &succs, num_blocks)
+            })
+            .count();
+        sync_phase + mbar_phase
+    };
+
+    // 4c. Validate `mbarrier` initialization (`init -> sync_threads() -> arrive/wait`) and
+    //     PTX `generic -> async` proxy coherence (`fence_proxy_async_shared_cta()`).
+    let sync_block_set: BTreeSet<usize> = barrier_sites.iter().map(|&(b, _)| b).collect();
+    for (u_blk, &b_ptr) in blocks.iter().enumerate() {
+        let mut seen_sync_in_blk = false;
+        let mut initialized_and_synced_in_blk: BTreeSet<usize> = BTreeSet::new();
+        let mut initialized_in_blk: BTreeSet<usize> = BTreeSet::new();
+        for op_ptr in b_ptr.deref(ctx).iter(ctx) {
+            let opid = Operation::get_opid(op_ptr, ctx).to_string();
+            let op = op_ptr.deref(ctx);
+            if opid == "nvvm.mbarrier_init_shared" {
+                if let Some(SsaKind::MbarrierPtr { bar_id }) = (op.get_num_operands() >= 1)
+                    .then(|| env.get_kind(&op.get_operand(0)))
+                    .flatten()
+                {
+                    initialized_in_blk.insert(bar_id);
+                }
+                continue;
+            }
+            if opid == "nvvm.barrier0" {
+                seen_sync_in_blk = true;
+                initialized_and_synced_in_blk.extend(initialized_in_blk.iter().copied());
+                continue;
+            }
+            let used_bar = if opid.starts_with("nvvm.cp_async_bulk_tensor_g2s") {
+                (op.get_num_operands() >= 2)
+                    .then(|| env.get_kind(&op.get_operand(1)))
+                    .flatten()
+            } else if matches!(
+                opid.as_str(),
+                "nvvm.mbarrier_arrive_shared"
+                    | "nvvm.mbarrier_arrive_cluster"
+                    | "nvvm.mbarrier_arrive_expect_tx_shared"
+                    | "nvvm.mbarrier_arrive_expect_tx_cluster"
+                    | "nvvm.mbarrier_try_wait_parity_shared"
+                    | "nvvm.mbarrier_try_wait_shared"
+                    | "nvvm.mbarrier_test_wait_shared"
+                    | "nvvm.mbarrier_try_wait_parity_cluster"
+                    | "nvvm.mbarrier_try_wait_parity_cluster_relaxed"
+            ) || opid.starts_with("nvvm.tcgen05_commit")
+            {
+                (op.get_num_operands() >= 1)
+                    .then(|| env.get_kind(&op.get_operand(0)))
+                    .flatten()
+            } else {
+                None
+            };
+            if let Some(SsaKind::MbarrierPtr { bar_id }) = used_bar {
+                let init_blks: Vec<usize> = mbarrier_init_sites
+                    .iter()
+                    .filter_map(|&(ib, _, b)| (b == bar_id).then_some(ib))
+                    .collect();
+                if init_blks.is_empty() {
+                    return Err(reject(
+                        &opid,
+                        "Barrier static is used without a dominating `mbarrier_init`",
+                    ));
+                }
+                let synced = initialized_and_synced_in_blk.contains(&bar_id)
+                    || (!can_reach_without_set(0, u_blk, &sync_block_set, &succs, num_blocks)
+                        && init_blks.iter().all(|&ib| {
+                            if ib == u_blk {
+                                seen_sync_in_blk
+                            } else {
+                                can_reach(ib, u_blk, &succs, num_blocks)
+                                    && !can_reach_without_set(
+                                        ib,
+                                        u_blk,
+                                        &sync_block_set,
+                                        &succs,
+                                        num_blocks,
+                                    )
+                            }
+                        }));
+                if !synced {
+                    return Err(reject(
+                        &opid,
+                        "`mbarrier_init` must be followed by `thread::sync_threads()` before arriving or waiting on the Barrier",
+                    ));
+                }
+            }
+        }
+    }
+
+    // Forward dataflow tracking unflushed `generic`-proxy writes across the CFG.
+    let mut in_proxy_dirty: Vec<HashMap<ProxyResource, ProxyDirtyState>> =
+        vec![HashMap::new(); num_blocks];
+    let step_proxy_op =
+        |opid: &str,
+         op: &Operation,
+         leader_only: bool,
+         dirty: &mut HashMap<ProxyResource, ProxyDirtyState>| {
+            match opid {
+                "nvvm.mbarrier_init_shared" => {
+                    if op.get_num_operands() >= 1
+                        && let Some(SsaKind::MbarrierPtr { bar_id }) =
+                            env.get_kind(&op.get_operand(0))
+                    {
+                        let state = if leader_only {
+                            ProxyDirtyState::NeedsFence
+                        } else {
+                            ProxyDirtyState::NeedsSyncAndFence
+                        };
+                        dirty
+                            .entry(ProxyResource::Barrier(bar_id))
+                            .and_modify(|s| *s = (*s).max(state))
+                            .or_insert(state);
+                    }
+                }
+                "mir.store" => {
+                    if op.get_num_operands() >= 1
+                        && let Some(
+                            SsaKind::SharedElementPtr { shared_id, .. }
+                            | SsaKind::SharedBasePtr { shared_id, .. },
+                        ) = env.get_kind(&op.get_operand(0))
+                    {
+                        let state = if leader_only {
+                            ProxyDirtyState::NeedsFence
+                        } else {
+                            ProxyDirtyState::NeedsSyncAndFence
+                        };
+                        dirty
+                            .entry(ProxyResource::Shared(shared_id))
+                            .and_modify(|s| *s = (*s).max(state))
+                            .or_insert(state);
+                    }
+                }
+                "nvvm.barrier0" => {
+                    for state in dirty.values_mut() {
+                        if *state == ProxyDirtyState::NeedsSyncAndFence {
+                            *state = ProxyDirtyState::NeedsFence;
+                        }
+                    }
+                }
+                "nvvm.fence_proxy_async_shared_cta" => {
+                    dirty.retain(|_, state| *state != ProxyDirtyState::NeedsFence);
+                }
+                _ => {}
+            }
+        };
+    for _ in 0..num_blocks + 2 {
+        let mut changed = false;
+        for (b_idx, &b_ptr) in blocks.iter().enumerate() {
+            let leader_only = block_guard_expr(b_idx).has_zero_leader_check();
+            let mut dirty = in_proxy_dirty[b_idx].clone();
+            for op_ptr in b_ptr.deref(ctx).iter(ctx) {
+                let opid = Operation::get_opid(op_ptr, ctx).to_string();
+                let op = op_ptr.deref(ctx);
+                step_proxy_op(&opid, &op, leader_only, &mut dirty);
+            }
+            for &succ in &succs[b_idx] {
+                let dst = &mut in_proxy_dirty[succ];
+                for (&res, &state) in &dirty {
+                    match dst.get_mut(&res) {
+                        Some(existing) if *existing < state => {
+                            *existing = state;
+                            changed = true;
+                        }
+                        None => {
+                            dst.insert(res, state);
+                            changed = true;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let check_proxy_clean = |opid: &str,
+                             res: ProxyResource,
+                             dirty: &HashMap<ProxyResource, ProxyDirtyState>|
+     -> Result<(), ExportError> {
+        match dirty.get(&res) {
+            Some(ProxyDirtyState::NeedsSyncAndFence) => Err(reject(
+                opid,
+                "multi-thread generic shared-memory write requires `thread::sync_threads()` followed by `fence_proxy_async_shared_cta()` before async proxy consumption",
+            )),
+            Some(ProxyDirtyState::NeedsFence) => Err(reject(
+                opid,
+                "generic shared-memory write or `mbarrier_init` reaches async proxy operation without `fence_proxy_async_shared_cta()`",
+            )),
+            None => Ok(()),
+        }
+    };
+    for (b_idx, &b_ptr) in blocks.iter().enumerate() {
+        let leader_only = block_guard_expr(b_idx).has_zero_leader_check();
+        let mut dirty = in_proxy_dirty[b_idx].clone();
+        for op_ptr in b_ptr.deref(ctx).iter(ctx) {
+            let opid = Operation::get_opid(op_ptr, ctx).to_string();
+            let op = op_ptr.deref(ctx);
+            if opid.starts_with("nvvm.cp_async_bulk_tensor_g2s") && op.get_num_operands() >= 2 {
+                if let Some(SsaKind::SharedBasePtr { shared_id, .. }) =
+                    env.get_kind(&op.get_operand(0))
+                {
+                    check_proxy_clean(&opid, ProxyResource::Shared(shared_id), &dirty)?;
+                }
+                if let Some(SsaKind::MbarrierPtr { bar_id }) = env.get_kind(&op.get_operand(1)) {
+                    check_proxy_clean(&opid, ProxyResource::Barrier(bar_id), &dirty)?;
+                }
+            } else if opid.starts_with("nvvm.tcgen05_commit") && op.get_num_operands() >= 1 {
+                if let Some(SsaKind::MbarrierPtr { bar_id }) = env.get_kind(&op.get_operand(0)) {
+                    check_proxy_clean(&opid, ProxyResource::Barrier(bar_id), &dirty)?;
+                }
+            } else if opid.starts_with("nvvm.tcgen05_mma") || opid.starts_with("nvvm.tcgen05_cp") {
+                for operand in op.operands() {
+                    if let Some((shared_id, _, _)) = env
+                        .get_kind(&operand)
+                        .as_ref()
+                        .and_then(as_smem_desc_source)
+                    {
+                        check_proxy_clean(&opid, ProxyResource::Shared(shared_id), &dirty)?;
+                    }
+                }
+            }
+            step_proxy_op(&opid, &op, leader_only, &mut dirty);
         }
     }
 
@@ -2753,8 +3628,10 @@ fn translate_verified_2d_tiled_kernel(
                 if op.get_num_operands() == 2 && op.get_num_results() == 1 {
                     let idx_val = op.get_operand(0);
                     let bound_val = op.get_operand(1);
-                    if matches!(env.get_kind(&idx_val), Some(SsaKind::Index(_)))
-                        && let Some(SsaKind::ConstInt { value, .. }) = env.get_kind(&bound_val)
+                    if matches!(
+                        env.get_kind(&idx_val),
+                        Some(SsaKind::Index(_) | SsaKind::ConstInt { .. })
+                    ) && let Some(SsaKind::ConstInt { value, .. }) = env.get_kind(&bound_val)
                         && let Ok(bound) = u64::try_from(value)
                     {
                         lt_const_bounds.insert(op.get_result(0), (idx_val, bound));
@@ -2844,21 +3721,37 @@ fn translate_verified_2d_tiled_kernel(
 
     let mut global_strip_accesses = Vec::new();
     let mut shared_accesses = Vec::new();
+    let mut tmem_accesses = Vec::new();
     let mut proven_assert_ops = Vec::new();
+    let mut tma_write_phase_for_shared: HashMap<usize, usize> = HashMap::new();
+    let mut shared_consumer_blocks: HashMap<usize, BTreeSet<usize>> = HashMap::new();
+    let mut tmem_alloc_sites: Vec<(usize, u64, bool)> = Vec::new();
+    let mut tmem_dealloc_sites: Vec<(usize, u64, bool)> = Vec::new();
+    let mut tmem_producer_blocks: BTreeSet<usize> = BTreeSet::new();
+    let mut tmem_consumer_blocks: BTreeSet<usize> = BTreeSet::new();
+    let mut tmem_ld_sites: Vec<(usize, usize)> = Vec::new();
+    let mut tmem_load_wait_sites: Vec<(usize, usize)> = Vec::new();
+
     for (b_idx, &b_ptr) in blocks.iter().enumerate() {
         let dom_guard = block_guard_expr(b_idx);
         let leader_only = dom_guard.has_zero_leader_check();
         let active_threads = dom_guard.active_threads_bound(u64::from(spec.block_size));
         let residual_guard = dom_guard.custom_residual();
         let mut seen_barriers_in_block = 0usize;
-        for op_ptr in b_ptr.deref(ctx).iter(ctx) {
+        for (op_idx, op_ptr) in b_ptr.deref(ctx).iter(ctx).enumerate() {
             let opid = Operation::get_opid(op_ptr, ctx).to_string();
             if opid == "nvvm.barrier0" {
                 seen_barriers_in_block += 1;
                 continue;
             }
-            let base_phase = block_phase(b_idx, seen_barriers_in_block);
+            let base_phase = effective_phase(b_idx, seen_barriers_in_block);
             let op = op_ptr.deref(ctx);
+            if opid.starts_with("nvvm.tcgen05") && !spec.tmem_lifecycle {
+                return Err(reject(
+                    &opid,
+                    "tcgen05 operations in a #[verify] kernel require `tmem_lifecycle`",
+                ));
+            }
             if opid.starts_with("nvvm.cp_async_bulk_tensor_g2s") {
                 if op.get_num_operands() >= 2
                     && let (
@@ -2883,6 +3776,7 @@ fn translate_verified_2d_tiled_kernel(
                         Some(&tx_bytes) => tx_bytes.div_ceil(elem_bytes),
                         None => size,
                     };
+                    tma_write_phase_for_shared.insert(shared_id, base_phase);
                     let shared_name = shared_raw_list
                         .get(shared_id)
                         .map(|(n, _)| n.clone())
@@ -2902,7 +3796,345 @@ fn translate_verified_2d_tiled_kernel(
                 }
                 continue;
             }
+            if opid == "nvvm.tcgen05_alloc" || opid == "nvvm.tcgen05_alloc_cg2" {
+                let is_cg2 = opid.ends_with("_cg2");
+                if dom_guard
+                    .selects_single_full_warp(spec.block_size, spec.block_y)
+                    .is_none()
+                {
+                    return Err(reject(
+                        &opid,
+                        "`tcgen05_alloc` is warp-synchronous and must be guarded by a single full 32-lane warp condition (such as `warp_id == 0`)",
+                    ));
+                }
+                let (
+                    Some(
+                        SsaKind::SharedBasePtr {
+                            shared_id, size, ..
+                        }
+                        | SsaKind::SharedElementPtr {
+                            shared_id,
+                            size,
+                            addr: IdxExpr::Const(0),
+                        },
+                    ),
+                    Some(SsaKind::ConstInt {
+                        value: raw_cols, ..
+                    }),
+                ) = (
+                    (op.get_num_operands() >= 1)
+                        .then(|| env.get_kind(&op.get_operand(0)))
+                        .flatten(),
+                    (op.get_num_operands() >= 2)
+                        .then(|| env.get_kind(&op.get_operand(1)))
+                        .flatten(),
+                )
+                else {
+                    return Err(reject(
+                        &opid,
+                        "`tcgen05_alloc` requires a verified `SharedArray<u32, ...>` slot and constant column count",
+                    ));
+                };
+                if !spec.no_oob_shared.contains(&shared_id)
+                    || !spec.no_data_race.contains(&shared_id)
+                {
+                    return Err(reject(
+                        &opid,
+                        "`tcgen05_alloc` shared-memory address slot must be listed in `no_oob_idx` and `no_data_race`",
+                    ));
+                }
+                if let Some(&assert_op) = ptr_asserts.get(&op.get_operand(0))
+                    && !proven_assert_ops.contains(&assert_op)
+                {
+                    proven_assert_ops.push(assert_op);
+                }
+                let alloc_cols = u64::try_from(raw_cols).unwrap_or(u64::MAX);
+                tmem_alloc_sites.push((b_idx, alloc_cols, is_cg2));
+                let shared_name = shared_raw_list
+                    .get(shared_id)
+                    .map(|(n, _)| n.clone())
+                    .unwrap_or_else(|| format!("SHARED_{shared_id}"));
+                shared_accesses.push(PhasedSharedAccess {
+                    kind: AccessKind::Write,
+                    shared_id,
+                    shared_name,
+                    buffer_len: size,
+                    phase: base_phase,
+                    pattern: TileAccessPatternKind::LinearScan,
+                    loop_bound: 1,
+                    leader_only: true,
+                    active_threads,
+                    guard: GuardExpr::True,
+                });
+                continue;
+            }
+            if opid == "nvvm.tcgen05_dealloc" || opid == "nvvm.tcgen05_dealloc_cg2" {
+                let is_cg2 = opid.ends_with("_cg2");
+                if dom_guard
+                    .selects_single_full_warp(spec.block_size, spec.block_y)
+                    .is_none()
+                {
+                    return Err(reject(
+                        &opid,
+                        "`tcgen05_dealloc` is warp-synchronous and must be guarded by a single full 32-lane warp condition (such as `warp_id == 0`)",
+                    ));
+                }
+                let (
+                    Some(SsaKind::TmemAddr {
+                        lane_expr: IdxExpr::Const(0),
+                        col_expr: IdxExpr::Const(0),
+                        ..
+                    }),
+                    Some(SsaKind::ConstInt {
+                        value: raw_cols, ..
+                    }),
+                ) = (
+                    (op.get_num_operands() >= 1)
+                        .then(|| env.get_kind(&op.get_operand(0)))
+                        .flatten(),
+                    (op.get_num_operands() >= 2)
+                        .then(|| env.get_kind(&op.get_operand(1)))
+                        .flatten(),
+                )
+                else {
+                    return Err(reject(
+                        &opid,
+                        "`tcgen05_dealloc` requires the base `TMEM` address loaded from `TMEM_ADDR` and a constant column count",
+                    ));
+                };
+                let dealloc_cols = u64::try_from(raw_cols).unwrap_or(u64::MAX);
+                tmem_dealloc_sites.push((b_idx, dealloc_cols, is_cg2));
+                continue;
+            }
+            if opid.starts_with("nvvm.tcgen05_mma") || opid.starts_with("nvvm.tcgen05_cp") {
+                if !leader_only {
+                    return Err(reject(
+                        &opid,
+                        format!(
+                            "`{opid}` is a single-thread async instruction and must be guarded by a leader check (such as `tid == 0`)"
+                        ),
+                    ));
+                }
+                let Some(SsaKind::TmemAddr {
+                    lane_expr,
+                    col_expr,
+                    ..
+                }) = (op.get_num_operands() >= 1)
+                    .then(|| env.get_kind(&op.get_operand(0)))
+                    .flatten()
+                else {
+                    return Err(reject(
+                        &opid,
+                        format!(
+                            "`{opid}` destination operand must derive from an allocated `TMEM` base address"
+                        ),
+                    ));
+                };
+                if !is_loop_expr_in_scope(&lane_expr, b_idx, &succs, num_blocks)
+                    || !is_loop_expr_in_scope(&col_expr, b_idx, &succs, num_blocks)
+                {
+                    return Err(reject(
+                        &opid,
+                        format!(
+                            "`{opid}` TMEM address uses an out-of-scope or conflicting loop variable"
+                        ),
+                    ));
+                }
+                let is_cg2 = opid.ends_with("_cg2");
+                let (height_lanes, width_cols) = if opid.starts_with("nvvm.tcgen05_cp") {
+                    parse_tcgen05_cp_shape(&opid).ok_or_else(|| {
+                        reject(&opid, format!("unrecognized `tcgen05_cp` shape `{opid}`"))
+                    })?
+                } else {
+                    let idesc_val = op
+                        .operands()
+                        .filter_map(|v| match env.get_kind(&v) {
+                            Some(SsaKind::ConstInt { value, .. }) if value >= 256 => Some(value),
+                            _ => None,
+                        })
+                        .next()
+                        .ok_or_else(|| {
+                            reject(
+                                &opid,
+                                format!("`{opid}` requires a compile-time constant `Tcgen05InstructionDescriptor`"),
+                            )
+                        })?;
+                    decode_tcgen05_idesc_shape(idesc_val, is_cg2).ok_or_else(|| {
+                        reject(
+                            &opid,
+                            format!(
+                                "`{opid}` instruction descriptor encodes zero M or N dimension"
+                            ),
+                        )
+                    })?
+                };
+                let mut desc_rank = 0usize;
+                for (arg_pos, operand) in op.operands().enumerate().skip(1) {
+                    let op_ty = operand.get_type(ctx).deref(ctx);
+                    let is_u64 = op_ty
+                        .downcast_ref::<IntegerType>()
+                        .is_some_and(|i| i.width() == 64);
+                    if !is_u64 {
+                        continue;
+                    }
+                    let Some((shared_id, size, elem_bytes)) = env
+                        .get_kind(&operand)
+                        .as_ref()
+                        .and_then(as_smem_desc_source)
+                    else {
+                        return Err(reject(
+                            &opid,
+                            format!(
+                                "`{opid}` 64-bit SMEM descriptor operand {arg_pos} must derive from `cvta_generic_to_shared_offset` on a verified `SharedArray`"
+                            ),
+                        ));
+                    };
+                    if elem_bytes == 0 {
+                        return Err(reject(
+                            &opid,
+                            "cannot determine element byte width for `tcgen05` SMEM descriptor",
+                        ));
+                    }
+                    let req_bytes = if opid.starts_with("nvvm.tcgen05_cp") {
+                        height_lanes * width_cols * 4
+                    } else if desc_rank == 0 {
+                        height_lanes * 32
+                    } else {
+                        let b_rows = if is_cg2 { width_cols / 2 } else { width_cols };
+                        b_rows * 32
+                    };
+                    desc_rank += 1;
+                    let req_elems = req_bytes.div_ceil(elem_bytes);
+                    let mut phase = base_phase;
+                    if let Some(&bar_id) = async_bar_for_shared.get(&shared_id)
+                        && !is_stage_ready(b_idx, bar_id)
+                        && let Some(&w_phase) = tma_write_phase_for_shared.get(&shared_id)
+                    {
+                        phase = w_phase;
+                    }
+                    shared_consumer_blocks
+                        .entry(shared_id)
+                        .or_default()
+                        .insert(b_idx);
+                    let shared_name = shared_raw_list
+                        .get(shared_id)
+                        .map(|(n, _)| n.clone())
+                        .unwrap_or_else(|| format!("SHARED_{shared_id}"));
+                    shared_accesses.push(PhasedSharedAccess {
+                        kind: AccessKind::Read,
+                        shared_id,
+                        shared_name,
+                        buffer_len: size,
+                        phase,
+                        pattern: TileAccessPatternKind::LinearScan,
+                        loop_bound: req_elems,
+                        leader_only: true,
+                        active_threads,
+                        guard: GuardExpr::True,
+                    });
+                }
+                let loop_bound = lane_expr.loop_bound().max(col_expr.loop_bound());
+                tmem_producer_blocks.insert(b_idx);
+                tmem_accesses.push(ExtractedTmemAccess {
+                    lane_expr,
+                    col_expr,
+                    height_lanes,
+                    width_cols,
+                    loop_bound,
+                    warp_restricted: false,
+                    guard: dom_guard.clone(),
+                });
+                continue;
+            }
+            if opid.starts_with("nvvm.tcgen05_ld_") {
+                let (height_lanes, width_cols) =
+                    parse_tcgen05_ld_shape(&opid).ok_or_else(|| {
+                        reject(&opid, format!("unrecognized `tcgen05_ld` shape `{opid}`"))
+                    })?;
+                let Some(SsaKind::TmemAddr {
+                    lane_expr,
+                    col_expr,
+                    ..
+                }) = (op.get_num_operands() >= 1)
+                    .then(|| env.get_kind(&op.get_operand(0)))
+                    .flatten()
+                else {
+                    return Err(reject(
+                        &opid,
+                        "`tcgen05_ld` operand must derive from an allocated `TMEM` base address",
+                    ));
+                };
+                if !is_loop_expr_in_scope(&lane_expr, b_idx, &succs, num_blocks)
+                    || !is_loop_expr_in_scope(&col_expr, b_idx, &succs, num_blocks)
+                {
+                    return Err(reject(
+                        &opid,
+                        "`tcgen05_ld` TMEM address uses an out-of-scope or conflicting loop variable",
+                    ));
+                }
+                if committed_tmem_bars.is_empty()
+                    || !committed_tmem_bars
+                        .iter()
+                        .any(|&bar_id| is_tmem_ready(b_idx, bar_id))
+                {
+                    return Err(reject(
+                        &opid,
+                        "`tcgen05_ld` requires a dominating `mbarrier_try_wait` on the Barrier signaled by `tcgen05_commit`",
+                    ));
+                }
+                let loop_bound = lane_expr.loop_bound().max(col_expr.loop_bound());
+                tmem_consumer_blocks.insert(b_idx);
+                tmem_ld_sites.push((b_idx, op_idx));
+                tmem_accesses.push(ExtractedTmemAccess {
+                    lane_expr,
+                    col_expr,
+                    height_lanes,
+                    width_cols,
+                    loop_bound,
+                    warp_restricted: true,
+                    guard: residual_guard.clone(),
+                });
+                continue;
+            }
+            if opid == "nvvm.tcgen05_load_wait" {
+                tmem_load_wait_sites.push((b_idx, op_idx));
+                continue;
+            }
+            if opid.starts_with("nvvm.tcgen05_commit") {
+                if !leader_only {
+                    return Err(reject(
+                        &opid,
+                        "`tcgen05_commit` must be guarded by a single-leader thread check (such as `tid == 0`)",
+                    ));
+                }
+                continue;
+            }
+            if matches!(
+                opid.as_str(),
+                "nvvm.tcgen05_store_wait"
+                    | "nvvm.tcgen05_fence_before_thread_sync"
+                    | "nvvm.tcgen05_fence_after_thread_sync"
+            ) {
+                continue;
+            }
+            if opid.starts_with("nvvm.tcgen05") {
+                return Err(reject(
+                    &opid,
+                    format!("unsupported `tcgen05` operation `{opid}` in verified kernel"),
+                ));
+            }
             match opid.as_str() {
+                "nvvm.cvta_generic_to_shared_offset" => {
+                    if !matches!(
+                        env.get_kind(&op.get_result(0)),
+                        Some(SsaKind::SmemSharedOffset { .. })
+                    ) {
+                        return Err(reject(
+                            &opid,
+                            "`cvta_generic_to_shared_offset` must target a `SharedArray` listed in `no_oob_idx` and `no_data_race`",
+                        ));
+                    }
+                }
                 "mir.ptr_offset" => {
                     if let Some(SsaKind::SharedBasePtr { .. }) = env.get_kind(&op.get_operand(0))
                         && !matches!(
@@ -2951,10 +4183,15 @@ fn translate_verified_2d_tiled_kernel(
                         }
                         let mut phase = base_phase;
                         if let Some(&bar_id) = async_bar_for_shared.get(&shared_id)
-                            && is_stage_ready(b_idx, bar_id)
+                            && !is_stage_ready(b_idx, bar_id)
+                            && let Some(&w_phase) = tma_write_phase_for_shared.get(&shared_id)
                         {
-                            phase += 1;
+                            phase = w_phase;
                         }
+                        shared_consumer_blocks
+                            .entry(shared_id)
+                            .or_default()
+                            .insert(b_idx);
                         let (pattern, loop_bound) = addr.classify_pattern(spec.block_size);
                         let guard = if matches!(
                             pattern,
@@ -3024,9 +4261,10 @@ fn translate_verified_2d_tiled_kernel(
                         }
                         let mut phase = base_phase;
                         if let Some(&bar_id) = async_bar_for_shared.get(&shared_id)
-                            && is_stage_ready(b_idx, bar_id)
+                            && !is_stage_ready(b_idx, bar_id)
+                            && let Some(&w_phase) = tma_write_phase_for_shared.get(&shared_id)
                         {
-                            phase += 1;
+                            phase = w_phase;
                         }
                         let (pattern, loop_bound) = addr.classify_pattern(spec.block_size);
                         let guard = if matches!(
@@ -3057,9 +4295,14 @@ fn translate_verified_2d_tiled_kernel(
                     }
                 }
                 "mir.cast"
+                | "mir.construct_struct"
+                | "mir.insert_field"
+                | "mir.alloca"
+                | "mir.field_addr"
                 | "nvvm.mbarrier_init_shared"
                 | "nvvm.mbarrier_inval_shared"
                 | "nvvm.mbarrier_arrive_shared"
+                | "nvvm.mbarrier_arrive_cluster"
                 | "nvvm.mbarrier_arrive_expect_tx_shared"
                 | "nvvm.mbarrier_arrive_expect_tx_cluster"
                 | "nvvm.mbarrier_try_wait_parity_shared"
@@ -3099,6 +4342,206 @@ fn translate_verified_2d_tiled_kernel(
             }
         }
     }
+
+    // 5b. Check cyclic loop back-pressure (`EMPTY_BAR` or `sync_threads()`) on async TMA
+    //     and `tcgen05` producers so iteration `k + 1` cannot overwrite iteration `k` while
+    //     consumers are still reading.
+    let signaled_bars: BTreeSet<usize> = arrived_plain_bars
+        .union(&arrived_expect_tx_bars)
+        .copied()
+        .chain(committed_tmem_bars.iter().copied())
+        .collect();
+    for (&shared_id, prod_list) in &async_prod_blocks_for_shared {
+        let Some(consumers) = shared_consumer_blocks.get(&shared_id) else {
+            continue;
+        };
+        for &(prod_blk, full_bar_id) in prod_list {
+            let prod_cyclic = succs[prod_blk]
+                .iter()
+                .any(|&s| can_reach(s, prod_blk, &succs, num_blocks));
+            if !prod_cyclic {
+                continue;
+            }
+            let mut backpressure = sync_block_set.clone();
+            for &(_w_blk, ready_dst, b_id) in &mbarrier_wait_edges {
+                if b_id != full_bar_id && signaled_bars.contains(&b_id) {
+                    backpressure.insert(ready_dst);
+                }
+            }
+            for &cons_blk in consumers {
+                if can_reach(cons_blk, prod_blk, &succs, num_blocks)
+                    && can_reach_without_set(cons_blk, prod_blk, &backpressure, &succs, num_blocks)
+                {
+                    return Err(reject(
+                        "mbarrier loop back-pressure",
+                        "async TMA producer inside a loop requires a second `EMPTY_BAR` wait or `thread::sync_threads()` between consumer reads and the next iteration's TMA overwrite",
+                    ));
+                }
+            }
+        }
+    }
+    for &prod_blk in &tmem_producer_blocks {
+        let prod_cyclic = succs[prod_blk]
+            .iter()
+            .any(|&s| can_reach(s, prod_blk, &succs, num_blocks));
+        if !prod_cyclic {
+            continue;
+        }
+        let mut backpressure = sync_block_set.clone();
+        for &(_w_blk, ready_dst, b_id) in &mbarrier_wait_edges {
+            if !committed_tmem_bars.contains(&b_id) && signaled_bars.contains(&b_id) {
+                backpressure.insert(ready_dst);
+            }
+        }
+        for &cons_blk in &tmem_consumer_blocks {
+            if can_reach(cons_blk, prod_blk, &succs, num_blocks)
+                && can_reach_without_set(cons_blk, prod_blk, &backpressure, &succs, num_blocks)
+            {
+                return Err(reject(
+                    "tmem loop back-pressure",
+                    "in-loop `tcgen05` producer requires an `EMPTY_BAR` wait or `thread::sync_threads()` between `tcgen05_ld` consumption and the next tile's `TMEM` overwrite",
+                ));
+            }
+        }
+    }
+
+    // 5c. Finalize `tmem_lifecycle` (`alloc -> commit -> wait -> ld -> load_wait -> sync -> dealloc`).
+    let extracted_tmem_lifecycle = if spec.tmem_lifecycle {
+        if tmem_alloc_sites.len() != 1 {
+            return Err(reject(
+                "tmem_lifecycle",
+                format!(
+                    "`tmem_lifecycle` requires exactly one `tcgen05_alloc` site, found {}",
+                    tmem_alloc_sites.len()
+                ),
+            ));
+        }
+        if tmem_dealloc_sites.is_empty() {
+            return Err(reject(
+                "tmem_lifecycle",
+                "`tmem_lifecycle` requires `tcgen05_dealloc` before kernel exit to prevent `CUDA_ERROR_TENSOR_MEMORY_LEAK`",
+            ));
+        }
+        let (alloc_blk, alloc_cols, alloc_cg2) = tmem_alloc_sites[0];
+        let dealloc_cols = tmem_dealloc_sites[0].1;
+        if tmem_dealloc_sites
+            .iter()
+            .any(|&(_, cols, cg2)| cg2 != alloc_cg2 || cols != dealloc_cols)
+        {
+            return Err(reject(
+                "tmem_lifecycle",
+                "all `tcgen05_dealloc` sites must match `tcgen05_alloc`'s CTA-group mode and column count",
+            ));
+        }
+
+        // Every `tcgen05_mma` / `tcgen05_cp` must be followed by `tcgen05_commit` before exit.
+        if !tmem_producer_blocks.is_empty() && committed_tmem_bars.is_empty() {
+            return Err(reject(
+                "tmem_lifecycle",
+                "asynchronous `tcgen05_mma` / `tcgen05_cp` operations must be tracked by `tcgen05_commit`",
+            ));
+        }
+
+        // Every `tcgen05_ld` must be post-dominated by `tcgen05_load_wait` before return/dealloc.
+        let load_wait_blocks: BTreeSet<usize> =
+            tmem_load_wait_sites.iter().map(|&(b, _)| b).collect();
+        for &(ld_blk, ld_op_idx) in &tmem_ld_sites {
+            let same_blk_wait = tmem_load_wait_sites
+                .iter()
+                .any(|&(wb, w_idx)| wb == ld_blk && w_idx > ld_op_idx);
+            if !same_blk_wait {
+                let post_dom = return_blocks.iter().all(|&ret_blk| {
+                    !can_reach_without_set(ld_blk, ret_blk, &load_wait_blocks, &succs, num_blocks)
+                });
+                if !post_dom {
+                    return Err(reject(
+                        "tmem_lifecycle",
+                        "`tcgen05_ld` must be followed by `tcgen05_load_wait()` on every execution path",
+                    ));
+                }
+            }
+        }
+
+        // Every `TMEM` producer/consumer must be separated from `tcgen05_dealloc` by `sync_threads()`,
+        // and no `TMEM` use or second `tcgen05_dealloc` may be reachable after `tcgen05_dealloc`.
+        let all_tmem_use_blocks: BTreeSet<usize> = tmem_producer_blocks
+            .union(&tmem_consumer_blocks)
+            .copied()
+            .collect();
+        for &(dealloc_blk, _, _) in &tmem_dealloc_sites {
+            for &use_blk in &all_tmem_use_blocks {
+                if can_reach(use_blk, dealloc_blk, &succs, num_blocks)
+                    && can_reach_without_set(
+                        use_blk,
+                        dealloc_blk,
+                        &sync_block_set,
+                        &succs,
+                        num_blocks,
+                    )
+                {
+                    return Err(reject(
+                        "tmem_lifecycle",
+                        "`thread::sync_threads()` is required between `tcgen05` operations and `tcgen05_dealloc`",
+                    ));
+                }
+            }
+            for &next_blk in &succs[dealloc_blk] {
+                for &use_blk in &all_tmem_use_blocks {
+                    if can_reach(next_blk, use_blk, &succs, num_blocks) {
+                        return Err(reject(
+                            "tmem_lifecycle",
+                            "`TMEM` cannot be accessed after `tcgen05_dealloc` (use-after-free)",
+                        ));
+                    }
+                }
+                for &(other_dealloc, _, _) in &tmem_dealloc_sites {
+                    if can_reach(next_blk, other_dealloc, &succs, num_blocks) {
+                        return Err(reject(
+                            "tmem_lifecycle",
+                            "`tcgen05_dealloc` cannot execute more than once along an execution path (double-free)",
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Every path from `tcgen05_alloc` to `mir.return` must pass through the warp-collective
+        // `tcgen05_dealloc` guard header (or `dealloc_blk` directly in a single-warp block).
+        let mut dealloc_gate_blocks: BTreeSet<usize> = BTreeSet::new();
+        for &(dealloc_blk, _, _) in &tmem_dealloc_sites {
+            dealloc_gate_blocks.insert(dealloc_blk);
+            for (pred_blk, pred_succs) in succs.iter().enumerate() {
+                if pred_succs.contains(&dealloc_blk) && pred_succs.len() == 2 {
+                    dealloc_gate_blocks.insert(pred_blk);
+                }
+            }
+        }
+        for &ret_blk in &return_blocks {
+            if can_reach(alloc_blk, ret_blk, &succs, num_blocks)
+                && can_reach_without_set(
+                    alloc_blk,
+                    ret_blk,
+                    &dealloc_gate_blocks,
+                    &succs,
+                    num_blocks,
+                )
+            {
+                return Err(reject(
+                    "tmem_lifecycle",
+                    "every execution path after `tcgen05_alloc` must execute `tcgen05_dealloc` before returning",
+                ));
+            }
+        }
+
+        Some(ExtractedTmemLifecycle {
+            alloc_cols,
+            dealloc_cols,
+            balanced: true,
+        })
+    } else {
+        None
+    };
+
     shared_accesses.sort_by_key(|a| (a.shared_id, a.phase, a.kind));
 
     Ok(TranslatedFunction::TiledKernel2D {
@@ -3107,6 +4550,8 @@ fn translate_verified_2d_tiled_kernel(
         barriers_uniform: final_barriers_uniform,
         global_strip_accesses,
         shared_accesses,
+        tmem_lifecycle: extracted_tmem_lifecycle,
+        tmem_accesses,
         proven_assert_ops,
     })
 }

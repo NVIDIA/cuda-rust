@@ -1513,6 +1513,14 @@ pub fn __verify_uniform_barriers_config() {
     // Compiler marker: deliberately empty and removed during MIR import.
 }
 
+/// Internal compiler marker recording a `tmem_lifecycle` obligation from
+/// `#[verify(...)]`.
+#[doc(hidden)]
+#[inline(never)]
+pub fn __verify_tmem_lifecycle_config() {
+    // Compiler marker: deliberately empty and removed during MIR import.
+}
+
 #[cfg(test)]
 mod tests {
     use super::block_linear_thread_id;

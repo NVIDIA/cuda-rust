@@ -64,6 +64,8 @@ inductive MemorySpace where
   | global
   /-- Per-block shared memory (`SharedArray<T, N>`). -/
   | shared
+  /-- Per-SM Blackwell Tensor Memory (`TMEM`, 128 lanes x up to 512 columns). -/
+  | tmem
   deriving Repr, DecidableEq
 
 /-- Compositional index expression over thread coordinates `(tx, ty)` and loop step `i`. -/
@@ -204,6 +206,25 @@ structure TiledKernelSummary2D where
   barriersUniform : Bool
   /-- All phased shared-memory accesses extracted from the kernel CFG. -/
   sharedAccesses : List PhasedTileAccess
+  deriving Repr, DecidableEq
+
+/-- A Blackwell Tensor Memory (`TMEM`) access (`tcgen05.mma`, `tcgen05.cp`,
+    `tcgen05.ld`, or `tcgen05.st`) extracted at `PostMem2Reg`. -/
+structure TmemAccess where
+  /-- Starting TMEM lane expression (`(taddr >> 16) & 0xFFFF`, within `0..128`). -/
+  laneExpr : IdxExpr
+  /-- Starting TMEM column expression (`taddr & 0xFFFF`, within `0..allocCols`). -/
+  colExpr : IdxExpr
+  /-- Number of TMEM lanes touched by the instruction (`16`, `32`, `64`, or `128`). -/
+  heightLanes : Nat
+  /-- Number of 32-bit TMEM columns touched by the instruction (`1..256`). -/
+  widthCols : Nat
+  /-- Exclusive upper bound on loop index `i` (`1` when outside a loop). -/
+  loopBound : Nat := 1
+  /-- True for `tcgen05.ld` / `tcgen05.st`, which must stay inside the warp's 32-lane slice. -/
+  warpRestricted : Bool := true
+  /-- Dominating thread guard (`GuardExpr.tr` when all block threads participate). -/
+  guard : GuardExpr := .tr
   deriving Repr, DecidableEq
 
 end CudaOxide.Mir.Kernel

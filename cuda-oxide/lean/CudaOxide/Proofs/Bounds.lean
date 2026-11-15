@@ -158,4 +158,67 @@ theorem no_oob_tile_bit_split_slot {activeThreads blockDimY loopBound groupSize 
     Nat.lt_of_lt_of_le (Nat.mod_lt tx hpos) hstride       -- `tx % groupSize < groupSize ≤ stride`
   exact CudaOxide.Proofs.Launch.launched_index_fits hdiv hrem hfit -- `(tx / W) * stride + (tx % W) < bufferLen`
 
+/-- Proves `NoOobTmemAccess` for a non-warp-restricted Tensor Core operation
+    (`tcgen05.mma` or `tcgen05.cp`) at constant `(laneOffset, colOffset)` when
+    `laneOffset + heightLanes ≤ 128` and `colOffset + widthCols ≤ allocCols ≤ 512`. -/
+theorem no_oob_tmem_mma
+    {blockDimX blockDimY allocCols laneOffset colOffset heightLanes widthCols loopBound : Nat}
+    {guard : GuardExpr}
+    (hlane : laneOffset + heightLanes ≤ 128)
+    (hcol : colOffset + widthCols ≤ allocCols)
+    (hmax : allocCols ≤ 512) :
+    NoOobTmemAccess blockDimX blockDimY allocCols
+      { laneExpr := .const laneOffset, colExpr := .const colOffset,
+        heightLanes := heightLanes, widthCols := widthCols,
+        loopBound := loopBound, warpRestricted := false, guard := guard } := by
+  intro _tx _ty _i _htx _hty _hi _hguard                  -- Unpack thread coordinates, loop step, and guard
+  refine ⟨hlane, hcol, hmax, ?_⟩                          -- Supply lane, column, and 512-column bounds directly
+  intro hw                                                -- Assume `false = true` on the `warpRestricted` premise
+  cases hw                                                -- Discharge vacuous `false = true` branch
+
+/-- Proves `NoOobTmemAccess` for a warp-partitioned `tcgen05.ld.32x32b` column scan
+    across up to 4 warps (`blockDimX ≤ 128`), where warp `tx / 32` reads its own
+    32-lane slice `(tx / 32) * 32 .. + 32` at column `i * colStride + colOffset`. -/
+theorem no_oob_tmem_warp_ld_scan
+    {blockDimX blockDimY allocCols colStride colOffset widthCols loopBound : Nat}
+    (hblock : blockDimX ≤ 128) (hpos : 0 < loopBound)
+    (hcol : (loopBound - 1) * colStride + colOffset + widthCols ≤ allocCols)
+    (hmax : allocCols ≤ 512) :
+    NoOobTmemAccess blockDimX blockDimY allocCols
+      { laneExpr := .mul (.div .tx 32) (.const 32),
+        colExpr := .add (.mul .loopVar (.const colStride)) (.const colOffset),
+        heightLanes := 32, widthCols := widthCols,
+        loopBound := loopBound, warpRestricted := true } := by
+  intro tx _ty i htx _hty hi _hguard                      -- Unpack `tx < blockDimX ≤ 128` and `i < loopBound`
+  simp only [IdxExpr.eval] at *                           -- Simplify record projections and `IdxExpr.eval` in goal and `hi`
+  have hw : tx / 32 < 4 := by omega                       -- `tx < 128` implies warp index `tx / 32` is in `0..3`
+  have hmod : (tx / 32) % 4 = tx / 32 := Nat.mod_eq_of_lt hw -- Simplify `(tx / 32) % 4` to `tx / 32`
+  have hle : i ≤ loopBound - 1 := by omega                -- `i < loopBound` with `0 < loopBound` gives `i ≤ loopBound - 1`
+  have _hmul := Nat.mul_le_mul_right colStride hle        -- Multiply both sides by `colStride` for column bound
+  rw [hmod]                                               -- Rewrite `(tx / 32) % 4` to `tx / 32` in the warpgroup slice goal
+  refine ⟨by omega, by omega, hmax, ?_⟩                   -- Prove `lane + 32 ≤ 128` and `col + widthCols ≤ allocCols`
+  intro _hwarp                                            -- Unpack `true = true` for `warpRestricted`
+  omega                                                   -- `(tx / 32) * 32` matches slice `[w * 32, w * 32 + 32]`
+
+/-- Proves `NoOobTmemAccess` for a unit-stride warp-partitioned `tcgen05.ld.32x32b`
+    column scan (`colExpr = .loopVar`, i.e., `tmem_row_base + col` for `col < loopBound`). -/
+theorem no_oob_tmem_warp_ld_unit_scan
+    {blockDimX blockDimY allocCols widthCols loopBound : Nat}
+    (hblock : blockDimX ≤ 128) (hpos : 0 < loopBound)
+    (hcol : (loopBound - 1) + widthCols ≤ allocCols)
+    (hmax : allocCols ≤ 512) :
+    NoOobTmemAccess blockDimX blockDimY allocCols
+      { laneExpr := .mul (.div .tx 32) (.const 32),
+        colExpr := .loopVar,
+        heightLanes := 32, widthCols := widthCols,
+        loopBound := loopBound, warpRestricted := true } := by
+  intro tx _ty i htx _hty hi _hguard                      -- Unpack `tx < blockDimX ≤ 128` and `i < loopBound`
+  simp only [IdxExpr.eval] at *                           -- Simplify record projections and `IdxExpr.eval`
+  have hw : tx / 32 < 4 := by omega                       -- `tx < 128` implies warp index `tx / 32` is in `0..3`
+  have hmod : (tx / 32) % 4 = tx / 32 := Nat.mod_eq_of_lt hw -- Simplify `(tx / 32) % 4` to `tx / 32`
+  rw [hmod]                                               -- Rewrite warpgroup slice index to `tx / 32`
+  refine ⟨by omega, by omega, hmax, ?_⟩                   -- Prove `lane + 32 ≤ 128` and `i + widthCols ≤ allocCols`
+  intro _hwarp                                            -- Unpack `true = true` for `warpRestricted`
+  omega                                                   -- `(tx / 32) * 32` stays inside `[w * 32, w * 32 + 32]`
+
 end CudaOxide.Proofs.Bounds

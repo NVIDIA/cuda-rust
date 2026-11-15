@@ -72,6 +72,8 @@ pub(crate) struct VerifyArgs {
     pub(crate) no_data_race: Vec<Ident>,
     /// Span of `uniform_barriers` when requested.
     pub(crate) uniform_barriers: Option<Ident>,
+    /// Span of `tmem_lifecycle` when Blackwell `TMEM` lifecycle/bounds verification is requested.
+    pub(crate) tmem_lifecycle: Option<Ident>,
 }
 
 impl Parse for VerifyArgs {
@@ -79,24 +81,28 @@ impl Parse for VerifyArgs {
         if input.is_empty() {
             return Err(syn::Error::new(
                 input.span(),
-                "verify requires at least one obligation: `no_oob_idx(...)`, `disjoint_writes(...)`, `writes_all_elems(...)`, `no_data_race(...)`, or `uniform_barriers`",
+                "verify requires at least one obligation: `no_oob_idx(...)`, `disjoint_writes(...)`, `writes_all_elems(...)`, `no_data_race(...)`, `uniform_barriers`, or `tmem_lifecycle`",
             ));
         }
         let mut args = VerifyArgs::default();
         while !input.is_empty() {
             let clause: Ident = input.parse()?;
-            if clause == "uniform_barriers" {
+            if clause == "uniform_barriers" || clause == "tmem_lifecycle" {
                 if input.peek(syn::token::Paren) {
                     let content;
                     syn::parenthesized!(content in input);
                     if !content.is_empty() {
                         return Err(syn::Error::new(
                             clause.span(),
-                            "`uniform_barriers` takes no arguments",
+                            format!("`{clause}` takes no arguments"),
                         ));
                     }
                 }
-                args.uniform_barriers = Some(clause);
+                if clause == "uniform_barriers" {
+                    args.uniform_barriers = Some(clause);
+                } else {
+                    args.tmem_lifecycle = Some(clause);
+                }
                 if !input.is_empty() {
                     input.parse::<Token![,]>()?;
                 }
@@ -120,7 +126,7 @@ impl Parse for VerifyArgs {
                     return Err(syn::Error::new(
                         clause.span(),
                         format!(
-                            "unknown #[verify] obligation `{clause}`; expected `no_oob_idx`, `disjoint_writes`, `writes_all_elems`, `no_data_race`, or `uniform_barriers`"
+                            "unknown #[verify] obligation `{clause}`; expected `no_oob_idx`, `disjoint_writes`, `writes_all_elems`, `no_data_race`, `uniform_barriers`, or `tmem_lifecycle`"
                         ),
                     ));
                 }
@@ -185,26 +191,30 @@ fn resolve_and_inject_verify_markers(
     Ok(())
 }
 
-/// AST visitor that wraps index reads/writes and verified async TMA / `mbarrier`
-/// calls on Lean-verified `SharedArray` and `Barrier` statics in `unsafe` blocks
-/// so the kernel body can be written in safe Rust with explicit phase scopes.
+/// AST visitor that wraps index reads/writes and verified async TMA / `mbarrier` /
+/// `tcgen05` calls on Lean-verified `SharedArray`, `Barrier`, and `TMEM` resources
+/// in `unsafe` blocks so the kernel body can be written in safe Rust.
 struct VerifiedSharedArrayRewriter {
     /// In-body `SharedArray` statics listed in both `no_oob_idx` and `no_data_race`.
     verified_shared: Vec<Ident>,
     /// In-body `Barrier` (`mbarrier`) statics declared inside the kernel function.
     barrier_statics: Vec<Ident>,
+    /// True when `tmem_lifecycle` is present on `#[verify(...)]`.
+    tmem_lifecycle: bool,
     /// True while traversing inside an existing `unsafe { ... }` block.
     in_unsafe: bool,
 }
 
-/// Peel casts, raw-address-of, references, parens, and `.as_ptr()` / `.as_mut_ptr()`
-/// to check whether `expr` directly targets a static identifier in `allowed`.
+/// Peel casts, raw-address-of, references, index projections, parens, and
+/// `.as_ptr()` / `.as_mut_ptr()` to check whether `expr` directly targets a
+/// static identifier in `allowed`.
 fn expr_targets_static(expr: &Expr, allowed: &[Ident]) -> bool {
     match expr {
         Expr::Path(path_expr) => path_expr
             .path
             .get_ident()
             .is_some_and(|id| allowed.iter().any(|v| v == id)),
+        Expr::Index(idx) => expr_targets_static(&idx.expr, allowed),
         Expr::Cast(cast) => expr_targets_static(&cast.expr, allowed),
         Expr::RawAddr(raw) => expr_targets_static(&raw.expr, allowed),
         Expr::Reference(refer) => expr_targets_static(&refer.expr, allowed),
@@ -234,9 +244,9 @@ impl VerifiedSharedArrayRewriter {
             .is_some_and(|id| self.verified_shared.iter().any(|v| v == id))
     }
 
-    /// Return true when `expr` is a verified `mbarrier` op on `self.barrier_statics`
-    /// or a `g2s` TMA bulk copy targeting `self.verified_shared` + `self.barrier_statics`
-    /// (leaving unverified `SharedArray`s and `s2g` TMA stores unwrapped).
+    /// Return true when `expr` is a verified `mbarrier` op on `self.barrier_statics`,
+    /// a `g2s` TMA bulk copy targeting `self.verified_shared` + `self.barrier_statics`,
+    /// or (under `tmem_lifecycle`) a scoped `tcgen05` / `cvta_generic_to_shared_offset` call.
     fn is_verified_async_barrier_call(&self, expr: &Expr) -> bool {
         let Expr::Call(call_expr) = expr else {
             return false;
@@ -250,7 +260,8 @@ impl VerifiedSharedArrayRewriter {
         let name = last.ident.to_string();
         match name.as_str() {
             "fence_proxy_async_shared_cta" => {
-                call_expr.args.is_empty() && !self.barrier_statics.is_empty()
+                call_expr.args.is_empty()
+                    && (!self.barrier_statics.is_empty() || self.tmem_lifecycle)
             }
             "mbarrier_init"
             | "mbarrier_inval"
@@ -272,6 +283,44 @@ impl VerifiedSharedArrayRewriter {
                         .iter()
                         .any(|bar| expr_targets_static(bar, &self.barrier_statics))
             }
+            "cvta_generic_to_shared_offset" if self.tmem_lifecycle => call_expr
+                .args
+                .first()
+                .is_some_and(|ptr| expr_targets_static(ptr, &self.verified_shared)),
+            "tcgen05_alloc" | "tcgen05_alloc_cg2" if self.tmem_lifecycle => call_expr
+                .args
+                .first()
+                .is_some_and(|dst| expr_targets_static(dst, &self.verified_shared)),
+            "tcgen05_commit"
+            | "tcgen05_commit_cg2"
+            | "tcgen05_commit_shared_cluster"
+            | "tcgen05_commit_shared_cluster_cg2"
+            | "tcgen05_commit_multicast"
+            | "tcgen05_commit_multicast_cg2"
+                if self.tmem_lifecycle =>
+            {
+                call_expr
+                    .args
+                    .first()
+                    .is_some_and(|bar| expr_targets_static(bar, &self.barrier_statics))
+            }
+            "tcgen05_dealloc"
+            | "tcgen05_dealloc_cg2"
+            | "tcgen05_load_wait"
+            | "tcgen05_store_wait"
+            | "tcgen05_fence_before_thread_sync"
+            | "tcgen05_fence_after_thread_sync"
+                if self.tmem_lifecycle =>
+            {
+                true
+            }
+            _ if self.tmem_lifecycle
+                && (name.starts_with("tcgen05_mma")
+                    || name.starts_with("tcgen05_cp")
+                    || name.starts_with("tcgen05_ld_")) =>
+            {
+                true
+            }
             _ => false,
         }
     }
@@ -291,28 +340,46 @@ impl VisitMut for VerifiedSharedArrayRewriter {
             if let Expr::Assign(assign) = expr
                 && self.is_verified_shared_index(&assign.left)
             {
+                self.in_unsafe = true;
                 visit_mut::visit_expr_mut(self, &mut assign.right);
                 if let Expr::Index(idx) = &mut *assign.left {
                     visit_mut::visit_expr_mut(self, &mut idx.index);
                 }
+                self.in_unsafe = false;
+                let inner = expr.clone();
+                *expr = parse_quote! { unsafe { #inner } };
+                return;
+            }
+            if let Expr::RawAddr(raw) = expr
+                && self.is_verified_shared_index(&raw.expr)
+            {
+                self.in_unsafe = true;
+                if let Expr::Index(idx) = &mut *raw.expr {
+                    visit_mut::visit_expr_mut(self, &mut idx.index);
+                }
+                self.in_unsafe = false;
                 let inner = expr.clone();
                 *expr = parse_quote! { unsafe { #inner } };
                 return;
             }
             if self.is_verified_shared_index(expr) {
+                self.in_unsafe = true;
                 if let Expr::Index(idx) = expr {
                     visit_mut::visit_expr_mut(self, &mut idx.index);
                 }
+                self.in_unsafe = false;
                 let inner = expr.clone();
                 *expr = parse_quote! { unsafe { #inner } };
                 return;
             }
             if self.is_verified_async_barrier_call(expr) {
+                self.in_unsafe = true;
                 if let Expr::Call(call_expr) = expr {
                     for arg in &mut call_expr.args {
                         visit_mut::visit_expr_mut(self, arg);
                     }
                 }
+                self.in_unsafe = false;
                 let inner = expr.clone();
                 *expr = parse_quote! { unsafe { #inner } };
                 return;
@@ -348,6 +415,7 @@ fn rewrite_verified_shared_accesses(
     let mut rewriter = VerifiedSharedArrayRewriter {
         verified_shared,
         barrier_statics,
+        tmem_lifecycle: args.tmem_lifecycle.is_some(),
         in_unsafe: false,
     };
     for stmt in stmts {
@@ -445,6 +513,11 @@ fn build_verify_marker_stmts(
     if args.uniform_barriers.is_some() {
         stmts.push(parse_quote! {
             ::cuda_device::thread::__verify_uniform_barriers_config();
+        });
+    }
+    if args.tmem_lifecycle.is_some() {
+        stmts.push(parse_quote! {
+            ::cuda_device::thread::__verify_tmem_lifecycle_config();
         });
     }
     Ok(stmts)
@@ -565,6 +638,64 @@ mod tests {
             rendered.matches("unsafe").count(),
             1,
             "only verified g2s TMA copy on TILE_A should be wrapped in unsafe: {rendered}"
+        );
+
+        // `tmem_lifecycle(a)` with arguments must be rejected.
+        let bad_tmem = syn::parse_str::<VerifyArgs>("tmem_lifecycle(a)");
+        assert!(
+            bad_tmem
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("`tmem_lifecycle` takes no arguments")
+        );
+
+        // Without `tmem_lifecycle`, `tcgen05_*` and `cvta_generic_to_shared_offset` must NOT
+        // be wrapped in `unsafe`; with `tmem_lifecycle`, only verified statics/barriers are wrapped.
+        let mut tmem_fn: ItemFn = parse_quote! {
+            pub fn tmem_k(a: &[f32], mut c: DisjointSlice<f32>) {
+                static mut TILE_A: SharedArray<u8, 4096, 128> = SharedArray::UNINIT;
+                static mut OTHER_TILE: SharedArray<u8, 4096, 128> = SharedArray::UNINIT;
+                static mut TMEM_ADDR: SharedArray<u32, 1, 4> = SharedArray::UNINIT;
+                static mut BAR: Barrier = Barrier::UNINIT;
+                static mut OTHER_BAR: u64 = 0;
+                tcgen05_alloc(&raw mut TMEM_ADDR[0], 128);
+                tcgen05_alloc(&raw mut OTHER_TILE as *mut u32, 128);
+                let _a = cvta_generic_to_shared_offset(&raw const TILE_A as *const u8);
+                let _b = cvta_generic_to_shared_offset(&raw const OTHER_TILE as *const u8);
+                tcgen05_mma_f16(0, 0, 0, 0, false);
+                tcgen05_commit_shared_cluster(&raw mut BAR as *mut u64);
+                tcgen05_commit_shared_cluster(&raw mut OTHER_BAR);
+                let _r = tcgen05_ld_32x32b_x1_raw(0);
+                tcgen05_load_wait();
+                tcgen05_dealloc(0, 128);
+            }
+        };
+        let tmem_shared = collect_shared_array_statics(&tmem_fn.block.stmts);
+        let mut tmem_without_clause = tmem_fn.clone();
+        rewrite_verified_shared_accesses(
+            &tiled_args,
+            &tmem_shared,
+            &mut tmem_without_clause.block.stmts,
+        );
+        assert_eq!(
+            quote!(#tmem_without_clause)
+                .to_string()
+                .matches("unsafe")
+                .count(),
+            0,
+            "tcgen05 calls must remain unwrapped when `tmem_lifecycle` is omitted"
+        );
+        let tmem_args: VerifyArgs = syn::parse_str(
+            "no_oob_idx(TILE_A, TMEM_ADDR), no_data_race(TILE_A, TMEM_ADDR), uniform_barriers, tmem_lifecycle",
+        )
+        .unwrap();
+        rewrite_verified_shared_accesses(&tmem_args, &tmem_shared, &mut tmem_fn.block.stmts);
+        let rendered_tmem = quote!(#tmem_fn).to_string();
+        assert_eq!(
+            rendered_tmem.matches("unsafe").count(),
+            7,
+            "expected 7 scoped tcgen05/cvta calls wrapped in unsafe (leaving OTHER_TILE and OTHER_BAR unwrapped): {rendered_tmem}"
         );
     }
 }

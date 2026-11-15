@@ -261,4 +261,12 @@ theorem uniform_barriers_of_checked {numBarriers : Nat}
     UniformBarriers true numBarriers := by
   exact ⟨rfl, hpos⟩                                       -- Pair `true = true` (`rfl`) with `0 < numBarriers`
 
+/-- Proves `tmem_lifecycle` when `cols` is a valid power-of-two column count in
+    `[32, 512]`, `tcgen05.dealloc` frees the same `cols`, and the CFG lifecycle
+    (`alloc -> commit -> wait -> ld -> load_wait -> dealloc`) is balanced. -/
+theorem tmem_lifecycle_of_checked {cols : Nat}
+    (hvalid : TmemValidCols cols) :
+    TmemLifecycle cols cols true := by
+  exact ⟨hvalid, rfl, rfl⟩                                -- Pair `TmemValidCols cols` with `cols = cols` and `true = true`
+
 end CudaOxide.Proofs.Launch

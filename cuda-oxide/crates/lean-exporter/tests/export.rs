@@ -24,6 +24,7 @@ const SGEMM_TILED_FIXTURE: &str = include_str!("../fixtures/sgemm_tiled.mir");
 const WARP_REDUCE_FIXTURE: &str = include_str!("../fixtures/warp_reduce.mir");
 const SUBWARP_MULTIBUF_FIXTURE: &str = include_str!("../fixtures/subwarp_multibuf.mir");
 const ASYNC_COPY_FIXTURE: &str = include_str!("../fixtures/async_copy_stage.mir");
+const TCGEN05_MATMUL_FIXTURE: &str = include_str!("../fixtures/tcgen05_matmul.mir");
 
 fn export(source: &str) -> String {
     export_named_source(source, "global_index").expect("valid scalar MIR")
@@ -870,12 +871,17 @@ fn verifies_stage5_async_copy_and_mbarrier_token_ordering() {
         "unexpected Lean error for missing mbarrier_arrive_expect_tx: {err}"
     );
 
-    // 4. Negative check C: Waiting on a DIFFERENT barrier (`BAR_OTHER` instead of `BAR`)
+    // 4. Negative check C: Waiting on a DIFFERENT initialized barrier (`BAR_OTHER` instead of `BAR`)
     // does not unlock `TILE` (which was bound to `BAR`), so `NoDataRace` fails in Lean!
-    let wrong_barrier = ASYNC_COPY_FIXTURE.replace(
-        "bar_wait_raw = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string \"BAR\", source_name: builtin.string \"safe_async_copy::kernels::async_copy_stage::BAR\"]",
-        "bar_wait_raw = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string \"BAR_OTHER\", source_name: builtin.string \"safe_async_copy::kernels::async_copy_stage::BAR_OTHER\"]",
-    );
+    let wrong_barrier = ASYNC_COPY_FIXTURE
+        .replace(
+            "nvvm.mbarrier_init_shared (bar_init_raw, c1_u32) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui32) -> ()>;",
+            "bar_other_init = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string \"BAR_OTHER\", source_name: builtin.string \"safe_async_copy::kernels::async_copy_stage::BAR_OTHER\"]: <() -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;\n        nvvm.mbarrier_init_shared (bar_init_raw, c1_u32) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui32) -> ()>;\n        nvvm.mbarrier_init_shared (bar_other_init, c1_u32) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui32) -> ()>;",
+        )
+        .replace(
+            "bar_wait_raw = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string \"BAR\", source_name: builtin.string \"safe_async_copy::kernels::async_copy_stage::BAR\"]",
+            "bar_wait_raw = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string \"BAR_OTHER\", source_name: builtin.string \"safe_async_copy::kernels::async_copy_stage::BAR_OTHER\"]",
+        );
     let wrong_bar_lean = export_named_source(&wrong_barrier, "async_copy_stage")
         .expect("exports mismatched mbarrier obligation");
     let err = lean_exporter::runner::check_generated_lean(&wrong_bar_lean, &lean_dir)
@@ -1227,5 +1233,195 @@ fn rejects_post_loop_loopvar_leak_conflicting_loop_counters_and_escaping_shared_
             "verified shared-memory pointer cannot escape into unmodeled operation `mir.call`"
         ),
         "unexpected error for escaping shared pointer: {err}"
+    );
+}
+
+#[test]
+fn verifies_stage6_tcgen05_tmem_proxy_and_mbarrier_lifecycle() {
+    let lean_dir = lean_exporter::runner::default_lean_package_dir();
+
+    // 1. Valid Stage 6 Blackwell `tcgen05` + `TMEM` + TMA + proxy + `mbarrier` kernel passes
+    //    `lean-exporter` and Lean 4 (`0 sorryAx`), eliding both `TMEM_ADDR[0]` and `SMEM_OUT` bounds checks!
+    let valid_lean = export_named_source(TCGEN05_MATMUL_FIXTURE, "tcgen05_matmul_verified")
+        .expect("valid Stage 6 tcgen05_matmul_verified MIR must export cleanly");
+    assert!(valid_lean.contains("theorem verify_tmem_lifecycle"));
+    assert!(valid_lean.contains("CudaOxide.Proofs.Bounds.no_oob_tmem_mma"));
+    assert!(valid_lean.contains("CudaOxide.Proofs.Bounds.no_oob_tmem_warp_ld_unit_scan"));
+    lean_exporter::runner::check_generated_lean(&valid_lean, &lean_dir)
+        .expect("valid Stage 6 tcgen05_matmul_verified MIR must pass Lean 4 verification");
+    assert_eq!(
+        count_proven_asserts(TCGEN05_MATMUL_FIXTURE, "tcgen05_matmul_verified"),
+        2,
+        "both `TMEM_ADDR[0]` and `SMEM_OUT[tid * 128 + col]` mir.assert checks must be proven redundant"
+    );
+
+    // 2. Negative check (PTX Proxy Coherence): Omitting `fence_proxy_async_shared_cta()` after
+    //    `mbarrier_init` before `cp_async_bulk` / `tcgen05_commit` must be rejected!
+    let missing_proxy_fence = TCGEN05_MATMUL_FIXTURE
+        .lines()
+        .filter(|line| !line.contains("fence_proxy_async_shared_cta"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let err = export_named_source(&missing_proxy_fence, "tcgen05_matmul_verified")
+        .expect_err("missing fence_proxy_async_shared_cta after mbarrier_init must be rejected");
+    assert!(
+        err.to_string()
+            .contains("reaches async proxy operation without `fence_proxy_async_shared_cta()`"),
+        "unexpected error for missing proxy fence: {err}"
+    );
+
+    // 3. Negative check (`mbarrier` Init Lifecycle): Omitting `sync_threads()` (`nvvm.barrier0`)
+    //    between `mbarrier_init` and `mbarrier_arrive` / `mbarrier_try_wait` must be rejected!
+    let missing_init_sync = ASYNC_COPY_FIXTURE.replacen(
+        "      ^sync_after_init():\n        nvvm.barrier0 () [] []: <() -> ()>;",
+        "      ^sync_after_init():",
+        1,
+    );
+    let err = export_named_source(&missing_init_sync, "async_copy_stage")
+        .expect_err("missing sync_threads() after mbarrier_init must be rejected");
+    assert!(
+        err.to_string().contains(
+            "`mbarrier_init` must be followed by `thread::sync_threads()` before arriving or waiting"
+        ),
+        "unexpected error for missing sync after mbarrier_init: {err}"
+    );
+
+    // 4. Negative check (Uninitialized Barrier): Waiting on an uninitialized `BAR_UNINIT` must be rejected!
+    let uninit_bar = ASYNC_COPY_FIXTURE.replace(
+        "bar_wait_raw = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string \"BAR\", source_name: builtin.string \"safe_async_copy::kernels::async_copy_stage::BAR\"]",
+        "bar_wait_raw = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string \"BAR_UNINIT\", source_name: builtin.string \"safe_async_copy::kernels::async_copy_stage::BAR_UNINIT\"]",
+    );
+    let err = export_named_source(&uninit_bar, "async_copy_stage")
+        .expect_err("waiting on uninitialized Barrier must fail closed");
+    assert!(
+        err.to_string()
+            .contains("Barrier static is used without a dominating `mbarrier_init`"),
+        "unexpected error for uninitialized Barrier: {err}"
+    );
+
+    // 5. Negative check (Loop Back-Pressure `EMPTY_BAR`): Looping back from consumer `^consume_tile`
+    //    into async TMA producer `^sync_after_init` (`is_leader -> ^issue_tma`) with no `EMPTY_BAR`
+    //    and no `sync_threads()` along the backedge must be rejected!
+    let missing_backpressure = ASYNC_COPY_FIXTURE.replace(
+        "        _val = mir.load (elem_ptr) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>) -> (builtin.fp32)>;\n        mir.goto () [^exit] []: <() -> ()>",
+        "        _val = mir.load (elem_ptr) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>) -> (builtin.fp32)>;\n        mir.cond_br (is_leader) [^issue_tma, ^exit] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>",
+    );
+    let err = export_named_source(&missing_backpressure, "async_copy_stage").expect_err(
+        "cyclic async TMA loop without EMPTY_BAR or sync_threads back-pressure must fail closed",
+    );
+    assert!(
+        err.to_string()
+            .contains("async TMA producer inside a loop requires a second `EMPTY_BAR` wait or `thread::sync_threads()`"),
+        "unexpected error for missing loop back-pressure: {err}"
+    );
+
+    // 6. Negative check (Missing `tmem_lifecycle` clause): `tcgen05` op without `verify_tmem_lifecycle`!
+    let missing_clause =
+        TCGEN05_MATMUL_FIXTURE.replace(", verify_tmem_lifecycle: builtin.string \"true\"", "");
+    let err = export_named_source(&missing_clause, "tcgen05_matmul_verified")
+        .expect_err("tcgen05 ops without `tmem_lifecycle` must fail closed");
+    assert!(
+        err.to_string()
+            .contains("tcgen05 operations in a #[verify] kernel require `tmem_lifecycle`"),
+        "unexpected error for missing tmem_lifecycle clause: {err}"
+    );
+
+    // 7. Negative check (Single-lane `tcgen05_alloc` instead of 32-lane warp collective):
+    let lane_divergent_alloc = TCGEN05_MATMUL_FIXTURE.replacen(
+        "mir.cond_br (is_warp0) [^alloc_tmem, ^sync_after_alloc]",
+        "mir.cond_br (is_leader) [^alloc_tmem, ^sync_after_alloc]",
+        1,
+    );
+    let err = export_named_source(&lane_divergent_alloc, "tcgen05_matmul_verified").expect_err(
+        "single-lane `tid == 0` guard on warp-synchronous `tcgen05_alloc` must fail closed",
+    );
+    assert!(
+        err.to_string().contains(
+            "`tcgen05_alloc` is warp-synchronous and must be guarded by a single full 32-lane warp"
+        ),
+        "unexpected error for lane-divergent tcgen05_alloc: {err}"
+    );
+
+    // 8. Negative check (Missing `mbarrier_try_wait` on `MMA_BAR` before `tcgen05_ld`):
+    let missing_mma_wait = TCGEN05_MATMUL_FIXTURE.replacen(
+        "mir.cond_br (not_ready_mma) [^wait_mma_spin, ^epilogue_init]",
+        "mir.goto () [^epilogue_init]",
+        1,
+    ).replace(
+        " [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>\n\n      ^wait_mma_spin():",
+        " []: <() -> ()>\n\n      ^wait_mma_spin():",
+    );
+    let err = export_named_source(&missing_mma_wait, "tcgen05_matmul_verified")
+        .expect_err("tcgen05_ld without dominating mbarrier_try_wait on MMA_BAR must fail closed");
+    assert!(
+        err.to_string().contains(
+            "`tcgen05_ld` requires a dominating `mbarrier_try_wait` on the Barrier signaled by `tcgen05_commit`"
+        ),
+        "unexpected error for missing MMA_BAR wait: {err}"
+    );
+
+    // 9. Negative check (Missing `tcgen05_load_wait()` after `tcgen05_ld`):
+    let missing_ld_wait = TCGEN05_MATMUL_FIXTURE
+        .lines()
+        .filter(|line| !line.contains("tcgen05_load_wait"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let err = export_named_source(&missing_ld_wait, "tcgen05_matmul_verified")
+        .expect_err("tcgen05_ld without tcgen05_load_wait() must fail closed");
+    assert!(
+        err.to_string()
+            .contains("`tcgen05_ld` must be followed by `tcgen05_load_wait()`"),
+        "unexpected error for missing tcgen05_load_wait: {err}"
+    );
+
+    // 10. Negative check (`TMEM` leak: uniform early-return branch `tile_x == tile_y` bypassing
+    //     `tcgen05_dealloc` to `^exit`):
+    let leaked_tmem = TCGEN05_MATMUL_FIXTURE.replacen(
+        "mir.cond_br (in_col) [^col_body, ^sync_before_dealloc]",
+        "mir.cond_br (in_col) [^col_body, ^maybe_skip_dealloc] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>\n\n      ^maybe_skip_dealloc():\n        early_cond = mir.eq (tile_x, tile_y) [] []: <(builtin.integer si32, builtin.integer si32) -> (builtin.integer i1)>;\n        mir.cond_br (early_cond) [^exit, ^sync_before_dealloc]",
+        1,
+    );
+    let err = export_named_source(&leaked_tmem, "tcgen05_matmul_verified")
+        .expect_err("early return bypassing tcgen05_dealloc must fail closed");
+    assert!(
+        err.to_string().contains(
+            "every execution path after `tcgen05_alloc` must execute `tcgen05_dealloc` before returning"
+        ),
+        "unexpected error for leaked TMEM: {err}"
+    );
+
+    // 11. Negative check (Lean 4 `NoOobTmemAccess` column overflow: allocating only `64` TMEM
+    //     columns while `M128_N128` MMA + `col < 128` epilogue access `128` columns!):
+    let tmem_col_overflow = TCGEN05_MATMUL_FIXTURE
+        .replace(
+            "c128_cols = mir.constant () [] [value: builtin.integer <128: ui32>]",
+            "c128_cols = mir.constant () [] [value: builtin.integer <64: ui32>]",
+        )
+        .replace(
+            "c128_dealloc = mir.constant () [] [value: builtin.integer <128: ui32>]",
+            "c128_dealloc = mir.constant () [] [value: builtin.integer <64: ui32>]",
+        );
+    let overflow_lean = export_named_source(&tmem_col_overflow, "tcgen05_matmul_verified")
+        .expect("exports 64-col TMEM allocation against 128-col MMA/ld obligations");
+    let err = lean_exporter::runner::check_generated_lean(&overflow_lean, &lean_dir)
+        .expect_err("Lean 4 must reject 128-column MMA/ld on a 64-column TMEM allocation");
+    assert!(
+        err.to_string().contains("omega could not prove the goal"),
+        "unexpected Lean error for TMEM column overflow: {err}"
+    );
+
+    // 12. Negative check (Lean 4 warpgroup lane-slice violation: reading `tmem_addr + col`
+    //     without `(warp_id * 32) << 16` across 4 warps!):
+    let bad_warp_slice = TCGEN05_MATMUL_FIXTURE.replace(
+        "ld_addr = mir.add (tmem_row_base, col_u32)",
+        "ld_addr = mir.add (tmem_addr, col_u32)",
+    );
+    let bad_slice_lean = export_named_source(&bad_warp_slice, "tcgen05_matmul_verified")
+        .expect("exports warpgroup lane-slice violation to Lean");
+    let err = lean_exporter::runner::check_generated_lean(&bad_slice_lean, &lean_dir)
+        .expect_err("Lean 4 must reject warps 1..3 reading TMEM lane 0 via tcgen05_ld");
+    assert!(
+        err.to_string().contains("omega could not prove the goal"),
+        "unexpected Lean error for TMEM warpgroup slice violation: {err}"
     );
 }

@@ -651,6 +651,32 @@ mod kernels {
         *out_elem = sum.wrapping_add(base);
     }
 
+    /// Regression for NVIDIA/cuda-rust#1815: automatic unrolling must keep this
+    /// unannotated accumulator in registers.
+    #[allow(clippy::needless_range_loop)]
+    #[kernel]
+    pub fn unannotated_range_accumulator(input: &[u32], mut out: DisjointSlice<u32>) {
+        let tid = thread::index_1d().get();
+        let Some(out_elem) = out.get_mut(thread::index_1d()) else {
+            return;
+        };
+        let mut acc = [[tid as u32; 4]; 8];
+        for n in 0..8 {
+            let x = input[(n * 32 + tid) * 2];
+            let y = input[(n * 32 + tid) * 2 + 1];
+            acc[n] = [
+                acc[n][0].wrapping_mul(x).wrapping_add(y),
+                acc[n][1].wrapping_mul(y).wrapping_add(x),
+                acc[n][2].wrapping_add(x.wrapping_mul(y)),
+                acc[n][3].wrapping_sub(x.wrapping_mul(y)),
+            ];
+        }
+        *out_elem = (acc[0][0] ^ acc[1][1])
+            .wrapping_add(acc[2][2] ^ acc[3][3])
+            .wrapping_add(acc[4][0] ^ acc[5][1])
+            .wrapping_add(acc[6][2] ^ acc[7][3]);
+    }
+
     /// Range `for` loops over `isize`. core steps `isize` by casting to `i64`
     /// and back; those are the same dialect type, so the loops unroll like
     /// `i64`. `#[unroll]` on `0isize..8` (`a..b`) fills `acc`, `#[unroll]` on
@@ -1058,6 +1084,46 @@ fn main() {
             d_nested.to_host_vec(&stream).unwrap(),
             want_nested,
             "16x16 nested range over a 16-lane accumulator"
+        );
+
+        let unannotated_input: Vec<u32> = (0..(8 * N * 2) as u32)
+            .map(|i| i.wrapping_mul(7).wrapping_add(3))
+            .collect();
+        let d_unannotated_input = DeviceBuffer::from_host(&stream, &unannotated_input).unwrap();
+        let mut d_unannotated = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();
+        // SAFETY: each thread writes its own element; the kernel reads 8 * N * 2 inputs.
+        unsafe {
+            module.unannotated_range_accumulator(
+                stream.as_ref(),
+                cfg,
+                &d_unannotated_input,
+                &mut d_unannotated,
+            )
+        }
+        .expect("launch unannotated_range_accumulator");
+        let want_unannotated: Vec<u32> = (0..N as u32)
+            .map(|tid| {
+                let mut acc = [[tid; 4]; 8];
+                for (n, lanes) in acc.iter_mut().enumerate() {
+                    let i = (n * N + tid as usize) * 2;
+                    let (x, y) = (unannotated_input[i], unannotated_input[i + 1]);
+                    *lanes = [
+                        lanes[0].wrapping_mul(x).wrapping_add(y),
+                        lanes[1].wrapping_mul(y).wrapping_add(x),
+                        lanes[2].wrapping_add(x.wrapping_mul(y)),
+                        lanes[3].wrapping_sub(x.wrapping_mul(y)),
+                    ];
+                }
+                (acc[0][0] ^ acc[1][1])
+                    .wrapping_add(acc[2][2] ^ acc[3][3])
+                    .wrapping_add(acc[4][0] ^ acc[5][1])
+                    .wrapping_add(acc[6][2] ^ acc[7][3])
+            })
+            .collect();
+        assert_eq!(
+            d_unannotated.to_host_vec(&stream).unwrap(),
+            want_unannotated,
+            "unannotated `0..8` range over an 8x4 accumulator"
         );
 
         let mut d_const_bound = DeviceBuffer::<u32>::zeroed(&stream, N).unwrap();

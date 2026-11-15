@@ -7,10 +7,11 @@
 //! reserved-name checks shared by every macro in this crate.
 
 use proc_macro::TokenStream;
+use proc_macro2::TokenStream as TokenStream2;
 use reserved_oxide_symbols::{
     CODEGEN_FINGERPRINT_ENV, MATERIALIZE_CUBIN_ENV, MATERIALIZER_PROVENANCE_ENV, RESERVED_ROOT,
 };
-use syn::{FnArg, Ident, ItemFn, Meta, PatType, Type, visit::Visit};
+use syn::{FnArg, Ident, ItemFn, Meta, PatType, Stmt, Type, parse_quote, visit::Visit};
 
 /// Record cuda-oxide's exact device-codegen identity in the consuming crate's
 /// dep-info. Cargo then rebuilds only crates that can own or instantiate device
@@ -19,6 +20,41 @@ pub(crate) fn track_codegen_environment() {
     let _ = proc_macro::tracked::env_var(CODEGEN_FINGERPRINT_ENV);
     let _ = proc_macro::tracked::env_var(MATERIALIZE_CUBIN_ENV);
     let _ = proc_macro::tracked::env_var(MATERIALIZER_PROVENANCE_ENV);
+}
+
+/// Whether the macros expand for cuda-oxide's device build, which sets
+/// `CODEGEN_FINGERPRINT_ENV` for every crate it compiles.
+pub(crate) fn device_build() -> bool {
+    proc_macro::tracked::env_var(CODEGEN_FINGERPRINT_ENV).is_ok()
+}
+
+/// Roots device-code entry `entry` for monomorphization, as attributes for it
+/// and statements for its body. cuda-oxide's backend finds entries by their
+/// export. A plain host build must still instantiate them, so their
+/// post-monomorphization checks fail it, but an export there would put the
+/// entry's device-only callees into a host shared object's imports.
+pub(crate) fn collector_root(
+    device_build: bool,
+    entry: &Ident,
+    export: TokenStream2,
+) -> (TokenStream2, Vec<Stmt>) {
+    if device_build {
+        return (export, Vec::new());
+    }
+    // A static is always instantiated; the anonymous const, always live,
+    // makes it, and through it a private entry, count as used.
+    let root = internal_ident("__CUDA_OXIDE_HOST_ROOT");
+    let reify = parse_quote! {
+        static #root: fn() = || {
+            ::core::hint::black_box(#entry as *const ());
+        };
+    };
+    let used = parse_quote! {
+        const _: () = {
+            let _ = &#root;
+        };
+    };
+    (TokenStream2::new(), vec![reify, used])
 }
 
 /// Build a private identifier that cannot capture, or be captured by, a name

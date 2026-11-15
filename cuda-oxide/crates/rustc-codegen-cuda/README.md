@@ -112,6 +112,7 @@ These are set automatically by `cargo oxide`. For manual invocations, all four a
 | `CUDA_OXIDE_DEBUG`                   | Device DWARF level override                 |
 | `CUDA_OXIDE_NO_FMA`                  | Disable FMA contraction (presence only)     |
 | `CUDA_OXIDE_NO_SPILL_WARN`           | Silence the register-spill warning          |
+| `CUDA_OXIDE_NO_SHORT_PTR`            | 64-bit pointers everywhere (presence only)  |
 
 `CUDA_OXIDE_DEBUG` overrides the DWARF level rustc's `-C debuginfo` would
 imply: `0`/`off`/`none`, `1`/`line`/`lines`/`line-tables`/`line-tables-only`,
@@ -132,6 +133,14 @@ and wins.
 value, including the empty string, enables them. The first backs
 `cargo oxide --no-fmad`; the second suppresses the post-`ptxas` register-spill
 warning, which only fires when a native cubin is materialized.
+
+`CUDA_OXIDE_NO_SHORT_PTR` is presence-only too: `llc` runs without
+`--nvptx-short-ptr` and the module declares the matching data layout, so
+shared, constant and local pointers are 64-bit like generic ones. OptiX
+programs need it (OptiX faults on `.local` depots addressed through 32-bit
+registers); `short-pointers = false` in `.cargo/cuda-oxide.toml` sets it.
+NVVM IR/LTOIR output, a libNVVM fallback and the CUTLASS backend refuse it
+with an error.
 
 `cargo oxide --arch <sm_XX>` sets `CUDA_OXIDE_TARGET`. When it is unset,
 PTX output auto-detects the required target from generated LLVM IR.

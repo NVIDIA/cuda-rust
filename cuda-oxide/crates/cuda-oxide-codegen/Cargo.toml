@@ -32,3 +32,4 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 libloading = { workspace = true }
 object = { workspace = true }
+reserved-oxide-symbols = { workspace = true }

@@ -64,6 +64,42 @@ impl DeviceArchHint {
     }
 }
 
+/// Pointer widths of the PTX module `llc` produces.
+///
+/// ```text
+///            generic/global   shared   const   local     llc flag
+/// Short      64               32       32      32        --nvptx-short-ptr
+/// Wide       64               64       64      64        (none)
+/// ```
+///
+/// `Short` is the default and what cuda-oxide always did. `Wide` is what
+/// nvcc-built OptiX code uses: OptiX faults (`CUDA_ERROR_ILLEGAL_ADDRESS`) on a
+/// `.local` depot addressed through 32-bit registers (`cvt.u32.u64` of
+/// `%SPL`), so OptiX device crates must be compiled with it. It only exists on
+/// the `llc` PTX route: libNVVM (NVVM IR / LTOIR output) and the CUTLASS
+/// backend refuse it instead of silently compiling short pointers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PtxPointerWidth {
+    /// 32-bit shared, constant and local pointers (`--nvptx-short-ptr`).
+    #[default]
+    Short,
+    /// 64-bit pointers in every address space
+    /// ([`reserved_oxide_symbols::NO_SHORT_PTR_ENV`]).
+    Wide,
+}
+
+impl PtxPointerWidth {
+    /// Read [`reserved_oxide_symbols::NO_SHORT_PTR_ENV`], a presence switch
+    /// like `CUDA_OXIDE_NO_FMA`.
+    pub fn from_env() -> Self {
+        if std::env::var_os(reserved_oxide_symbols::NO_SHORT_PTR_ENV).is_some() {
+            Self::Wide
+        } else {
+            Self::Short
+        }
+    }
+}
+
 /// Explicit backend knobs; replaces every `CUDA_OXIDE_*` env read inside the
 /// backend. `run_pipeline` (mir-importer) builds one from the environment at
 /// its own boundary. The standalone API builds one from typed compile
@@ -89,6 +125,8 @@ pub struct BackendOptions {
     pub no_opt: bool,
     /// Suppress `llc -fp-contract=fast` (fmul+fadd fusion to fma).
     pub no_fma: bool,
+    /// Pointer widths of the produced PTX (`CUDA_OXIDE_NO_SHORT_PTR`).
+    pub ptx_pointer_width: PtxPointerWidth,
     /// Print progress and tool-selection notes to stderr.
     pub verbose: bool,
     /// Explicit `llc` binary (was `CUDA_OXIDE_LLC`).
@@ -123,6 +161,7 @@ impl Default for BackendOptions {
             device_arch_hint: None,
             no_opt: false,
             no_fma: false,
+            ptx_pointer_width: PtxPointerWidth::Short,
             verbose: false,
             llc_override: None,
             opt_override: None,
@@ -167,6 +206,7 @@ impl BackendOptions {
             }),
             no_opt: std::env::var("CUDA_OXIDE_NO_OPT").is_ok(),
             no_fma: std::env::var("CUDA_OXIDE_NO_FMA").is_ok(),
+            ptx_pointer_width: PtxPointerWidth::from_env(),
             verbose: std::env::var("CUDA_OXIDE_VERBOSE").is_ok(),
             llc_override: std::env::var("CUDA_OXIDE_LLC").ok().map(PathBuf::from),
             opt_override: std::env::var("CUDA_OXIDE_OPT").ok().map(PathBuf::from),

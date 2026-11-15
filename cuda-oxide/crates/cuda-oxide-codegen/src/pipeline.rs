@@ -14,10 +14,10 @@ use crate::cutlass_backend::{
 };
 use crate::error::PipelineError;
 use crate::export::{
-    DebugExport, DeviceExternDecl, export_llvm_ir, function_local_static_placement_for_llc,
-    module_uses_libdevice, render_llvm_ir, resolve_nvvm_target_with_generated,
-    unresolved_external_symbols, unresolved_libdevice_ptx_declarations,
-    validate_nvvm_debug_support,
+    DebugExport, DeviceExternDecl, ExportTarget, export_llvm_ir,
+    function_local_static_placement_for_llc, module_uses_libdevice, render_llvm_ir,
+    resolve_nvvm_target_with_generated, unresolved_external_symbols,
+    unresolved_libdevice_ptx_declarations, validate_nvvm_debug_support,
 };
 use crate::generated::{
     GeneratedMarkerPolicy, collect_generated_intrinsic_requirements_for_backend,
@@ -26,7 +26,7 @@ use crate::generated_intrinsic_targets::GeneratedIntrinsicBackend;
 use crate::iket::{has_iket_operations, materialize as materialize_iket, strip as strip_iket};
 use crate::llvm_tools::LlvmToolchain;
 use crate::lower::{add_device_extern_declarations, lower_to_llvm};
-use crate::options::{BackendOptions, IketInstrumentation};
+use crate::options::{BackendOptions, IketInstrumentation, PtxPointerWidth};
 use crate::prep::{MirPreparation, prepare_mir_module};
 use crate::ptx::{
     PtxModule, discover_llvm_toolchain, generate_ptx_discovered, generate_ptx_with_toolchain,
@@ -482,6 +482,16 @@ pub fn compile_translated_module(
     // discovering NVVM mode only after lowering is too late.
     let backend_selection =
         select_pre_lowering_backend(ctx, module, request.output_policy, can_ir_link_libdevice);
+    refuse_wide_pointers_off_llc(
+        backend.ptx_pointer_width,
+        backend_selection.emit_nvvm_ir,
+        matches!(
+            request.output_policy,
+            OutputPolicy::ExternalLinkAllowed {
+                request_nvvm_ir: true
+            }
+        ),
+    )?;
     let generated_requirements = collect_generated_intrinsic_requirements_for_backend(
         ctx,
         module,
@@ -549,8 +559,7 @@ pub fn compile_translated_module(
             ctx,
             module,
             request.device_externs,
-            false,
-            None,
+            ExportTarget::Ptx(backend.ptx_pointer_width),
             DebugExport {
                 kind: request.debug_kind,
                 function_local_static_placement: FunctionLocalStaticPlacement::CompileUnitGlobals,
@@ -655,13 +664,17 @@ pub fn compile_translated_module(
     );
 
     remove_stale_files(request.files.stale_before_export)?;
+    // `nvvm_dialect` is resolved exactly when `emit_nvvm_ir` holds.
+    let export_target = nvvm_dialect.map_or(
+        ExportTarget::Ptx(backend.ptx_pointer_width),
+        ExportTarget::Nvvm,
+    );
     let exported = export_llvm_ir(
         ctx,
         module,
         request.device_externs,
         request.files.llvm_ir,
-        emit_nvvm_ir,
-        nvvm_dialect,
+        export_target,
         DebugExport {
             kind: request.debug_kind,
             function_local_static_placement,
@@ -772,6 +785,33 @@ pub fn compile_translated_module(
     })
 }
 
+/// The refusal for [`PtxPointerWidth::Wide`] on a route other than `llc`.
+fn wide_pointers_need_llc(route: &str) -> String {
+    format!(
+        "{} (64-bit pointers in every address space) needs the llc PTX route, but this module goes through {route}; unset it or build PTX without NVVM IR/LTOIR output",
+        reserved_oxide_symbols::NO_SHORT_PTR_ENV
+    )
+}
+
+/// Wide pointers exist only on the `llc` route: refuse them before lowering
+/// when the module goes to libNVVM, rather than hand libNVVM a module it
+/// would compile with its own (short) layout.
+fn refuse_wide_pointers_off_llc(
+    pointer_width: PtxPointerWidth,
+    emit_nvvm_ir: bool,
+    requested_nvvm_ir: bool,
+) -> Result<(), PipelineError> {
+    if pointer_width == PtxPointerWidth::Short || !emit_nvvm_ir {
+        return Ok(());
+    }
+    let route = if requested_nvvm_ir {
+        "requested NVVM IR/LTOIR output"
+    } else {
+        "libNVVM, chosen because the module calls libdevice and no same-major llvm-link can link libdevice.10.bc at IR level"
+    };
+    Err(PipelineError::Lowering(wide_pointers_need_llc(route)))
+}
+
 fn validate_cutlass_compile_policy(
     backend: &BackendOptions,
     debug_kind: DebugKind,
@@ -787,6 +827,11 @@ fn validate_cutlass_compile_policy(
             "unoptimized device code is not implemented by the pinned CUTLASS backend; refusing to silently use its fixed optimized pipeline"
                 .to_owned(),
         ));
+    }
+    if backend.ptx_pointer_width == PtxPointerWidth::Wide {
+        return Err(PipelineError::BackendB(wide_pointers_need_llc(
+            "the pinned CUTLASS backend",
+        )));
     }
     if debug_kind != DebugKind::Off {
         return Err(PipelineError::BackendB(
@@ -1341,6 +1386,33 @@ mod tests {
         backend.no_opt = false;
         let error = validate_cutlass_compile_policy(&backend, DebugKind::LineTables).unwrap_err();
         assert!(error.to_string().contains("debug information"), "{error}");
+
+        backend.ptx_pointer_width = PtxPointerWidth::Wide;
+        let error = validate_cutlass_compile_policy(&backend, DebugKind::Off).unwrap_err();
+        assert!(
+            error.to_string().contains("CUDA_OXIDE_NO_SHORT_PTR"),
+            "{error}"
+        );
+    }
+
+    /// Wide pointers pass on the `llc` route and are refused, naming the
+    /// variable and the reason, whenever the module goes to libNVVM.
+    #[test]
+    fn wide_pointers_are_refused_off_the_llc_route() {
+        for emit_nvvm_ir in [false, true] {
+            assert!(
+                refuse_wide_pointers_off_llc(PtxPointerWidth::Short, emit_nvvm_ir, emit_nvvm_ir)
+                    .is_ok()
+            );
+        }
+        assert!(refuse_wide_pointers_off_llc(PtxPointerWidth::Wide, false, false).is_ok());
+        for (requested, reason) in [(true, "requested NVVM IR"), (false, "libdevice")] {
+            let error = refuse_wide_pointers_off_llc(PtxPointerWidth::Wide, true, requested)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("CUDA_OXIDE_NO_SHORT_PTR"), "{error}");
+            assert!(error.contains(reason), "{error}");
+        }
     }
 
     #[test]

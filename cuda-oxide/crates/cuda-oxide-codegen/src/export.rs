@@ -5,6 +5,7 @@
 
 use crate::error::PipelineError;
 use crate::generated::GeneratedModuleRequirements;
+use crate::options::PtxPointerWidth;
 use crate::target::{
     DetectedFeatures, arch_satisfies, generated_ptx_isa_requirement, generated_target_satisfied,
     honour_sm_floor, select_target_with_generated, validate_generated_target,
@@ -246,11 +247,22 @@ pub struct DebugExport {
     pub function_local_static_placement: FunctionLocalStaticPlacement,
 }
 
-/// Exports an LLVM dialect module to textual LLVM IR (`.ll` file).
-///
-/// Backend configuration is selected based on flags:
-/// - `emit_nvvm_ir`: Uses `NvvmExportConfig` for NVVM IR output
-/// - Otherwise: Uses default `PtxExportConfig` for standard PTX generation
+/// Which LLVM text an export writes.
+// mir-importer pipeline plumbing; not part of the frontend contract.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExportTarget {
+    /// Input for `llc`: `PtxExportConfig` (short pointers) or
+    /// `PtxWideExportConfig` (64-bit pointers everywhere).
+    Ptx(PtxPointerWidth),
+    /// NVVM IR for libNVVM in the given dialect (`NvvmExportConfig`), whose
+    /// data layout libNVVM fixes; a wide-pointer request never reaches it
+    /// (the pipeline refuses it before lowering).
+    Nvvm(NvvmIrDialect),
+}
+
+/// Exports an LLVM dialect module to textual LLVM IR (`.ll` file) for
+/// `target`.
 ///
 /// Device extern declarations are emitted before the main module content.
 // mir-importer pipeline plumbing; not part of the frontend contract.
@@ -260,18 +272,10 @@ pub fn export_llvm_ir(
     module_op_ptr: Ptr<Operation>,
     device_externs: &[DeviceExternDecl],
     path: &Path,
-    emit_nvvm_ir: bool,
-    nvvm_dialect: Option<NvvmIrDialect>,
+    target: ExportTarget,
     debug: DebugExport,
 ) -> Result<llvm_export::export::ExportedModule, PipelineError> {
-    let exported = render_exported_llvm_ir(
-        ctx,
-        module_op_ptr,
-        device_externs,
-        emit_nvvm_ir,
-        nvvm_dialect,
-        debug,
-    )?;
+    let exported = render_exported_llvm_ir(ctx, module_op_ptr, device_externs, target, debug)?;
 
     std::fs::write(path, &exported.llvm_ir).map_err(|e| PipelineError::Export(e.to_string()))?;
 
@@ -289,62 +293,63 @@ pub fn render_llvm_ir(
     ctx: &Context,
     module_op_ptr: Ptr<Operation>,
     device_externs: &[DeviceExternDecl],
-    emit_nvvm_ir: bool,
-    nvvm_dialect: Option<NvvmIrDialect>,
+    target: ExportTarget,
     debug: DebugExport,
 ) -> Result<String, PipelineError> {
-    render_exported_llvm_ir(
-        ctx,
-        module_op_ptr,
-        device_externs,
-        emit_nvvm_ir,
-        nvvm_dialect,
-        debug,
-    )
-    .map(|exported| exported.llvm_ir)
+    render_exported_llvm_ir(ctx, module_op_ptr, device_externs, target, debug)
+        .map(|exported| exported.llvm_ir)
 }
 
 fn render_exported_llvm_ir(
     ctx: &Context,
     module_op_ptr: Ptr<Operation>,
     device_externs: &[DeviceExternDecl],
-    emit_nvvm_ir: bool,
-    nvvm_dialect: Option<NvvmIrDialect>,
+    target: ExportTarget,
     debug: DebugExport,
 ) -> Result<llvm_export::export::ExportedModule, PipelineError> {
     let module_op = Operation::get_op::<pliron::builtin::ops::ModuleOp>(module_op_ptr, ctx)
         .ok_or_else(|| PipelineError::Export("Not a module op".to_string()))?;
+    let module_op = &module_op;
 
-    let exported = if emit_nvvm_ir {
-        let dialect = nvvm_dialect.ok_or_else(|| {
-            PipelineError::Export("NVVM export reached without a selected IR dialect".to_string())
-        })?;
-        let config = PipelineExportConfig {
-            inner: llvm_export::export::NvvmExportConfig::new(dialect),
-            debug,
-        };
-        llvm_export::export::export_module_with_externs_and_roots(
+    match target {
+        ExportTarget::Nvvm(dialect) => export_with(
             ctx,
-            &module_op,
+            module_op,
             device_externs,
-            &config,
-        )
-        .map_err(PipelineError::Export)?
-    } else {
-        let config = PipelineExportConfig {
-            inner: llvm_export::export::PtxExportConfig,
+            llvm_export::export::NvvmExportConfig::new(dialect),
             debug,
-        };
-        llvm_export::export::export_module_with_externs_and_roots(
+        ),
+        ExportTarget::Ptx(PtxPointerWidth::Short) => export_with(
             ctx,
-            &module_op,
+            module_op,
             device_externs,
-            &config,
-        )
-        .map_err(PipelineError::Export)?
-    };
+            llvm_export::export::PtxExportConfig,
+            debug,
+        ),
+        ExportTarget::Ptx(PtxPointerWidth::Wide) => export_with(
+            ctx,
+            module_op,
+            device_externs,
+            llvm_export::export::PtxWideExportConfig,
+            debug,
+        ),
+    }
+}
 
-    Ok(exported)
+fn export_with<C: ExportBackendConfig>(
+    ctx: &Context,
+    module_op: &pliron::builtin::ops::ModuleOp,
+    device_externs: &[DeviceExternDecl],
+    inner: C,
+    debug: DebugExport,
+) -> Result<llvm_export::export::ExportedModule, PipelineError> {
+    llvm_export::export::export_module_with_externs_and_roots(
+        ctx,
+        module_op,
+        device_externs,
+        &PipelineExportConfig { inner, debug },
+    )
+    .map_err(PipelineError::Export)
 }
 
 struct PipelineExportConfig<C> {
@@ -826,8 +831,7 @@ mod tests {
             &ctx,
             module_ptr,
             &[],
-            false,
-            None,
+            ExportTarget::Ptx(PtxPointerWidth::Short),
             DebugExport {
                 kind: DebugKind::Off,
                 function_local_static_placement: FunctionLocalStaticPlacement::CompileUnitGlobals,
@@ -840,6 +844,34 @@ mod tests {
             crate::target::detect_features_in_llvm_text(&preview),
             DetectedFeatures::Blackwell
         );
+    }
+
+    /// The pointer width picks the module's data layout on the PTX route
+    /// (the `llc` flag follows the same value); NVVM keeps its own layout.
+    #[test]
+    fn pointer_width_selects_the_ptx_data_layout() {
+        let mut ctx = Context::new();
+        let module_ptr = build_module_with_func_decl(&mut ctx, "kernel_main");
+        let debug = DebugExport {
+            kind: DebugKind::Off,
+            function_local_static_placement: FunctionLocalStaticPlacement::CompileUnitGlobals,
+        };
+        let layout = |target| {
+            let ir = render_llvm_ir(&ctx, module_ptr, &[], target, debug).unwrap();
+            ir.lines()
+                .find(|line| line.starts_with("target datalayout"))
+                .map(str::to_owned)
+                .unwrap()
+        };
+        let short = layout(ExportTarget::Ptx(PtxPointerWidth::Short));
+        assert!(short.contains("-p3:32:32:32-"), "{short}");
+        let wide = layout(ExportTarget::Ptx(PtxPointerWidth::Wide));
+        assert!(wide.contains("\"e-p:64:64:64-"), "{wide}");
+        assert!(
+            !wide.contains("-p3:") && !wide.contains("-p4:") && !wide.contains("-p5:"),
+            "{wide}"
+        );
+        assert_eq!(layout(ExportTarget::Nvvm(NvvmIrDialect::Modern)), short);
     }
 
     #[test]

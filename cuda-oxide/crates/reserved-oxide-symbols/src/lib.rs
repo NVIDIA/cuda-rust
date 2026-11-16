@@ -143,6 +143,11 @@ pub const LEGACY_DEVICE_PREFIX: &str = "cuda_oxide_device_246e25db_";
 /// linker resolves against the original (unprefixed) external symbol.
 pub const DEVICE_EXTERN_PREFIX: &str = "cuda_oxide_device_extern_246e25db_";
 
+/// Doc-alias marker retained after `#[convergent]` macro expansion.
+/// Unlike doc comments, aliases survive dependency metadata even for private
+/// externs reached through a downstream generic instantiation.
+pub const DEVICE_EXTERN_CONVERGENT_MARKER: &str = "cuda_oxide_device_extern_convergent_246e25db";
+
 /// Prefix added to closure-monomorphization helper functions generated
 /// by `#[kernel]` for kernels that take a closure parameter.
 ///

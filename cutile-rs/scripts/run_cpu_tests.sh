@@ -7,6 +7,10 @@ set -u
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test_runner_common.sh"
 
+# The Tile steps run bare `cargo` against the nested cutile-rs workspace, and
+# rustup picks that workspace's toolchain pin from the working directory.
+cd "$REPO_ROOT" || exit 1
+
 print_header "Running CPU tests"
 
 run_step \

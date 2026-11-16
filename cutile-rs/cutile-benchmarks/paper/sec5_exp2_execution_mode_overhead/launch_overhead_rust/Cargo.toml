@@ -14,11 +14,11 @@ name = "async_throughput"
 path = "src/bin/async_throughput.rs"
 
 [dependencies]
-cuda-core = "0.2.0"
-cuda-async = { version = "0.2.0" }
-cutile = "0.2.0"
-cutile-macro = "0.2.0"
-cutile-compiler = "0.2.0"
+cuda-core = { path = "../../../../../cuda-core" }
+cuda-async = { path = "../../../../../cuda-async" }
+cutile = { path = "../../../../cutile" }
+cutile-macro = { path = "../../../../cutile-macro" }
+cutile-compiler = { path = "../../../../cutile-compiler" }
 tokio = { version = "1", features = ["rt", "macros"] }
 
 [profile.release]
@@ -26,13 +26,3 @@ opt-level = 3
 lto = "thin"
 
 [workspace]
-
-[patch.crates-io]
-cuda-async = { path = "/home/elibol/dev/cutile-rs/cuda-async" }
-cuda-core = { path = "/home/elibol/dev/cutile-rs/cuda-core" }
-cuda-bindings = { path = "/home/elibol/dev/cutile-rs/cuda-bindings" }
-cutile = { path = "/home/elibol/dev/cutile-rs/cutile" }
-cutile-macro = { path = "/home/elibol/dev/cutile-rs/cutile-macro" }
-cutile-compiler = { path = "/home/elibol/dev/cutile-rs/cutile-compiler" }
-cutile-ir = { path = "/home/elibol/dev/cutile-rs/cutile-ir" }
-

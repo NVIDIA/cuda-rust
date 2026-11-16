@@ -104,6 +104,14 @@ jobs:
       - name: Example lockfiles resolve identical dependency versions
         run: bash cuda-oxide/scripts/sync-example-locks.sh --check
 
+      # No build reads a ```rust fence in markdown, so imports copied from the
+      # book and READMEs can name removed paths. This compiles each one.
+      # It needs the toolkit for cuda-bindings, hence this job.
+      - name: Imports in markdown compile
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/doc-use-paths-target
+        run: python3 cuda-oxide/scripts/check-doc-use-paths.py
+
       # The device pipeline shells out to LLVM's llc/opt for PTX
       # generation. This pin is the FLOOR GATE: if someone lands IR that
       # needs a newer llc, this job is where the floor bump becomes

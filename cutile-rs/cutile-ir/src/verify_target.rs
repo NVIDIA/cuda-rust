@@ -587,22 +587,10 @@ pub(crate) fn verify_operation(
             if view.pointer_attribute() == Some(crate::ir::PointerAttribute::Multicast) {
                 return Err(fail("ordinary view accesses do not accept multicast pointers; use multimem view operations"));
             }
-            if op
-                .attributes
-                .iter()
-                .any(|(name, attr)| name == "valid_check" && matches!(attr, Attribute::Bool(true)))
-            {
-                for (_, attr) in &op.attributes {
-                    if let Attribute::OptimizationHints(hints) = attr {
-                        if hints.entries.iter().any(|(_, entries)| {
-                            entries.iter().any(|(name, value)| {
-                                name == "allow_tma" && matches!(value, Attribute::Bool(false))
-                            })
-                        }) {
-                            return Err(fail("valid_check requires TMA; enable allow_tma"));
-                        }
-                    }
-                }
+            if op.attributes.iter().any(|(name, _)| name == "valid_check") {
+                return Err(fail(
+                    "view operations do not support the valid_check attribute",
+                ));
             }
             let (shape, element, padding, sparse) = match view.without_pointer_attribute() {
                 Type::PartitionView(v) => (

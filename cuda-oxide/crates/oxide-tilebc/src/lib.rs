@@ -46,6 +46,7 @@
 //! assert_eq!(&interface[8..12], &[13, 5, 1, 0]);
 //! ```
 
+pub mod describe;
 mod encoding;
 mod model;
 mod text;
@@ -53,8 +54,8 @@ mod verify;
 mod writer;
 
 pub use model::{
-    Access, BytecodeVersion, Declaration, FragmentArg, FragmentType, Implementation, Layout,
-    Library, MemorySpace, ScalarType, Synchronization, TileArg, TileType,
+    Access, BytecodeVersion, ConstParam, Declaration, Expr, FragmentArg, FragmentType,
+    Implementation, Layout, Library, MemorySpace, ScalarType, Synchronization, TileArg, TileType,
 };
 
 /// What can go wrong when describing a library.
@@ -66,6 +67,10 @@ pub enum Error {
     /// Preview content needs bytecode 13.5 or newer.
     #[error("bytecode version {0} is older than 13.5, the first with public-preview content")]
     Version(BytecodeVersion),
+    /// A `#[tile_export]` description cannot be turned into a library; the
+    /// message names the export and the rule.
+    #[error("{0}")]
+    Description(String),
 }
 
 #[cfg(test)]
@@ -250,9 +255,9 @@ mod tests {
         assert_eq!(section(&bytes, 2), expected);
 
         // The fragment type entry at 13.5: tagged symbolic shape holding one
-        // integer per dimension (the 13.5 assembler requires full rank), static shape
-        // [1], element f32 (index 0), local, (1):(1), (128, 1, 1):(1, 0, 0),
-        // alignment 1.
+        // integer per dimension (the 13.5 assembler requires full rank),
+        // static shape [1], element f32 (index 0), local, (1):(1),
+        // (128, 1, 1):(1, 0, 0), alignment 1.
         let types = section(&bytes, 5);
         let entries = &types[4 + 4 * 3..];
         assert_eq!(
@@ -340,6 +345,128 @@ mod tests {
              #cuda_tile.preview$layout<(128, 1, 1):(1, 0, 0)>> {cuda_tile.preview$access = \
              #cuda_tile.preview$access<inout>})\n"
         ));
+    }
+
+    /// `@relu<[N: index]>(%x: tile<[N]xf32>, %relu_out: tile<[N]xf32>)` with
+    /// `@relu_impl<[N: index]> implements @relu<[N]>`, fragmap `(N, 1, 1)`.
+    fn parametric_library() -> Library {
+        let n = Expr::var("N");
+        let tile = TileType::symbolic(vec![n.clone()], ScalarType::F32);
+        let fragment = |mem: Layout| {
+            FragmentType::new(
+                vec![1],
+                ScalarType::F32,
+                MemorySpace::Local,
+                mem,
+                Layout::elementwise(n.clone()),
+            )
+        };
+        Library::new(
+            "lib",
+            vec![Declaration::parametric(
+                "relu",
+                vec![ConstParam::index("N")],
+                vec![
+                    TileArg::new("x", tile.clone(), Access::In),
+                    TileArg::new("relu_out", tile, Access::Out),
+                ],
+            )],
+            vec![Implementation::parametric(
+                "relu_impl",
+                "relu",
+                vec!["N".to_string()],
+                vec![
+                    FragmentArg::new("x", fragment(Layout::scalar_mem()), Access::In),
+                    FragmentArg::new("relu_out", fragment(Layout::contiguous_mem(1)), Access::Out),
+                ],
+            )],
+        )
+    }
+
+    /// A parametric declaration writes its parameters after the zero body
+    /// length, and a tile with an expression extent writes `kDynamic` plus
+    /// the expressions as one tagged tuple.
+    #[test]
+    fn parametric_declaration_entry_and_tile_type() {
+        let lib = parametric_library();
+        lib.verify().unwrap();
+        let bytes = lib.interface_bytecode(BytecodeVersion::new(13, 6)).unwrap();
+        let table = strings(&bytes);
+        let name = index(&table, "relu");
+        let access = index(&table, "cuda_tile.preview$access");
+        let n = index(&table, "N");
+        assert_eq!(
+            section(&bytes, 2),
+            vec![
+                0x01, name, 0x02, 0x01,
+                0x01, // one function, name, (tile, tile) -> tile, private, debug
+                0x06, 0x02, 0x0A, 0x01, access, 0xDF, 0x01, 0x00, 0x0A, 0x01, access, 0xDF, 0x01,
+                0x01, // arg_attrs: [{in}, {out}]
+                0x00, // body length 0
+                0x06, 0x01, 0xE2, 0x01, n, 0x03, // const_params: [N: index], index at type 3
+                0xCB, 0xCB, 0xCB, 0xCB, 0xCB, 0xCB, // padded to 8
+            ]
+        );
+        // Types: f32, tile<[N]xf32>, (tile, tile) -> (tile), index.
+        let types = section(&bytes, 5);
+        let mut pos = 0;
+        assert_eq!(read_varint(&types, &mut pos), 4);
+        let entries = &types[4 + 4 * 4..];
+        assert_eq!(entries[0], 0x07, "f32");
+        assert_eq!(
+            &entries[1..18],
+            &[
+                0x0D, 0x00, 0x01, 0, 0, 0, 0, 0, 0, 0, 0x80, // tile, f32, [kDynamic]
+                0xD8, 0x01, 0x01, 0xD2, 0x01, n, // symbolic shape (N)
+            ],
+            "tile<[N]xf32>"
+        );
+        assert_eq!(&entries[18..24], &[0x10, 0x02, 0x01, 0x01, 0x01, 0x01]);
+        assert_eq!(&entries[24..], &[0xD6, 0x01], "index");
+    }
+
+    /// A parametric implementation sets bits 0 and 1 and writes its
+    /// parameters and arguments between the symbols and the function type.
+    #[test]
+    fn parametric_implementation_entry() {
+        let lib = parametric_library();
+        let bytes = lib
+            .implementation_bytecode(BytecodeVersion::new(13, 6))
+            .unwrap();
+        let table = strings(&bytes);
+        let symbol = index(&table, "relu_impl");
+        let implements = index(&table, "relu");
+        let access = index(&table, "cuda_tile.preview$access");
+        let n = index(&table, "N");
+        let mut expected = vec![
+            0x01, symbol, 0x03, 0x05,
+            0x01, // one function, symbol, (frag, frag) -> (), extern_impl, debug
+            0x07, // payload flags: const_params, const_args, arg_attrs
+            symbol, implements, //
+            0x01, 0xE2, 0x01, n, 0x04, // const_params: [N: index], index at type 4
+            0x01, 0xD2, 0x01, n,    // const_args: [N]
+            0x03, // function_type
+            0x02, 0x0A, 0x01, access, 0xDF, 0x01, 0x00, 0x0A, 0x01, access, 0xDF, 0x01,
+            0x01, // arg_attrs: [{in}, {out}]
+            0x01, 0x00, // one region, zero blocks
+            0x00, // body length 0
+        ];
+        while expected.len() % 8 != 0 {
+            expected.push(0xCB);
+        }
+        assert_eq!(section(&bytes, 2), expected);
+        // The by-value fragment's fragmap names N: (N, 1, 1):(1, 0, 0).
+        let types = section(&bytes, 5);
+        let entries = &types[4 + 4 * 5..];
+        // f32 entry, then the fragment: tag, empty tuple, shape [1], f32, local, mem_layout ():().
+        let fragmap_start = 1 + 2 + 3 + 9 + 1 + 1 + 4;
+        assert_eq!(
+            &entries[fragmap_start..fragmap_start + 18],
+            &[
+                0xD9, 0x01, 0x03, 0xD2, 0x01, n, 0xD1, 0x01, 0x02, 0xD1, 0x01, 0x02, //
+                0x03, 0xD1, 0x01, 0x02, 0xD1, 0x01, // ... strides (1, 0, 0) continue
+            ]
+        );
     }
 
     #[test]

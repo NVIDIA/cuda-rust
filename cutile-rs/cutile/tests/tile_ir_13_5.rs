@@ -94,35 +94,6 @@ mod kernels {
         };
     }
 
-    // Assembly-only: checked loads require a supported floating-point type
-    // and ordered memory semantics. Execution also needs a validity protocol.
-    #[cutile::entry()]
-    fn validity(input: &Tensor<f32, { [8] }>) {
-        let view: Partition<f32, { [4] }> = unsafe {
-            make_partition_view(
-                input,
-                shape![4],
-                padding::None,
-                dim_map::Identity,
-                new_token_unordered(),
-            )
-        };
-        let (_value, _token): (Tile<f32, { [4] }>, Token) = unsafe {
-            load_view_tko_valid_check(
-                &view,
-                [0i32],
-                None,
-                ordering::Acquire,
-                scope::Device,
-                tma::Enabled,
-                None,
-                [true],
-                shape![4],
-                true,
-            )
-        };
-    }
-
     #[cutile::entry()]
     fn atomic_inbounds(input: &Tensor<i32, { [8] }>) {
         let view: Partition<i32, { [4] }> = unsafe {
@@ -389,7 +360,6 @@ fn minimum_residency_hint_is_versioned() {
 fn new_view_attributes_and_selection_hints_are_versioned() {
     common::with_test_stack(|| {
         for (kernel, target, attribute) in [
-            ("validity", "sm_107", "valid_check"),
             ("atomic_inbounds", "sm_100", "inbounds"),
             ("selection", "sm_100", "condition_hint"),
             ("hinted_conditional", "sm_100", "condition_hint"),
@@ -416,14 +386,6 @@ fn new_view_attributes_and_selection_hints_are_versioned() {
                 .expect("13.5 required");
             assert!(error.to_string().contains("13.5"), "{kernel}: {error}");
         }
-        let error = KernelCompiler::new(kernels::__module_ast_self, "kernels", "validity")
-            .strides(&[("input", &[1])])
-            .target("sm_100")
-            .bytecode_version(BytecodeVersion::V13_5)
-            .compile()
-            .err()
-            .unwrap();
-        assert!(error.to_string().contains("sm_107"), "{error}");
     });
 }
 
@@ -486,7 +448,6 @@ fn assemble_13_5_feature_kernels() {
         for (kernel, target) in [
             ("multicast", "sm_100"),
             ("unicast", "sm_100"),
-            ("validity", "sm_107"),
             ("atomic_inbounds", "sm_100"),
             ("selection", "sm_100"),
             ("conditional", "sm_100"),

@@ -305,6 +305,10 @@ that script.
 
 ### Testing
 
+For concurrency tests, follow the [synchronization guidance and audit](docs/testing/concurrency-audit.md).
+Use observable state and explicit handshakes; keep timeouts as failing watchdogs,
+not evidence that an operation blocked or returned promptly.
+
 - Compiler pipeline changes should be validated against the existing examples
   in `cuda-oxide/crates/rustc-codegen-cuda/examples/`.
 - New GPU intrinsics should include a corresponding example demonstrating

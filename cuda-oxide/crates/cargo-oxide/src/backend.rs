@@ -103,20 +103,26 @@
 //! above guards only the `main` clone path: a rebuild from a pinned
 //! dependency's checkout converges by construction.
 
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
 
 use crate::backend_source::{self, DependencySource};
+use crate::platform;
 
-/// Finds the workspace root by walking up from CWD.
+const BACKEND_CRATE_NAME: &str = "rustc_codegen_cuda";
+const WINDOWS_MSVC_LINKER_ENV: &str = "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER";
+const WINDOWS_MSVC_LLD_LINKER: &str = "lld-link";
+
+/// Finds the workspace root by walking up from `start`, normally the CWD.
 ///
 /// Supports the component workspace (`crates/rustc-codegen-cuda`) and the
 /// historical combined layout (`cuda-oxide/crates/rustc-codegen-cuda`).
 /// Starting below `cuda-oxide/` finds the component root before the stable
 /// parent workspace.
-pub fn find_workspace_root() -> Option<PathBuf> {
-    let mut dir = std::env::current_dir().ok()?;
+pub fn find_workspace_root(start: &Path) -> Option<PathBuf> {
+    let mut dir = start.to_path_buf();
     loop {
         if dir.join("Cargo.toml").is_file() && codegen_crate_path(&dir).join("Cargo.toml").is_file()
         {
@@ -174,7 +180,14 @@ pub fn find_or_build_backend(workspace_root: &Path, configured_backend: Option<&
         std::process::exit(1);
     }
 
-    // 3. Local repo
+    // 3. Packaged release layout: cargo-oxide.exe and rustc_codegen_cuda.dll
+    // live side-by-side in the extracted archive.
+    let backend_filename = backend_filename_for_target(&active_host_target());
+    if let Some(packaged_backend) = packaged_backend_path(&backend_filename) {
+        return packaged_backend;
+    }
+
+    // 4. Local repo
     let codegen_crate = codegen_crate_path(workspace_root);
     if codegen_crate.is_dir() {
         return build_backend_from_source(&codegen_crate);
@@ -192,7 +205,14 @@ pub fn find_or_build_backend(workspace_root: &Path, configured_backend: Option<&
 /// the shared cache is reused only when it records that same commit. See the
 /// module-level comment ("The backend follows the dependency").
 fn standalone_backend(project_dir: &Path) -> PathBuf {
-    let source = match backend_source::resolve_dependency_source(project_dir, false) {
+    backend_for_dependency(resolve_standalone_dependency(project_dir))
+}
+
+/// Resolves the project's cuda-oxide dependency, fetching and writing
+/// `Cargo.lock` if needed, and exits with guidance when it does not resolve to
+/// one checkout. `None` means the project has no cuda-oxide dependency.
+fn resolve_standalone_dependency(project_dir: &Path) -> Option<DependencySource> {
+    match backend_source::resolve_dependency_source(project_dir, false) {
         Ok(source) => source,
         Err(error) => {
             eprintln!("Error: could not resolve this project's cuda-oxide dependency: {error}");
@@ -203,8 +223,11 @@ fn standalone_backend(project_dir: &Path) -> PathBuf {
             );
             std::process::exit(1);
         }
-    };
+    }
+}
 
+/// The backend for a resolved dependency source (see [`standalone_backend`]).
+fn backend_for_dependency(source: Option<DependencySource>) -> PathBuf {
     let Some(source) = source else {
         // No cuda-oxide crate in the graph, so nothing pins a commit: the
         // shared cache and the `main` clone are all there is.
@@ -287,15 +310,20 @@ fn build_and_cache(source: &DependencySource) -> PathBuf {
 /// without a toolchain file in the checkout, let the build proceed and surface
 /// its own errors.
 fn refuse_unloadable_backend(checkout: &Path, description: &str) {
-    let Some(report) = unloadable_backend_report(
-        description,
-        active_toolchain().as_deref(),
-        backend_source::pinned_channel(checkout).as_deref(),
-    ) else {
+    let Some(report) = unloadable_checkout_report(checkout, description) else {
         return;
     };
     eprint!("{report}");
     std::process::exit(1);
+}
+
+/// The refusal [`refuse_unloadable_backend`] prints for `checkout`, if any.
+fn unloadable_checkout_report(checkout: &Path, description: &str) -> Option<String> {
+    unloadable_backend_report(
+        description,
+        active_toolchain().as_deref(),
+        backend_source::pinned_channel(checkout).as_deref(),
+    )
 }
 
 /// `rustup show active-toolchain` from the process cwd: the toolchain the
@@ -368,7 +396,7 @@ fn consult_backend_cache(
     source_dir: Option<&Path>,
     expected_rev: Option<&str>,
 ) -> Option<PathBuf> {
-    let cached_so = cache_dir.join("librustc_codegen_cuda.so");
+    let cached_so = cache_dir.join(backend_filename_for_target(&active_host_target()));
     if !cached_so.exists() {
         return None;
     }
@@ -463,12 +491,18 @@ fn consult_backend_cache(
 /// `cargo oxide doctor` uses this so that a diagnostic run never triggers a
 /// multi-minute backend build or a git clone before it can print anything.
 pub fn backend_so_candidate(workspace_root: &Path, configured_backend: Option<&Path>) -> PathBuf {
+    let backend_filename = backend_filename_for_target(&active_host_target());
+
     if let Ok(path) = std::env::var("CUDA_OXIDE_BACKEND") {
         return PathBuf::from(path);
     }
 
     if let Some(path) = configured_backend {
         return path.to_path_buf();
+    }
+
+    if let Some(packaged_backend) = packaged_backend_path(&backend_filename) {
+        return packaged_backend;
     }
 
     let codegen_crate = codegen_crate_path(workspace_root);
@@ -487,8 +521,8 @@ pub fn backend_so_candidate(workspace_root: &Path, configured_backend: Option<&P
     }
 
     cache_directory()
-        .map(|dir| dir.join("librustc_codegen_cuda.so"))
-        .unwrap_or_else(|| PathBuf::from("librustc_codegen_cuda.so"))
+        .map(|dir| dir.join(&backend_filename))
+        .unwrap_or_else(|| PathBuf::from(backend_filename))
 }
 
 /// Why the cached backend is out of date, or that it is current. The two
@@ -909,6 +943,8 @@ fn remove_stranded_backend_temporaries(cache_dir: &Path) {
 }
 
 fn clear_cache_contents(cache_dir: &Path) {
+    let _ =
+        std::fs::remove_file(cache_dir.join(backend_filename_for_target(&active_host_target())));
     let _ = std::fs::remove_file(cache_dir.join("librustc_codegen_cuda.so"));
     let _ = std::fs::remove_dir_all(cache_dir.join("src"));
     // The record describes the `.so` just removed; without it, `doctor` would
@@ -923,18 +959,40 @@ fn clear_cache_contents(cache_dir: &Path) {
 ///
 /// Returns the path to the freshly built `.so`.
 pub fn refresh_cached_backend(project_dir: &Path) -> PathBuf {
-    // A path dependency builds in place and never touches the shared cache;
-    // clearing it would only cost other projects a rebuild. Read-only
-    // resolution here; the real one, which may fetch, runs in
-    // `standalone_backend`.
-    let builds_in_place = matches!(
-        backend_source::resolve_dependency_source(project_dir, true),
-        Ok(Some(ref source)) if source.rev().is_none()
-    );
-    if !builds_in_place {
+    let (source, clears_cache) = refresh_plan(project_dir).unwrap_or_else(|report| {
+        eprint!("{report}");
+        std::process::exit(1);
+    });
+    if clears_cache {
         let _ = clear_cached_backend();
     }
-    standalone_backend(project_dir)
+    backend_for_dependency(source)
+}
+
+/// The dependency a refresh of `project_dir` rebuilds from, and whether the
+/// refresh clears the shared cache first, or the toolchain refusal when the
+/// dependency's backend could not be built or loaded by this project.
+///
+/// The refusal is settled here, before anything is cleared, because a
+/// refused refresh builds nothing: clearing first would delete a cache other
+/// projects still use and leave nothing in its place.
+///
+/// A path dependency builds in place and never touches the shared cache;
+/// clearing it would only cost other projects a rebuild. The decision uses
+/// the full resolution, which writes a missing `Cargo.lock`, because the
+/// read-only one fails on a fresh project and cannot tell a path dependency
+/// from a git one there.
+fn refresh_plan(project_dir: &Path) -> Result<(Option<DependencySource>, bool), String> {
+    let source = resolve_standalone_dependency(project_dir);
+    if let Some(report) = source
+        .as_ref()
+        .and_then(|source| unloadable_checkout_report(source.checkout(), &source.describe()))
+    {
+        return Err(report);
+    }
+
+    let builds_in_place = source.as_ref().is_some_and(|source| source.rev().is_none());
+    Ok((source, !builds_in_place))
 }
 
 /// Builds the backend from a local source tree, with the build tree at
@@ -971,8 +1029,13 @@ pub fn build_backend_from_source_in(codegen_crate: &Path, target_dir: Option<&Pa
         );
     }
 
+    let host_target = active_host_target();
     let rustc_sysroot = get_rustc_sysroot();
-    let lib_path = rustc_sysroot.as_ref().map(|s| format!("{}/lib", s));
+    let lib_path = rustc_sysroot.as_ref().map(|s| {
+        rustc_sysroot_loader_dir(s, &host_target)
+            .to_string_lossy()
+            .into_owned()
+    });
 
     let mut cmd = backend_build_command_in(codegen_crate, target_dir, lib_path.as_deref());
     let output = cmd.output().unwrap_or_else(|error| {
@@ -1015,14 +1078,17 @@ fn backend_build_command_in(
     target_dir: Option<&Path>,
     rustc_lib_path: Option<&str>,
 ) -> Command {
+    let host_target = active_host_target();
     let codegen_crate = absolute_path(codegen_crate);
     let target_dir = target_dir
         .map(absolute_path)
         .unwrap_or_else(|| codegen_crate.join("target"));
     let mut cmd = Command::new("cargo");
+    cmd.args(["build", "--lib"]);
+    if backend_build_profile(&host_target) == "release" {
+        cmd.arg("--release");
+    }
     cmd.args([
-        "build",
-        "--lib",
         "--target",
         "host-tuple",
         "--message-format=json-render-diagnostics",
@@ -1058,12 +1124,75 @@ fn backend_build_command_in(
     cmd.env_remove("CARGO_BUILD_RUSTFLAGS");
     cmd.env("RUSTC_BOOTSTRAP", "1");
 
-    if let Some(path) = rustc_lib_path {
+    if platform::is_windows_target(&host_target) {
+        prefer_windows_lld_linker_for_backend(&mut cmd);
+
+        let mut loader_paths = Vec::new();
+        if let Some(libffi) = find_windows_libffi_paths() {
+            if let Some(value) = platform::prepend_env_paths("LIB", vec![libffi.lib_dir]) {
+                cmd.env("LIB", value);
+            }
+            if let Some(bin_dir) = libffi.bin_dir {
+                loader_paths.push(bin_dir);
+            }
+        } else {
+            eprintln!(
+                "Note: Windows backend builds require ffi.lib. Install `libffi:x64-windows` with vcpkg or set LIBFFI_LIB_DIR."
+            );
+        }
+        if let Some(path) = rustc_lib_path {
+            loader_paths.push(PathBuf::from(path));
+        }
+        if let Some(value) =
+            platform::prepend_env_paths(platform::loader_env_var(&host_target), loader_paths)
+        {
+            cmd.env(platform::loader_env_var(&host_target), value);
+        }
+    } else if let Some(path) = rustc_lib_path {
         cmd.env("LIBRARY_PATH", build_library_path(path));
         cmd.env("LD_LIBRARY_PATH", build_ld_library_path(path));
     }
 
     cmd
+}
+
+/// Returns the Cargo profile directory name (`"release"` on Windows, `"debug"` elsewhere)
+/// used when building the codegen backend.
+fn backend_build_profile(host_target: &str) -> &'static str {
+    if platform::is_windows_target(host_target) {
+        // The Windows dylib links a large rustc plugin graph. Debug builds
+        // exceed MSVC/lld-link object/export limits; release keeps the backend
+        // below those linker ceilings.
+        "release"
+    } else {
+        "debug"
+    }
+}
+
+/// Configures `lld-link` for the Windows backend build when available on `PATH`.
+fn prefer_windows_lld_linker_for_backend(cmd: &mut Command) {
+    if std::env::var_os(WINDOWS_MSVC_LINKER_ENV).is_some() {
+        return;
+    }
+    if windows_executable_on_path(WINDOWS_MSVC_LLD_LINKER) {
+        cmd.env(WINDOWS_MSVC_LINKER_ENV, WINDOWS_MSVC_LLD_LINKER);
+    }
+}
+
+/// Returns true when `name` (or `name.exe`) exists in `PATH`.
+fn windows_executable_on_path(name: &str) -> bool {
+    std::env::var_os("PATH")
+        .as_deref()
+        .is_some_and(|paths| windows_executable_in_path(name, paths))
+}
+
+/// Returns true when `name` (or `name.exe`) exists in `paths`.
+fn windows_executable_in_path(name: &str, paths: &OsStr) -> bool {
+    let has_extension = Path::new(name).extension().is_some();
+    std::env::split_paths(paths).any(|dir| {
+        let candidate = dir.join(name);
+        candidate.is_file() || (!has_extension && dir.join(format!("{name}.exe")).is_file())
+    })
 }
 
 fn absolute_path(path: &Path) -> PathBuf {
@@ -1086,9 +1215,11 @@ fn backend_dylib_filename() -> String {
 
 fn backend_so_path_candidate(codegen_crate: &Path) -> PathBuf {
     let target_dir = codegen_crate.join("target");
+    let host_target = active_host_target();
+    let profile = backend_build_profile(&host_target);
     let profile_dir = active_host_triple()
-        .map(|host| target_dir.join(host).join("debug"))
-        .unwrap_or_else(|| target_dir.join("debug"));
+        .map(|host| target_dir.join(host).join(profile))
+        .unwrap_or_else(|| target_dir.join(profile));
     profile_dir.join(backend_dylib_filename())
 }
 
@@ -1196,7 +1327,7 @@ pub enum CacheReport {
 /// Exposed so `doctor` can report the backend external projects resolve to,
 /// which is not the one the in-repo context uses.
 pub fn cached_backend_path() -> Option<PathBuf> {
-    cache_directory().map(|dir| dir.join("librustc_codegen_cuda.so"))
+    cache_directory().map(|dir| dir.join(backend_filename_for_target(&active_host_target())))
 }
 
 /// Compares a cached backend against one built locally.
@@ -1226,16 +1357,23 @@ fn cache_directory() -> Option<PathBuf> {
     dirs_path().map(|d| d.join("cuda-oxide"))
 }
 
-/// Resolves the Cargo home directory (`$CARGO_HOME` or `$HOME/.cargo`).
+/// Resolves Cargo home, including the native Windows `USERPROFILE` fallback.
 fn dirs_path() -> Option<PathBuf> {
-    std::env::var("CARGO_HOME")
-        .ok()
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var("HOME")
-                .ok()
-                .map(|h| PathBuf::from(h).join(".cargo"))
-        })
+    dirs_path_from_env(|name| std::env::var_os(name), cfg!(windows))
+}
+
+/// Resolves the Cargo home directory from injected environment variables.
+fn dirs_path_from_env(
+    mut get_env: impl FnMut(&str) -> Option<OsString>,
+    windows: bool,
+) -> Option<PathBuf> {
+    if let Some(path) = get_env("CARGO_HOME").filter(|value| !value.is_empty()) {
+        return Some(PathBuf::from(path));
+    }
+    let home = get_env("HOME")
+        .filter(|value| !value.is_empty())
+        .or_else(|| windows.then(|| get_env("USERPROFILE")).flatten())?;
+    (!home.is_empty()).then(|| PathBuf::from(home).join(".cargo"))
 }
 
 /// Clones cuda-oxide `main` into the cache directory and builds the backend.
@@ -1252,7 +1390,7 @@ fn auto_fetch_and_build() -> PathBuf {
     });
 
     let src_dir = cache_dir.join("src");
-    let so_path = cache_dir.join("librustc_codegen_cuda.so");
+    let so_path = cache_dir.join(backend_filename_for_target(&active_host_target()));
 
     std::fs::create_dir_all(&cache_dir).expect("Failed to create cache directory");
 
@@ -1321,7 +1459,7 @@ fn install_backend_into(
     source_rev: Option<&str>,
 ) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(cache_dir)?;
-    let so_path = cache_dir.join("librustc_codegen_cuda.so");
+    let so_path = cache_dir.join(backend_filename_for_target(&active_host_target()));
     let temporary = temporary_backend_path(cache_dir);
     if let Err(error) = std::fs::copy(built_so, &temporary) {
         let _ = std::fs::remove_file(&temporary);
@@ -1420,6 +1558,155 @@ pub fn build_ld_library_path(sysroot_lib: &str) -> String {
     } else {
         sysroot_lib.to_string()
     }
+}
+
+/// Returns the active rustc host target tuple, falling back to the std OS name.
+pub(crate) fn active_host_target() -> String {
+    active_host_triple().unwrap_or_else(|| std::env::consts::OS.to_string())
+}
+
+/// Returns a packaged backend next to the running `cargo-oxide` executable when present.
+fn packaged_backend_path(backend_filename: &str) -> Option<PathBuf> {
+    let exe_path = std::env::current_exe().ok()?;
+    let backend_path = exe_path.parent().map(|dir| dir.join(backend_filename))?;
+    backend_path.is_file().then_some(backend_path)
+}
+
+/// Returns the platform-appropriate filename for the codegen backend dylib on `target`.
+fn backend_filename_for_target(target: &str) -> String {
+    platform::dylib_filename(BACKEND_CRATE_NAME, target)
+}
+
+/// Returns the rustc sysroot directory containing shared libraries for `target`.
+fn rustc_sysroot_loader_dir(sysroot: &str, target: &str) -> PathBuf {
+    if platform::is_windows_target(target) {
+        PathBuf::from(sysroot).join("bin")
+    } else {
+        PathBuf::from(sysroot).join("lib")
+    }
+}
+
+/// Discovered Windows `libffi` import-library (`lib`) and DLL (`bin`) directories.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct WindowsLibffiPaths {
+    /// Directory containing `ffi.lib`.
+    lib_dir: PathBuf,
+    /// Directory containing the runtime `ffi*.dll`, if present.
+    bin_dir: Option<PathBuf>,
+}
+
+/// Returns the Windows `libffi` runtime DLL directory when discoverable.
+pub(crate) fn windows_libffi_loader_dir() -> Option<PathBuf> {
+    find_windows_libffi_paths().and_then(|paths| paths.bin_dir)
+}
+
+/// Searches `LIBFFI_LIB_DIR`, `LIB`, and `VCPKG_ROOT` / `PATH` for `ffi.lib`.
+fn find_windows_libffi_paths() -> Option<WindowsLibffiPaths> {
+    let explicit_bin_dir = std::env::var_os("LIBFFI_BIN_DIR")
+        .map(PathBuf::from)
+        .filter(|path| path.is_dir());
+
+    if let Some(paths) = std::env::var_os("LIBFFI_LIB_DIR")
+        .map(PathBuf::from)
+        .and_then(|lib_dir| libffi_paths_from_lib_dir(lib_dir, explicit_bin_dir.clone()))
+    {
+        return Some(paths);
+    }
+
+    if let Some(lib_paths) = std::env::var_os("LIB") {
+        for lib_dir in std::env::split_paths(&lib_paths) {
+            if let Some(paths) = libffi_paths_from_lib_dir(lib_dir, explicit_bin_dir.clone()) {
+                return Some(paths);
+            }
+        }
+    }
+
+    for root in windows_vcpkg_roots() {
+        if let Some(paths) = libffi_paths_from_vcpkg_root(&root, explicit_bin_dir.clone()) {
+            return Some(paths);
+        }
+    }
+
+    None
+}
+
+/// Candidate vcpkg installation roots on Windows.
+fn windows_vcpkg_roots() -> Vec<PathBuf> {
+    windows_vcpkg_roots_from_env(std::env::var_os("VCPKG_ROOT"), std::env::var_os("PATH"))
+}
+
+/// Resolves candidate vcpkg roots from `VCPKG_ROOT` and `PATH`.
+fn windows_vcpkg_roots_from_env(
+    vcpkg_root: Option<OsString>,
+    path: Option<OsString>,
+) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(root) = vcpkg_root.map(PathBuf::from).filter(|root| root.is_dir()) {
+        push_unique_path(&mut roots, root);
+    }
+
+    if let Some(path) = path {
+        for dir in std::env::split_paths(&path) {
+            if vcpkg_executable_names()
+                .iter()
+                .any(|name| dir.join(name).is_file())
+            {
+                push_unique_path(&mut roots, dir);
+            }
+        }
+    }
+
+    roots
+}
+
+/// Executable filenames probed when locating `vcpkg` on `PATH`.
+fn vcpkg_executable_names() -> &'static [&'static str] {
+    if cfg!(windows) {
+        &["vcpkg.exe", "vcpkg"]
+    } else {
+        &["vcpkg"]
+    }
+}
+
+/// Appends `path` to `paths` if it is not already present.
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.iter().any(|existing| existing == &path) {
+        paths.push(path);
+    }
+}
+
+/// Checks `<root>/installed/x64-windows` for `libffi`.
+fn libffi_paths_from_vcpkg_root(
+    root: &Path,
+    explicit_bin_dir: Option<PathBuf>,
+) -> Option<WindowsLibffiPaths> {
+    let installed = root.join("installed").join("x64-windows");
+    libffi_paths_from_lib_dir(
+        installed.join("lib"),
+        explicit_bin_dir.or_else(|| {
+            let bin_dir = installed.join("bin");
+            bin_dir.is_dir().then_some(bin_dir)
+        }),
+    )
+}
+
+/// Validates that `lib_dir` contains `ffi.lib` and resolves its sibling `bin` directory.
+fn libffi_paths_from_lib_dir(
+    lib_dir: PathBuf,
+    explicit_bin_dir: Option<PathBuf>,
+) -> Option<WindowsLibffiPaths> {
+    lib_dir
+        .join("ffi.lib")
+        .is_file()
+        .then(|| WindowsLibffiPaths {
+            bin_dir: explicit_bin_dir.or_else(|| {
+                lib_dir.parent().and_then(|parent| {
+                    let bin_dir = parent.join("bin");
+                    bin_dir.is_dir().then_some(bin_dir)
+                })
+            }),
+            lib_dir,
+        })
 }
 
 #[cfg(test)]
@@ -2783,6 +3070,93 @@ mod tests {
                 "outside any repository there is nothing to record"
             );
         }
+    }
+
+    /// A project in `root` with a path dependency on a cuda-oxide checkout,
+    /// and no `Cargo.lock` yet. Returns the checkout and the project
+    fn lockless_path_dependency_project(root: &Path) -> (PathBuf, PathBuf) {
+        let checkout = root.join("checkout");
+        let codegen_crate = checkout.join(CODEGEN_CRATE_SUBDIR);
+        std::fs::create_dir_all(&codegen_crate).unwrap();
+        std::fs::write(codegen_crate.join("Cargo.toml"), "[package]\n").unwrap();
+        std::fs::write(
+            checkout.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/*\"]\nexclude = [\"crates/rustc-codegen-cuda\"]\n",
+        )
+        .unwrap();
+        let device = checkout.join("crates/cuda-device");
+        std::fs::create_dir_all(device.join("src")).unwrap();
+        std::fs::write(
+            device.join("Cargo.toml"),
+            "[package]\nname = \"cuda-device\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::write(device.join("src/lib.rs"), "").unwrap();
+
+        let project = root.join("project");
+        std::fs::create_dir_all(project.join("src")).unwrap();
+        std::fs::write(
+            project.join("Cargo.toml"),
+            format!(
+                "[package]\nname = \"project\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\
+                 [dependencies]\ncuda-device = {{ path = {:?} }}\n",
+                device.display().to_string()
+            ),
+        )
+        .unwrap();
+        std::fs::write(project.join("src/lib.rs"), "").unwrap();
+        (checkout, project)
+    }
+
+    /// A fresh project has no `Cargo.lock`, so only the full resolution sees
+    /// its path dependency; deciding from anything less clears the shared
+    /// cache that the in-place build never repopulates
+    #[test]
+    fn refresh_keeps_the_shared_cache_for_a_lockless_path_dependency() {
+        let root = tempdir();
+        let (_, project) = lockless_path_dependency_project(&root);
+        assert!(!project.join("Cargo.lock").exists());
+
+        let (source, clears_cache) = refresh_plan(&project).expect("the fixture pins no toolchain");
+        let source = source.expect("the path dependency must resolve");
+        assert_eq!(source.rev(), None);
+        assert!(!clears_cache, "a path dependency builds in place");
+
+        // without a cuda-oxide dependency the refresh rebuilds the cache
+        let plain = root.join("plain");
+        std::fs::create_dir_all(plain.join("src")).unwrap();
+        std::fs::write(
+            plain.join("Cargo.toml"),
+            "[package]\nname = \"plain\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::write(plain.join("src/lib.rs"), "").unwrap();
+        assert_eq!(refresh_plan(&plain), Ok((None, true)));
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A dependency whose toolchain this project cannot build or load is
+    /// refused while planning, so `refresh_cached_backend` exits before it
+    /// clears a cache that the refused refresh would never replace. Skipped
+    /// without rustup, which gives no verdict
+    #[test]
+    fn refresh_refuses_an_unloadable_dependency_before_clearing_the_cache() {
+        if active_toolchain().is_none() {
+            return;
+        }
+        let root = tempdir();
+        let (checkout, project) = lockless_path_dependency_project(&root);
+        std::fs::write(
+            checkout.join("rust-toolchain.toml"),
+            "[toolchain]\nchannel = \"nightly-2000-01-01\"\n",
+        )
+        .unwrap();
+
+        let report = refresh_plan(&project).expect_err("a mismatched toolchain must refuse");
+        assert!(report.contains("nightly-2000-01-01"), "{report}");
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     fn tempdir() -> PathBuf {

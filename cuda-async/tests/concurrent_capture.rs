@@ -8,6 +8,10 @@
 use cuda_async::cuda_graph::CudaGraph;
 use cuda_async::device_operation::value;
 use cuda_async::error::DeviceError;
+use std::sync::mpsc;
+use std::time::Duration;
+
+const WATCHDOG: Duration = Duration::from_secs(60);
 
 fn has_gpu() -> bool {
     cuda_core::Context::device_count()
@@ -27,10 +31,15 @@ fn concurrent_capture_same_context() {
     let stream_a = device.new_stream().unwrap();
     let stream_b = device.new_stream().unwrap();
 
+    let (a_entered, wait_a) = mpsc::channel();
+    let (b_entered, wait_b) = mpsc::channel();
     let handle_a = std::thread::spawn(move || -> Result<(), DeviceError> {
         CudaGraph::scope(&stream_a, |s| {
             s.record(value(1))?;
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            a_entered.send(()).unwrap();
+            wait_b
+                .recv_timeout(WATCHDOG)
+                .expect("capture B did not enter");
             s.record(value(2))?;
             Ok(())
         })?;
@@ -40,7 +49,10 @@ fn concurrent_capture_same_context() {
     let handle_b = std::thread::spawn(move || -> Result<(), DeviceError> {
         CudaGraph::scope(&stream_b, |s| {
             s.record(value(3))?;
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            b_entered.send(()).unwrap();
+            wait_a
+                .recv_timeout(WATCHDOG)
+                .expect("capture A did not enter");
             s.record(value(4))?;
             Ok(())
         })?;
@@ -69,15 +81,16 @@ fn new_stream_during_capture_on_another_thread() {
     let device_a = cuda_core::Context::new(0).unwrap();
     let stream_a = device_a.new_stream().unwrap();
 
-    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
-    let barrier_a = barrier.clone();
-    let barrier_b = barrier.clone();
+    let (entered, capture_started) = mpsc::channel();
+    let (finished, stream_created) = mpsc::channel();
 
     let handle_a = std::thread::spawn(move || -> Result<(), DeviceError> {
         CudaGraph::scope(&stream_a, |s| {
             s.record(value(1))?;
-            barrier_a.wait();
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            entered.send(()).unwrap();
+            stream_created
+                .recv_timeout(WATCHDOG)
+                .expect("stream creation did not finish during capture");
             s.record(value(2))?;
             Ok(())
         })?;
@@ -85,9 +98,13 @@ fn new_stream_during_capture_on_another_thread() {
     });
 
     let handle_b = std::thread::spawn(move || -> Result<(), DeviceError> {
-        barrier_b.wait();
+        capture_started
+            .recv_timeout(WATCHDOG)
+            .expect("capture did not start");
         let device_b = cuda_core::Context::new(0).unwrap();
-        let _stream = device_b.new_stream()?;
+        let result = device_b.new_stream();
+        finished.send(()).unwrap();
+        let _stream = result?;
         Ok(())
     });
 

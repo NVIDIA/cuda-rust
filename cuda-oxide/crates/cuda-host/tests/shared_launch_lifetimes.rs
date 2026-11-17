@@ -23,13 +23,46 @@ const PTX: &str = ".version 7.0\n.target sm_52\n.address_size 64\n.visible .entr
 /// primary context sequentially, and driver module/allocation calls can block
 /// while a host callback is parked. Serialize these host-callback-gated tests
 /// so default multi-threaded `cargo test` runs do not contend on the driver's
-/// callback worker and trip the 10-second gate timeout.
+/// callback worker and trip the gate watchdog.
 static HOST_CALLBACK_GATE_LOCK: Mutex<()> = Mutex::new(());
 
-struct Gate(mpsc::Sender<()>);
+/// Holds a host callback until the test releases it explicitly.
+/// A rescue deadline fails the test; it cannot silently permit later assertions.
+struct Gate {
+    /// Explicit release, also sent during unwinding.
+    /// This owns no CUDA objects and can wake the driver callback safely.
+    release: mpsc::Sender<()>,
+    /// Callback acknowledgement distinguishes explicit release from expiry.
+    /// Reading it after release also covers a delayed watchdog notification.
+    completed: mpsc::Receiver<bool>,
+}
+
+impl Gate {
+    /// Enqueue the gate only after module, allocator and launch setup finishes.
+    /// CUDA setup may synchronize a context and must not run behind this gate.
+    fn arm(stream: &cuda_core::Stream) -> Self {
+        let (release, wait) = mpsc::channel();
+        let (done, completed) = mpsc::channel();
+        stream
+            .launch_host_function(move || {
+                let explicit = wait.recv_timeout(Duration::from_secs(60)).is_ok();
+                let _ = done.send(explicit);
+            })
+            .unwrap();
+        Self { release, completed }
+    }
+}
+
 impl Drop for Gate {
     fn drop(&mut self) {
-        let _ = self.0.send(());
+        let _ = self.release.send(());
+        let completed = self.completed.recv_timeout(Duration::from_secs(60));
+        if !std::thread::panicking() {
+            assert!(
+                matches!(completed, Ok(true)),
+                "GPU gate did not acknowledge explicit release: {completed:?}"
+            );
+        }
     }
 }
 
@@ -72,13 +105,7 @@ fn pending_launch_keeps_access(forget: bool, atomic: bool) {
     let mut future = launch
         .schedule(&SingleStream::from_stream(stream.clone()))
         .unwrap();
-    let (tx, rx) = mpsc::channel();
-    stream
-        .launch_host_function(move || {
-            let _ = rx.recv_timeout(Duration::from_secs(10));
-        })
-        .unwrap();
-    let gate = Gate(tx);
+    let gate = Gate::arm(&stream);
     assert!(
         Pin::new(&mut future)
             .poll(&mut TaskContext::from_waker(Waker::noop()))
@@ -164,13 +191,7 @@ fn device_box_preserves_concurrent_read_permissions() {
     let mut first = make_launch()
         .schedule(&SingleStream::from_stream(stream.clone()))
         .unwrap();
-    let (tx, rx) = mpsc::channel();
-    stream
-        .launch_host_function(move || {
-            let _ = rx.recv_timeout(Duration::from_secs(10));
-        })
-        .unwrap();
-    let gate = Gate(tx);
+    let gate = Gate::arm(&stream);
     assert!(
         Pin::new(&mut first)
             .poll(&mut TaskContext::from_waker(Waker::noop()))

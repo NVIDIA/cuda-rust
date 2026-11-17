@@ -367,7 +367,7 @@ fn cargo_package_manifest_matches(package: &serde_json::Value, manifest_path: &P
         .is_some_and(|path| path == manifest_path)
 }
 
-fn cargo_metadata(manifest_dir: &Path) -> Result<serde_json::Value, String> {
+pub(super) fn cargo_metadata(manifest_dir: &Path) -> Result<serde_json::Value, String> {
     let output = Command::new("cargo")
         .env("RUSTC_BOOTSTRAP", "1")
         .args(["metadata", "--format-version=1", "--no-deps"])

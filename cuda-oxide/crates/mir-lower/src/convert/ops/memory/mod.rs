@@ -22,12 +22,14 @@
 //!
 //! ## Static Shared Memory (`SharedArray<T, N, ALIGN>`)
 //!
-//! Each static shared memory allocation gets a unique global symbol
-//! (`__shared_mem_N`, with the compiling crate's stable id woven in when the
+//! Each static shared memory allocation gets a unique global symbol,
+//! `__shared_mem_<hash>`, where the hash is taken from the allocation's key
+//! (the Rust static's mangled symbol), so adding or reordering other kernels
+//! never renames it. The compiling crate's stable id is woven in when the
 //! lowering options carry a module disambiguator — see
-//! `crate::context::module_namespaced_symbol`). Multiple allocations in the
+//! `crate::context::module_namespaced_symbol`. Multiple allocations in the
 //! same or different kernels each have their own symbol with their own size
-//! and alignment.
+//! and alignment; references to the same static share one.
 //!
 //! ## Dynamic Shared Memory (`DynamicSharedArray<T, ALIGN>`)
 //!

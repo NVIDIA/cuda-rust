@@ -612,15 +612,14 @@ fn shared_alloc_source_name_reaches_the_exported_llvm_ir() {
     );
 }
 
-/// A `__shared_mem_N` or `__device_global_N` index must depend only on
-/// the module being lowered, not on how many allocations any OTHER
-/// module has already lowered in this process (#706). Before the fix,
-/// each `N` came from a `static AtomicUsize` shared across every call in
-/// the process, so lowering the second of these two modules would have
-/// produced `__shared_mem_1` and `__device_global_1`, not the `_0` names.
+/// The names of shared and device globals must depend only on the module
+/// being lowered, not on how many allocations any OTHER module has already
+/// lowered in this process (#706). Before that fix, each `N` came from a
+/// `static AtomicUsize` shared across every call in the process, so
+/// lowering the second of these two modules renamed both globals.
 #[test]
-fn shared_and_device_global_indices_are_per_module_not_process_global() {
-    for _ in 0..2 {
+fn shared_and_device_global_names_are_per_module_not_process_global() {
+    let lower = || -> Vec<String> {
         let mut ctx = make_ctx();
         let (module_ptr, block) = build_kernel(&mut ctx, vec![], vec![]);
         append_shared_alloc(&mut ctx, block, "k", 64);
@@ -628,38 +627,95 @@ fn shared_and_device_global_indices_are_per_module_not_process_global() {
         append_mir_return(&mut ctx, block, vec![]);
 
         crate::lower_mir_to_llvm(&mut ctx, module_ptr).expect("lowering failed");
+        global_names(&ctx, module_ptr)
+    };
 
-        let top = module_top_block(&ctx, module_ptr);
-        let names: Vec<String> = top
-            .deref(&ctx)
-            .iter(&ctx)
-            .filter_map(|op| Operation::get_op::<llvm::GlobalOp>(op, &ctx))
-            .map(|g| g.get_symbol_name(&ctx).to_string())
-            .collect();
-        assert!(
-            names.iter().any(|n| n == "__shared_mem_0"),
-            "a module with exactly one shared allocation must always name it \
-                 __shared_mem_0, regardless of how many other modules already lowered \
-                 one in this process (got {names:?})"
+    let first = lower();
+    assert_eq!(
+        first.len(),
+        2,
+        "one shared and one device global: {first:?}"
+    );
+    assert_eq!(
+        lower(),
+        first,
+        "lowering an identical module again must not rename its globals"
+    );
+}
+
+/// Adding a kernel must not rename another kernel's shared or device
+/// globals (#1477). Names used to come from module-wide counters assigned in
+/// MIR walk order, so a new kernel walked first shifted every later index
+/// and changed the PTX of kernels whose code had not changed. Each name now
+/// derives from the global's own key, so the existing kernels lower to the
+/// same text with or without the new one.
+#[test]
+fn adding_a_kernel_leaves_other_kernels_globals_unchanged() {
+    let tile = |name: &str| {
+        dialect_mir::ops::encode_rust_static_global_key(&format!("_RNvNvCs0_5crate{name}4TILE"))
+    };
+    let lower = |with_new_kernel: bool| -> String {
+        let mut ctx = make_ctx();
+        let module = pliron::builtin::ops::ModuleOp::new(&mut ctx, "m".try_into().unwrap());
+        let module_ptr = module.get_operation();
+        let mut kernels = vec![("c4_a", 128), ("c4_b", 256)];
+        if with_new_kernel {
+            kernels.insert(0, ("c4_new", 64));
+        }
+        for (name, size) in kernels {
+            let block = append_named_kernel(&mut ctx, module_ptr, name);
+            append_shared_alloc(&mut ctx, block, &tile(name), size);
+            append_global_alloc(&mut ctx, block, &format!("{name}_counter"), false);
+            append_mir_return(&mut ctx, block, vec![]);
+        }
+
+        crate::lower_mir_to_llvm_with_options(
+            &mut ctx,
+            module_ptr,
+            crate::LoweringOptions {
+                module_disambiguator: Some(0x00c0_ffee),
+                ..Default::default()
+            },
+        )
+        .expect("lowering failed");
+        llvm_export::export::export_module_to_string(&ctx, &module).expect("export")
+    };
+
+    let base = lower(false);
+    let extended = lower(true);
+    for kernel in ["c4_a", "c4_b"] {
+        let definition = |ir: &str| {
+            let start = ir
+                .find(&format!("@{kernel}("))
+                .and_then(|at| ir[..at].rfind("define "))
+                .unwrap_or_else(|| panic!("{kernel} missing:\n{ir}"));
+            let end = start + ir[start..].find("\n}").expect("function end");
+            ir[start..end].to_string()
+        };
+        assert_eq!(
+            definition(&base),
+            definition(&extended),
+            "adding a kernel changed {kernel}:\n{base}\n---\n{extended}"
         );
+    }
+    for global in base.lines().filter(|line| line.starts_with("@__")) {
         assert!(
-            names.iter().any(|n| n == "__device_global_0"),
-            "a module with exactly one ordinary device global must always name it \
-                 __device_global_0, regardless of how many other modules already \
-                 lowered one in this process (got {names:?})"
+            extended.lines().any(|line| line == global),
+            "adding a kernel changed `{global}`:\n{extended}"
         );
     }
 }
 
-/// Per-module counters restart at zero in every module, so two crates'
-/// modules both define `__shared_mem_0` / `__device_global_0`, and the
-/// textual PTX bundle merge in `load_all_ptx_bundles_merged` fails driver
-/// JIT compilation on the duplicate definition (#1277). A caller whose
-/// output can be merged passes a per-compilation disambiguator; the name
-/// must then be a pure function of (disambiguator, family, module-local
-/// counter) — deterministic for one crate, distinct across crates.
+/// Per-module counters restarted at zero in every module, so two crates'
+/// modules both defined `__shared_mem_0` / `__device_global_0`; key hashes
+/// repeat the same way for a static both crates reach through a shared
+/// dependency. The textual PTX bundle merge in `load_all_ptx_bundles_merged`
+/// fails driver JIT compilation on the duplicate definition (#1277). A caller
+/// whose output can be merged passes a per-compilation disambiguator; the
+/// name must then be a pure function of (disambiguator, family, key) --
+/// deterministic for one crate, distinct across crates.
 #[test]
-fn module_disambiguator_separates_counter_named_globals_across_modules() {
+fn module_disambiguator_separates_keyed_globals_across_modules() {
     let lower_one_module = |disambiguator: Option<u64>| -> Vec<String> {
         let mut ctx = make_ctx();
         let (module_ptr, block) = build_kernel(&mut ctx, vec![], vec![]);
@@ -677,34 +733,40 @@ fn module_disambiguator_separates_counter_named_globals_across_modules() {
             },
         )
         .expect("lowering failed");
-
-        let top = module_top_block(&ctx, module_ptr);
-        top.deref(&ctx)
-            .iter(&ctx)
-            .filter_map(|op| Operation::get_op::<llvm::GlobalOp>(op, &ctx))
-            .map(|g| g.get_symbol_name(&ctx).to_string())
-            .collect()
+        global_names(&ctx, module_ptr)
+    };
+    // the hash suffix is 16 lowercase hex digits after the given prefix
+    let has_keyed_name = |names: &[String], prefix: &str| {
+        names.iter().any(|name| {
+            name.strip_prefix(prefix).is_some_and(|hash| {
+                hash.len() == 16 && hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+            })
+        })
     };
 
     // The exact shape is part of the cross-crate uniqueness contract: the
-    // disambiguator sits between family and counter, zero-padded to the full
-    // u64 width so no (disambiguator, counter) pair can collide with another
-    // by concatenation.
+    // disambiguator sits between family and key hash, both zero-padded to the
+    // full u64 width so no pair can collide with another by concatenation.
     let crate_a = lower_one_module(Some(0x00c0_ffee));
-    for expected in [
-        "__shared_mem_0000000000c0ffee_0",
-        "__device_global_0000000000c0ffee_0",
-        // The dynamic pool symbol keeps its owner suffix: within one module
-        // the owner keeps per-function pools apart, and the crate namespace
-        // keeps the same owner's declarations apart across merged bundles,
-        // whose alignments would otherwise silently resolve by bundle order.
-        "__dynamic_smem_0000000000c0ffee_kernel_func",
+    for prefix in [
+        "__shared_mem_0000000000c0ffee_",
+        "__device_global_0000000000c0ffee_",
     ] {
         assert!(
-            crate_a.iter().any(|n| n == expected),
-            "expected {expected} among disambiguated globals (got {crate_a:?})"
+            has_keyed_name(&crate_a, prefix),
+            "expected a {prefix}<hash> global (got {crate_a:?})"
         );
     }
+    // The dynamic pool symbol keeps its owner suffix: within one module the
+    // owner keeps per-function pools apart, and the crate namespace keeps the
+    // same owner's declarations apart across merged bundles, whose alignments
+    // would otherwise silently resolve by bundle order.
+    assert!(
+        crate_a
+            .iter()
+            .any(|n| n == "__dynamic_smem_0000000000c0ffee_kernel_func"),
+        "expected the namespaced dynamic pool (got {crate_a:?})"
+    );
 
     // The same module lowered under a different crate identity shares no
     // module-scope symbol with the first: this is the #1277 merge invariant.
@@ -717,19 +779,54 @@ fn module_disambiguator_separates_counter_named_globals_across_modules() {
         );
     }
 
-    // No disambiguator keeps the historical undecorated names.
+    // No disambiguator keeps the undecorated family prefix.
     let undecorated = lower_one_module(None);
-    for expected in [
-        "__shared_mem_0",
-        "__device_global_0",
-        "__dynamic_smem_kernel_func",
-    ] {
+    for prefix in ["__shared_mem_", "__device_global_"] {
         assert!(
-            undecorated.iter().any(|n| n == expected),
-            "expected historical name {expected} without a disambiguator \
-             (got {undecorated:?})"
+            has_keyed_name(&undecorated, prefix),
+            "expected an undecorated {prefix}<hash> global (got {undecorated:?})"
         );
     }
+    assert!(
+        undecorated
+            .iter()
+            .any(|n| n == "__dynamic_smem_kernel_func"),
+        "expected the undecorated dynamic pool (got {undecorated:?})"
+    );
+}
+
+/// Symbol names of every global in the lowered module.
+fn global_names(ctx: &Context, module_ptr: Ptr<Operation>) -> Vec<String> {
+    module_top_block(ctx, module_ptr)
+        .deref(ctx)
+        .iter(ctx)
+        .filter_map(|op| Operation::get_op::<llvm::GlobalOp>(op, ctx))
+        .map(|global| global.get_symbol_name(ctx).to_string())
+        .collect()
+}
+
+/// Append an argument-less `MirFuncOp` named `name` to `module_ptr` and
+/// return its entry block.
+fn append_named_kernel(
+    ctx: &mut Context,
+    module_ptr: Ptr<Operation>,
+    name: &str,
+) -> Ptr<BasicBlock> {
+    let func_ty = pliron::builtin::types::FunctionType::get(ctx, vec![], vec![]);
+    let func_op = Operation::new(
+        ctx,
+        mir::MirFuncOp::get_concrete_op_info(),
+        vec![],
+        vec![],
+        vec![],
+        1,
+    );
+    let func = mir::MirFuncOp::new(ctx, func_op, TypeAttr::new(func_ty.into()));
+    func.set_symbol_name(ctx, name.try_into().unwrap());
+    let entry = BasicBlock::new(ctx, None, vec![]);
+    entry.insert_at_back(func_op.deref(ctx).get_region(0), ctx);
+    func_op.insert_at_back(module_top_block(ctx, module_ptr), ctx);
+    entry
 }
 
 /// Append a `mir.extern_shared` (dynamic shared memory) to `block` with the

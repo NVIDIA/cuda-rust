@@ -40,7 +40,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 rust-version = "1.89"
 license = "Apache-2.0"
@@ -87,11 +87,11 @@ cuda-async = { path = "../cuda-async", version = "=0.5.0" }
 # crate for downstreams (candle CI, 2026-09-04: cutile 0.3.0 resolved
 # cutile-macro 0.3.1 and failed on 0.3.1-only symbols). Exact-pin, like
 # serde pins serde_derive.
-cutile-compiler = { path = "cutile-compiler", version = "=0.5.0" }
-cutile-macro = { path = "cutile-macro", version = "=0.5.0" }
-cutile = { path = "cutile", version = "=0.5.0" }
-cutile-ir = { path = "cutile-ir", version = "=0.5.0" }
-cutile-kernels = { path = "cutile-kernels", version = "=0.5.0" }
+cutile-compiler = { path = "cutile-compiler", version = "=0.6.0" }
+cutile-macro = { path = "cutile-macro", version = "=0.6.0" }
+cutile = { path = "cutile", version = "=0.6.0" }
+cutile-ir = { path = "cutile-ir", version = "=0.6.0" }
+cutile-kernels = { path = "cutile-kernels", version = "=0.6.0" }
 
 # Lint policy shared by every workspace crate (`[lints] workspace = true`).
 [workspace.lints.rust]

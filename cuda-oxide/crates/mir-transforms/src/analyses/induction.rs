@@ -31,6 +31,14 @@
 //!     i.e. `arg` and `init` leave the same remainder when divided by `step`) is
 //!     what the unroller exploits when it folds `& mask` operations to
 //!     constants.
+//!   * **Runtime induction variable.** The latch feeds back `arg + step`, but
+//!     the starting value or the step is only known at runtime, as in the
+//!     block-stride loop `i = threadIdx.x; while i < n { i += blockDim.x }`.
+//!     The step must have the same value on every iteration: it is either
+//!     computed before the loop, or computed in the loop from such values and
+//!     from special registers that are fixed for the whole launch
+//!     ([`loop_invariant`]). There is no trip count, but partial unrolling can
+//!     still step the counter itself.
 //!   * **Reduction** (a loop-carried accumulator). A value carried across
 //!     iterations and updated by something other than a constant step, e.g.
 //!     `acc = acc + (i & 3)`. It is not a counter, so we cannot replace it with
@@ -51,7 +59,9 @@
 //! anything that does not match the simple counted-loop shape it recognises is
 //! reported as `Unknown` / `None` rather than guessed at.
 
-use dialect_mir::ops::arithmetic::{MirAddOp, MirNotOp, MirSubOp};
+use dialect_mir::attributes::MirCastKindAttr;
+use dialect_mir::ops::arithmetic::{MirAddOp, MirMulOp, MirNotOp, MirSubOp};
+use dialect_mir::ops::cast::MirCastOp;
 use dialect_mir::ops::comparison::{MirGeOp, MirGtOp, MirLeOp, MirLtOp};
 use dialect_mir::ops::constants::MirConstantOp;
 use dialect_mir::ops::control_flow::MirCondBranchOp;
@@ -110,6 +120,10 @@ pub enum ArgKind {
     /// A counter: its value is `init + step * iteration`, so it forms the
     /// sequence `init, init+step, init+2*step, ...`.
     BasicIv { init: i128, step: i128 },
+    /// A counter that also advances by the same `step` on every iteration,
+    /// but whose starting value or step is only known at runtime, so it has
+    /// no numeric formula and no trip count.
+    RuntimeIv { step: RuntimeStep },
     /// A value carried across iterations and updated by something other than a
     /// fixed step, e.g. an accumulator `acc = acc + (i & 3)`.
     Reduction,
@@ -117,6 +131,17 @@ pub enum ArgKind {
     Invariant,
     /// Did not match any of the patterns above.
     Unknown,
+}
+
+/// The step of an [`ArgKind::RuntimeIv`] counter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeStep {
+    /// A compile-time constant, for a counter with a runtime start.
+    Const(i128),
+    /// A value added to the counter on every back-edge (`arg + step`), the same
+    /// on every iteration. It may be computed inside the loop; see
+    /// [`loop_invariant`] for which values qualify.
+    Value(Value),
 }
 
 /// Everything this analysis learned about one loop.
@@ -268,6 +293,7 @@ pub fn analyze(
         let recurrence_values = recurrence_values(ctx, l, header, arg, i);
         args.push(classify_arg(
             ctx,
+            l,
             arg,
             i,
             pre_ops.as_deref(),
@@ -403,6 +429,7 @@ fn expand_block_argument(
 
 fn classify_arg(
     ctx: &Context,
+    lp: &Loop,
     arg: Value,
     i: usize,
     pre_ops: Option<&[Value]>,
@@ -431,11 +458,143 @@ fn classify_arg(
             return ArgKind::BasicIv { init, step };
         }
         // Steps like a counter, but its starting value isn't a constant, so we
-        // can't give it a numeric formula; treat it as a carried value instead.
-        return ArgKind::Reduction;
+        // can't give it a numeric formula.
+        return ArgKind::RuntimeIv {
+            step: RuntimeStep::Const(step),
+        };
+    }
+
+    // Every back-edge may instead add the same runtime value, such as
+    // `blockDim.x`. Requiring one SSA value on every path, rather than equal
+    // expressions, keeps the check simple; a step recomputed separately on two
+    // `continue` paths is not recognized.
+    let mut runtime_steps = values.iter().map(|&value| runtime_offset(ctx, value, arg));
+    if let Some(step) = runtime_steps.next().flatten()
+        && runtime_steps.all(|candidate| candidate == Some(step))
+        && loop_invariant(ctx, &lp.blocks, step)
+    {
+        return ArgKind::RuntimeIv {
+            step: RuntimeStep::Value(step),
+        };
     }
     // Changes each iteration but not by a fixed step: an accumulator.
     ArgKind::Reduction
+}
+
+/// If `v` is `arg + s` or `s + arg` for a value `s` that is not a constant,
+/// return `s`. Subtraction is not matched: a runtime `arg - s` would need the
+/// negated step materialized, which nothing needs yet.
+fn runtime_offset(ctx: &Context, v: Value, arg: Value) -> Option<Value> {
+    let def = v.defining_op()?;
+    Operation::get_op::<MirAddOp>(def, ctx)?;
+    let a = def.deref(ctx).get_operand(0);
+    let b = def.deref(ctx).get_operand(1);
+    let step = if a == arg {
+        b
+    } else if b == arg {
+        a
+    } else {
+        return None;
+    };
+    (step != arg && const_i128(ctx, step).is_none()).then_some(step)
+}
+
+/// Special registers whose value is fixed for a thread over the whole launch,
+/// so reading them anywhere in a loop gives the same value. The others, such
+/// as `%clock`, `%smid`, and `%warpid`, can change while a thread runs.
+const LAUNCH_INVARIANT_SREGS: &[&str] = &[
+    "tid_x",
+    "tid_y",
+    "tid_z",
+    "ntid_x",
+    "ntid_y",
+    "ntid_z",
+    "ctaid_x",
+    "ctaid_y",
+    "ctaid_z",
+    "nctaid_x",
+    "nctaid_y",
+    "nctaid_z",
+    "laneid",
+    "clusterid_x",
+    "clusterid_y",
+    "clusterid_z",
+    "nclusterid_x",
+    "nclusterid_y",
+    "nclusterid_z",
+    "cluster_ctaid_x",
+    "cluster_ctaid_y",
+    "cluster_ctaid_z",
+    "cluster_nctaid_x",
+    "cluster_nctaid_y",
+    "cluster_nctaid_z",
+    "cluster_ctarank",
+    "cluster_nctarank",
+];
+
+/// How deep [`loop_invariant`] follows operands of in-loop operations. A step
+/// or bound is normally a register read or an argument and a cast; this only
+/// bounds the recursion.
+const MAX_INVARIANT_DEPTH: usize = 8;
+
+/// Whether `v` has the same value on every iteration of the loop whose
+/// blocks are `loop_blocks`.
+///
+/// A value defined outside the loop qualifies. So does the result of one of
+/// these operations in the loop, when every operand qualifies too: an integer
+/// constant, an integer cast, wrapping `+`, `-`, or `*`, and a read of one of
+/// the special registers fixed for the whole launch, such as `blockDim.x`.
+/// The block-stride loop reads `blockDim.x` again on every iteration, so
+/// requiring a definition outside the loop would miss it. A loop block
+/// argument does not qualify: it is carried from one iteration to the next.
+///
+/// The special registers are matched by operation name (`nvvm.read_ptx_sreg_*`)
+/// so this analysis does not depend on the NVVM dialect.
+pub fn loop_invariant(ctx: &Context, loop_blocks: &FxHashSet<Ptr<BasicBlock>>, v: Value) -> bool {
+    invariant_within(ctx, loop_blocks, v, MAX_INVARIANT_DEPTH)
+}
+
+/// [`loop_invariant`], following at most `depth` more in-loop definitions.
+fn invariant_within(
+    ctx: &Context,
+    loop_blocks: &FxHashSet<Ptr<BasicBlock>>,
+    v: Value,
+    depth: usize,
+) -> bool {
+    let Some(def) = v.defining_op() else {
+        return v
+            .defining_block()
+            .is_some_and(|block| !loop_blocks.contains(&block));
+    };
+    let Some(block) = def.deref(ctx).get_parent_block() else {
+        return false;
+    };
+    if !loop_blocks.contains(&block) {
+        return true;
+    }
+    if depth == 0 {
+        return false;
+    }
+    let pure_arithmetic = Operation::get_op::<MirConstantOp>(def, ctx).is_some()
+        || Operation::get_op::<ConstantOp>(def, ctx).is_some()
+        || Operation::get_op::<MirAddOp>(def, ctx).is_some()
+        || Operation::get_op::<MirSubOp>(def, ctx).is_some()
+        || Operation::get_op::<MirMulOp>(def, ctx).is_some()
+        || Operation::get_op::<MirCastOp>(def, ctx).is_some_and(|cast| {
+            cast.get_attr_cast_kind(ctx)
+                .is_some_and(|kind| *kind == MirCastKindAttr::IntToInt)
+        });
+    let launch_invariant_read = || {
+        let name = Operation::get_opid(def, ctx).to_string();
+        name.strip_prefix("nvvm.read_ptx_sreg_")
+            .is_some_and(|sreg| LAUNCH_INVARIANT_SREGS.contains(&sreg))
+    };
+    if !pure_arithmetic && !launch_invariant_read() {
+        return false;
+    }
+    let op = def.deref(ctx);
+    op.operands()
+        .all(|operand| invariant_within(ctx, loop_blocks, operand, depth - 1))
 }
 
 /// If `v` is `arg + c`, `c + arg`, or `arg - c` for a constant `c`, return how
@@ -566,7 +725,10 @@ fn analyze_guard(
     };
     // The thing being tested must actually be a counter for this to be a
     // counted loop.
-    if !matches!(args[iv_index], ArgKind::BasicIv { .. }) {
+    if !matches!(
+        args[iv_index],
+        ArgKind::BasicIv { .. } | ArgKind::RuntimeIv { .. }
+    ) {
         return None;
     }
     // `IV + offset <pred> n` is `IV <pred> n - offset`. A limit the analysis

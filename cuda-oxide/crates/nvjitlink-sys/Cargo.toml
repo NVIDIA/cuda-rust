@@ -1,6 +1,6 @@
 [package]
 name = "nvjitlink-sys"
-version = "0.3.0"
+version = "0.4.0"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -9,5 +9,6 @@ description = "Runtime (dlopen) bindings to NVIDIA nvJitLink (ships with the CUD
 readme = "README.md"
 
 [dependencies]
+cuda-toolkit-discovery = { workspace = true }
 libloading = { workspace = true }
 thiserror = { workspace = true }

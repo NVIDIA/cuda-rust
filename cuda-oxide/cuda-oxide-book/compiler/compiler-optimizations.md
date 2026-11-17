@@ -263,9 +263,12 @@ The source attribute travels through the compiler in six stages:
 3. Constant propagation folds constant expressions, such as a bound written
    `N / 8`. `LoopInfo` then finds the enclosing loop, while induction analysis
    finds its counter, start, step, bound, and—when possible—trip count.
-4. The pass normalizes supported control flow. It joins multiple `continue`
-   paths into one path back to the loop header and routes supported
-   loop-carried values out of a fully unrolled loop.
+4. The pass normalizes supported control flow. It removes branches to blocks
+   that only reach `mir.unreachable`, such as the arm rustc adds to a `match`
+   on an enum for discriminants it cannot have, so they do not count as loop
+   exits. It joins multiple `continue` paths into one path back to the loop
+   header and routes supported loop-carried values out of a fully unrolled
+   loop.
 5. The transform clones and reconnects the body for full or partial unrolling.
 6. A cleanup phase folds constants, simplifies branches, and removes dead or
    unreachable code.
@@ -281,10 +284,12 @@ unroll; the loop continues with the same behavior.
 The current pass intentionally recognizes a conservative set of loop shapes.
 A counted `while` loop and a range `for` loop (`for i in a..b` and
 `(a..b).rev()`, over any integer counter including `isize`) need a counter the
-pass can follow: a compile-time-constant starting value, the same fixed step
-on every path back to the header, and a simple, side-effect-free test that
-directly compares the counter with its bound. The loop must also have one
-ordinary entry before its header. For unusual or irreducible control flow, the
+pass can follow: the same step on every path back to the header and a simple,
+side-effect-free test that directly compares the counter with its bound. Full
+unrolling also needs a compile-time-constant starting value and step. Partial
+unrolling accepts a runtime starting value and a step that is a runtime value
+fixed for the whole loop, such as `blockDim_x()` in a block-stride loop. The
+loop must also have one ordinary entry before its header. For unusual or irreducible control flow, the
 compiler warns and does not unroll the loop.
 
 | Shape | Current behavior |
@@ -294,13 +299,23 @@ compiler warns and does not unroll the loop.
 | Other iterator `for` loops (`a..=b`, `.step_by(k)`, `.iter()`) | Not yet recognized; warns |
 | Constant trip count with `#[unroll]` | Fully unrolled |
 | Runtime, loop-invariant limit with `#[unroll(N)]` | Partially unrolled |
+| Block-stride loop (`i = threadIdx_x(); while i < n { ..; i += blockDim_x() }`) with `#[unroll(N)]` | Partially unrolled |
 | Several `continue` paths with the same counter step | Joined and unrolled |
 | Early `break` or multiple exits with `#[unroll]` | Supported |
 | Early `break` or another exit with `#[unroll(N)]` | Warns; partial unroll is skipped |
+| A `match` on an enum in the body, such as `opt.unwrap_or(x)` | Not an exit; its `unreachable` arm is removed |
 | Nested loops | Only the annotated loop is unrolled |
 
-Partial unrolling also requires `N >= 2`, a positive counter step, a `<` or
-`<=` comparison, and a limit that does not change inside the loop.
+Partial unrolling also requires `N >= 2`, a `<` or `<=` comparison, and a
+limit that does not change inside the loop. A compile-time-constant step must
+be positive. A runtime step, and a limit the loop recomputes on every
+iteration (such as `n as usize` in `while i < n as usize`), must be computed
+only from values set before the loop, constants, launch-geometry reads such as
+`blockDim_x()` or `threadIdx_x()`, integer casts, and `+`, `-`, or `*`. With a runtime step the
+unrolled loop runs a group of `N` iterations only when the loop's own test
+passes for every counter value in the group, computed with the same wrapping
+arithmetic as the loop; otherwise the remaining iterations run one at a time in
+the original loop.
 
 When an annotated outer loop contains an unannotated inner loop, each outer
 copy receives an intact clone of that inner loop; the inner loop remains a

@@ -207,9 +207,10 @@ PTX 8.6 and exist only on `sm_100a`, `sm_100f`, `sm_103a`, and `sm_103f`. They
 are not available on `sm_110a` or `sm_120a`, so consumer Blackwell is out.
 Build for one of those four targets or compilation fails.
 
-The `redux_f32` example is the working reference. It builds for `sm_100a`, so
-CI compiles it and checks the emitted PTX rather than running it. Its `main`
-skips unless the device reports `sm_100` and nothing else.
+The `redux_f32` example is the working reference. CI builds it for `sm_100a`
+and checks the emitted PTX rather than running it. `cargo oxide run` builds
+for the attached GPU, and `main` skips unless that GPU can load the module's
+`.target` (an `sm_100a` module needs `sm_100`, an `sm_103a` module `sm_103`).
 
 ---
 

@@ -1246,8 +1246,8 @@ fn sibling_llvm_tools(llc: &Path) -> Result<(PathBuf, PathBuf)> {
     let tool_dir = llc
         .parent()
         .context("selected llc has no containing tool directory")?;
-    let llvm_as = tool_dir.join("llvm-as");
-    let llvm_dis = tool_dir.join("llvm-dis");
+    let llvm_as = tool_dir.join(format!("llvm-as{}", std::env::consts::EXE_SUFFIX));
+    let llvm_dis = tool_dir.join(format!("llvm-dis{}", std::env::consts::EXE_SUFFIX));
     ensure!(
         llvm_as.is_file() && llvm_dis.is_file(),
         "selected LLVM toolchain omits llvm-as or llvm-dis"
@@ -1856,7 +1856,8 @@ fn rust_toolchain_llc() -> Result<(PathBuf, RustcCommit)> {
     let path = PathBuf::from(String::from_utf8_lossy(&sysroot.stdout).trim())
         .join("lib/rustlib")
         .join(host)
-        .join("bin/llc");
+        .join("bin")
+        .join(format!("llc{}", std::env::consts::EXE_SUFFIX));
     ensure!(
         path.is_file(),
         "rust toolchain has no llc at {}",

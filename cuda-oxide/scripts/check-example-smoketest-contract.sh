@@ -186,6 +186,48 @@ esac
                  f"{result.returncode}, {result.stdout!r}, {result.stderr!r}")
     print(f"OK: {len(cases)} WGMMA verdict cases and failed-run summary/exit status.")
 
+    # On R100 (compute capability 10.7), NVVM_VERIFY_EXAMPLES with a
+    # verify-code-shape.sh gate must run `cargo oxide build <ex>` without
+    # passing the NVVM-only `sm_107` target into the NVPTX prebuild, while
+    # keeping `--arch=sm_107` for `emit-ltoir` (NVBug 7084024).
+    for ex_name in ("kernel_reference_validity", "promoted_ref_return"):
+        ex_dir = simt / f"crates/rustc-codegen-cuda/examples/{ex_name}"
+        ex_dir.mkdir(parents=True, exist_ok=True)
+        (ex_dir / "Cargo.toml").touch()
+        shape = ex_dir / "verify-code-shape.sh"
+        shape.write_text("#!/usr/bin/env bash\ntest -s \"$(dirname \"$0\")/" + ex_name + ".ptx\"\n")
+        shape.chmod(0o755)
+    (bin_dir / "nvidia-smi").write_text('#!/usr/bin/env bash\necho "NVIDIA Graphics Device, 10.7"\n')
+    (bin_dir / "cargo").write_text('''#!/usr/bin/env bash
+case "$*" in
+    "oxide --help"|"oxide setup") exit 0 ;;
+    "oxide __debug-policy") echo unset; exit 0 ;;
+    "oxide build kernel_reference_validity"|"oxide build promoted_ref_return")
+        ex="$3"
+        printf '.version 8.0\n.target sm_80\n.address_size 64\n' > "crates/rustc-codegen-cuda/examples/${ex}/${ex}.ptx"
+        exit 0 ;;
+    "oxide emit-ltoir kernel_reference_validity --arch=sm_107"|"oxide emit-ltoir promoted_ref_return --arch=sm_107")
+        ex="$3"
+        rm -f "crates/rustc-codegen-cuda/examples/${ex}/${ex}.ptx"
+        printf '; ModuleID = %s\n' "${ex}" > "crates/rustc-codegen-cuda/examples/${ex}/${ex}.ll"
+        printf 'ltoir' > "crates/rustc-codegen-cuda/examples/${ex}/${ex}.ltoir"
+        exit 0 ;;
+    *)
+        echo "unexpected cargo invocation: $*" >&2
+        exit 99 ;;
+esac
+''')
+    r100_result = subprocess.run(
+        ["bash", str(script), "--compile-only", "--only", "^(kernel_reference_validity|promoted_ref_return)$", "--no-color"],
+        cwd=root, env=env, capture_output=True, text=True,
+    )
+    if (r100_result.returncode != 0
+            or not re.search(r"^Pass:\s+2 / 2$", r100_result.stdout, re.M)
+            or not re.search(r"^Fail:\s+0 / 2$", r100_result.stdout, re.M)):
+        sys.exit(f"R100 compile-only NVVM code-shape prebuild failed: "
+                 f"{r100_result.returncode}, {r100_result.stdout!r}, {r100_result.stderr!r}")
+    print("OK: R100 (sm_107) compile-only NVVM code-shape prebuild omits --arch on build and passes --arch=sm_107 to emit-ltoir.")
+
 # Exercise the actual CLI/preflight without building or launching an example.
 # The Rust parser owns aliases and normalization; this checks that the shell
 # trusts its token, honors explicit mode, and refuses a failed/malformed reply.

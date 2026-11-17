@@ -718,6 +718,8 @@ enum OnceState<Op, Out> {
 struct ExecuteOnce<Op, Out> {
     state: Mutex<OnceState<Op, Out>>,
     settled: Condvar,
+    #[cfg(test)]
+    wait_entered: Mutex<Option<std::sync::mpsc::Sender<()>>>,
 }
 
 impl<Op, Out> ExecuteOnce<Op, Out> {
@@ -725,6 +727,8 @@ impl<Op, Out> ExecuteOnce<Op, Out> {
         Self {
             state: Mutex::new(OnceState::Pending(op)),
             settled: Condvar::new(),
+            #[cfg(test)]
+            wait_entered: Mutex::new(None),
         }
     }
 
@@ -736,6 +740,8 @@ impl<Op, Out> ExecuteOnce<Op, Out> {
                 producer: None,
             }),
             settled: Condvar::new(),
+            #[cfg(test)]
+            wait_entered: Mutex::new(None),
         }
     }
 
@@ -817,6 +823,10 @@ impl<Op, Out> ExecuteOnce<Op, Out> {
                              execution (a shared or unzipped op executing itself)"
                                 .into(),
                         ));
+                    }
+                    #[cfg(test)]
+                    if let Some(entered) = self.wait_entered.lock().unwrap().take() {
+                        let _ = entered.send(());
                     }
                     state = self
                         .settled
@@ -1934,5 +1944,51 @@ mod send_bounds {
     fn ops_and_futures_are_send() {
         assert_send::<Value<std::sync::Arc<u8>>>();
         assert_send::<crate::device_future::DeviceFuture<i32, Value<i32>>>();
+    }
+}
+
+#[cfg(test)]
+mod execute_once_wait_tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    /// Wait until the second executor has actually selected the Running arm,
+    /// then fail the producer and verify both consumers receive its error.
+    #[test]
+    #[ignore = "requires a CUDA GPU; run by run_gpu_tests.sh"]
+    fn contending_executor_observes_the_producers_failure() {
+        let device = Context::new(0).unwrap();
+        let first = ExecutionContext::new(device.new_stream().unwrap());
+        let second = ExecutionContext::new(device.new_stream().unwrap());
+        let once = Arc::new(ExecuteOnce::<(), ()>::pending(()));
+        let (entered, running) = mpsc::channel();
+        let (waiting, wait_started) = mpsc::channel();
+        *once.wait_entered.lock().unwrap() = Some(waiting);
+        let producer_once = once.clone();
+        let producer = std::thread::spawn(move || {
+            producer_once.execute(
+                &first,
+                |(), _| {
+                    entered.send(()).unwrap();
+                    wait_started
+                        .recv_timeout(Duration::from_secs(60))
+                        .expect("second executor never reached the Running wait");
+                    Err(DeviceError::Internal("producer failure".into()))
+                },
+                |_| Ok(()),
+            )
+        });
+        running.recv_timeout(Duration::from_secs(60)).unwrap();
+        let consumer = once.execute(
+            &second,
+            |(), _| panic!("operation executed twice"),
+            |_| Ok(()),
+        );
+        for result in [producer.join().unwrap(), consumer] {
+            assert!(
+                matches!(result, Err(DeviceError::Internal(message)) if message == "producer failure")
+            );
+        }
     }
 }

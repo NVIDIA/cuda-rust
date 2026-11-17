@@ -50,3 +50,4 @@ workspace = true
 cutile = { workspace = true }
 cutile-kernels = { workspace = true }
 tokio = { workspace = true }
+serde_json = { workspace = true }

@@ -118,6 +118,29 @@ fn composition_known_examples() {
     }
 }
 
+/// A step smaller than an `a` mode that does not divide it is only
+/// representable while the whole walk stays inside that mode. Once the walk
+/// leaves the mode, the composed map has no constant-stride form and must be
+/// rejected rather than returned with wrong offsets.
+#[test]
+fn composition_rejects_walks_that_leave_a_non_dividing_mode() {
+    // 6 rows, padded leading dimension 10. b = 4:4 visits flat coordinates
+    // 0, 4, 8, 12, i.e. offsets 0, 4, 12, 20; no `a,b` mode pair can say that.
+    let a = l("(6,4):(1,10)");
+    assert!(composition(&a, &l("4:4")).is_err());
+    // The same walk drives `logical_divide` by a 4-cell tile: its tile index
+    // mode is `6:4`. The returned layout used to reach the padding at 6..9.
+    assert!(logical_divide(&a, &l("4:1")).is_err());
+    // A short walk that stays inside the first mode is still representable.
+    let inside = composition(&a, &l("2:4")).unwrap();
+    for i in 0..2 {
+        assert_eq!(
+            inside.call(&IntTuple::Leaf(i)),
+            a.call(&IntTuple::Leaf(4 * i))
+        );
+    }
+}
+
 /// Joining a layout and its complement must reach each offset in `[0, M)`
 /// exactly once.
 #[test]

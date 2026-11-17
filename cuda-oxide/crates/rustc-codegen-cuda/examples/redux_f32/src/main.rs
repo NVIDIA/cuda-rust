@@ -10,8 +10,9 @@
 //! instruction. The NaN kernel feeds one lane a NaN so the two NaN policies
 //! observably differ.
 //!
-//! Compile-only in CI, since it pins `sm_100a` and no runner has that device.
-//! Run it on a B200/GB200 (sm_100) and the reductions are verified:
+//! Compile-only in CI, which builds it with `--arch sm_100a` and has no
+//! family-10x device. `cargo oxide run` targets the attached GPU, so on a
+//! B200/GB200 (sm_100) or B300/GB300 (sm_103) the reductions are verified:
 //!
 //!   cargo oxide run redux_f32
 
@@ -88,11 +89,12 @@ fn main() {
     let (major, minor) = ctx.compute_capability().expect("compute capability");
     println!("GPU Compute Capability: sm_{}{}", major, minor);
 
-    // The device code is pinned to sm_100a, so only an exact sm_100 device
-    // can load it; the f32 redux family itself exists only on family 10x.
-    if (major, minor) != (10, 0) {
-        println!("\nskipping: this build targets sm_100a (B200/GB200)");
-        println!("  this GPU is sm_{}{}", major, minor);
+    // The f32 redux family exists only on family 10x, and the module's own
+    // `.target` decides which GPUs can load it: an `sm_100a` build (the CI
+    // build) runs only on sm_100, an `sm_103a` build only on sm_103.
+    let target = ptx_target();
+    if !module_target_runs_on(&target, major, minor) {
+        println!("\nskipping: this module targets {target}, which sm_{major}{minor} cannot load");
         return;
     }
 
@@ -153,4 +155,39 @@ fn main() {
         std::process::exit(1);
     }
     println!("\nSUCCESS: redux.sync f32 family produced correct results");
+}
+
+/// The `.target` of the generated PTX (e.g. `sm_103a`). `cargo oxide run`
+/// picks it from the attached GPU unless `--arch` overrides it, so it can
+/// differ from the GPU this binary later runs on.
+fn ptx_target() -> String {
+    let ptx_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("redux_f32.ptx");
+    let ptx = std::fs::read_to_string(&ptx_path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", ptx_path.display()));
+    ptx.lines()
+        .find_map(|line| line.strip_prefix(".target "))
+        .map(|rest| rest.split([',', ' ']).next().unwrap_or(rest).to_string())
+        .unwrap_or_else(|| panic!("no .target line in {}", ptx_path.display()))
+}
+
+/// Whether a GPU of compute capability `major.minor` can load a module built
+/// for `target`: an `a` target needs that exact capability, an `f` target the
+/// same major and at least its minor, a plain target at least its capability.
+fn module_target_runs_on(target: &str, major: i32, minor: i32) -> bool {
+    let Some(digits) = target.strip_prefix("sm_") else {
+        return false;
+    };
+    let (number, suffix) = match digits.chars().last() {
+        Some(c @ ('a' | 'f')) => (&digits[..digits.len() - 1], Some(c)),
+        _ => (digits, None),
+    };
+    let Ok(capability) = number.parse::<i32>() else {
+        return false;
+    };
+    let (t_major, t_minor) = (capability / 10, capability % 10);
+    match suffix {
+        Some('a') => (major, minor) == (t_major, t_minor),
+        Some(_) => major == t_major && minor >= t_minor,
+        None => (major, minor) >= (t_major, t_minor),
+    }
 }

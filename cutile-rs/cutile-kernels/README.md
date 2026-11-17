@@ -69,8 +69,10 @@ cargo run --release -p cutile-examples --example nvfp4_moe
 
 The example is a synthetic correctness and timing fixture; its timings are not
 a comparison against a production MoE library. See the
-[current validation gap](../cutile-examples/README.md#nvfp4-moe-validation-gap)
-observed with public `tileiras` 13.5.37 on SM120 before using its results.
+[validation instructions](../cutile-examples/README.md#validation) and
+[known SM120 limitation](../cutile-examples/README.md#known-sm120-limitation)
+before using its results. Opt-in B200 launch profiles and the large synthetic fixture
+are documented in the [host example guide](../cutile-examples/README.md#b200-reference-profiles).
 
 ## Fused QKV
 
@@ -78,8 +80,9 @@ observed with public `tileiras` 13.5.37 on SM120 before using its results.
 FP8 conversion, Q storage, and paged K/V scatter. V is not normalized. The
 [runnable example and benchmark guide](../cutile-examples/fused_qkv.md) documents
 the unsafe buffer/slot contract, full-output correctness fixture, and opt-in
-CUDA graph timing sweep. Use CUDA 13.5's assembler for performance evaluation;
-the starting schedule has not been tuned on B200 and overlap is not guaranteed.
+CUDA graph timing sweep. Its opt-in `--profile b200` schedules are intended for
+evaluation with CUDA 13.5 tooling; compiler support for individual schedules can
+vary. Defaults retain the original schedule. Overlap is not guaranteed.
 The adapted TileGym traversal retains its MIT license in the kernel source.
 
 ## Validation

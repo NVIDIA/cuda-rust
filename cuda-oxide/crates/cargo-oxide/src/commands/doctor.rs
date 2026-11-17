@@ -607,7 +607,8 @@ pub fn doctor(ctx: &Context) {
             let mut lines = stdout.lines();
             let sysroot = lines.next()?;
             let host = lines.next()?;
-            let path: std::path::PathBuf = [sysroot, "lib", "rustlib", host, "bin", "llc"]
+            let llc_name = crate::platform::executable_filename("llc", host);
+            let path: std::path::PathBuf = [sysroot, "lib", "rustlib", host, "bin", &llc_name]
                 .iter()
                 .collect();
             path.is_file()

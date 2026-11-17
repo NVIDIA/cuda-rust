@@ -12,6 +12,7 @@ pub use cuda_core::embedded::{
     embedded_modules_from_current_exe,
 };
 use cuda_core::{CudaContext, CudaModule, DriverError};
+use oxide_artifacts::ArtifactEntryKind;
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -162,10 +163,15 @@ pub fn merge_ptx_bundles<'a>(
     let mut merged = String::new();
     let mut found_any = false;
 
-    // Keep each bundle's debug file indices and helper `.func` names distinct
-    // in the merged module.
+    // Keep each bundle's debug file indices, helper `.func` names, bundle-local
+    // labels, and coalesced DWARF `.section` blocks distinct in the merged module.
     let mut file_index_offset = 0;
     let mut seen_functions = std::collections::HashSet::new();
+    let mut section_order: Vec<String> = Vec::new();
+    let mut section_bodies: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let mut abbrev_byte_offset = 0u64;
+    let mut info_byte_offset = 0u64;
 
     for (bundle_index, bundle) in bundles.into_iter().enumerate() {
         if let Some(ptx_bytes) = bundle.payload(ArtifactPayloadKind::Ptx) {
@@ -176,10 +182,11 @@ pub fn merge_ptx_bundles<'a>(
                 .trim_end_matches('\0');
 
             let strip_headers = found_any;
-            let (body, max_file_index) = prepare_bundle_body_with_functions(
+            let bundle_file_offset = file_index_offset;
+            let (body, max_file_index, sections) = prepare_bundle_body_with_functions(
                 ptx_str,
                 strip_headers,
-                file_index_offset,
+                bundle_file_offset,
                 bundle_index,
                 &mut seen_functions,
             )
@@ -192,6 +199,41 @@ pub fn merge_ptx_bundles<'a>(
             if !body.ends_with('\n') {
                 merged.push('\n');
             }
+
+            let this_abbrev_bytes = sections
+                .iter()
+                .find(|(name, _)| name == ".debug_abbrev")
+                .map(|(_, sec_body)| debug_section_byte_size(sec_body))
+                .unwrap_or(0);
+            let this_info_bytes = sections
+                .iter()
+                .find(|(name, _)| name == ".debug_info")
+                .map(|(_, sec_body)| debug_section_byte_size(sec_body))
+                .unwrap_or(0);
+
+            for (sec_name, sec_body) in sections {
+                let adjusted = adjust_debug_section_body(
+                    &sec_name,
+                    &sec_body,
+                    abbrev_byte_offset,
+                    info_byte_offset,
+                    bundle_file_offset,
+                );
+                if !section_bodies.contains_key(&sec_name) {
+                    section_order.push(sec_name.clone());
+                }
+                let entry = section_bodies.entry(sec_name).or_default();
+                if !adjusted.trim().is_empty() {
+                    if !entry.is_empty() && !entry.ends_with('\n') {
+                        entry.push('\n');
+                    }
+                    entry.push_str(adjusted.trim_matches('\n'));
+                    entry.push('\n');
+                }
+            }
+
+            abbrev_byte_offset = abbrev_byte_offset.saturating_add(this_abbrev_bytes);
+            info_byte_offset = info_byte_offset.saturating_add(this_info_bytes);
             found_any = true;
         }
     }
@@ -199,6 +241,16 @@ pub fn merge_ptx_bundles<'a>(
     if !found_any {
         return Err(EmbeddedModuleError::NoModules);
     }
+
+    for sec_name in section_order {
+        let body = section_bodies.remove(&sec_name).unwrap_or_default();
+        if body.trim().is_empty() {
+            merged.push_str(&format!("\t.section\t{sec_name}\t{{\t}}\n"));
+        } else {
+            merged.push_str(&format!("\t.section\t{sec_name}\n\t{{\n{body}\t}}\n"));
+        }
+    }
+
     Ok(merged)
 }
 
@@ -211,46 +263,100 @@ fn prepare_bundle_body(
     file_index_offset: u64,
 ) -> Result<(String, u64), String> {
     let mut seen_functions = std::collections::HashSet::new();
-    prepare_bundle_body_with_functions(
+    let (body, max_file_index, sections) = prepare_bundle_body_with_functions(
         ptx,
         strip_headers,
         file_index_offset,
         0,
         &mut seen_functions,
-    )
+    )?;
+    let mut full = body;
+    for (sec_name, sec_body) in sections {
+        if !full.is_empty() && !full.ends_with('\n') {
+            full.push('\n');
+        }
+        if sec_body.trim().is_empty() {
+            full.push_str(&format!("\t.section\t{sec_name}\t{{\t}}\n"));
+        } else {
+            let trimmed = sec_body.trim_matches('\n');
+            full.push_str(&format!("\t.section\t{sec_name}\n\t{{\n{trimmed}\n\t}}\n"));
+        }
+    }
+    Ok((full, max_file_index))
 }
 
-/// Strip repeated headers, disambiguate colliding helper `.func` symbols, and
-/// shift debug indices past the previous bundles. Returns the rewritten text
-/// and its highest debug file index.
+/// Strip repeated headers, disambiguate colliding helper `.func` symbols and
+/// per-bundle labels/local depots, extract `.section` blocks for module-level
+/// coalescing, and shift debug indices past the previous bundles.
+#[allow(clippy::type_complexity)]
 fn prepare_bundle_body_with_functions(
     ptx: &str,
     strip_headers: bool,
     file_index_offset: u64,
     bundle_index: usize,
     seen_functions: &mut std::collections::HashSet<String>,
-) -> Result<(String, u64), String> {
+) -> Result<(String, u64, Vec<(String, String)>), String> {
     let document = ptx_parse::Document::parse(ptx).map_err(|error| error.to_string())?;
     let mut edits = ptx_parse::EditScript::new();
     let mut max_file_index = 0u64;
 
     let mut bundle_functions = std::collections::HashSet::new();
-    let mut colliding_functions = std::collections::HashMap::new();
+    let mut renamed_symbols = std::collections::HashMap::new();
     for callable in document.callables() {
         if callable.kind() == ptx_parse::CallableKind::Function && !callable.is_extern() {
             let name = callable.name();
             bundle_functions.insert(name.to_string());
             if seen_functions.contains(name) {
-                colliding_functions.insert(name, format!("{name}__bundle_{bundle_index}"));
+                renamed_symbols.insert(name.to_string(), format!("{name}__bundle_{bundle_index}"));
             }
         }
     }
     seen_functions.extend(bundle_functions);
 
-    if !colliding_functions.is_empty() {
+    // Disambiguate bundle-local labels (`$L__*`, etc.) and `.local` stack depots
+    // (`__local_depot*`) in subsequent bundles so module-scoped DWARF sections
+    // (`.debug_pubnames`, `.debug_pubtypes`, `.debug_loc`, `.debug_info`) never
+    // define or reference colliding labels across merged bundles.
+    if bundle_index > 0 {
+        for label in document.labels() {
+            let name = label.name();
+            renamed_symbols
+                .entry(name.to_string())
+                .or_insert_with(|| format!("{name}__bundle_{bundle_index}"));
+        }
+        let tokens = document.tokens();
+        for directive in document.directives() {
+            if directive.name() == ".local" {
+                let span = directive.arguments_span();
+                let first = tokens.partition_point(|token| token.span().end <= span.start);
+                let mut local_ident = None;
+                for token in tokens[first..]
+                    .iter()
+                    .take_while(|token| token.span().start < span.end)
+                {
+                    if token.text(ptx) == "[" {
+                        break;
+                    }
+                    if token.kind() == ptx_parse::TokenKind::Word
+                        && !token.text(ptx).starts_with('.')
+                        && !token.text(ptx).bytes().all(|b| b.is_ascii_digit())
+                    {
+                        local_ident = Some(token.text(ptx));
+                    }
+                }
+                if let Some(name) = local_ident {
+                    renamed_symbols
+                        .entry(name.to_string())
+                        .or_insert_with(|| format!("{name}__bundle_{bundle_index}"));
+                }
+            }
+        }
+    }
+
+    if !renamed_symbols.is_empty() {
         for token in document.tokens() {
             if token.kind() == ptx_parse::TokenKind::Word
-                && let Some(renamed) = colliding_functions.get(token.text(ptx))
+                && let Some(renamed) = renamed_symbols.get(token.text(ptx))
             {
                 edits
                     .replace(token.span(), renamed.clone())
@@ -300,8 +406,154 @@ fn prepare_bundle_body_with_functions(
         }
     }
 
-    let body = edits.apply(ptx).map_err(|error| error.to_string())?;
-    Ok((body, max_file_index))
+    let rewritten = edits.apply(ptx).map_err(|error| error.to_string())?;
+    let (body, sections) = extract_ptx_sections(&rewritten)?;
+    Ok((body, max_file_index, sections))
+}
+
+/// Extract top-level `.section <name> { ... }` blocks from `ptx` so they can be
+/// coalesced into one section per name at the end of a merged PTX module.
+#[allow(clippy::type_complexity)]
+fn extract_ptx_sections(ptx: &str) -> Result<(String, Vec<(String, String)>), String> {
+    let document = ptx_parse::Document::parse(ptx).map_err(|error| error.to_string())?;
+    let mut section_deletes = ptx_parse::EditScript::new();
+    let mut sections = Vec::new();
+    let bytes = ptx.as_bytes();
+
+    for scope in document.scopes() {
+        let Some(header_id) = scope.header() else {
+            continue;
+        };
+        let Some(directive) = document.directive_for_statement(header_id) else {
+            continue;
+        };
+        if directive.name() != ".section" {
+            continue;
+        }
+        let sec_name = directive.arguments().trim().to_string();
+        let sec_body = ptx[scope.body_span()].to_string();
+        sections.push((sec_name, sec_body));
+
+        let start = directive.line_span().start;
+        let mut end = scope.span().end;
+        while end < bytes.len() && matches!(bytes[end], b' ' | b'\t' | b'\r') {
+            end += 1;
+        }
+        if end < bytes.len() && bytes[end] == b'\n' {
+            end += 1;
+        }
+        section_deletes
+            .delete(start..end)
+            .map_err(|error| error.to_string())?;
+    }
+
+    if sections.is_empty() {
+        return Ok((ptx.to_string(), sections));
+    }
+    let body = section_deletes
+        .apply(ptx)
+        .map_err(|error| error.to_string())?;
+    Ok((body, sections))
+}
+
+/// Compute the byte size of a PTX `.section` body from its `.b8`/`.b16`/`.b32`/`.b64`
+/// data directives.
+fn debug_section_byte_size(section_body: &str) -> u64 {
+    let Ok(document) = ptx_parse::Document::parse(section_body) else {
+        return 0;
+    };
+    let tokens = document.tokens();
+    let mut total = 0u64;
+    for directive in document.directives() {
+        let elem_bytes: u64 = match directive.name() {
+            ".b8" => 1,
+            ".b16" => 2,
+            ".b32" => 4,
+            ".b64" => 8,
+            _ => continue,
+        };
+        let span = directive.arguments_span();
+        let first = tokens.partition_point(|token| token.span().end <= span.start);
+        let mut items = 1u64;
+        for token in tokens[first..]
+            .iter()
+            .take_while(|token| token.span().start < span.end)
+        {
+            if token.text(section_body) == "," {
+                items += 1;
+            }
+        }
+        total = total.saturating_add(elem_bytes.saturating_mul(items));
+    }
+    total
+}
+
+/// Adjust intra-DWARF section offsets and `.file` numbers in a bundle's debug
+/// section body before coalescing it with prior bundles' debug sections.
+fn adjust_debug_section_body(
+    sec_name: &str,
+    sec_body: &str,
+    abbrev_byte_offset: u64,
+    info_byte_offset: u64,
+    file_index_offset: u64,
+) -> String {
+    match sec_name {
+        ".debug_info" if abbrev_byte_offset > 0 || file_index_offset > 0 => {
+            let mut out = String::with_capacity(sec_body.len() + 32);
+            for line in sec_body.lines() {
+                let trimmed = line.trim_start();
+                if abbrev_byte_offset > 0
+                    && let Some(rest) = trimmed.strip_prefix(".b32 .debug_abbrev")
+                    && (rest.is_empty()
+                        || rest.starts_with(char::is_whitespace)
+                        || rest.starts_with('/'))
+                {
+                    let indent = &line[..line.len() - trimmed.len()];
+                    out.push_str(indent);
+                    out.push_str(&format!(".b32 .debug_abbrev+{abbrev_byte_offset}{rest}\n"));
+                    continue;
+                }
+                if file_index_offset > 0
+                    && (line.contains("DW_AT_decl_file") || line.contains("DW_AT_call_file"))
+                    && let Some(rest) = trimmed.strip_prefix(".b8 ")
+                {
+                    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+                    if let Ok(file_idx) = digits.parse::<u64>()
+                        && file_idx > 0
+                    {
+                        let indent = &line[..line.len() - trimmed.len()];
+                        let suffix = &rest[digits.len()..];
+                        let shifted = file_idx.saturating_add(file_index_offset);
+                        out.push_str(&format!("{indent}.b8 {shifted}{suffix}\n"));
+                        continue;
+                    }
+                }
+                out.push_str(line);
+                out.push('\n');
+            }
+            out
+        }
+        ".debug_pubnames" | ".debug_pubtypes" if info_byte_offset > 0 => {
+            let mut out = String::with_capacity(sec_body.len() + 16);
+            for line in sec_body.lines() {
+                let trimmed = line.trim_start();
+                if let Some(rest) = trimmed.strip_prefix(".b32 .debug_info")
+                    && (rest.is_empty()
+                        || rest.starts_with(char::is_whitespace)
+                        || rest.starts_with('/'))
+                {
+                    let indent = &line[..line.len() - trimmed.len()];
+                    out.push_str(indent);
+                    out.push_str(&format!(".b32 .debug_info+{info_byte_offset}{rest}\n"));
+                    continue;
+                }
+                out.push_str(line);
+                out.push('\n');
+            }
+            out
+        }
+        _ => sec_body.to_string(),
+    }
 }
 
 /// Shift one complete decimal index token, preserving surrounding PTX.
@@ -357,6 +609,13 @@ fn load_bundle(
         return Ok(ctx.load_module_from_image(ptx)?);
     }
 
+    let expected_kernels = bundle
+        .entries
+        .iter()
+        .filter(|entry| entry.kind == ArtifactEntryKind::Kernel)
+        .map(|entry| entry.symbol.as_str())
+        .collect::<Vec<_>>();
+
     if let Some(nvvm_ir) = bundle.payload(ArtifactPayloadKind::NvvmIr) {
         let emitted = target_arch_for_bundle(bundle)?;
         let execution = ltoir::execution_arch_for_context(ctx)?;
@@ -366,12 +625,14 @@ fn load_bundle(
                 &bundle.name,
                 &emitted.sm(),
                 bundle.compile_options,
+                &expected_kernels,
             )?,
             ltoir::ExecutionRoute::PtxBridge => ltoir::build_ptx_from_nvvm_ir_with_compile_options(
                 nvvm_ir,
                 &bundle.name,
                 &emitted.sm(),
                 bundle.compile_options,
+                &expected_kernels,
             )?,
         };
         return Ok(ctx.load_module_from_image(&image)?);
@@ -386,12 +647,14 @@ fn load_bundle(
                 &bundle.name,
                 &emitted.sm(),
                 bundle.compile_options,
+                &expected_kernels,
             )?,
             ltoir::ExecutionRoute::PtxBridge => ltoir::link_ltoir_to_ptx_with_compile_options(
                 ltoir,
                 &bundle.name,
                 &emitted.sm(),
                 bundle.compile_options,
+                &expected_kernels,
             )?,
         };
         return Ok(ctx.load_module_from_image(&image)?);
@@ -658,6 +921,129 @@ mod tests {
             1
         );
         assert!(merged.contains("call.uni (r0), shared_helper__bundle_1, ();"));
+    }
+
+    #[test]
+    fn merged_bundles_coalesce_debug_sections_and_disambiguate_labels_and_local_depots() {
+        let first = ptx_bundle(
+            "first",
+            "\
+.version 7.8
+.target sm_90, debug
+.address_size 64
+.file 1 \"a/src/lib.rs\"
+.visible .entry kernel_a()
+{
+\t.local .align 8 .b8 \t__local_depot0[16];
+$L__func_begin0:
+\t.loc\t1 10 5
+\tmov.b64 \t%SPL, __local_depot0;
+\tret;
+$L__func_end0:
+}
+\t.section\t.debug_abbrev
+\t{
+.b8 1
+.b8 17
+.b8 0
+\t}
+\t.section\t.debug_info
+\t{
+.b32 22
+.b8 2
+.b8 0
+.b32 .debug_abbrev
+.b8 8
+.b8 1                                   // DW_AT_decl_file
+.b64 $L__func_begin0
+.b64 __local_depot0
+\t}
+\t.section\t.debug_pubnames
+\t{
+.b32 $L__pubNames_end0-$L__pubNames_start0
+$L__pubNames_start0:
+.b8 2
+.b8 0
+.b32 .debug_info
+.b32 26
+.b32 0
+$L__pubNames_end0:
+\t}
+\t.section\t.debug_macinfo\t{\t}
+",
+        );
+        let second = ptx_bundle(
+            "second",
+            "\
+.version 7.8
+.target sm_90, debug
+.address_size 64
+.file 1 \"b/src/main.rs\"
+.visible .entry kernel_b()
+{
+\t.local .align 8 .b8 \t__local_depot0[16];
+$L__func_begin0:
+\t.loc\t1 20 5
+\tmov.b64 \t%SPL, __local_depot0;
+\tret;
+$L__func_end0:
+}
+\t.section\t.debug_abbrev
+\t{
+.b8 1
+.b8 17
+.b8 0
+\t}
+\t.section\t.debug_info
+\t{
+.b32 22
+.b8 2
+.b8 0
+.b32 .debug_abbrev
+.b8 8
+.b8 1                                   // DW_AT_decl_file
+.b64 $L__func_begin0
+.b64 __local_depot0
+\t}
+\t.section\t.debug_pubnames
+\t{
+.b32 $L__pubNames_end0-$L__pubNames_start0
+$L__pubNames_start0:
+.b8 2
+.b8 0
+.b32 .debug_info
+.b32 26
+.b32 0
+$L__pubNames_end0:
+\t}
+\t.section\t.debug_macinfo\t{\t}
+",
+        );
+
+        let merged = merge_ptx_bundles([&first, &second]).unwrap();
+
+        // Each DWARF section appears once at the end of the merged module.
+        for sec in [
+            ".section\t.debug_abbrev",
+            ".section\t.debug_info",
+            ".section\t.debug_pubnames",
+            ".section\t.debug_macinfo",
+        ] {
+            assert_eq!(merged.matches(sec).count(), 1, "duplicate {sec}:\n{merged}");
+        }
+
+        // Second bundle's labels and local stack depot are disambiguated.
+        assert!(merged.contains("$L__func_begin0__bundle_1:"));
+        assert!(merged.contains(".b64 $L__func_begin0__bundle_1"));
+        assert!(merged.contains("__local_depot0__bundle_1[16];"));
+        assert!(merged.contains(".b64 __local_depot0__bundle_1"));
+        assert!(merged.contains("$L__pubNames_start0__bundle_1:"));
+        assert!(merged.contains("$L__pubNames_end0__bundle_1-$L__pubNames_start0__bundle_1"));
+
+        // Second CU's abbrev offset, pubnames CU offset, and DW_AT_decl_file index are shifted.
+        assert!(merged.contains(".b32 .debug_abbrev+3"));
+        assert!(merged.contains(".b32 .debug_info+28"));
+        assert!(merged.contains(".b8 2                                   // DW_AT_decl_file"));
     }
 
     #[test]

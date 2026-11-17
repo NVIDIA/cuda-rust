@@ -257,7 +257,7 @@ pub struct PipelineConfig {
     ///
     /// Explicit fused operations, such as `f32::mul_add`, are unaffected.
     pub allow_fma_contraction: bool,
-    /// Stable per-compilation identity woven into counter-named module-scope
+    /// Stable per-compilation identity woven into generated module-scope
     /// symbols (`__shared_mem_*`, `__device_global_*`) and the dynamic
     /// shared-memory pool externs (`__dynamic_smem_*`) during MIR lowering.
     ///
@@ -672,6 +672,7 @@ pub fn run_pipeline(
                 config.allow_fma_contraction,
                 config.debug_kind,
             )?;
+            write_expected_kernels_sidecar(&config.output_dir, &config.output_name, functions)?;
             // Publish the target last: its version marker is the completion record
             // that says the sibling options file is required.
             write_nvvm_target_sidecar(&config.output_dir, &config.output_name, &generated.target)?;
@@ -799,6 +800,29 @@ fn write_nvvm_compile_options_sidecar(
     })
 }
 
+/// Records, next to the emitted `.ll`, the kernels its finalized image must
+/// define, so that finalizing from files checks them as the embedded route
+/// does.
+fn write_expected_kernels_sidecar(
+    output_dir: &Path,
+    output_name: &str,
+    functions: &[CollectedFunction],
+) -> Result<(), PipelineError> {
+    let path = output_dir.join(format!("{output_name}.kernels"));
+    let text = cuda_artifact_finalizer::expected_kernels_sidecar_text(
+        functions
+            .iter()
+            .filter(|function| function.is_kernel)
+            .map(|function| function.export_name.as_str()),
+    );
+    std::fs::write(&path, text).map_err(|error| {
+        PipelineError::Export(format!(
+            "failed to record expected kernels in {}: {error}",
+            path.display()
+        ))
+    })
+}
+
 fn stale_compilation_artifact_paths(
     output_dir: &Path,
     output_name: &str,
@@ -810,6 +834,7 @@ fn stale_compilation_artifact_paths(
         "ptx",
         "target",
         "options",
+        "kernels",
         "ltoir",
         "cubin",
         "cubin.target",
@@ -1007,6 +1032,7 @@ union Word {
 struct SharedMarker<T, const N: usize>(core::marker::PhantomData<T>);
 unsafe impl<T, const N: usize> Sync for SharedMarker<T, N> {}
 struct ContainsPointer { pointer: *mut u32 }
+struct RecursiveNode { next: *const RecursiveNode, value: u32 }
 
 static SCALAR: u64 = 7;
 static UNION_VALUE: Word = Word { value: 11 };
@@ -1015,7 +1041,9 @@ static SHARED_I32: SharedMarker<i32, 32> = SharedMarker(core::marker::PhantomDat
 static SHARED_UNION: SharedMarker<Word, 4> = SharedMarker(core::marker::PhantomData);
 static SHARED_POINTER: SharedMarker<*mut u32, 4> = SharedMarker(core::marker::PhantomData);
 static SHARED_POINTER_STRUCT: SharedMarker<ContainsPointer, 2> = SharedMarker(core::marker::PhantomData);
-static SHARED_OPAQUE_POINTER: SharedMarker<*mut ContainsPointer, 4> = SharedMarker(core::marker::PhantomData);
+static SHARED_STRUCT_POINTER: SharedMarker<*mut ContainsPointer, 4> = SharedMarker(core::marker::PhantomData);
+static SHARED_OPAQUE_POINTER: SharedMarker<*mut Word, 4> = SharedMarker(core::marker::PhantomData);
+static SHARED_RECURSIVE_POINTER: SharedMarker<*const RecursiveNode, 4> = SharedMarker(core::marker::PhantomData);
 
 fn same_leaf(flag: bool) {
     if flag {
@@ -1158,11 +1186,19 @@ fn same_leaf(flag: bool) {
             )
         ));
         assert!(shared("SHARED_POINTER_STRUCT").is_some());
-        // A composite pointee has no bounded tree, so the pointer falls back
-        // to the opaque legacy form and the whole graph is rejected.
+        assert!(
+            shared("SHARED_STRUCT_POINTER").is_some(),
+            "non-recursive struct pointees carry a complete TypedPointer graph"
+        );
+        // An unsupported union pointee or a cycle-broken recursive struct
+        // pointee falls back to an opaque pointer and is rejected for AS3.
         assert!(
             shared("SHARED_OPAQUE_POINTER").is_none(),
             "legacy untyped pointers must be rejected"
+        );
+        assert!(
+            shared("SHARED_RECURSIVE_POINTER").is_none(),
+            "cycle-broken recursive struct pointers must be rejected for AS3"
         );
         let same_leaf: Vec<_> = supported
             .iter()

@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-use crate::backend;
-use crate::cutlass_toolchain;
-use std::path::Path;
+use crate::{backend, cutlass_toolchain, platform};
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::*;
@@ -1088,23 +1088,42 @@ pub(super) fn inherited_or_configured_env(ctx: &Context, key: &str) -> Option<St
     })
 }
 
-/// Build `LD_LIBRARY_PATH` for the child cargo process.
+/// Build the platform loader path (`LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, or `PATH`)
+/// for the child cargo process.
 ///
-/// Includes the rustc sysroot lib (for `librustc_driver.so` etc.), the
-/// libmathdx lib (when `LIBMATHDX_PATH` is set), and any existing
-/// `LD_LIBRARY_PATH` from the parent environment.
+/// Includes the rustc sysroot loader directory (`lib` on Unix, `bin` on Windows),
+/// Windows `libffi` binary directory when discovered, `LIBMATHDX_PATH/lib` when set,
+/// and any existing loader path from the parent environment or project config.
 pub(super) fn apply_ld_library_path(cmd: &mut Command, ctx: &Context) {
-    let mut ld_paths: Vec<String> = Vec::new();
+    let host_target = backend::active_host_target();
+    let loader_env = platform::loader_env_var(&host_target);
+    let mut paths: Vec<PathBuf> = Vec::new();
     if let Some(sysroot) = backend::get_rustc_sysroot() {
-        ld_paths.push(format!("{}/lib", sysroot));
+        paths.push(rustc_sysroot_loader_dir(&sysroot, &host_target));
+    }
+    if platform::is_windows_target(&host_target)
+        && let Some(libffi_bin_dir) = backend::windows_libffi_loader_dir()
+    {
+        paths.push(libffi_bin_dir);
     }
     if let Some(libmathdx_path) = inherited_or_configured_env(ctx, "LIBMATHDX_PATH") {
-        ld_paths.push(format!("{}/lib", libmathdx_path));
+        paths.push(PathBuf::from(libmathdx_path).join("lib"));
     }
-    if let Some(existing) = inherited_or_configured_env(ctx, "LD_LIBRARY_PATH") {
-        ld_paths.push(existing);
+    if let Some(existing) = inherited_or_configured_env(ctx, loader_env) {
+        paths.extend(std::env::split_paths(OsStr::new(&existing)));
     }
-    if !ld_paths.is_empty() {
-        cmd.env("LD_LIBRARY_PATH", ld_paths.join(":"));
+    if !paths.is_empty()
+        && let Some(value) = platform::join_env_paths(paths)
+    {
+        cmd.env(loader_env, value);
+    }
+}
+
+/// Returns the rustc sysroot directory containing shared libraries for `target`.
+fn rustc_sysroot_loader_dir(sysroot: &str, target: &str) -> PathBuf {
+    if platform::is_windows_target(target) {
+        PathBuf::from(sysroot).join("bin")
+    } else {
+        PathBuf::from(sysroot).join("lib")
     }
 }

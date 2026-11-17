@@ -104,3 +104,98 @@ pygments_style = 'default'
 html_show_sourcelink = False
 html_title = "cuda-oxide"
 html_baseurl = "https://nvidia.github.io/cuda-rust/cuda-oxide/"
+
+
+def setup(app):
+    """Register custom Pygments lexers for CLI commands, Tile C++, and Tile IR."""
+    from pygments.lexer import RegexLexer, inherit
+    from pygments.lexers.c_cpp import CppLexer
+    from pygments.lexers.shell import BashLexer
+    from pygments.token import (
+        Comment,
+        Keyword,
+        Literal,
+        Name,
+        Number,
+        Operator,
+        Punctuation,
+        String,
+        Text,
+        Whitespace,
+    )
+
+    class OxideBashLexer(BashLexer):
+        """Bash lexer that highlights CLI tools, cargo-oxide subcommands, flags, and GPU targets."""
+
+        name = "OxideBash"
+        aliases = ["bash", "sh"]
+
+        tokens = {
+            "basic": [
+                (
+                    r"\b(cargo|nvcc|tileiras|just|rustup|rustc|git|python3?)\b",
+                    Name.Builtin,
+                ),
+                (
+                    r"\b(oxide|tilelib|build|run|test|check|new|doctor|clean|install)\b",
+                    Keyword,
+                ),
+                (r"(--[A-Za-z0-9_-]+|-[A-Za-z0-9]+)\b", Name.Attribute),
+                (r"\b(sm_[0-9]+[a-z]?|compute_[0-9]+[a-z]?)\b", Literal.String.Symbol),
+                inherit,
+            ],
+        }
+
+    class OxideCppLexer(CppLexer):
+        """C++ lexer that accepts CUDA Tile C++ attributes and foreign-call qualifiers."""
+
+        name = "OxideCpp"
+        aliases = ["cpp", "c++", "cuda"]
+
+        tokens = {
+            "statements": [
+                (r"\[\[[^\]]*\]\]", Name.Attribute),
+                (
+                    r"\b(__tile_global__|__tile__|__experimental_foreign_decl__|__experimental_foreign_name__)\b",
+                    Keyword.Reserved,
+                ),
+                inherit,
+            ],
+        }
+
+    class MlirLexer(RegexLexer):
+        """Lexer for MLIR and CUDA Tile IR modules."""
+
+        name = "MLIR"
+        aliases = ["mlir", "tileir"]
+
+        tokens = {
+            "root": [
+                (r"\s+", Whitespace),
+                (r"//[^\n]*", Comment.Single),
+                (r'"[^"]*"', String.Double),
+                (
+                    r"\b(module|func|extern|implements|synchronization|mem_layout|fragmap|local|in|out|inout|warp|none)\b",
+                    Keyword,
+                ),
+                (r"\b(cuda_tile\.[A-Za-z0-9_$]+)\b", Keyword.Namespace),
+                (r"@[A-Za-z_][A-Za-z0-9_$.]*", Name.Function),
+                (r"%[A-Za-z0-9_$.]+", Name.Variable),
+                (r"![A-Za-z0-9_$.]+", Keyword.Type),
+                (r"#[A-Za-z0-9_$.]+", Name.Attribute),
+                (r"\b([0-9]+x)?(f16|bf16|f32|f64|i1|i8|i16|i32|i64|index)\b", Keyword.Type),
+                (r"\b[0-9]+\b", Number.Integer),
+                (r"->|=", Operator),
+                (r"[{}()\[\]<>:,]", Punctuation),
+                (r"[^\s{}()\[\]<>:,]+", Text),
+            ],
+        }
+
+    app.add_lexer("bash", OxideBashLexer)
+    app.add_lexer("sh", OxideBashLexer)
+    app.add_lexer("cpp", OxideCppLexer)
+    app.add_lexer("c++", OxideCppLexer)
+    app.add_lexer("cuda", OxideCppLexer)
+    app.add_lexer("mlir", MlirLexer)
+    app.add_lexer("tileir", MlirLexer)
+

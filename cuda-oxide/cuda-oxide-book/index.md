@@ -125,6 +125,7 @@ Encode layouts, swizzles, TMA pipelines, and tensor-core MMA in Rust's type syst
 :caption: Getting Started
 
 getting-started/installation
+getting-started/windows
 getting-started/hello-gpu
 ```
 
@@ -196,6 +197,7 @@ advanced/warp-level-programming
 advanced/tensor-memory-accelerator
 advanced/matrix-multiply-accelerators
 advanced/cluster-programming
+advanced/tile-libraries
 ```
 
 ```{toctree}

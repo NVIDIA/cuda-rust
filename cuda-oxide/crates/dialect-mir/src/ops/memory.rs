@@ -1040,8 +1040,8 @@ impl Verify for MirPtrOffsetOp {
 /// | `mir_alignment` | IntegerAttr | Optional alignment (natural if not set) |
 /// ```
 ///
-/// `source_name` is diagnostic only. Lowering mints an anonymous
-/// `__shared_mem_N` symbol for every shared allocation, which leaves a
+/// `source_name` is diagnostic only. Lowering names every shared allocation
+/// `__shared_mem_<hash>` after a hash of its `alloc_key`, which leaves a
 /// consumer inspecting the generated PTX unable to tell which Rust
 /// `SharedArray` or `Barrier` static accounts for which block of shared
 /// memory. Carrying the Rust path alongside the deduplication key lets

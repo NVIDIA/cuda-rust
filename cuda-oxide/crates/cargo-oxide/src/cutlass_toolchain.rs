@@ -408,8 +408,10 @@ fn extract_archive(archive: &Path, destination: &Path) -> Result<(), String> {
         .args([
             "--no-same-owner",
             "--no-same-permissions",
-            "--delay-directory-restore",
         ])
+        // Windows ships BSD tar, which restores directories after extraction
+        // without GNU tar's explicit directory-restore option.
+        .args((!cfg!(windows)).then_some("--delay-directory-restore"))
         .output()
         .map_err(|error| {
             format!(

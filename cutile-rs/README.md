@@ -124,7 +124,6 @@ JIT error before assembly.
 | Saturating float-to-int, `ptr_attr<none>`, load/store view `inbounds` | Tile IR 13.4 |
 | Unicast/multicast pointers and multicast view operations | Tile IR 13.5 and `sm_100` / `sm_103` / `sm_107`; NVLink SHARP-capable fabric |
 | Atomic view `inbounds` | Tile IR 13.5 |
-| TMA data-validity checks | Tile IR 13.5 and `sm_107` only |
 | Condition likelihood hints | Tile IR 13.5 |
 | Minimum CTAs per SM | Tile IR 13.5 |
 | `f8e5m3fnu` | Tile IR 13.4 and `sm_107+` |

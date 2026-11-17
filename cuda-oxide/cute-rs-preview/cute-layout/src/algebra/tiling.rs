@@ -200,8 +200,13 @@ fn zipped_product(a: &Layout, b: &Layout, block_first: bool) -> Result<Layout> {
     let lp = logical_product(&ap, &bp)?;
     let parts = lp.modes();
     let (block, reps) = (&parts[0], &parts[1]);
-    let block_modes = block.modes();
-    let rep_modes = reps.modes();
+    // With one axis, each part is that axis's whole mode. Splitting it would
+    // treat a multi-mode repetition such as `(2,2):(1,6)` as two axes.
+    let (block_modes, rep_modes) = if n == 1 {
+        (vec![block.clone()], vec![reps.clone()])
+    } else {
+        (block.modes(), reps.modes())
+    };
     if block_modes.len() != n || rep_modes.len() != n {
         return Err(AlgebraError("product: unexpected mode structure".into()));
     }

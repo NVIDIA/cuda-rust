@@ -250,6 +250,7 @@ for test_target in \
     stream_priority \
     stream_query \
     nvlink_multicast \
+    memcpy_batch \
     shared_allocation \
     vmm_p2p
 do

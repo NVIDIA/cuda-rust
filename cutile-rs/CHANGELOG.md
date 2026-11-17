@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `cuda_core::memory::memcpy_batch_async` enqueues a batch of copies between
+  device and host memory with one `cuMemcpyBatchAsync` call, with a
+  `MemcpySrcAccessOrder` for the batch.
 - Add opt-in B200 profiles to the fused QKV and NVFP4 MoE examples. Add public
   CTK 13.5 setup instructions, explicit large MoE fixture selection, focused
   correctness runs and raw timing samples; retain the original default profiles.

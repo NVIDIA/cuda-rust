@@ -1,17 +1,27 @@
-# Later matching patterns take precedence.
-# Names from the CUDA Rust unification proposal: Nihal is SIMT DRI,
-# Melih is Tile DRI, shared host crates are dual-reviewed, everything
-# else falls to the maintainer set.
+# Later matching patterns take precedence, and a matching rule replaces the
+# owners of every earlier rule (owners are not added together).
+# Owners follow who changes and who approves each area. Nihal is SIMT DRI,
+# Melih is Tile DRI, shared host crates are dual-reviewed.
 
-# Remaining git-root files (Cargo.toml, CI, docs, etc.).
-* @nihalpasham @binarybana @kkraus14 @elibol @rparolin @cryos @roivanov
+# Root files, docs and anything not listed below.
+* @nihalpasham @elibol @roivanov
 
-# Shared host crates: Tile DRI plus Keith / Rob / Nihal.
-/cuda-bindings/ @elibol @kkraus14 @rparolin @nihalpasham
-/cuda-core/ @elibol @kkraus14 @rparolin @nihalpasham
-/cuda-core-derive/ @elibol @kkraus14 @rparolin @nihalpasham
-/cuda-async/ @elibol @kkraus14 @rparolin @nihalpasham
+# Shared host crates: the Tile DRI authors most changes, the others review.
+/cuda-bindings/ @elibol @nihalpasham
+/cuda-core/ @elibol @nihalpasham
+/cuda-core-derive/ @elibol @nihalpasham
+/cuda-async/ @elibol @nihalpasham
+/cuda-repr/ @elibol @nihalpasham
 
 # Model trees.
 /cutile-rs/ @elibol
 /cuda-oxide/ @nihalpasham
+
+# CI: the people who author and approve workflow changes.
+/.github/ @nihalpasham @elibol @roivanov @cryos
+/cutile-rs/.github/ @nihalpasham @elibol @roivanov @cryos
+
+# Paths that two owners change.
+/cutile-rs/cutile-ir/ @elibol @nvlcambier
+/cuda-oxide/crates/cuda-host/ @nihalpasham @elibol
+/cuda-oxide/cute-rs-preview/ @nihalpasham @elibol

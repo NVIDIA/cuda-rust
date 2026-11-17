@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Add experimental FP16 GEMM, causal attention and routed MoE variants with
+  shared host examples, correctness coverage and optimization guidance.
+
 - Add opt-in B200 profiles to the fused QKV and NVFP4 MoE examples. Add public
   CTK 13.5 setup instructions, explicit large MoE fixture selection, focused
   correctness runs and raw timing samples; retain the original default profiles.
@@ -61,6 +64,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   bytecode-version negotiation instructions (#1746).
 
 ### Fixed
+
+- Fix scalar padding broadcasts for multidimensional masked pointer loads.
 
 - Keep masked QKV tail-row slot pointers in bounds, retaining the original
   M=67 fixture and numerical checks under compiler-instrumented memcheck.

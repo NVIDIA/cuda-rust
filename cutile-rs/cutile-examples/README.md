@@ -153,3 +153,10 @@ On aarch64, the CPU-reference dependency may also need
 
 An example that only uses baseline features must keep running on 13.2/13.3.
 Do not raise its requirements to hide a compatibility regression.
+
+## Reusable GEMM, attention and FP16 MoE variants
+
+The [cutile-kernels example](../cutile-kernels/README.md#gemm-causal-attention-and-fp16-moe-variants)
+provides correctness-checked host launches for GEMM memory variants, causal
+attention specializations and routed FP16 MoE. Their implementations live in
+`cutile-kernels`; no duplicate device kernels are maintained here.

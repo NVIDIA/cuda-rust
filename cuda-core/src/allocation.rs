@@ -116,7 +116,24 @@ impl Drop for Allocation {
                 unsafe { crate::memory::free_async(ptr, stream.cu_stream()) }
             } else {
                 // SAFETY: ownership of this synchronous allocation is unique.
-                unsafe { crate::memory::free_sync(ptr) }
+                match unsafe {
+                    crate::cudarc_shim::device::get_attribute(
+                        context.cu_device(),
+                        cuda_bindings::CUdevice_attribute_enum_CU_DEVICE_ATTRIBUTE_MEMORY_POOLS_SUPPORTED,
+                    )
+                } {
+                    Ok(1) => match context.new_stream() {
+                        Ok(stream) => {
+                            // SAFETY: all leases drained; this stream shares the retained context.
+                            unsafe { crate::memory::free_async(ptr, stream.cu_stream()) }
+                                .and_then(|()| stream.synchronize())
+                                .inspect_err(|_| std::mem::forget(stream)) // Preserve unknown completion.
+                        }
+                        // No free was submitted when stream creation failed.
+                        Err(_) => unsafe { crate::memory::free_sync(ptr) },
+                    },
+                    _ => unsafe { crate::memory::free_sync(ptr) }, // Legacy fallback.
+                }
             };
             if let Err(error) = result {
                 context.record_err(Err::<(), _>(error));

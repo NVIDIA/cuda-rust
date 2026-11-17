@@ -301,7 +301,7 @@ impl<T> DeviceBuffer<T> {
     /// - `ptr` must belong to the same CUDA context as `ctx`.
     /// - The caller transfers ownership -- `ptr` will be freed on drop.
     /// - `ptr` is assumed to be a synchronous (`cuMemAlloc`) allocation and is
-    ///   freed with the synchronous `cuMemFree` on drop. Do not pass a
+    ///   reclaimed after its completion leases drain. Do not pass a
     ///   stream-ordered (`cuMemAllocAsync`) pointer here.
     ///
     /// # Panics

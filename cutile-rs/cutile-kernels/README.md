@@ -45,6 +45,43 @@ scheduling parameters. With `M_EFF = BM * GROUP` and
 `[q_len, num_head_groups * GROUP, D]`. See the entry-point safety contracts for
 alignment, grid, and dimension requirements.
 
+## GEMM, causal attention and FP16 MoE variants
+
+| Module | Choices and output |
+| --- | --- |
+| `experimental::gemm_variants` | FP16 inputs, FP32 output; TMA/non-TMA access, transposed MMA, masked gathers for contiguous matrices with unaligned row strides |
+| `experimental::attention_f16` | FP16 causal attention with FP32 output; single-tile, narrow-tail and streaming paths |
+| `experimental::moe_f16` | Routed FP16 ReLU-squared MoE; direct gathers or packed input, FP32 weighted atomic combine |
+
+These are experimental building blocks, not an automatic dispatch policy. Tile
+sizes, layout constraints and scratch requirements are documented beside the
+entries. Raw-pointer and gather entry points have explicit unsafe contracts.
+The FP16 MoE path is separate from the block-scaled NVFP4 pipeline below.
+
+From `cutile-rs/`, run the [host example](examples/kernel_variants.rs):
+
+```sh
+cargo run --release -p cutile-kernels --example kernel_variants -- all
+# Or select gemm, attention or moe instead of all.
+```
+
+The example compares synthetic inputs against CPU references and exercises tail
+tiles, empty experts, skewed routing and packed/unpacked execution. It does not
+report benchmark rankings. Its host code is shared with the GPU regression
+suite, while kernel implementations stay in this crate's `src/experimental/`.
+Use stock CUDA 13.5 tooling for evaluation; available schedules depend on the
+GPU. See the book's [performance guide](../cutile-book/guide/performance.md) for
+choosing and measuring configurations.
+
+```sh
+cargo test -p cutile-kernels --test variants_gpu -- --ignored --test-threads=1
+CUTILE_JIT_SANITIZE=memcheck compute-sanitizer --tool memcheck --error-exitcode 1 \
+  target/release/examples/kernel_variants all
+```
+
+The sanitizer command requires the example binary built above and matching
+CUDA Toolkit tools. Sanitized execution is for correctness, not timing.
+
 ## NVFP4 MoE
 
 `experimental::nvfp4_moe` exposes six kernels by Emmet Zhang et al.:
@@ -87,7 +124,7 @@ The adapted TileGym traversal retains its MIT license in the kernel source.
 
 ## Validation
 
-From `cutile-rs/`, `cargo test -p cutile-kernels --test smoke` lowers all 48
+From `cutile-rs/`, `cargo test -p cutile-kernels --test smoke` lowers the kernel
 entry points to Tile IR and serializes bytecode. It does not launch GPU kernels.
 NVFP4 compilation is checked for both SM100 and SM120 with explicit Tile IR
 13.3 and 13.4 bytecode versions, independent of the selected assembler.

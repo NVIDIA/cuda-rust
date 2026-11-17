@@ -10,10 +10,13 @@
 //! root kernel modules.
 
 pub mod attention;
+pub mod attention_f16;
 pub mod fused_transformer;
 pub mod gemm;
+pub mod gemm_variants;
 pub mod kvbm;
 pub mod moe;
+pub mod moe_f16;
 pub mod norms;
 pub mod nvfp4_moe;
 pub mod qkv;

@@ -779,3 +779,99 @@ fn smoke_compile_nvfp4_moe() {
         }
     }
 }
+
+#[test]
+fn smoke_compile_gemm_memory_variants() {
+    use cutile_kernels::experimental::gemm_variants::kernels;
+    let mut cases = Vec::new();
+    for mode in ["0", "1", "2"] {
+        cases.push(SmokeCase {
+            name: "gemm",
+            module_ast: kernels::__module_ast_self,
+            module_name: "kernels",
+            function_name: "gemm",
+            generics: g(&["32", "32", "32", "1", mode]),
+            strides: vec![("a", vec![96, 1]), ("b", vec![80, 1]), ("c", vec![80, 1])],
+            grid: Some((2, 3, 1)),
+        });
+    }
+    for (entry, generics) in [
+        ("gemm_transposed", g(&["32", "32", "32", "1"])),
+        ("gemm_gather", g(&["32", "32", "32", "1", "1024", "1024"])),
+    ] {
+        cases.push(SmokeCase {
+            name: entry,
+            module_ast: kernels::__module_ast_self,
+            module_name: "kernels",
+            function_name: entry,
+            generics,
+            strides: vec![("a", vec![71, 1]), ("b", vec![53, 1]), ("c", vec![53, 1])],
+            grid: Some((2, 2, 1)),
+        });
+    }
+    compile_cases(cases);
+}
+
+#[test]
+fn smoke_compile_causal_attention_variants() {
+    use cutile_kernels::experimental::attention_f16::kernels;
+    let mut cases = Vec::new();
+    for (entry, generics, blocks) in [
+        ("single", g(&["16", "32", "32", "1", "19"]), 2),
+        ("tail", g(&["16", "64", "32", "16", "73"]), 5),
+        ("causal", g(&["64", "128", "32", "279"]), 5),
+    ] {
+        cases.push(SmokeCase {
+            name: entry,
+            module_ast: kernels::__module_ast_self,
+            module_name: "kernels",
+            function_name: entry,
+            generics,
+            strides: vec![
+                ("o", vec![64, 32, 1]),
+                ("q", vec![64, 32, 1]),
+                ("k", vec![64, 32, 1]),
+                ("v", vec![64, 32, 1]),
+            ],
+            grid: Some((blocks, 2, 1)),
+        });
+    }
+    compile_cases(cases);
+}
+
+#[test]
+fn smoke_compile_routed_fp16_moe() {
+    use cutile_kernels::experimental::moe_f16::kernels;
+    let mut entries = vec![
+        ("prepare_small", g(&["10", "16", "64", "1280"])),
+        ("prepare_large", g(&["138", "256", "17664"])),
+        ("schedule", g(&["4", "4", "64"])),
+        ("pack_input", g(&["256", "2", "64", "138", "7", "16384"])),
+    ];
+    for packed in ["false", "true"] {
+        for entry in ["fc1", "fc2"] {
+            entries.push((
+                entry,
+                g(&[
+                    "256", "256", "4", "2", "64", "64", "64", "138", "7", packed, "4096", "4096",
+                ]),
+            ));
+        }
+    }
+    compile_cases_for_target(
+        entries
+            .into_iter()
+            .map(|(entry, generics)| SmokeCase {
+                name: entry,
+                module_ast: kernels::__module_ast_self,
+                module_name: "kernels",
+                function_name: entry,
+                generics,
+                strides: vec![],
+                grid: Some((4, 1, 1)),
+            })
+            .collect(),
+        TARGET,
+        Some(BytecodeVersion::V13_5),
+    );
+}

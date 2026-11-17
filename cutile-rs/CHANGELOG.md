@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Locality domains (the dies of a multi-die GPU, CUDA 13.4+):
+  `vmm::MemLocation`, `PhysicalAllocation::new_at` and
+  `vmm::allocation_granularity_at` allocate physical memory in one domain;
+  `Context::locality_domain_count` and `vmm::locality_domain_of` report the
+  domains of a device and of an address.
 - Add opt-in B200 profiles to the fused QKV and NVFP4 MoE examples. Add public
   CTK 13.5 setup instructions, explicit large MoE fixture selection, focused
   correctness runs and raw timing samples; retain the original default profiles.

@@ -27,6 +27,57 @@ pub fn set_mem_location_id(loc: &mut CUmemLocation, id: ::core::ffi::c_int) {
     }
 }
 
+/// `CU_DEVICE_ATTRIBUTE_LOCALITY_DOMAIN_COUNT`, or `None` when the CUDA headers
+/// these bindings were generated from predate locality domains (before CUDA
+/// 13.4).
+#[cfg(cuda_has_locality_domain_attributes)]
+pub const DEVICE_ATTRIBUTE_LOCALITY_DOMAIN_COUNT: Option<CUdevice_attribute> =
+    Some(CUdevice_attribute_enum_CU_DEVICE_ATTRIBUTE_LOCALITY_DOMAIN_COUNT);
+/// `CU_DEVICE_ATTRIBUTE_LOCALITY_DOMAIN_COUNT`, or `None` when the CUDA headers
+/// these bindings were generated from predate locality domains (before CUDA
+/// 13.4).
+#[cfg(not(cuda_has_locality_domain_attributes))]
+pub const DEVICE_ATTRIBUTE_LOCALITY_DOMAIN_COUNT: Option<CUdevice_attribute> = None;
+
+/// `CU_POINTER_ATTRIBUTE_LOCALITY_DOMAIN_ORDINAL`, or `None` when the CUDA
+/// headers these bindings were generated from predate locality domains.
+#[cfg(cuda_has_locality_domain_attributes)]
+pub const POINTER_ATTRIBUTE_LOCALITY_DOMAIN_ORDINAL: Option<CUpointer_attribute> =
+    Some(CUpointer_attribute_enum_CU_POINTER_ATTRIBUTE_LOCALITY_DOMAIN_ORDINAL);
+/// `CU_POINTER_ATTRIBUTE_LOCALITY_DOMAIN_ORDINAL`, or `None` when the CUDA
+/// headers these bindings were generated from predate locality domains.
+#[cfg(not(cuda_has_locality_domain_attributes))]
+pub const POINTER_ATTRIBUTE_LOCALITY_DOMAIN_ORDINAL: Option<CUpointer_attribute> = None;
+
+/// Points `loc` at locality domain `domain` of device `device`
+/// (`CU_MEM_LOCATION_TYPE_DEVICE_LOCALITY_DOMAIN`: the memory of one die of a
+/// multi-die GPU; `CU_DEVICE_ATTRIBUTE_LOCALITY_DOMAIN_COUNT` domains per
+/// device). Sets both the location type and the id.
+///
+/// Returns `false`, leaving `loc` unchanged, when the CUDA headers these
+/// bindings were generated from predate locality domains (before CUDA 13.4).
+#[inline]
+pub fn set_mem_location_locality_domain(
+    loc: &mut CUmemLocation,
+    device: ::core::ffi::c_uchar,
+    domain: ::core::ffi::c_uchar,
+) -> bool {
+    #[cfg(cu_mem_location_locality_domain)]
+    {
+        loc.type_ = CUmemLocationType_enum_CU_MEM_LOCATION_TYPE_DEVICE_LOCALITY_DOMAIN;
+        // Zero the whole 4-byte id union first: `localized` covers only its first two bytes.
+        loc.__bindgen_anon_1.id = 0;
+        loc.__bindgen_anon_1.localized.deviceId = device;
+        loc.__bindgen_anon_1.localized.localityDomainId = domain;
+        true
+    }
+    #[cfg(not(cu_mem_location_locality_domain))]
+    {
+        let _ = (loc, device, domain);
+        false
+    }
+}
+
 #[allow(dead_code)]
 mod generated_cuda {
     use super::*;

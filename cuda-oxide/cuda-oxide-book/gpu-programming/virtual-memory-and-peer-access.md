@@ -175,6 +175,14 @@ The main APIs are:
 | `Mapping::new(va, size, &physical, offset)` | Map physical memory into a VA range       |
 | `vmm::set_access(va, size, devices)`        | Grant devices access to the mapped range  |
 
+On a multi-die GPU (CUDA 13.4+), `PhysicalAllocation::new` interleaves the dies'
+memory. To place an allocation in the memory of one die (a *locality domain*),
+use a `vmm::MemLocation::LocalityDomain { device, domain }` with
+`vmm::allocation_granularity_at(location, granularity)` and
+`PhysicalAllocation::new_at(location, size)`.
+`Context::locality_domain_count()` gives the number of domains (1 on single-die
+GPUs) and `vmm::locality_domain_of(address)` the domain backing a mapped address.
+
 ## Allocation granularity
 
 CUDA VMM operations require allocation sizes and mapping sizes to be multiples

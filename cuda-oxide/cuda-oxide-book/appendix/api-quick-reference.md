@@ -585,6 +585,10 @@ and custom launch code.
 | `VirtualReservation::new(size, alignment)`  | Reserve a virtual address range             |
 | `Mapping::new(va, size, &physical, offset)` | Map physical memory into a VA range         |
 | `vmm::set_access(va, size, devices)`        | Grant read/write access to selected devices |
+| `vmm::allocation_granularity_at(location, granularity)` | Granularity at a `MemLocation` (minimum or recommended) |
+| `PhysicalAllocation::new_at(location, size)` | Allocate physical memory at a `MemLocation`, e.g. one locality domain (die) |
+| `Context::locality_domain_count()`          | Number of locality domains (dies) of the device |
+| `vmm::locality_domain_of(address)`          | Locality domain backing an address, if localized |
 
 Mappings must be dropped before their virtual reservations and physical
 allocations.

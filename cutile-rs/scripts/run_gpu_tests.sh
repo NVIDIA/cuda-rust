@@ -246,6 +246,7 @@ for test_target in \
     context_sync_policy \
     device_buffer \
     device_buffer_leaks \
+    event_record_flags \
     pinned_host_buffer \
     stream_priority \
     stream_query \

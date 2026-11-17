@@ -467,6 +467,16 @@ pub(crate) mod event {
         Ok(())
     }
 
+    /// # Safety
+    /// Both `event` and `stream` must be valid handles.
+    pub unsafe fn record_with_flags(
+        event: cuda_bindings::CUevent,
+        stream: cuda_bindings::CUstream,
+        flags: cuda_bindings::CUevent_record_flags,
+    ) -> Result<(), DriverError> {
+        unsafe { cuda_bindings::cuEventRecordWithFlags(event, stream, flags).result() }
+    }
+
     /// Returns elapsed time in milliseconds between two recorded events.
     ///
     /// # Safety

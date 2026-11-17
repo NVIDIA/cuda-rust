@@ -47,23 +47,27 @@
   ├── Mir/                   1. The MIR & GPU Representation in Lean
   │   ├── Scalar.lean           `Expr width arity` (`BitVec` wrapping word math)
   │   ├── Launch.lean           `Thread1D blocks blockSize` & `globalIndex`
-  │   └── Kernel.lean           `GuardedAccess1D` & `KernelSummary1D`
+  │   ├── Kernel.lean           `GuardedAccess1D`, `PhasedTileAccess` & `TmemAccess`
+  │   └── ControlFlow.lean      `ControlFlowCfg`, `CfgOp` & `CtaState` transitions
   │
   ├── Contracts/             2. The `#[verify(...)]` Specifications (`Prop`)
-  │   └── Access.lean           `NoOobIdx`, `DisjointWrites`, `WritesAllElems`
+  │   ├── Access.lean           `NoOobIdx`, `NoDataRace`, `NoOobTmemAccess`
+  │   └── ControlFlow.lean      `UniformBarriers`, `TmemLifecycle`, `WritesOnAllActivePaths`
   │
   └── Proofs/                3. The Reusable Proof Library (`theorem`)
-      ├── Bounds.lean           `index_lt_of_guard`, `no_oob_idx_of_guard_le`
-      └── Launch.lean           `disjoint_writes_1d`, `writes_all_elems_1d`
+      ├── Bounds.lean           `no_oob_idx_*`, `no_oob_tile_*`, `no_oob_tmem_*`
+      ├── Launch.lean           `disjoint_writes_1d`, `writes_all_elems_1d`, `no_data_race_*`
+      └── ControlFlow.lean      `uniform_barriers_sound`, `tmem_lifecycle_sound` (`by decide`)
 ```
 
-| Rust `#[verify(...)]` Clause | Lean Contract (`CudaOxide.Contracts`)     | Reusable Proof (`CudaOxide.Proofs`)            |
-|:-----------------------------|:------------------------------------------|:-----------------------------------------------|
-| `no_oob_idx(buf)`            | `NoOobIdx` / `NoOobTileAccess`            | `Bounds.no_oob_idx_*` / `Bounds.no_oob_tile_*` |
-| `no_data_race(buf)`          | `NoDataRace`                              | `Launch.no_data_race_*`                        |
-| `disjoint_writes(buf)`       | `DisjointWrites` / `DisjointGroupWrites`  | `Launch.disjoint_writes_1d`                    |
-| `writes_all_elems(buf)`      | `WritesAllElems`                          | `Launch.writes_all_elems_1d`                   |
-| `uniform_barriers`           | `UniformBarriers`                         | `Launch.uniform_barriers_of_checked`           |
+| Rust `#[verify(...)]` Clause | Lean Contract (`CudaOxide.Contracts`)             | Reusable Proof (`CudaOxide.Proofs`)                      |
+|:-----------------------------|:--------------------------------------------------|:---------------------------------------------------------|
+| `no_oob_idx(buf)`            | `NoOobIdx` / `NoOobTileAccess`                    | `Bounds.no_oob_idx_*` / `Bounds.no_oob_tile_*`           |
+| `no_data_race(buf)`          | `NoDataRace`                                      | `Launch.no_data_race_*`                                  |
+| `disjoint_writes(buf)`       | `DisjointWrites` / `DisjointGroupWrites`          | `Launch.disjoint_writes_1d`                              |
+| `writes_all_elems(buf)`      | `WritesAllElems` + `ControlFlow.WritesOnAllActivePaths` | `Launch.writes_all_elems_1d` + `ControlFlow.writes_on_active_paths_sound` |
+| `uniform_barriers`           | `ControlFlow.UniformBarriers`                     | `ControlFlow.uniform_barriers_sound` (`by decide`)       |
+| `tmem_lifecycle`             | `ControlFlow.TmemLifecycle` + `NoOobTmemAccess`   | `ControlFlow.tmem_lifecycle_sound` + `Bounds.no_oob_tmem_*` |
 
 ## Commands
 

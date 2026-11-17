@@ -6,9 +6,12 @@ SPDX-License-Identifier: Apache-2.0
 import CudaOxide.Mir.Launch
 import CudaOxide.Mir.Scalar
 import CudaOxide.Mir.Kernel
+import CudaOxide.Mir.ControlFlow
 import CudaOxide.Contracts.Access
+import CudaOxide.Contracts.ControlFlow
 import CudaOxide.Proofs.Bounds
 import CudaOxide.Proofs.Launch
+import CudaOxide.Proofs.ControlFlow
 
 /-!
 # `CudaOxide` Lean Verification Library

@@ -95,6 +95,8 @@ pub(crate) fn verification_marker_leaf(path: &str) -> Option<&'static str> {
 struct DetectedVerificationMetadata {
     /// Domain declared by `#[launch_contract(domain = D)]`.
     launch_domain: Option<u32>,
+    /// Whether `u32_coordinates` was set on `#[launch_contract]`.
+    u32_coordinates: bool,
     /// Pairs `(lhs, rhs)` from `requires = (lhs.len() >= rhs.len())`.
     requires_len_ge: Vec<(usize, usize)>,
     /// Parameter indices requested in `#[verify(no_oob_idx(...))]`.
@@ -166,6 +168,9 @@ fn detect_verification_metadata(
         {
             if let Some(domain) = args.0.first().and_then(read_const_usize_arg) {
                 meta.launch_domain = u32::try_from(domain).ok();
+            }
+            if args.0.get(1).and_then(read_const_usize_arg) == Some(1) {
+                meta.u32_coordinates = true;
             }
         } else if fn_name == "__launch_contract_requires_len_ge_config"
             || fn_name.ends_with("::__launch_contract_requires_len_ge_config")
@@ -241,6 +246,14 @@ pub(crate) fn attach_verification_attributes(
             key,
             IntegerAttr::new(u32_ty, APInt::from_u32(domain, width)),
         );
+    }
+    if verification_meta.u32_coordinates {
+        let key: Identifier = "launch_contract_u32_coords".try_into().unwrap();
+        mir_func_op
+            .get_operation()
+            .deref_mut(ctx)
+            .attributes
+            .set(key, StringAttr::new("true".to_string()));
     }
     if !verification_meta.requires_len_ge.is_empty() {
         let formatted = verification_meta

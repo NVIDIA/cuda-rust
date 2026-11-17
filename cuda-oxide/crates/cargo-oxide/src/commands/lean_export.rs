@@ -31,6 +31,7 @@ fn resolve_verified_example_functions(
         "verified_warp_reduce" => "safe_warp_reduce",
         "verified_subwarp_stage" => "safe_subwarp_stage",
         "verified_async_copy" => "safe_async_copy",
+        "verified_tcgen05_matmul" => "safe_tcgen05_matmul",
         other => other,
     };
     let roots = example_roots(ctx);
@@ -70,6 +71,10 @@ fn resolve_verified_example_functions(
         "safe_async_copy" => (
             "crates/lean-exporter/fixtures/async_copy_stage.mir",
             &["async_copy_stage"],
+        ),
+        "safe_tcgen05_matmul" => (
+            "crates/lean-exporter/fixtures/tcgen05_matmul.mir",
+            &["tcgen05_matmul_verified"],
         ),
         _ => {
             return Err(format!(

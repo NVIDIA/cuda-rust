@@ -19,8 +19,8 @@ by a kernel author in Rust's `#[verify(...)]` attribute:
   `disjoint_writes(buf)`                 `DisjointWrites blockSize offset`
   `writes_all_elems(buf)`                `WritesAllElems blocks blockSize outLen`
   `no_data_race(buf)`                    `NoDataRace blockDimX blockDimY a₁ a₂`
-  `uniform_barriers`                     `UniformBarriers barriersUniform numBarriers`
-  `tmem_lifecycle`                       `TmemLifecycle allocCols deallocCols balanced`
+  `uniform_barriers`                     `ControlFlow.UniformBarriers cfg`
+  `tmem_lifecycle`                       `ControlFlow.TmemLifecycle cfg` + `NoOobTmemAccess`
 ```
 
 Each proposition states a mathematical obligation over the kernel's exported
@@ -47,6 +47,17 @@ def DisjointWrites (blockSize offset : Nat) : Prop :=
     globalIndex blockSize block₁ lane₁ + offset =         -- AND both threads write to the exact
       globalIndex blockSize block₂ lane₂ + offset →       --     same buffer index (`idx₁ + offset = idx₂ + offset`),
     block₁ = block₂ ∧ lane₁ = lane₂                       -- THEN they are the exact same thread (`∧` = AND).
+
+/-- **`disjoint_writes(buf)` (cross-access pair on `&mut [T]`)**: Across a write
+    at `offset₁` and any read or write at `offset₂` on the same writable slice,
+    distinct 1D threads never touch the same element index. -/
+def DisjointSliceAccessPair (blockSize offset₁ offset₂ : Nat) : Prop :=
+  ∀ block₁ block₂ lane₁ lane₂ : Nat,                      -- Pick ANY two threads (block₁, lane₁) and (block₂, lane₂):
+    lane₁ < blockSize →                                   -- IF thread 1's lane is valid,
+    lane₂ < blockSize →                                   -- AND thread 2's lane is valid,
+    globalIndex blockSize block₁ lane₁ + offset₁ =        -- AND thread 1's access (`idx₁ + offset₁`) hits the
+      globalIndex blockSize block₂ lane₂ + offset₂ →      --     same element as thread 2's (`idx₂ + offset₂`),
+    block₁ = block₂ ∧ lane₁ = lane₂                       -- THEN they must be the exact same thread (`∧` = AND).
 
 /-- **`writes_all_elems(buf)`**: Every output element index `i < outLen` in `buf`
     is written by some launched thread `(block, lane)` in the 1D grid. -/
@@ -117,12 +128,6 @@ def NoOobScaledGuard (blockSize groupSize guardLen bufferLen : Nat) : Prop :=
     globalIndex blockSize block lane / groupSize < guardLen → -- IF its group slot is `< guardLen`,
     globalIndex blockSize block lane < bufferLen          -- THEN its element index `idx` is `< bufferLen`.
 
-/-- **`uniform_barriers`**: All `sync_threads()` barriers in the kernel execute
-    in thread-uniform control flow. -/
-def UniformBarriers (barriersUniform : Bool) (numBarriers : Nat) : Prop :=
-  barriersUniform = true ∧                                -- Every barrier is outside thread-divergent branches, AND
-  0 < numBarriers                                         -- at least one barrier synchronizes the phases.
-
 /-- **`no_oob_idx(a)` (2D row strip)**: Every element `start + col + offset` with
     `col < cols` is `< bufferLen` when the strip's last element
     `start + (cols - 1) < bufferLen` (and `offset = 0`). -/
@@ -151,15 +156,6 @@ def TmemValidCols (nCols : Nat) : Prop :=
   nCols = 128 ∨                                           -- 128 columns, OR
   nCols = 256 ∨                                           -- 256 columns, OR
   nCols = 512                                             -- 512 columns (full per-SM TMEM capacity).
-
-/-- **`tmem_lifecycle`**: Blackwell Tensor Memory (`TMEM`) is allocated with a
-    valid power-of-two column count in `[32, 512]`, token-ordered across async
-    `tcgen05` operations, and deallocated with the exact same column count on
-    every kernel exit path. -/
-def TmemLifecycle (allocCols deallocCols : Nat) (balanced : Bool) : Prop :=
-  TmemValidCols allocCols ∧                               -- Allocated column count is a power of two in [32, 512], AND
-  allocCols = deallocCols ∧                               -- `tcgen05.dealloc` frees the exact `allocCols`, AND
-  balanced = true                                         -- Alloc/commit/wait/dealloc CFG lifecycle holds on all exit paths.
 
 /-- **`tmem_lifecycle` / `no_oob_idx` (`TMEM` bounds & warpgroup slice)**:
     Every active thread `(tx, ty)` and loop step `i < a.loopBound` accesses

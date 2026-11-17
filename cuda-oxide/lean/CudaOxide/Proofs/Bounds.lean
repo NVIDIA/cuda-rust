@@ -3,7 +3,6 @@ SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All 
 SPDX-License-Identifier: Apache-2.0
 -/
 
-import Lean
 import CudaOxide.Contracts.Access
 import CudaOxide.Proofs.Launch
 
@@ -82,7 +81,7 @@ theorem no_oob_col_strip {bufferLen : Nat} :
 /-- Proves `no_oob_idx(WARP_SUMS)` for a group-slot access `WARP_SUMS[tx / groupSize]`:
     in-bounds when `tx < blockDimX` and `(blockDimX - 1) / groupSize < bufferLen`. -/
 theorem no_oob_tile_group_slot {blockDimX blockDimY loopBound groupSize bufferLen : Nat}
-    (hpos : 0 < groupSize) (hfit : (blockDimX - 1) / groupSize < bufferLen) :
+    (_hpos : 0 < groupSize) (hfit : (blockDimX - 1) / groupSize < bufferLen) :
     NoOobTileAccess blockDimX blockDimY loopBound (.groupSlot groupSize) bufferLen := by
   intro tx _ty _i htx _hty _hi                            -- Unpack `tx < blockDimX`
   simp only [TileAccessPattern.address]                   -- Unfold `.groupSlot groupSize` address to `tx / groupSize`

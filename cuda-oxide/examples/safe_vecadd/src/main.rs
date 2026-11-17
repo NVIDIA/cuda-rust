@@ -34,6 +34,25 @@ mod kernels {
             *c_elem = a[idx_raw] + b[idx_raw];
         }
     }
+
+    /// Plain `&mut [f32]` vector addition kernel checked by Lean 4 at `PostMem2Reg`
+    /// without `DisjointSlice` or `ThreadIndex` wrapper types:
+    /// - `no_oob_idx(a, b, c)` + `disjoint_writes(c)` prove per-thread exclusivity on `c`
+    ///   and elide all 3 slice bounds checks (`a[idx]`, `b[idx]`, `c[idx]`).
+    #[launch_contract(
+        domain = 1,
+        block = (256, 1, 1),
+        requires = (a.len() >= c.len(), b.len() >= c.len()),
+    )]
+    #[verify(no_oob_idx(a, b, c), disjoint_writes(c), writes_all_elems(c))]
+    #[kernel]
+    pub fn vecadd_mut_slice(a: &[f32], b: &[f32], c: &mut [f32]) {
+        let idx = (thread::blockIdx_x() as usize) * (thread::blockDim_x() as usize)
+            + (thread::threadIdx_x() as usize);
+        if idx < c.len() {
+            c[idx] = a[idx] + b[idx];
+        }
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -57,26 +76,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let a_dev = DeviceBuffer::from_host(&stream, &a_host)?;
     let b_dev = DeviceBuffer::from_host(&stream, &b_host)?;
     let mut c_dev = DeviceBuffer::<f32>::zeroed(&stream, N)?;
+    let mut c_mut_dev = DeviceBuffer::<f32>::zeroed(&stream, N)?;
 
     // SAFETY: this binary embeds the single `safe_vecadd` PTX module.
     let module = unsafe { kernels::load(&ctx)? };
     let blocks = (N as u32).div_ceil(BLOCK_SIZE);
-    let launch = module.prepare_vecadd(LaunchConfig1D::new(blocks, BLOCK_SIZE, 0))?;
+    let cfg = LaunchConfig1D::new(blocks, BLOCK_SIZE, 0);
+    let launch = module.prepare_vecadd(cfg)?;
+    let launch_mut = module.prepare_vecadd_mut_slice(cfg)?;
 
-    // Safe, contract-checked launch: enforces `a.len() >= c.len()` and
-    // `b.len() >= c.len()` on the host before launching the provably safe PTX.
+    // Safe, contract-checked launches (`DisjointSlice` and plain `&mut [f32]`):
     module.vecadd(&stream, &launch, &a_dev, &b_dev, &mut c_dev)?;
+    module.vecadd_mut_slice(&stream, &launch_mut, &a_dev, &b_dev, &mut c_mut_dev)?;
 
     let c_host = c_dev.to_host_vec(&stream)?;
+    let c_mut_host = c_mut_dev.to_host_vec(&stream)?;
     for i in 0..N {
         let expected = a_host[i] + b_host[i];
         assert!(
-            (c_host[i] - expected).abs() <= 1e-5,
-            "mismatch at index {i}: expected {expected}, got {}",
-            c_host[i]
+            (c_host[i] - expected).abs() <= 1e-5 && c_host[i] == c_mut_host[i],
+            "mismatch at index {i}: expected {expected}, got {} / {}",
+            c_host[i],
+            c_mut_host[i]
         );
     }
 
-    println!("Verified launch succeeded: all {N} elements match!");
+    println!(
+        "Verified launch succeeded (both `DisjointSlice` and plain `&mut [f32]`): all {N} elements match!"
+    );
     Ok(())
 }

@@ -315,12 +315,21 @@ pub(super) fn cuda_module_launch_contract(
     };
     let args = attr.parse_args::<LaunchContractArgs>()?;
 
-    if let Some(param) = params.iter().find(|param| param.mutable_slice) {
-        return Err(syn::Error::new(
-            param.name.span(),
-            "contracted kernels cannot take `&mut [T]`; use `DisjointSlice<T, IndexSpace>` so the launch domain and per-thread write ownership are explicit",
+    let verify_attrs: Vec<_> = attrs
+        .iter()
+        .filter(|a| attr_path_ends_with(a, "verify"))
+        .collect();
+    if verify_attrs.len() > 1 {
+        return Err(syn::Error::new_spanned(
+            verify_attrs[1],
+            "a kernel may have only one #[verify(...)] attribute",
         ));
     }
+    let parsed_verify = match verify_attrs.first() {
+        Some(v_attr) => Some(v_attr.parse_args::<crate::verify::VerifyArgs>()?),
+        None => None,
+    };
+    crate::verify::validate_mutable_slice_verify_coverage(parsed_verify.as_ref(), params)?;
     if let Some(block) = args.exact_block {
         validate_dimensions_for_domain(block, args.domain, "block", attr.span())?;
     }

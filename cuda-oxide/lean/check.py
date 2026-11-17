@@ -20,6 +20,7 @@ REJECTED = (
     ("RejectedCoverage.lean", "insufficient launch coverage"),
     ("RejectedTmemColOverflow.lean", "TMEM column range overflow"),
     ("RejectedTmemWarpSlice.lean", "TMEM warpgroup lane-slice violation"),
+    ("RejectedMutSliceRace.lean", "cross-thread &mut [T] read-write race"),
 )
 
 

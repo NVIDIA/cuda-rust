@@ -82,9 +82,14 @@ fn find_lake_executable() -> Result<PathBuf, ExportError> {
     }
 }
 
-/// Run Lean 4 (`lake env lean`) on generated Lean code and audit axioms.
+/// Run Lean 4 on `lean_source` (using direct `lean` + `LEAN_PATH` when `.olean` artifacts
+/// are already built, falling back to `lake env lean`) and audit proof axioms.
 pub fn check_generated_lean(lean_source: &str, lean_package_dir: &Path) -> Result<(), ExportError> {
     let lake = find_lake_executable()?;
+    let lean_bin = lake.with_file_name("lean");
+    let olean_dir = lean_package_dir.join(".lake/build/lib/lean");
+    let use_direct_lean = lean_bin.is_file() && olean_dir.join("CudaOxide.olean").is_file();
+
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -100,17 +105,25 @@ pub fn check_generated_lean(lean_source: &str, lean_package_dir: &Path) -> Resul
         )
     })?;
 
-    let output = Command::new(&lake)
-        .current_dir(lean_package_dir)
-        .args(["env", "lean"])
-        .arg(&temp_path)
-        .output();
+    let output = if use_direct_lean {
+        Command::new(&lean_bin)
+            .current_dir(lean_package_dir)
+            .env("LEAN_PATH", &olean_dir)
+            .arg(&temp_path)
+            .output()
+    } else {
+        Command::new(&lake)
+            .current_dir(lean_package_dir)
+            .args(["env", "lean"])
+            .arg(&temp_path)
+            .output()
+    };
     let _ = fs::remove_file(&temp_path);
 
     let output = output.map_err(|e| {
         reject(
             "lean verifier",
-            format!("failed to execute `lake env lean`: {e}"),
+            format!("failed to execute Lean type-checker: {e}"),
         )
     })?;
     let combined = format!(
@@ -147,6 +160,38 @@ pub fn check_generated_lean(lean_source: &str, lean_package_dir: &Path) -> Resul
     Ok(())
 }
 
+/// Combine multiple generated kernel `.lean` modules into a single `.lean` source file
+/// with one shared `import CudaOxide` header so all kernels in a crate check in one run.
+fn combine_lean_modules(modules: &[String]) -> String {
+    if modules.len() == 1 {
+        return modules[0].clone();
+    }
+    let mut combined = String::from(
+        "import CudaOxide\n\nset_option linter.unusedSimpArgs false\nset_option maxRecDepth 4096\n\n",
+    );
+    for (idx, src) in modules.iter().enumerate() {
+        let body = src
+            .lines()
+            .filter(|l| {
+                !l.starts_with("--") && !l.starts_with("import ") && !l.starts_with("set_option ")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let namespaced = body
+            .replace(
+                "namespace CudaOxide.Generated",
+                &format!("namespace CudaOxide.Generated.Kernel{idx}"),
+            )
+            .replace(
+                "end CudaOxide.Generated",
+                &format!("end CudaOxide.Generated.Kernel{idx}"),
+            );
+        combined.push_str(&namespaced);
+        combined.push_str("\n\n");
+    }
+    combined
+}
+
 /// Verify every `mir.func` in `module` that carries `#[verify(...)]` attributes,
 /// and elide `mir.assert` bounds checks proven redundant by Lean 4.
 ///
@@ -179,22 +224,30 @@ pub fn verify_module_kernels(
     }
 
     let lean_dir = default_lean_package_dir();
+    let mut prepared = Vec::with_capacity(functions.len());
+    let mut lean_modules = Vec::with_capacity(functions.len());
     for func in functions {
         let name = MirFuncOp::wrap(ctx, func)
             .map(|f| f.get_symbol_name(ctx).to_string())
             .unwrap_or_else(|| "<kernel>".to_string());
         let translated = translate_function(ctx, func)?;
         let lean_code = render_lean_module(&translated)?;
-        check_generated_lean(&lean_code, &lean_dir)?;
+        lean_modules.push(lean_code);
+        prepared.push((name, translated));
+    }
 
-        let strip_slice: &[crate::translate::GlobalStripAccess2D] = match &translated {
+    let batched_source = combine_lean_modules(&lean_modules);
+    check_generated_lean(&batched_source, &lean_dir)?;
+
+    for (name, translated) in &prepared {
+        let strip_slice: &[crate::translate::GlobalStripAccess2D] = match translated {
             TranslatedFunction::TiledKernel2D {
                 global_strip_accesses,
                 ..
             } => global_strip_accesses,
             _ => &[],
         };
-        match &translated {
+        match translated {
             TranslatedFunction::Kernel {
                 spec,
                 proven_assert_ops,

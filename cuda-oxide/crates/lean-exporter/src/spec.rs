@@ -21,7 +21,7 @@
 
 use std::collections::BTreeSet;
 
-use dialect_mir::types::{MirDisjointSliceType, MirSliceType};
+use dialect_mir::types::{MirDisjointSliceType, MirPtrType, MirSliceType};
 use pliron::{
     attribute::AttributeDict,
     builtin::{
@@ -45,6 +45,10 @@ pub struct KernelVerificationSpec {
     pub block_size: u32,
     /// Static block Y dimension from `reqntid_y` (`1` for 1D kernels).
     pub block_y: u32,
+    /// True when `u32_coordinates` was set on `#[launch_contract]` (`grid * block <= u32::MAX`).
+    pub u32_coordinates: bool,
+    /// Indices of `&mut [T]` (`MirSliceType` with `mutable: true`) parameters.
+    pub mutable_slice_params: BTreeSet<usize>,
     /// Pairs `(lhs, rhs)` from `requires = (lhs.len() >= rhs.len())`.
     pub requires_len_ge: BTreeSet<(usize, usize)>,
     /// Parameter indices requested in `#[verify(no_oob_idx(...))]`.
@@ -267,21 +271,34 @@ pub(crate) fn parse_kernel_verification_spec(
         get_string_attr(attrs, "verify_uniform_barriers").as_deref() == Some("true");
     let tmem_lifecycle = get_string_attr(attrs, "verify_tmem_lifecycle").as_deref() == Some("true");
 
+    let u32_coordinates =
+        get_string_attr(attrs, "launch_contract_u32_coords").as_deref() == Some("true");
     let is_phased_shared =
         !no_oob_shared.is_empty() || !no_data_race.is_empty() || uniform_barriers || tmem_lifecycle;
     let mut writable_params = BTreeSet::new();
+    let mut mutable_slice_params = BTreeSet::new();
     for (idx, ty) in inputs.iter().enumerate() {
         let ty_ref = ty.deref(ctx);
         if let Some(slice) = ty_ref.downcast_ref::<MirSliceType>() {
             if slice.is_mutable() {
+                if !no_oob_idx.contains(&idx) || !disjoint_writes.contains(&idx) {
+                    return Err(reject(
+                        "kernel contract",
+                        format!(
+                            "mutable slice parameter {idx} (`&mut [T]`) requires both `no_oob_idx` and `disjoint_writes`"
+                        ),
+                    ));
+                }
                 writable_params.insert(idx);
+                mutable_slice_params.insert(idx);
             }
         } else if ty_ref.downcast_ref::<MirDisjointSliceType>().is_some() {
             writable_params.insert(idx);
-        } else if domain == 1 && !is_phased_shared {
+        } else if domain == 1 && !is_phased_shared && ty_ref.downcast_ref::<MirPtrType>().is_some()
+        {
             return Err(reject(
                 "kernel signature",
-                format!("parameter {idx} must be a slice or DisjointSlice in the v0 kernel subset"),
+                format!("parameter {idx} cannot be a raw pointer in a verified 1D slice kernel"),
             ));
         }
     }
@@ -301,6 +318,8 @@ pub(crate) fn parse_kernel_verification_spec(
             domain,
             block_size: block_x,
             block_y,
+            u32_coordinates,
+            mutable_slice_params,
             requires_len_ge,
             no_oob_idx,
             disjoint_writes,

@@ -114,6 +114,10 @@ inductive GuardExpr where
   | ne (a b : IdxExpr)
   /-- Conjunction of two dominating branch guards (`p ∧ q`). -/
   | and (p q : GuardExpr)
+  /-- Unmodeled or data-dependent branch condition (`if flag`, `if data[tid] > 0.0`).
+      Contributes no narrowing assumption (`True`) on bounds/race obligations, while
+      poisoning warp-collective and block-uniformity checks. -/
+  | unknown
   deriving Repr, DecidableEq
 
 /-- Unfold a `GuardExpr` syntax tree into a `Prop` over `(tx, ty, i)`. -/
@@ -125,6 +129,84 @@ def GuardExpr.eval (g : GuardExpr) (tx ty i : Nat) : Prop :=
   | .eq a b => a.eval tx ty i = b.eval tx ty i
   | .ne a b => a.eval tx ty i ≠ b.eval tx ty i
   | .and p q => p.eval tx ty i ∧ q.eval tx ty i
+  | .unknown => True
+
+/-- Logical negation of a `GuardExpr` across a `cond_br` false arm. -/
+def GuardExpr.negate (g : GuardExpr) : GuardExpr :=
+  match g with
+  | .tr => .tr
+  | .lt a b => .ge a b
+  | .ge a b => .lt a b
+  | .eq a b => .ne a b
+  | .ne a b => .eq a b
+  | .and _ _ => .unknown
+  | .unknown => .unknown
+
+/-- Conjoin two `GuardExpr`s, simplifying `.tr` identities. -/
+def GuardExpr.conj (p q : GuardExpr) : GuardExpr :=
+  match p, q with
+  | .tr, _ => q
+  | _, .tr => p
+  | _, _ => if p == q then p else .and p q
+
+/-- True when `g` contains any unmodeled / data-dependent `.unknown` branch guard. -/
+def GuardExpr.hasUnknown (g : GuardExpr) : Bool :=
+  match g with
+  | .unknown => true
+  | .and p q => p.hasUnknown || q.hasUnknown
+  | _ => false
+
+/-- True when `g` includes a single-leader lane check (`tx = 0` or `tx % G = 0`). -/
+def GuardExpr.hasZeroLeaderCheck (g : GuardExpr) : Bool :=
+  match g with
+  | .eq (.tx) (.const 0) | .eq (.const 0) (.tx) => true
+  | .eq (.mod .tx _) (.const 0) | .eq (.const 0) (.mod .tx _) => true
+  | .and p q => p.hasZeroLeaderCheck || q.hasZeroLeaderCheck
+  | _ => false
+
+/-- True when `g` filters lanes within a 32-lane hardware warp or depends on `.unknown`. -/
+def GuardExpr.hasSubwarpLaneFilter (g : GuardExpr) : Bool :=
+  match g with
+  | .tr => false
+  | .lt .tx (.const bound) => bound != 32
+  | .eq (.div .tx 32) (.const _) | .eq (.const _) (.div .tx 32) => false
+  | .and p q => p.hasSubwarpLaneFilter || q.hasSubwarpLaneFilter
+  | _ => true
+
+/-- Return `some warpIdx` when `g` selects exactly one full 32-lane hardware warp
+    (`(warpIdx + 1) * 32 ≤ blockDimX` in a 1D block `blockDimY = 1`) with zero
+    sub-warp lane filtering or `.unknown` branch nesting. -/
+def GuardExpr.selectsSingleFullWarp (g : GuardExpr) (blockDimX blockDimY : Nat) : Option Nat :=
+  if blockDimY != 1 || g.hasSubwarpLaneFilter then
+    none
+  else
+    match g with
+    | .tr => if blockDimX == 32 then some 0 else none
+    | .lt .tx (.const 32) => if 32 ≤ blockDimX then some 0 else none
+    | .eq (.div .tx 32) (.const w) | .eq (.const w) (.div .tx 32) =>
+        if (w + 1) * 32 ≤ blockDimX then some w else none
+    | .and p q =>
+        match p.selectsSingleFullWarp blockDimX blockDimY,
+              q.selectsSingleFullWarp blockDimX blockDimY with
+        | some w1, some w2 => if w1 == w2 then some w1 else none
+        | some w, none | none, some w => some w
+        | none, none => none
+    | _ => none
+
+/-- Evaluate a known coordinate `GuardExpr` to a concrete `Bool` on `(tx, ty, i)`,
+    returning `none` if `g` depends on `.unknown`. -/
+def GuardExpr.evalBool (g : GuardExpr) (tx ty i : Nat) : Option Bool :=
+  match g with
+  | .tr => some true
+  | .lt a b => some (decide (a.eval tx ty i < b.eval tx ty i))
+  | .ge a b => some (decide (a.eval tx ty i ≥ b.eval tx ty i))
+  | .eq a b => some (decide (a.eval tx ty i = b.eval tx ty i))
+  | .ne a b => some (decide (a.eval tx ty i ≠ b.eval tx ty i))
+  | .and p q =>
+      match p.evalBool tx ty i, q.evalBool tx ty i with
+      | some bp, some bq => some (bp && bq)
+      | _, _ => none
+  | .unknown => none
 
 /-- How threads in a block index into a shared-memory array (`SharedArray`). -/
 inductive TileAccessPattern where
@@ -200,10 +282,8 @@ structure TiledKernelSummary2D where
   blockDimX : Nat
   /-- Static Y dimension of the thread block (`reqntid_y`). -/
   blockDimY : Nat
-  /-- Number of `sync_threads()` barriers in the tile loop. -/
+  /-- Number of effective barriers (`sync_threads()` + signaled `mbarrier` waits). -/
   numBarriers : Nat
-  /-- Whether all barriers execute in thread-uniform control flow. -/
-  barriersUniform : Bool
   /-- All phased shared-memory accesses extracted from the kernel CFG. -/
   sharedAccesses : List PhasedTileAccess
   deriving Repr, DecidableEq

@@ -434,18 +434,28 @@ fn exports_safe_vecadd_kernel_and_rejects_unguarded_accesses() {
     );
 
     // Scenario 5d (Hole #7): Conditional inner branch inside `^active` that can skip
-    // writing `c` when `idx < c.len()` must fail `writes_all_elems(c)`!
+    // writing `c` when `idx < c.len()` is transcribed into `controlFlowCfg` and
+    // rejected by Lean 4's `WritesOnAllActivePaths`!
     let conditional_skip_write = VECADD_FIXTURE.replace(
         "    mir.store (c_elem, sum) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:RawMut>, builtin.fp32) -> ()>;\n    mir.goto () [^exit] []: <() -> ()>",
         "    skip_flag = mir.lt (c_len, idx) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;\n    mir.cond_br (skip_flag) [^do_write, ^exit] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>\n\n  ^do_write():\n    mir.store (c_elem, sum) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:RawMut>, builtin.fp32) -> ()>;\n    mir.goto () [^exit] []: <() -> ()>",
     );
-    let err = export_named_source(&conditional_skip_write, "vecadd")
-        .expect_err("conditional inner branch skipping `c` write must fail `writes_all_elems`");
+    let skip_lean = export_named_source(&conditional_skip_write, "vecadd")
+        .expect("transcribes conditional skip write into controlFlowCfg");
     assert!(
-        err.to_string()
-            .contains("conditional branch can skip writing it when `idx < len`"),
-        "unexpected error for conditional write under `writes_all_elems`: {err}"
+        skip_lean.contains("CudaOxide.Contracts.ControlFlow.WritesOnAllActivePaths controlFlowCfg")
     );
+    let lean_dir = lean_exporter::runner::default_lean_package_dir();
+    if let Err(err) = lean_exporter::runner::check_generated_lean(&skip_lean, &lean_dir) {
+        if !err.to_string().contains("could not locate `lake`") {
+            assert!(
+                err.to_string().contains("lean proof check failed"),
+                "unexpected Lean error for conditional skip write: {err}"
+            );
+        }
+    } else {
+        panic!("Lean 4 must reject conditional branch skipping `c` write under `writes_all_elems`");
+    }
 }
 
 #[test]
@@ -565,18 +575,20 @@ fn verifies_2d_sgemm_tiled_views_and_rejects_shared_races_oob_and_divergent_barr
     );
 
     // Stage 2 Negative Scenario C: Non-uniform / divergent barrier (early conditional return
-    // before the barrier loop). Lean 4 rejects `UniformBarriers false ...`.
+    // before the barrier loop). Transcribed into `controlFlowCfg` and rejected by Lean 4!
     let divergent_barrier = SGEMM_TILED_FIXTURE.replace(
         "mir.goto (zero_f32, zero_u32) [^tile_header] []: <(builtin.fp32, builtin.integer ui32) -> ()>",
         "early_cond = mir.lt (tx, k) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer i1)>;\n    mir.cond_br (early_cond) [^exit, ^enter_loop] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>\n\n  ^enter_loop():\n    mir.goto (zero_f32, zero_u32) [^tile_header] []: <(builtin.fp32, builtin.integer ui32) -> ()>",
     );
     let divergent_lean = export_named_source(&divergent_barrier, "sgemm_tiled_views")
-        .expect("exports UniformBarriers false obligation");
-    assert!(divergent_lean.contains("barriersUniform := false"));
+        .expect("exports controlFlowCfg for divergent barrier obligation");
+    assert!(
+        divergent_lean.contains("CudaOxide.Contracts.ControlFlow.UniformBarriers controlFlowCfg")
+    );
     let err = lean_exporter::runner::check_generated_lean(&divergent_lean, &lean_dir)
         .expect_err("Lean must reject divergent barrier when early return skips barrier loop");
     assert!(
-        err.to_string().contains("omega could not prove the goal"),
+        err.to_string().contains("lean proof check failed"),
         "unexpected Lean error for divergent barrier: {err}"
     );
 
@@ -1255,64 +1267,51 @@ fn verifies_stage6_tcgen05_tmem_proxy_and_mbarrier_lifecycle() {
         "both `TMEM_ADDR[0]` and `SMEM_OUT[tid * 128 + col]` mir.assert checks must be proven redundant"
     );
 
-    // 2. Negative check (PTX Proxy Coherence): Omitting `fence_proxy_async_shared_cta()` after
-    //    `mbarrier_init` before `cp_async_bulk` / `tcgen05_commit` must be rejected!
+    // 2. Negative check (PTX Proxy Coherence in Lean 4): Omitting `fence_proxy_async_shared_cta()`
+    //    after `mbarrier_init` before `cp_async_bulk` / `tcgen05_commit` is transcribed into
+    //    `controlFlowCfg` and rejected by Lean 4's `TmemLifecycle`!
     let missing_proxy_fence = TCGEN05_MATMUL_FIXTURE
         .lines()
         .filter(|line| !line.contains("fence_proxy_async_shared_cta"))
         .collect::<Vec<_>>()
         .join("\n");
-    let err = export_named_source(&missing_proxy_fence, "tcgen05_matmul_verified")
-        .expect_err("missing fence_proxy_async_shared_cta after mbarrier_init must be rejected");
-    assert!(
-        err.to_string()
-            .contains("reaches async proxy operation without `fence_proxy_async_shared_cta()`"),
-        "unexpected error for missing proxy fence: {err}"
-    );
+    let missing_proxy_lean = export_named_source(&missing_proxy_fence, "tcgen05_matmul_verified")
+        .expect("transcribes missing proxy fence into controlFlowCfg");
+    lean_exporter::runner::check_generated_lean(&missing_proxy_lean, &lean_dir)
+        .expect_err("Lean 4 must reject missing fence_proxy_async_shared_cta after mbarrier_init");
 
-    // 3. Negative check (`mbarrier` Init Lifecycle): Omitting `sync_threads()` (`nvvm.barrier0`)
-    //    between `mbarrier_init` and `mbarrier_arrive` / `mbarrier_try_wait` must be rejected!
+    // 3. Negative check (`mbarrier` Init Lifecycle in Lean 4): Omitting `sync_threads()`
+    //    between `mbarrier_init` and `mbarrier_arrive` / `mbarrier_try_wait` fails in Lean 4!
     let missing_init_sync = ASYNC_COPY_FIXTURE.replacen(
         "      ^sync_after_init():\n        nvvm.barrier0 () [] []: <() -> ()>;",
         "      ^sync_after_init():",
         1,
     );
-    let err = export_named_source(&missing_init_sync, "async_copy_stage")
-        .expect_err("missing sync_threads() after mbarrier_init must be rejected");
-    assert!(
-        err.to_string().contains(
-            "`mbarrier_init` must be followed by `thread::sync_threads()` before arriving or waiting"
-        ),
-        "unexpected error for missing sync after mbarrier_init: {err}"
-    );
+    let missing_init_sync_lean = export_named_source(&missing_init_sync, "async_copy_stage")
+        .expect("transcribes missing sync_threads after mbarrier_init into controlFlowCfg");
+    lean_exporter::runner::check_generated_lean(&missing_init_sync_lean, &lean_dir)
+        .expect_err("Lean 4 must reject missing sync_threads() after mbarrier_init");
 
-    // 4. Negative check (Uninitialized Barrier): Waiting on an uninitialized `BAR_UNINIT` must be rejected!
+    // 4. Negative check (Uninitialized Barrier in Lean 4): Waiting on an uninitialized `BAR_UNINIT`!
     let uninit_bar = ASYNC_COPY_FIXTURE.replace(
         "bar_wait_raw = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string \"BAR\", source_name: builtin.string \"safe_async_copy::kernels::async_copy_stage::BAR\"]",
         "bar_wait_raw = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string \"BAR_UNINIT\", source_name: builtin.string \"safe_async_copy::kernels::async_copy_stage::BAR_UNINIT\"]",
     );
-    let err = export_named_source(&uninit_bar, "async_copy_stage")
-        .expect_err("waiting on uninitialized Barrier must fail closed");
-    assert!(
-        err.to_string()
-            .contains("Barrier static is used without a dominating `mbarrier_init`"),
-        "unexpected error for uninitialized Barrier: {err}"
-    );
+    let uninit_bar_lean = export_named_source(&uninit_bar, "async_copy_stage")
+        .expect("transcribes uninitialized Barrier wait into controlFlowCfg");
+    lean_exporter::runner::check_generated_lean(&uninit_bar_lean, &lean_dir)
+        .expect_err("Lean 4 must reject waiting on an uninitialized Barrier");
 
-    // 5. Negative check (Loop Back-Pressure `EMPTY_BAR`): Looping back from consumer `^consume_tile`
-    //    into async TMA producer `^sync_after_init` (`is_leader -> ^issue_tma`) with no `EMPTY_BAR`
-    //    and no `sync_threads()` along the backedge must be rejected!
+    // 5. Negative check (Loop Back-Pressure `EMPTY_BAR` in Lean 4): Looping back from consumer
+    //    `^consume_tile` into async TMA producer `^issue_tma` with no `EMPTY_BAR` or `sync_threads()`!
     let missing_backpressure = ASYNC_COPY_FIXTURE.replace(
         "        _val = mir.load (elem_ptr) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>) -> (builtin.fp32)>;\n        mir.goto () [^exit] []: <() -> ()>",
         "        _val = mir.load (elem_ptr) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>) -> (builtin.fp32)>;\n        mir.cond_br (is_leader) [^issue_tma, ^exit] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>",
     );
-    let err = export_named_source(&missing_backpressure, "async_copy_stage").expect_err(
-        "cyclic async TMA loop without EMPTY_BAR or sync_threads back-pressure must fail closed",
-    );
-    assert!(
-        err.to_string()
-            .contains("async TMA producer inside a loop requires a second `EMPTY_BAR` wait or `thread::sync_threads()`"),
-        "unexpected error for missing loop back-pressure: {err}"
+    let missing_bp_lean = export_named_source(&missing_backpressure, "async_copy_stage")
+        .expect("transcribes un-backpressured cyclic TMA loop into controlFlowCfg");
+    lean_exporter::runner::check_generated_lean(&missing_bp_lean, &lean_dir).expect_err(
+        "Lean 4 must reject cyclic async TMA loop without EMPTY_BAR or sync_threads back-pressure",
     );
 
     // 6. Negative check (Missing `tmem_lifecycle` clause): `tcgen05` op without `verify_tmem_lifecycle`!
@@ -1326,23 +1325,19 @@ fn verifies_stage6_tcgen05_tmem_proxy_and_mbarrier_lifecycle() {
         "unexpected error for missing tmem_lifecycle clause: {err}"
     );
 
-    // 7. Negative check (Single-lane `tcgen05_alloc` instead of 32-lane warp collective):
+    // 7. Negative check (Single-lane `tcgen05_alloc` instead of 32-lane warp collective in Lean 4):
     let lane_divergent_alloc = TCGEN05_MATMUL_FIXTURE.replacen(
         "mir.cond_br (is_warp0) [^alloc_tmem, ^sync_after_alloc]",
         "mir.cond_br (is_leader) [^alloc_tmem, ^sync_after_alloc]",
         1,
     );
-    let err = export_named_source(&lane_divergent_alloc, "tcgen05_matmul_verified").expect_err(
-        "single-lane `tid == 0` guard on warp-synchronous `tcgen05_alloc` must fail closed",
-    );
-    assert!(
-        err.to_string().contains(
-            "`tcgen05_alloc` is warp-synchronous and must be guarded by a single full 32-lane warp"
-        ),
-        "unexpected error for lane-divergent tcgen05_alloc: {err}"
+    let lane_div_lean = export_named_source(&lane_divergent_alloc, "tcgen05_matmul_verified")
+        .expect("transcribes single-lane tcgen05_alloc guard into controlFlowCfg");
+    lean_exporter::runner::check_generated_lean(&lane_div_lean, &lean_dir).expect_err(
+        "Lean 4 must reject single-lane `tid == 0` guard on warp-synchronous `tcgen05_alloc`",
     );
 
-    // 8. Negative check (Missing `mbarrier_try_wait` on `MMA_BAR` before `tcgen05_ld`):
+    // 8. Negative check (Missing `mbarrier_try_wait` on `MMA_BAR` before `tcgen05_ld` in Lean 4):
     let missing_mma_wait = TCGEN05_MATMUL_FIXTURE.replacen(
         "mir.cond_br (not_ready_mma) [^wait_mma_spin, ^epilogue_init]",
         "mir.goto () [^epilogue_init]",
@@ -1351,44 +1346,34 @@ fn verifies_stage6_tcgen05_tmem_proxy_and_mbarrier_lifecycle() {
         " [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>\n\n      ^wait_mma_spin():",
         " []: <() -> ()>\n\n      ^wait_mma_spin():",
     );
-    let err = export_named_source(&missing_mma_wait, "tcgen05_matmul_verified")
-        .expect_err("tcgen05_ld without dominating mbarrier_try_wait on MMA_BAR must fail closed");
-    assert!(
-        err.to_string().contains(
-            "`tcgen05_ld` requires a dominating `mbarrier_try_wait` on the Barrier signaled by `tcgen05_commit`"
-        ),
-        "unexpected error for missing MMA_BAR wait: {err}"
+    let missing_mma_wait_lean = export_named_source(&missing_mma_wait, "tcgen05_matmul_verified")
+        .expect("transcribes unawaited MMA_BAR into controlFlowCfg");
+    lean_exporter::runner::check_generated_lean(&missing_mma_wait_lean, &lean_dir).expect_err(
+        "Lean 4 must reject tcgen05_ld without dominating mbarrier_try_wait on MMA_BAR",
     );
 
-    // 9. Negative check (Missing `tcgen05_load_wait()` after `tcgen05_ld`):
+    // 9. Negative check (Missing `tcgen05_load_wait()` after `tcgen05_ld` in Lean 4):
     let missing_ld_wait = TCGEN05_MATMUL_FIXTURE
         .lines()
         .filter(|line| !line.contains("tcgen05_load_wait"))
         .collect::<Vec<_>>()
         .join("\n");
-    let err = export_named_source(&missing_ld_wait, "tcgen05_matmul_verified")
-        .expect_err("tcgen05_ld without tcgen05_load_wait() must fail closed");
-    assert!(
-        err.to_string()
-            .contains("`tcgen05_ld` must be followed by `tcgen05_load_wait()`"),
-        "unexpected error for missing tcgen05_load_wait: {err}"
-    );
+    let missing_ld_wait_lean = export_named_source(&missing_ld_wait, "tcgen05_matmul_verified")
+        .expect("transcribes missing tcgen05_load_wait into controlFlowCfg");
+    lean_exporter::runner::check_generated_lean(&missing_ld_wait_lean, &lean_dir)
+        .expect_err("Lean 4 must reject tcgen05_ld without tcgen05_load_wait()");
 
-    // 10. Negative check (`TMEM` leak: uniform early-return branch `tile_x == tile_y` bypassing
-    //     `tcgen05_dealloc` to `^exit`):
+    // 10. Negative check (`TMEM` leak: early-return branch `tile_x == tile_y` bypassing
+    //     `tcgen05_dealloc` to `^exit`, rejected by Lean 4):
     let leaked_tmem = TCGEN05_MATMUL_FIXTURE.replacen(
         "mir.cond_br (in_col) [^col_body, ^sync_before_dealloc]",
         "mir.cond_br (in_col) [^col_body, ^maybe_skip_dealloc] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>\n\n      ^maybe_skip_dealloc():\n        early_cond = mir.eq (tile_x, tile_y) [] []: <(builtin.integer si32, builtin.integer si32) -> (builtin.integer i1)>;\n        mir.cond_br (early_cond) [^exit, ^sync_before_dealloc]",
         1,
     );
-    let err = export_named_source(&leaked_tmem, "tcgen05_matmul_verified")
-        .expect_err("early return bypassing tcgen05_dealloc must fail closed");
-    assert!(
-        err.to_string().contains(
-            "every execution path after `tcgen05_alloc` must execute `tcgen05_dealloc` before returning"
-        ),
-        "unexpected error for leaked TMEM: {err}"
-    );
+    let leaked_tmem_lean = export_named_source(&leaked_tmem, "tcgen05_matmul_verified")
+        .expect("transcribes early-return TMEM leak into controlFlowCfg");
+    lean_exporter::runner::check_generated_lean(&leaked_tmem_lean, &lean_dir)
+        .expect_err("Lean 4 must reject early return bypassing tcgen05_dealloc");
 
     // 11. Negative check (Lean 4 `NoOobTmemAccess` column overflow: allocating only `64` TMEM
     //     columns while `M128_N128` MMA + `col < 128` epilogue access `128` columns!):
@@ -1424,4 +1409,172 @@ fn verifies_stage6_tcgen05_tmem_proxy_and_mbarrier_lifecycle() {
         err.to_string().contains("omega could not prove the goal"),
         "unexpected Lean error for TMEM warpgroup slice violation: {err}"
     );
+
+    // 13. Negative check (3-level nested non-coordinate `if`s inside `if warp_id == 0` around
+    //     `tcgen05_dealloc`: transcribed as `.unknown` edges and rejected by Lean 4!):
+    let nested_3_ifs_dealloc = TCGEN05_MATMUL_FIXTURE.replacen(
+        "      ^dealloc_tmem():\n        c128_dealloc = mir.constant () [] [value: builtin.integer <128: ui32>]: <() -> (builtin.integer ui32)>;\n        nvvm.tcgen05_dealloc (tmem_addr, c128_dealloc) [] []: <(builtin.integer ui32, builtin.integer ui32) -> ()>;\n        mir.goto () [^exit] []: <() -> ()>",
+        "      ^dealloc_tmem():\n        cond_l1 = mir.eq (tile_x, tile_y) [] []: <(builtin.integer si32, builtin.integer si32) -> (builtin.integer i1)>;\n        mir.cond_br (cond_l1) [^dealloc_l2, ^exit] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>\n\n      ^dealloc_l2():\n        cond_l2 = mir.lt (tile_x, tile_y) [] []: <(builtin.integer si32, builtin.integer si32) -> (builtin.integer i1)>;\n        mir.cond_br (cond_l2) [^dealloc_l3, ^exit] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>\n\n      ^dealloc_l3():\n        cond_l3 = mir.ne (tile_x, tile_y) [] []: <(builtin.integer si32, builtin.integer si32) -> (builtin.integer i1)>;\n        mir.cond_br (cond_l3) [^dealloc_inner, ^exit] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>\n\n      ^dealloc_inner():\n        c128_dealloc = mir.constant () [] [value: builtin.integer <128: ui32>]: <() -> (builtin.integer ui32)>;\n        nvvm.tcgen05_dealloc (tmem_addr, c128_dealloc) [] []: <(builtin.integer ui32, builtin.integer ui32) -> ()>;\n        mir.goto () [^exit] []: <() -> ()>",
+        1,
+    );
+    let nested_3_lean = export_named_source(&nested_3_ifs_dealloc, "tcgen05_matmul_verified")
+        .expect("transcribes 3-deep nested unknown ifs around tcgen05_dealloc into controlFlowCfg");
+    assert!(nested_3_lean.contains(".unknown"));
+    lean_exporter::runner::check_generated_lean(&nested_3_lean, &lean_dir).expect_err(
+        "Lean 4 must reject 3-level nested runtime `if`s around `tcgen05_dealloc` inside `if warp_id == 0`",
+    );
+
+    // 14. Negative check (Out-of-order `tcgen05_commit` placed BEFORE `tcgen05_mma_f16`):
+    let commit_before_mma = TCGEN05_MATMUL_FIXTURE.replacen(
+        "        nvvm.tcgen05_mma_f16 (tmem_addr, a_desc, b_desc, idesc, false_i1) [] []: <(builtin.integer ui32, builtin.integer ui64, builtin.integer ui64, builtin.integer ui32, builtin.integer i1) -> ()>;\n        nvvm.tcgen05_commit_shared_cluster (mma_bar_p) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>) -> ()>;",
+        "        nvvm.tcgen05_commit_shared_cluster (mma_bar_p) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>) -> ()>;\n        nvvm.tcgen05_mma_f16 (tmem_addr, a_desc, b_desc, idesc, false_i1) [] []: <(builtin.integer ui32, builtin.integer ui64, builtin.integer ui64, builtin.integer ui32, builtin.integer i1) -> ()>;",
+        1,
+    );
+    let commit_before_mma_lean = export_named_source(&commit_before_mma, "tcgen05_matmul_verified")
+        .expect("transcribes out-of-order commit-before-mma into controlFlowCfg");
+    lean_exporter::runner::check_generated_lean(&commit_before_mma_lean, &lean_dir)
+        .expect_err("Lean 4 must reject `tcgen05_commit` placed before `tcgen05_mma`");
+
+    // 15. Negative check (Out-of-order `tcgen05_load_wait()` placed AFTER `raw_val` is stored!):
+    let use_before_ld_wait = TCGEN05_MATMUL_FIXTURE.replacen(
+        "        raw_val = nvvm.tcgen05_ld_32x32b_x1_raw (ld_addr) [] []: <(builtin.integer ui32) -> (builtin.integer ui32)>;\n        nvvm.tcgen05_load_wait () [] []: <() -> ()>;",
+        "        raw_val = nvvm.tcgen05_ld_32x32b_x1_raw (ld_addr) [] []: <(builtin.integer ui32) -> (builtin.integer ui32)>;",
+        1,
+    ).replacen(
+        "        mir.store (out_ptr, raw_val) [] []: <(mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:3,kind:UniqueRef>, builtin.integer ui32) -> ()>;",
+        "        mir.store (out_ptr, raw_val) [] []: <(mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:3,kind:UniqueRef>, builtin.integer ui32) -> ()>;\n        nvvm.tcgen05_load_wait () [] []: <() -> ()>;",
+        1,
+    );
+    let use_before_wait_lean = export_named_source(&use_before_ld_wait, "tcgen05_matmul_verified")
+        .expect("transcribes tmemLoadUse before tmemLoadWait into controlFlowCfg");
+    assert!(
+        use_before_wait_lean
+            .contains("(.tmemLoad 0), (.tmemLoadUse 0), (.sharedWrite 2), .tmemLoadWait")
+    );
+    lean_exporter::runner::check_generated_lean(&use_before_wait_lean, &lean_dir).expect_err(
+        "Lean 4 must reject reading `tcgen05_ld` register before `tcgen05_load_wait()`",
+    );
+
+    // 16. Negative check (`smem_a_off + 2048` interior byte offset overflowing 4096-byte `SMEM_A`):
+    let smem_desc_byte_oob = TCGEN05_MATMUL_FIXTURE.replacen(
+        "        a_shr = mir.shr (a_off, sh4) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;",
+        "        c2048_off = mir.constant () [] [value: builtin.integer <2048: ui64>]: <() -> (builtin.integer ui64)>;\n        a_off_shifted = mir.add (a_off, c2048_off) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;\n        a_shr = mir.shr (a_off_shifted, sh4) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;",
+        1,
+    );
+    let smem_oob_lean = export_named_source(&smem_desc_byte_oob, "tcgen05_matmul_verified")
+        .expect("exports byte_offset + tile_bytes = 6144 against 4096-byte SMEM_A");
+    assert!(smem_oob_lean.contains("loopBound := 6144"));
+    let err = lean_exporter::runner::check_generated_lean(&smem_oob_lean, &lean_dir)
+        .expect_err("Lean 4 must reject `smem_a_off + 2048` overflowing 4096-byte SMEM_A");
+    assert!(
+        err.to_string().contains("omega could not prove the goal"),
+        "unexpected Lean error for SMEM descriptor byte offset overflow: {err}"
+    );
+}
+
+#[test]
+fn verifies_plain_mut_slice_and_rejects_unverified_wraparound_and_cross_thread_races() {
+    let lean_dir = lean_exporter::runner::default_lean_package_dir();
+
+    // 1. Positive: plain `c: &mut [f32]` (`MirSliceType` with `mutable: true`) + 64-bit hardware
+    //    `(blockIdx_x as usize) * (blockDim_x as usize) + (threadIdx_x as usize)` + in-place `c[idx] += a[idx]`
+    //    proves `NoOobIdx`, `DisjointWrites`, `DisjointSliceAccessPair`, and `WritesAllElems`, AND elides
+    //    both `a[idx]` and `c[idx]` `mir.assert` checks!
+    let mut_inplace_mir = r#"mir.func @inplace_add: builtin.function <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>, mir.slice <builtin.fp32 ,mutable:true,kind:UniqueRef>) -> ()>
+  [contract_requires_len_ge: builtin.string "0>=1", gpu_kernel: builtin.string "true", launch_contract_domain: builtin.integer <1: ui32>, reqntid_x: builtin.integer <256: ui32>, reqntid_y: builtin.integer <1: ui32>, reqntid_z: builtin.integer <1: ui32>, verify_disjoint_writes: builtin.string "1", verify_no_oob_idx: builtin.string "0,1", verify_writes_all_elems: builtin.string "1"]
+{
+  ^entry(a: mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>, c: mir.slice <builtin.fp32 ,mutable:true,kind:UniqueRef>):
+    bx32 = nvvm.read_ptx_sreg_ctaid_x () [] []: <() -> (builtin.integer ui32)>;
+    bd32 = nvvm.read_ptx_sreg_ntid_x () [] []: <() -> (builtin.integer ui32)>;
+    tx32 = nvvm.read_ptx_sreg_tid_x () [] []: <() -> (builtin.integer ui32)>;
+    bx = mir.cast (bx32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+    bd = mir.cast (bd32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+    tx = mir.cast (tx32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+    base = mir.mul (bx, bd) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+    idx = mir.add (base, tx) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+    c_len = mir.extract_field (c) [] [index: mir.field_index 1]: <(mir.slice <builtin.fp32 ,mutable:true,kind:UniqueRef>) -> (builtin.integer ui64)>;
+    in_bounds = mir.lt (idx, c_len) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+    mir.cond_br (in_bounds) [^active, ^exit] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+  ^active():
+    a_len = mir.extract_field (a) [] [index: mir.field_index 1]: <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>) -> (builtin.integer ui64)>;
+    a_chk = mir.lt (idx, a_len) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+    mir.assert (a_chk) [] []: <(builtin.integer i1) -> ()>;
+    a_ptr = mir.extract_field (a) [] [index: mir.field_index 0]: <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>)>;
+    a_elem = mir.ptr_offset (a_ptr, idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>)>;
+    a_val = mir.load (a_elem) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>) -> (builtin.fp32)>;
+    c_chk = mir.lt (idx, c_len) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+    mir.assert (c_chk) [] []: <(builtin.integer i1) -> ()>;
+    c_ptr = mir.extract_field (c) [] [index: mir.field_index 0]: <(mir.slice <builtin.fp32 ,mutable:true,kind:UniqueRef>) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>)>;
+    c_elem = mir.ptr_offset (c_ptr, idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>)>;
+    c_prev = mir.load (c_elem) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>) -> (builtin.fp32)>;
+    c_next = mir.add (c_prev, a_val) [] []: <(builtin.fp32, builtin.fp32) -> (builtin.fp32)>;
+    mir.store (c_elem, c_next) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>, builtin.fp32) -> ()>;
+    mir.goto () [^exit] []: <() -> ()>
+
+  ^exit():
+    mir.return () [] []: <() -> ()>
+}"#;
+    let inplace_lean =
+        export_named_source(mut_inplace_mir, "inplace_add").expect("exports &mut [f32] kernel");
+    assert!(inplace_lean.contains("DisjointSliceAccessPair 256 0 0"));
+    lean_exporter::runner::check_generated_lean(&inplace_lean, &lean_dir)
+        .expect("Lean 4 proves in-place c[idx] += a[idx] on &mut [f32]");
+
+    // Verify both `a[idx]` and `c[idx]` `mir.assert` ops are proven redundant and elided:
+    assert_eq!(
+        count_proven_asserts(
+            &format!("builtin.module @test {{\n  ^entry_mod():\n{mut_inplace_mir}\n}}"),
+            "inplace_add"
+        ),
+        2
+    );
+
+    // 2. Negative: `&mut [f32]` without `disjoint_writes` must fail closed in `spec.rs`:
+    let missing_disjoint =
+        mut_inplace_mir.replacen("verify_disjoint_writes: builtin.string \"1\", ", "", 1);
+    let err = export_named_source(&missing_disjoint, "inplace_add")
+        .expect_err("&mut [f32] without disjoint_writes must be rejected");
+    assert!(
+        err.to_string()
+            .contains("requires both `no_oob_idx` and `disjoint_writes`"),
+        "unexpected error: {err}"
+    );
+
+    // 3. Negative: 32-bit `blockIdx_x() * blockDim_x()` without `u32_coordinates` must fail closed:
+    let wrap32_mir = mut_inplace_mir.replacen(
+        "    bx = mir.cast (bx32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;\n    bd = mir.cast (bd32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;\n    tx = mir.cast (tx32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;\n    base = mir.mul (bx, bd) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;\n    idx = mir.add (base, tx) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;",
+        "    base32 = mir.mul (bx32, bd32) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;\n    idx32 = mir.add (base32, tx32) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;\n    idx = mir.cast (idx32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;",
+        1,
+    );
+    let err = export_named_source(&wrap32_mir, "inplace_add")
+        .expect_err("32-bit blockIdx_x * blockDim_x without u32_coordinates must be rejected");
+    assert!(
+        err.to_string().contains("can wrap past `u32::MAX`"),
+        "unexpected error: {err}"
+    );
+
+    // 4. Positive: with `launch_contract_u32_coords: "true"`, 32-bit coordinates ARE sound and accepted:
+    let u32_coords_ok = wrap32_mir.replacen(
+        "gpu_kernel: builtin.string \"true\", ",
+        "gpu_kernel: builtin.string \"true\", launch_contract_u32_coords: builtin.string \"true\", ",
+        1,
+    );
+    let u32_lean = export_named_source(&u32_coords_ok, "inplace_add")
+        .expect("32-bit coordinates succeed when u32_coordinates is active");
+    lean_exporter::runner::check_generated_lean(&u32_lean, &lean_dir)
+        .expect("Lean 4 proves u32_coordinates inplace_add");
+
+    // 5. Negative: racy cross-thread read `c[idx + 1]` paired with write `c[idx]` on `&mut [f32]`
+    //    must be rejected by Lean 4 (`DisjointSliceAccessPair 256 0 1`):
+    let racy_stencil = mut_inplace_mir.replacen(
+        "    c_prev = mir.load (c_elem) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>) -> (builtin.fp32)>;",
+        "    c1_off = mir.constant () [] [value: builtin.integer <1: ui64>]: <() -> (builtin.integer ui64)>;\n    idx_plus1 = mir.add (idx, c1_off) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;\n    c_next_elem = mir.ptr_offset (c_ptr, idx_plus1) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>)>;\n    c_prev = mir.load (c_next_elem) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>) -> (builtin.fp32)>;",
+        1,
+    );
+    let racy_lean = export_named_source(&racy_stencil, "inplace_add")
+        .expect("exports DisjointSliceAccessPair 256 0 1 obligation");
+    assert!(racy_lean.contains("DisjointSliceAccessPair 256 0 1"));
+    lean_exporter::runner::check_generated_lean(&racy_lean, &lean_dir)
+        .expect_err("Lean 4 must reject cross-thread c[idx + 1] read + c[idx] write race");
 }

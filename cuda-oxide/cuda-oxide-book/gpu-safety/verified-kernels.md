@@ -35,6 +35,7 @@ We do not prove functional correctness or floating-point math formulas. Instead,
 | `disjoint_writes`   | Two different threads never write to the same output slot | Which formula is written (`a - b` vs `+`) |
 | `writes_all_elems`  | Every output slot is written by a launched thread         | Whether the written value is right        |
 | `uniform_barriers`  | Every thread in the block reaches every barrier           | Waiting across different thread blocks    |
+| `tmem_lifecycle`    | Valid `TMEM` bounds, warpgroup slices, and async order    | Floating-point Tensor Core rounding       |
 
 ---
 
@@ -71,7 +72,7 @@ Unlike a C or CUDA C++ verifier, Lean 4 does not need to prove pointer validity,
   - **Shared read-only slices**: Copying `&[f32]` to thousands of GPU threads is sound because no thread mutates the input slices.
 - **What does *not* transfer from Rust alone**:
   - Giving thousands of GPU threads a raw `&mut [f32]` (or shared-memory array) would let two threads mutate the same element at the same time.
-  - Per-element exclusivity across GPU threads is proved by `DisjointSlice` (for 1-thread-per-element outputs) or Lean 4 (across all thread pairs and barrier phases).
+  - Per-element exclusivity across GPU threads is proved by `DisjointSlice` (for unverified kernels) or by Lean 4 (`#[verify(no_oob_idx(c), disjoint_writes(c))]`, which unlocks plain `c: &mut [f32]` with zero `DisjointSlice` or `ThreadIndex` wrapper types).
 
 | Property                                  | Who Proves It                          | Why It Holds on the GPU                                        |
 |:------------------------------------------|:---------------------------------------|:---------------------------------------------------------------|
@@ -94,7 +95,8 @@ How one `no_oob_idx` clause maps to the right reusable proof in Lean:
 - **2D shared memory tile**: proved from the 2D thread coordinates (`tx < 16`, `ty < 16`) and loop bound (`i < 16`).
 - **Shared warp-leader slot and scan**: proved from the block size (`tid < 256` implies `tid / 32 < 8`) and scan loop bound (`w < 8`).
 - **Sub-warp bit-splits and packed multi-buffer staging**: proved from the bit-split bijection (`(tid >> 4) * 16 + (tid & 15) = tid`), active-thread guards (`if tid < 64`), and packed loop bounds (`w < 4` implies `tid * 4 + w < 256`).
-- **Asynchronous TMA bulk copies and `mbarrier` token handoffs**: proved from single-leader TMA issue (`if tid == 0`), expected-byte arrival (`mbarrier_arrive_expect_tx`), and dominating `mbarrier_try_wait_parity` completion before consumer reads.
+- **Asynchronous TMA bulk copies and `mbarrier` token handoffs**: proved from single-leader TMA issue (`if tid == 0`), expected-byte arrival (`mbarrier_arrive_expect_tx`), proxy coherence (`fence_proxy_async_shared_cta`), and dominating `mbarrier_try_wait_parity` completion before consumer reads.
+- **Blackwell `tcgen05` Tensor Cores and `TMEM` lifecycle (`tmem_lifecycle`)**: `lean-exporter` transcribes the kernel's basic-block control-flow graph (`ControlFlowCfg`), and Lean 4 proves full-warp `tcgen05_alloc` / `tcgen05_dealloc` symmetry, `mma -> commit -> wait -> ld -> load_wait` ordering, `128`-lane and `allocCols <= 512` bounds, and warpgroup 32-lane `tcgen05_ld` slice bounds.
 
 ### Trusted Computing Base
 
@@ -163,8 +165,25 @@ pub fn vecadd(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>) {
 
 What happens when you build:
 - The host contract guarantees `a` and `b` are at least as long as `c`.
-- Lean 4 proves that any thread inside `if let Some(c_elem)` is also in bounds for `a` and `b`.
-- The compiler deletes both `a[idx_raw]` and `b[idx_raw]` bounds checks before PTX lowering.
+- Lean 4 proves that any thread inside `if let Some(c_elem)` is also in bounds for `a` and `b`, and deletes those bounds checks before PTX lowering.
+- Because `#[verify]` proves `no_oob_idx(c)` and `disjoint_writes(c)` across all GPU threads, you can also write the exact same kernel using plain `c: &mut [f32]` and ordinary slice indexing (with all three bounds checks `a[idx]`, `b[idx]`, and `c[idx]` elided):
+
+```rust
+#[launch_contract(
+    domain = 1,
+    block = (256, 1, 1),
+    requires = (a.len() >= c.len(), b.len() >= c.len()),
+)]
+#[verify(no_oob_idx(a, b, c), disjoint_writes(c), writes_all_elems(c))]
+#[kernel]
+pub fn vecadd_mut_slice(a: &[f32], b: &[f32], c: &mut [f32]) {
+    let idx = (thread::blockIdx_x() as usize) * (thread::blockDim_x() as usize)
+        + (thread::threadIdx_x() as usize);
+    if idx < c.len() {
+        c[idx] = a[idx] + b[idx];
+    }
+}
+```
 
 You can inspect the MIR input and generated Lean theorems at any time:
 
@@ -494,4 +513,74 @@ Inspect the exported Lean proof or run the TMA copy on the GPU with:
 ```console
 $ cargo oxide lean-export safe_async_copy
 $ cargo oxide run safe_async_copy
+```
+
+---
+
+### Example 6: Blackwell `tcgen05` Tensor Cores & `TMEM` Lifecycle
+
+On datacenter Blackwell GPUs (`sm_100a`, such as NVIDIA B200), 5th-generation Tensor Cores (`tcgen05.mma`) accumulate into dynamically allocated **Tensor Memory (`TMEM`)**:
+- **Warp 0 Allocation (`if warp_id == 0`)**: Collectively allocates `128` `TMEM` columns into `TMEM_ADDR[0]` via `tcgen05_alloc(&raw mut TMEM_ADDR[0], 128)`.
+- **2D TMA + Single-Thread MMA (`if tid == 0`)**: Stages `A` and `B` into `SMEM_A` and `SMEM_B`, builds shared-memory descriptors via `cvta_generic_to_shared_offset` and `Tcgen05SmemDescriptor::for_k_major`, issues `tcgen05_mma_f16`, and signals `MMA_BAR` via `tcgen05_commit_shared_cluster`.
+- **Warp-Partitioned `TMEM` Epilogue & Deallocation**: After `mbarrier_try_wait_parity(&raw const MMA_BAR, 0)`, each warp `0..4` reads its own 32-lane slice `(warp_id * 32) << 16` via `tcgen05_ld_32x32b_x1_raw` + `tcgen05_load_wait()`, syncs at `thread::sync_threads()`, and frees all `128` columns via `tcgen05_dealloc(tmem_addr, 128)` with **zero `unsafe` blocks** in the kernel.
+
+```rust
+#[kernel(launch_context = lc)]
+#[launch_bounds(128)]
+#[launch_contract(
+    domain = 1,
+    coordinates = u32,
+    block = (128, 1, 1),
+)]
+#[verify(
+    no_oob_idx(SMEM_A, SMEM_B, TMEM_ADDR),
+    no_data_race(SMEM_A, SMEM_B, TMEM_ADDR),
+    uniform_barriers,
+    tmem_lifecycle
+)]
+pub fn tcgen05_matmul_verified(
+    #[grid_constant] a_tmap: &TmaDescriptor,
+    #[grid_constant] b_tmap: &TmaDescriptor,
+    mut out: DisjointSlice<f32, LinearTiles<128>>,
+    tile_x: i32,
+    tile_y: i32,
+) {
+    static mut SMEM_A: SharedArray<u8, 4096, 128> = SharedArray::UNINIT;
+    static mut SMEM_B: SharedArray<u8, 4096, 128> = SharedArray::UNINIT;
+    static mut TMEM_ADDR: SharedArray<u32, 1, 4> = SharedArray::UNINIT;
+    static mut TMA_A_BAR: Barrier = Barrier::UNINIT;
+    static mut TMA_B_BAR: Barrier = Barrier::UNINIT;
+    static mut MMA_BAR: Barrier = Barrier::UNINIT;
+
+    let idx32 = thread::index_1d_u32(lc);
+    let tid = thread::threadIdx_x() as usize;
+    let warp_id = warp::warp_id();
+
+    if tid == 0 {
+        mbarrier_init(&raw mut TMA_A_BAR, 1);
+        mbarrier_init(&raw mut TMA_B_BAR, 1);
+        mbarrier_init(&raw mut MMA_BAR, 1);
+        fence_proxy_async_shared_cta();
+    }
+    thread::sync_threads();
+
+    if warp_id == 0 {
+        tcgen05_alloc(&raw mut TMEM_ADDR[0], 128);
+    }
+    thread::sync_threads();
+    let tmem_addr = TMEM_ADDR[0];
+    // ... TMA loads, tcgen05_mma_f16 + tcgen05_commit_shared_cluster,
+    //     mbarrier_try_wait_parity, tcgen05_ld_32x32b_x1_raw + tcgen05_load_wait ...
+    thread::sync_threads();
+    if warp_id == 0 {
+        tcgen05_dealloc(tmem_addr, 128);
+    }
+}
+```
+
+Inspect the transcribed `ControlFlowCfg` and Lean 4 theorems, or build and run on Blackwell (`sm_100a`):
+
+```console
+$ cargo oxide lean-export safe_tcgen05_matmul
+$ cargo oxide run safe_tcgen05_matmul --arch sm_100a
 ```

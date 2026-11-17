@@ -15,10 +15,13 @@
 use crate::{
     ExportError, reject,
     spec::KernelVerificationSpec,
-    ssa::{GlobalStripKind, GuardExpr, IdxExpr, TileAccessPatternKind},
+    ssa::{
+        CfgBranchCond, CfgOpItem, GlobalStripKind, GuardExpr, IdxExpr, TileAccessPatternKind,
+        TranscribedCfgBlock, TranscribedControlFlowCfg,
+    },
     translate::{
-        AccessKind, ExtractedAccess, ExtractedTmemAccess, ExtractedTmemLifecycle,
-        GlobalStripAccess2D, PhasedSharedAccess, TranslatedFunction,
+        AccessKind, ExtractedAccess, ExtractedTmemAccess, GlobalStripAccess2D,
+        PhasedGlobal1DAccess, PhasedSharedAccess, TranslatedFunction,
     },
 };
 
@@ -45,89 +48,117 @@ pub fn render_lean_module(translated: &TranslatedFunction) -> Result<String, Exp
             arity,
             spec,
             accesses,
+            control_flow_cfg,
+            write_path_obligations,
             ..
-        } => render_verified_kernel_module(*arity, spec, accesses),
+        } => render_verified_kernel_module(
+            *arity,
+            spec,
+            accesses,
+            control_flow_cfg,
+            write_path_obligations,
+        ),
         TranslatedFunction::TiledKernel2D {
+            arity,
             spec,
             num_barriers,
-            barriers_uniform,
             global_strip_accesses,
+            global_1d_accesses,
             shared_accesses,
-            tmem_lifecycle,
+            control_flow_cfg,
             tmem_accesses,
             ..
         } => render_verified_tiled_2d_module(
+            *arity,
             spec,
             *num_barriers,
-            *barriers_uniform,
             global_strip_accesses,
+            global_1d_accesses,
             shared_accesses,
-            tmem_lifecycle.as_ref(),
+            control_flow_cfg,
             tmem_accesses,
         ),
     }
 }
 
-/// Return the list of human-readable obligation descriptions proven for `translated`.
+/// Return grouped, human-readable obligation descriptions proven for `spec`.
 pub fn proved_obligation_descriptions(
     spec: &KernelVerificationSpec,
     global_strip_accesses: &[GlobalStripAccess2D],
 ) -> Vec<String> {
+    let fmt_ids = |prefix: &str, ids: &[usize]| -> String {
+        ids.iter()
+            .map(|id| format!("{prefix} {id}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     let mut items = Vec::new();
-    for &p in &spec.no_oob_idx {
+    if !spec.no_oob_idx.is_empty() {
         if spec.domain == 2 {
-            let contract = match global_strip_accesses.iter().find(|a| a.param == p) {
-                Some(GlobalStripAccess2D {
-                    kind: GlobalStripKind::ColStrip,
-                    ..
-                }) => "CudaOxide.Contracts.NoOobColStrip",
-                _ => "CudaOxide.Contracts.NoOobRowStrip",
-            };
-            items.push(format!("no_oob_idx(param {p}) -> {contract}"));
+            for &p in &spec.no_oob_idx {
+                let contract = match global_strip_accesses.iter().find(|a| a.param == p) {
+                    Some(GlobalStripAccess2D {
+                        kind: GlobalStripKind::ColStrip,
+                        ..
+                    }) => "CudaOxide.Contracts.NoOobColStrip",
+                    _ => "CudaOxide.Contracts.NoOobRowStrip",
+                };
+                items.push(format!("no_oob_idx(param {p}) -> {contract}"));
+            }
         } else {
             items.push(format!(
-                "no_oob_idx(param {p}) -> CudaOxide.Contracts.NoOobIdx"
+                "no_oob_idx({}) -> CudaOxide.Contracts.NoOobIdx",
+                fmt_ids("param", &spec.no_oob_idx)
             ));
         }
     }
-    for &p in &spec.disjoint_writes {
+    if !spec.disjoint_writes.is_empty() {
         items.push(format!(
-            "disjoint_writes(param {p}) -> CudaOxide.Contracts.DisjointWrites"
+            "disjoint_writes({}) -> CudaOxide.Contracts.DisjointWrites",
+            fmt_ids("param", &spec.disjoint_writes)
         ));
     }
-    for &p in &spec.writes_all_elems {
+    if !spec.writes_all_elems.is_empty() {
         items.push(format!(
-            "writes_all_elems(param {p}) -> CudaOxide.Contracts.WritesAllElems"
+            "writes_all_elems({}) -> CudaOxide.Contracts.WritesAllElems",
+            fmt_ids("param", &spec.writes_all_elems)
         ));
     }
-    for &s in &spec.no_oob_shared {
+    if !spec.no_oob_shared.is_empty() {
         items.push(format!(
-            "no_oob_idx(shared {s}) -> CudaOxide.Contracts.NoOobTileAccess"
+            "no_oob_idx({}) -> CudaOxide.Contracts.NoOobTileAccess",
+            fmt_ids("shared", &spec.no_oob_shared)
         ));
     }
-    for &s in &spec.no_data_race {
+    if !spec.no_data_race.is_empty() {
         items.push(format!(
-            "no_data_race(shared {s}) -> CudaOxide.Contracts.NoDataRace"
+            "no_data_race({}) -> CudaOxide.Contracts.NoDataRace",
+            fmt_ids("shared", &spec.no_data_race)
         ));
     }
     if spec.uniform_barriers {
-        items.push("uniform_barriers -> CudaOxide.Contracts.UniformBarriers".to_string());
+        items.push(
+            "uniform_barriers -> CudaOxide.Contracts.ControlFlow.UniformBarriers".to_string(),
+        );
     }
     if spec.tmem_lifecycle {
         items.push(
-            "tmem_lifecycle -> CudaOxide.Contracts.TmemLifecycle + CudaOxide.Contracts.NoOobTmemAccess"
+            "tmem_lifecycle -> CudaOxide.Contracts.ControlFlow.TmemLifecycle + CudaOxide.Contracts.NoOobTmemAccess"
                 .to_string(),
         );
     }
     items
 }
 
-/// Render a verified 1D kernel (`KernelSummary1D`) and its `NoOobIdx`,
-/// `DisjointWrites`, and `WritesAllElems` theorem obligations into Lean 4.
+/// Render a verified 1D kernel (`KernelSummary1D` + optional `ControlFlowCfg`) and its
+/// `NoOobIdx`, `DisjointWrites`, `WritesAllElems`, and `WritesOnAllActivePaths`
+/// theorem obligations into Lean 4.
 fn render_verified_kernel_module(
     arity: usize,
     spec: &KernelVerificationSpec,
     accesses: &[ExtractedAccess],
+    control_flow_cfg: &TranscribedControlFlowCfg,
+    write_path_obligations: &[(usize, Vec<usize>, Vec<usize>)],
 ) -> Result<String, ExportError> {
     let block_size = spec.block_size;
     let mut access_entries = Vec::new();
@@ -199,9 +230,14 @@ fn render_verified_kernel_module(
     }
 
     for &param in &spec.disjoint_writes {
-        let writes: Vec<_> = accesses
+        let param_accesses: Vec<_> = accesses
             .iter()
-            .filter(|a| a.kind == AccessKind::Write && a.target_param == param)
+            .filter(|a| a.target_param == param)
+            .collect();
+        let writes: Vec<_> = param_accesses
+            .iter()
+            .copied()
+            .filter(|a| a.kind == AccessKind::Write)
             .collect();
         if writes.is_empty() {
             return Err(reject(
@@ -224,6 +260,27 @@ fn render_verified_kernel_module(
                  exact CudaOxide.Proofs.Launch.disjoint_writes_1d"
             ));
             axiom_prints.push(format!("#print axioms {thm_name}"));
+        }
+        if param_accesses.len() > 1 {
+            for (w_idx, write) in writes.iter().enumerate() {
+                for (a_idx, other) in param_accesses.iter().enumerate() {
+                    let pair_name =
+                        format!("verify_disjoint_slice_pair_param{param}_{w_idx}_{a_idx}");
+                    let off1 = write.index_offset;
+                    let off2 = other.index_offset;
+                    let body = if off1 == off2 {
+                        "exact CudaOxide.Proofs.Launch.disjoint_slice_pair_same_offset"
+                    } else {
+                        "intro block₁ block₂ lane₁ lane₂ hlane₁ hlane₂ hsame\n  omega"
+                    };
+                    theorems.push(format!(
+                        "theorem {pair_name} :\n    \
+                         CudaOxide.Contracts.DisjointSliceAccessPair {block_size} {off1} {off2} := by\n  \
+                         {body}"
+                    ));
+                    axiom_prints.push(format!("#print axioms {pair_name}"));
+                }
+            }
         }
     }
 
@@ -259,17 +316,49 @@ fn render_verified_kernel_module(
             ));
         }
         axiom_prints.push(format!("#print axioms {thm_name}"));
+        if let Some((_, entries, write_blks)) =
+            write_path_obligations.iter().find(|(p, _, _)| *p == param)
+        {
+            let path_thm = format!("verify_writes_all_elems_path_param{param}");
+            let entries_str = entries
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            let writes_str = write_blks
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            theorems.push(format!(
+                "theorem {path_thm} :\n    \
+                 CudaOxide.Contracts.ControlFlow.WritesOnAllActivePaths controlFlowCfg [{entries_str}] [{writes_str}] := by\n  \
+                 exact CudaOxide.Proofs.ControlFlow.writes_on_active_paths_sound (by decide)"
+            ));
+            axiom_prints.push(format!("#print axioms {path_thm}"));
+        }
     }
+
+    let cfg_section = if !write_path_obligations.is_empty() {
+        format!(
+            "{}\n\n",
+            format_control_flow_cfg(u64::from(block_size), 1, control_flow_cfg)
+        )
+    } else {
+        String::new()
+    };
 
     Ok(format!(
         "-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.\n\
          -- SPDX-License-Identifier: Apache-2.0\n\
          -- Generated from PostMem2Reg dialect-mir.\n\
          import CudaOxide\n\n\
+         set_option maxRecDepth 4096\n\n\
          namespace CudaOxide.Generated\n\n\
          def kernelSummary : CudaOxide.Mir.Kernel.KernelSummary1D {arity} :=\n  \
          {{ blockSize := {block_size}\n  \
          , accesses := [\n{}\n    ]\n  }}\n\n\
+         {cfg_section}\
          {}\n\n\
          {}\n\n\
          end CudaOxide.Generated\n",
@@ -302,7 +391,99 @@ fn format_guard_expr(guard: &GuardExpr) -> String {
         GuardExpr::Eq(a, b) => format!("(.eq {} {})", format_idx_expr(a), format_idx_expr(b)),
         GuardExpr::Ne(a, b) => format!("(.ne {} {})", format_idx_expr(a), format_idx_expr(b)),
         GuardExpr::And(p, q) => format!("(.and {} {})", format_guard_expr(p), format_guard_expr(q)),
+        GuardExpr::Unknown => ".unknown".to_string(),
     }
+}
+
+/// Format a [`CfgBranchCond`] into a Lean `CudaOxide.Mir.ControlFlow.BranchCond` expression.
+fn format_cfg_branch_cond(cond: &CfgBranchCond) -> String {
+    match cond {
+        CfgBranchCond::Always => ".always".to_string(),
+        CfgBranchCond::Coord(g) => format!("(.coord {})", format_guard_expr(g)),
+        CfgBranchCond::MbarReady(b) => format!("(.mbarReady {b})"),
+        CfgBranchCond::MbarSpin(b) => format!("(.mbarSpin {b})"),
+        CfgBranchCond::Uniform => ".uniform".to_string(),
+        CfgBranchCond::Unknown => ".unknown".to_string(),
+    }
+}
+
+/// Format a [`CfgOpItem`] into a Lean `CudaOxide.Mir.ControlFlow.CfgOp` expression.
+fn format_cfg_op(op: &CfgOpItem) -> String {
+    match op {
+        CfgOpItem::SyncThreads => ".syncThreads".to_string(),
+        CfgOpItem::SharedRead { shared_id } => format!("(.sharedRead {shared_id})"),
+        CfgOpItem::SharedWrite { shared_id } => format!("(.sharedWrite {shared_id})"),
+        CfgOpItem::MbarInit { bar_id, count } => format!("(.mbarInit {bar_id} {count})"),
+        CfgOpItem::ProxyFenceAsyncShared => ".proxyFenceAsyncShared".to_string(),
+        CfgOpItem::MbarArrive { bar_id } => format!("(.mbarArrive {bar_id})"),
+        CfgOpItem::MbarArriveExpectTx { bar_id, tx_bytes } => {
+            format!("(.mbarArriveExpectTx {bar_id} {tx_bytes})")
+        }
+        CfgOpItem::TmaCopyG2S { shared_id, bar_id } => {
+            format!("(.tmaCopyG2S {shared_id} {bar_id})")
+        }
+        CfgOpItem::TmemAlloc {
+            shared_id,
+            cols,
+            is_cg2,
+        } => format!("(.tmemAlloc {shared_id} {cols} {is_cg2})"),
+        CfgOpItem::TmemDealloc { cols, is_cg2 } => {
+            format!("(.tmemDealloc {cols} {is_cg2})")
+        }
+        CfgOpItem::TmemAsyncIssue { smem_ids } => {
+            let list = smem_ids
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("(.tmemAsyncIssue [{list}])")
+        }
+        CfgOpItem::TmemCommit { bar_id } => format!("(.tmemCommit {bar_id})"),
+        CfgOpItem::TmemLoad { ld_id } => format!("(.tmemLoad {ld_id})"),
+        CfgOpItem::TmemLoadWait => ".tmemLoadWait".to_string(),
+        CfgOpItem::TmemLoadUse { ld_id } => format!("(.tmemLoadUse {ld_id})"),
+    }
+}
+
+/// Format one [`TranscribedCfgBlock`] as a Lean `CudaOxide.Mir.ControlFlow.CfgBlock` literal.
+fn format_cfg_block(blk: &TranscribedCfgBlock) -> String {
+    let ops_str = blk
+        .ops
+        .iter()
+        .map(format_cfg_op)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let succs_str = blk
+        .succs
+        .iter()
+        .map(|(c, dst)| format!("({}, {dst})", format_cfg_branch_cond(c)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let ret_suffix = if blk.is_return {
+        ", isReturn := true"
+    } else {
+        ""
+    };
+    format!("{{ ops := [{ops_str}], succs := [{succs_str}]{ret_suffix} }}")
+}
+
+/// Format the full [`TranscribedControlFlowCfg`] as a Lean `def controlFlowCfg` declaration.
+fn format_control_flow_cfg(bx: u64, by: u64, cfg: &TranscribedControlFlowCfg) -> String {
+    let block_lines = cfg
+        .blocks
+        .iter()
+        .map(|blk| format!("    {}", format_cfg_block(blk)))
+        .collect::<Vec<_>>()
+        .join(",\n");
+    format!(
+        "def controlFlowCfg : CudaOxide.Mir.ControlFlow.ControlFlowCfg :=\n  \
+         {{ blockDimX := {bx}\n  \
+         , blockDimY := {by}\n  \
+         , numShared := {}\n  \
+         , numBarriers := {}\n  \
+         , blocks := [\n{block_lines}\n    ]\n  }}",
+        cfg.num_shared, cfg.num_barriers
+    )
 }
 
 /// Format a [`TileAccessPatternKind`] into its corresponding Lean
@@ -367,16 +548,18 @@ fn format_tmem_access(a: &ExtractedTmemAccess) -> String {
     )
 }
 
-/// Render a phased shared-memory or 2D tiled kernel (`TiledKernelSummary2D`)
+/// Render a phased shared-memory or 2D tiled kernel (`TiledKernelSummary2D` + `ControlFlowCfg`)
 /// and its `NoOobRowStrip`, `NoOobColStrip`, `NoOobTileAccess`, `NoDataRace`,
 /// `UniformBarriers`, `TmemLifecycle`, and `NoOobTmemAccess` obligations into Lean 4.
+#[allow(clippy::too_many_arguments)]
 fn render_verified_tiled_2d_module(
+    arity: usize,
     spec: &KernelVerificationSpec,
     num_barriers: usize,
-    barriers_uniform: bool,
     global_strip_accesses: &[GlobalStripAccess2D],
+    global_1d_accesses: &[PhasedGlobal1DAccess],
     shared_accesses: &[PhasedSharedAccess],
-    tmem_lifecycle: Option<&ExtractedTmemLifecycle>,
+    control_flow_cfg: &TranscribedControlFlowCfg,
     tmem_accesses: &[ExtractedTmemAccess],
 ) -> Result<String, ExportError> {
     let bx = u64::from(spec.block_size);
@@ -390,11 +573,15 @@ fn render_verified_tiled_2d_module(
     let mut axiom_prints = Vec::new();
 
     for &param in &spec.no_oob_idx {
-        let matching: Vec<_> = global_strip_accesses
+        let matching_strips: Vec<_> = global_strip_accesses
             .iter()
             .filter(|a| a.param == param)
             .collect();
-        if matching.is_empty() {
+        let matching_1d: Vec<_> = global_1d_accesses
+            .iter()
+            .filter(|a| a.target_param == param)
+            .collect();
+        if matching_strips.is_empty() && matching_1d.is_empty() {
             return Err(reject(
                 "no_oob_idx",
                 format!(
@@ -402,11 +589,11 @@ fn render_verified_tiled_2d_module(
                 ),
             ));
         }
-        for (idx, acc) in matching.iter().enumerate() {
-            let thm_name = if matching.len() == 1 {
+        for (idx, acc) in matching_strips.iter().enumerate() {
+            let thm_name = if matching_strips.len() == 1 && matching_1d.is_empty() {
                 format!("verify_no_oob_idx_param{param}")
             } else {
-                format!("verify_no_oob_idx_param{param}_{idx}")
+                format!("verify_no_oob_idx_param{param}_strip_{idx}")
             };
             let (contract, lemma) = match acc.kind {
                 GlobalStripKind::RowStrip => (
@@ -444,6 +631,114 @@ fn render_verified_tiled_2d_module(
                 ));
             }
             axiom_prints.push(format!("#print axioms {thm_name}"));
+        }
+        for (idx, acc) in matching_1d.iter().enumerate() {
+            let thm_name = if matching_1d.len() == 1 && matching_strips.is_empty() {
+                format!("verify_no_oob_idx_param{param}")
+            } else {
+                format!("verify_no_oob_idx_param{param}_{idx}")
+            };
+            let guard = acc.guard_param;
+            let offset = acc.index_offset;
+            let effective_bs = if acc.group_size > 1 { 1 } else { bx };
+            if offset == 0 && param == guard {
+                theorems.push(format!(
+                    "theorem {thm_name} (lengths : Fin {arity} → Nat) :\n    \
+                     CudaOxide.Contracts.NoOobIdx {effective_bs} 0 (lengths ⟨{guard}, by decide⟩) (lengths ⟨{param}, by decide⟩) := by\n  \
+                     exact CudaOxide.Proofs.Bounds.no_oob_idx_of_same_len"
+                ));
+            } else if offset == 0 && spec.requires_len_ge.contains(&(param, guard)) {
+                theorems.push(format!(
+                    "theorem {thm_name} (lengths : Fin {arity} → Nat)\n    \
+                     (h_req : lengths ⟨{guard}, by decide⟩ ≤ lengths ⟨{param}, by decide⟩) :\n    \
+                     CudaOxide.Contracts.NoOobIdx {effective_bs} 0 (lengths ⟨{guard}, by decide⟩) (lengths ⟨{param}, by decide⟩) := by\n  \
+                     exact CudaOxide.Proofs.Bounds.no_oob_idx_of_guard_le h_req"
+                ));
+            } else {
+                let req_binder = if spec.requires_len_ge.contains(&(param, guard)) {
+                    format!(
+                        "\n    (h_req : lengths ⟨{guard}, by decide⟩ ≤ lengths ⟨{param}, by decide⟩)"
+                    )
+                } else {
+                    String::new()
+                };
+                theorems.push(format!(
+                    "theorem {thm_name} (lengths : Fin {arity} → Nat){req_binder} :\n    \
+                     CudaOxide.Contracts.NoOobIdx {effective_bs} {offset} (lengths ⟨{guard}, by decide⟩) (lengths ⟨{param}, by decide⟩) := by\n  \
+                     intro block lane active\n  \
+                     omega"
+                ));
+            }
+            axiom_prints.push(format!("#print axioms {thm_name}"));
+        }
+    }
+
+    for &param in &spec.disjoint_writes {
+        let param_accesses: Vec<_> = global_1d_accesses
+            .iter()
+            .filter(|a| a.target_param == param)
+            .collect();
+        let writes: Vec<_> = param_accesses
+            .iter()
+            .copied()
+            .filter(|a| a.kind == AccessKind::Write)
+            .collect();
+        if writes.is_empty() {
+            return Err(reject(
+                "disjoint_writes",
+                format!(
+                    "parameter {param} is listed in `disjoint_writes` but never written by the kernel"
+                ),
+            ));
+        }
+        for (idx, write) in writes.iter().enumerate() {
+            let thm_name = if writes.len() == 1 {
+                format!("verify_disjoint_writes_param{param}")
+            } else {
+                format!("verify_disjoint_writes_param{param}_{idx}")
+            };
+            if write.group_size > 1 {
+                theorems.push(format!(
+                    "theorem {thm_name} :\n    \
+                     CudaOxide.Contracts.DisjointGroupWrites {bx} {} := by\n  \
+                     exact CudaOxide.Proofs.Launch.disjoint_group_writes_1d",
+                    write.group_size
+                ));
+            } else {
+                theorems.push(format!(
+                    "theorem {thm_name} :\n    \
+                     CudaOxide.Contracts.DisjointWrites {bx} {} := by\n  \
+                     exact CudaOxide.Proofs.Launch.disjoint_writes_1d",
+                    write.index_offset
+                ));
+            }
+            axiom_prints.push(format!("#print axioms {thm_name}"));
+        }
+        if param_accesses.len() > 1 {
+            for (w_idx, write) in writes.iter().enumerate() {
+                for (a_idx, other) in param_accesses.iter().enumerate() {
+                    let pair_name =
+                        format!("verify_disjoint_slice_pair_param{param}_{w_idx}_{a_idx}");
+                    let off1 = write.index_offset;
+                    let off2 = other.index_offset;
+                    let body = if write.group_size == other.group_size && off1 == off2 {
+                        "exact CudaOxide.Proofs.Launch.disjoint_slice_pair_same_offset"
+                    } else {
+                        "intro block₁ block₂ lane₁ lane₂ hlane₁ hlane₂ hsame\n  omega"
+                    };
+                    let eff_bs = if write.group_size > 1 && write.group_size == other.group_size {
+                        1
+                    } else {
+                        bx
+                    };
+                    theorems.push(format!(
+                        "theorem {pair_name} :\n    \
+                         CudaOxide.Contracts.DisjointSliceAccessPair {eff_bs} {off1} {off2} := by\n  \
+                         {body}"
+                    ));
+                    axiom_prints.push(format!("#print axioms {pair_name}"));
+                }
+            }
         }
     }
 
@@ -645,46 +940,39 @@ fn render_verified_tiled_2d_module(
         }
     }
 
-    if spec.uniform_barriers {
+    let need_uniform_barriers = spec.uniform_barriers
+        || (!spec.no_data_race.is_empty() && num_barriers > 0)
+        || (control_flow_cfg.num_barriers > 0 && !spec.tmem_lifecycle);
+    let emit_cfg = need_uniform_barriers || spec.tmem_lifecycle;
+    let cfg_def_section = if emit_cfg {
+        format!("{}\n\n", format_control_flow_cfg(bx, by, control_flow_cfg))
+    } else {
+        String::new()
+    };
+
+    if need_uniform_barriers {
         let thm_name = "verify_uniform_barriers";
-        let proof_line = if barriers_uniform && num_barriers > 0 {
-            "exact CudaOxide.Proofs.Launch.uniform_barriers_of_checked (by decide)"
-        } else {
-            "unfold CudaOxide.Contracts.UniformBarriers\n  omega"
-        };
         theorems.push(format!(
             "theorem {thm_name} :\n    \
-             CudaOxide.Contracts.UniformBarriers {barriers_uniform} {num_barriers} := by\n  \
-             {proof_line}"
+             CudaOxide.Contracts.ControlFlow.UniformBarriers controlFlowCfg := by\n  \
+             exact CudaOxide.Proofs.ControlFlow.uniform_barriers_sound (by decide)"
         ));
         axiom_prints.push(format!("#print axioms {thm_name}"));
     }
 
     if spec.tmem_lifecycle {
-        let Some(lc) = tmem_lifecycle else {
-            return Err(reject(
-                "tmem_lifecycle",
-                "`tmem_lifecycle` was requested, but no `tcgen05_alloc` / `tcgen05_dealloc` pair was found in the kernel",
-            ));
-        };
         let lc_thm = "verify_tmem_lifecycle";
-        let valid_pow2 = matches!(lc.alloc_cols, 32 | 64 | 128 | 256 | 512);
-        let lc_proof = if valid_pow2 && lc.alloc_cols == lc.dealloc_cols && lc.balanced {
-            "exact CudaOxide.Proofs.Launch.tmem_lifecycle_of_checked (by unfold CudaOxide.Contracts.TmemValidCols; omega)"
-        } else {
-            "unfold CudaOxide.Contracts.TmemLifecycle CudaOxide.Contracts.TmemValidCols\n  omega"
-        };
         theorems.push(format!(
             "theorem {lc_thm} :\n    \
-             CudaOxide.Contracts.TmemLifecycle {} {} {} := by\n  \
-             {lc_proof}",
-            lc.alloc_cols, lc.dealloc_cols, lc.balanced
+             CudaOxide.Contracts.ControlFlow.TmemLifecycle controlFlowCfg := by\n  \
+             exact CudaOxide.Proofs.ControlFlow.tmem_lifecycle_sound (by decide)"
         ));
         axiom_prints.push(format!("#print axioms {lc_thm}"));
 
         for (idx, acc) in tmem_accesses.iter().enumerate() {
             let thm_name = format!("verify_no_oob_tmem_{idx}");
             let acc_str = format_tmem_access(acc);
+            let alloc_cols = acc.alloc_cols;
             let is_warp_lane_32 = matches!(
                 &acc.lane_expr,
                 IdxExpr::Mul(lhs, rhs)
@@ -695,8 +983,8 @@ fn render_verified_tiled_2d_module(
                 && let (IdxExpr::Const(lane_off), IdxExpr::Const(col_off)) =
                     (&acc.lane_expr, &acc.col_expr)
                 && lane_off + acc.height_lanes <= 128
-                && col_off + acc.width_cols <= lc.alloc_cols
-                && lc.alloc_cols <= 512
+                && col_off + acc.width_cols <= alloc_cols
+                && alloc_cols <= 512
             {
                 "exact CudaOxide.Proofs.Bounds.no_oob_tmem_mma (by decide) (by decide) (by decide)"
                     .to_string()
@@ -707,8 +995,8 @@ fn render_verified_tiled_2d_module(
                 && acc.loop_bound > 0
                 && is_warp_lane_32
                 && matches!(acc.col_expr, IdxExpr::LoopVar { .. })
-                && (acc.loop_bound - 1) + acc.width_cols <= lc.alloc_cols
-                && lc.alloc_cols <= 512
+                && (acc.loop_bound - 1) + acc.width_cols <= alloc_cols
+                && alloc_cols <= 512
             {
                 "exact CudaOxide.Proofs.Bounds.no_oob_tmem_warp_ld_unit_scan (by decide) (by decide) (by decide) (by decide)"
                     .to_string()
@@ -722,9 +1010,8 @@ fn render_verified_tiled_2d_module(
             };
             theorems.push(format!(
                 "theorem {thm_name} :\n    \
-                 CudaOxide.Contracts.NoOobTmemAccess {bx} {by} {}\n      {acc_str} := by\n  \
-                 {proof_line}",
-                lc.alloc_cols
+                 CudaOxide.Contracts.NoOobTmemAccess {bx} {by} {alloc_cols}\n      {acc_str} := by\n  \
+                 {proof_line}"
             ));
             axiom_prints.push(format!("#print axioms {thm_name}"));
         }
@@ -735,14 +1022,15 @@ fn render_verified_tiled_2d_module(
          -- SPDX-License-Identifier: Apache-2.0\n\
          -- Generated from PostMem2Reg dialect-mir (2D Phased Shared-Memory Kernel).\n\
          import CudaOxide\n\n\
-         set_option linter.unusedSimpArgs false\n\n\
+         set_option linter.unusedSimpArgs false\n\
+         set_option maxRecDepth 4096\n\n\
          namespace CudaOxide.Generated\n\n\
          def kernelSummary : CudaOxide.Mir.Kernel.TiledKernelSummary2D :=\n  \
          {{ blockDimX := {bx}\n  \
          , blockDimY := {by}\n  \
          , numBarriers := {num_barriers}\n  \
-         , barriersUniform := {barriers_uniform}\n  \
          , sharedAccesses := [\n{}\n    ]\n  }}\n\n\
+         {cfg_def_section}\
          {}\n\n\
          {}\n\n\
          end CudaOxide.Generated\n",

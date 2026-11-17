@@ -151,10 +151,15 @@ def main():
                 1,
             )
         )
-        rejected_skip = export(skip_write_mir, "vecadd")
-        if rejected_skip.returncode == 0 or "conditional branch can skip writing it" not in rejected_skip.stderr:
-            raise RuntimeError(f"Expected conditional skip under writes_all_elems to be rejected:\n{rejected_skip.stderr}")
-        print("REJECTED as expected: conditional branch skipping output write fails `writes_all_elems`.", flush=True)
+        skip_write_lean = require_export(skip_write_mir, "vecadd")
+        skip_write_file = temporary / "VecaddSkipWrite.lean"
+        skip_write_file.write_text(
+            "\n".join(line for line in skip_write_lean.splitlines() if not line.startswith("#print axioms"))
+        )
+        res_skip = run_lake("env", "lean", str(skip_write_file))
+        if res_skip.returncode == 0:
+            raise RuntimeError(f"Expected conditional skip under writes_all_elems to fail WritesOnAllActivePaths in Lean:\n{res_skip.stdout}")
+        print("REJECTED as expected: conditional branch skipping output write fails `WritesOnAllActivePaths` in Lean 4.", flush=True)
 
         # Verified 2D phased shared-memory SGEMM checks
         sgemm_source = SGEMM_TILED_FIXTURE.read_text()
@@ -445,17 +450,41 @@ def main():
         require_success("env", "lean", str(tcgen05_valid))
         print("PASS: exported tcgen05_matmul_verified MIR proves TMEM lifecycle, TMEM/SMEM bounds, warpgroup slices, and token ordering.", flush=True)
 
-        # Stage 6 negative check 1: Missing `fence_proxy_async_shared_cta()` after `mbarrier_init`:
+        # Stage 6 negative check 1: Missing `fence_proxy_async_shared_cta()` after `mbarrier_init` fails in Lean 4:
         no_proxy_mir = temporary / "tcgen05_no_proxy_fence.mir"
         no_proxy_mir.write_text(
             "\n".join(line for line in tcgen05_source.splitlines() if "fence_proxy_async_shared_cta" not in line)
         )
-        rejected_proxy = export(no_proxy_mir, "tcgen05_matmul_verified")
-        if rejected_proxy.returncode == 0 or "fence_proxy_async_shared_cta" not in rejected_proxy.stderr:
-            raise RuntimeError(f"Expected missing fence_proxy_async_shared_cta to be rejected:\n{rejected_proxy.stderr}")
-        print("REJECTED as expected: missing `fence_proxy_async_shared_cta()` before async TMA / tcgen05_commit is rejected.", flush=True)
+        no_proxy_lean = require_export(no_proxy_mir, "tcgen05_matmul_verified")
+        no_proxy_file = temporary / "Tcgen05NoProxyFence.lean"
+        no_proxy_file.write_text(
+            "\n".join(line for line in no_proxy_lean.splitlines() if not line.startswith("#print axioms"))
+        )
+        res_no_proxy = run_lake("env", "lean", str(no_proxy_file))
+        if res_no_proxy.returncode == 0:
+            raise RuntimeError(f"Expected missing fence_proxy_async_shared_cta to fail TmemLifecycle in Lean:\n{res_no_proxy.stdout}")
+        print("REJECTED as expected: missing `fence_proxy_async_shared_cta()` fails `TmemLifecycle` in Lean 4.", flush=True)
 
-        # Stage 6 negative check 2: 64-column TMEM allocation with 128-column MMA/ld overflows in Lean:
+        # Stage 6 negative check 2: Out-of-order `tcgen05_commit` placed before `tcgen05_mma_f16` fails in Lean 4:
+        commit_first_mir = temporary / "tcgen05_commit_before_mma.mir"
+        commit_first_mir.write_text(
+            tcgen05_source.replace(
+                "        nvvm.tcgen05_mma_f16 (tmem_addr, a_desc, b_desc, idesc, false_i1) [] []: <(builtin.integer ui32, builtin.integer ui64, builtin.integer ui64, builtin.integer ui32, builtin.integer i1) -> ()>;\n        nvvm.tcgen05_commit_shared_cluster (mma_bar_p) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>) -> ()>;",
+                "        nvvm.tcgen05_commit_shared_cluster (mma_bar_p) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>) -> ()>;\n        nvvm.tcgen05_mma_f16 (tmem_addr, a_desc, b_desc, idesc, false_i1) [] []: <(builtin.integer ui32, builtin.integer ui64, builtin.integer ui64, builtin.integer ui32, builtin.integer i1) -> ()>;",
+                1,
+            )
+        )
+        commit_first_lean = require_export(commit_first_mir, "tcgen05_matmul_verified")
+        commit_first_file = temporary / "Tcgen05CommitBeforeMma.lean"
+        commit_first_file.write_text(
+            "\n".join(line for line in commit_first_lean.splitlines() if not line.startswith("#print axioms"))
+        )
+        res_commit_first = run_lake("env", "lean", str(commit_first_file))
+        if res_commit_first.returncode == 0:
+            raise RuntimeError(f"Expected out-of-order tcgen05_commit before tcgen05_mma to fail in Lean:\n{res_commit_first.stdout}")
+        print("REJECTED as expected: `tcgen05_commit` before `tcgen05_mma` fails `TmemLifecycle` in Lean 4.", flush=True)
+
+        # Stage 6 negative check 3: 64-column TMEM allocation with 128-column MMA/ld overflows in Lean:
         tmem_overflow_mir = temporary / "tcgen05_col_overflow.mir"
         tmem_overflow_mir.write_text(
             tcgen05_source.replace(
@@ -475,6 +504,68 @@ def main():
         if res_tmem_overflow.returncode == 0 or "error: omega could not prove the goal:" not in res_tmem_overflow.stdout:
             raise RuntimeError(f"Expected 128-col MMA/ld on 64-col TMEM allocation to fail NoOobTmemAccess in Lean:\n{res_tmem_overflow.stdout}")
         print("REJECTED as expected: 128-column `tcgen05` MMA/ld on 64-column `TMEM` fails `NoOobTmemAccess`.", flush=True)
+
+        # `&mut [T]` positive + negative check: plain `c: &mut [f32]` with 64-bit hardware coordinates succeeds,
+        # while racy `c[idx] = c[idx + 1]` on `c: &mut [f32]` fails `DisjointSliceAccessPair` in Lean 4:
+        mut_slice_mir = temporary / "vecadd_mut_slice.mir"
+        mut_slice_source = """mir.func @vecadd_mut_slice: builtin.function <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>, mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>, mir.slice <builtin.fp32 ,mutable:true,kind:UniqueRef>) -> ()>
+  [contract_requires_len_ge: builtin.string "0>=2,1>=2", gpu_kernel: builtin.string "true", launch_contract_domain: builtin.integer <1: ui32>, reqntid_x: builtin.integer <256: ui32>, reqntid_y: builtin.integer <1: ui32>, reqntid_z: builtin.integer <1: ui32>, verify_disjoint_writes: builtin.string "2", verify_no_oob_idx: builtin.string "0,1,2", verify_writes_all_elems: builtin.string "2"]
+{
+  ^entry(a: mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>, b: mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>, c: mir.slice <builtin.fp32 ,mutable:true,kind:UniqueRef>):
+    bx32 = nvvm.read_ptx_sreg_ctaid_x () [] []: <() -> (builtin.integer ui32)>;
+    bd32 = nvvm.read_ptx_sreg_ntid_x () [] []: <() -> (builtin.integer ui32)>;
+    tx32 = nvvm.read_ptx_sreg_tid_x () [] []: <() -> (builtin.integer ui32)>;
+    bx = mir.cast (bx32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+    bd = mir.cast (bd32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+    tx = mir.cast (tx32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+    base = mir.mul (bx, bd) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+    idx = mir.add (base, tx) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+    c_len = mir.extract_field (c) [] [index: mir.field_index 1]: <(mir.slice <builtin.fp32 ,mutable:true,kind:UniqueRef>) -> (builtin.integer ui64)>;
+    in_bounds = mir.lt (idx, c_len) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+    mir.cond_br (in_bounds) [^active, ^exit] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+  ^active():
+    a_ptr = mir.extract_field (a) [] [index: mir.field_index 0]: <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>)>;
+    a_elem = mir.ptr_offset (a_ptr, idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>)>;
+    a_val = mir.load (a_elem) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>) -> (builtin.fp32)>;
+    b_ptr = mir.extract_field (b) [] [index: mir.field_index 0]: <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>)>;
+    b_elem = mir.ptr_offset (b_ptr, idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>)>;
+    b_val = mir.load (b_elem) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>) -> (builtin.fp32)>;
+    sum = mir.add (a_val, b_val) [] []: <(builtin.fp32, builtin.fp32) -> (builtin.fp32)>;
+    c_ptr = mir.extract_field (c) [] [index: mir.field_index 0]: <(mir.slice <builtin.fp32 ,mutable:true,kind:UniqueRef>) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>)>;
+    c_elem = mir.ptr_offset (c_ptr, idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>)>;
+    mir.store (c_elem, sum) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>, builtin.fp32) -> ()>;
+    mir.goto () [^exit] []: <() -> ()>
+
+  ^exit():
+    mir.return () [] []: <() -> ()>
+}
+"""
+        mut_slice_mir.write_text(mut_slice_source)
+        mut_slice_lean = require_export(mut_slice_mir, "vecadd_mut_slice")
+        mut_slice_file = temporary / "VecaddMutSlice.lean"
+        mut_slice_file.write_text(mut_slice_lean)
+        res_mut_slice = run_lake("env", "lean", str(mut_slice_file))
+        if res_mut_slice.returncode != 0:
+            raise RuntimeError(f"Expected plain &mut [f32] vecadd to verify in Lean:\n{res_mut_slice.stdout}")
+        print("PASS: exported vecadd_mut_slice MIR (`c: &mut [f32]`) proves NoOobIdx, DisjointWrites, and WritesAllElems.", flush=True)
+
+        racy_mut_mir = temporary / "vecadd_mut_racy.mir"
+        racy_mut_mir.write_text(
+            mut_slice_source.replace(
+                "    c_ptr = mir.extract_field (c) [] [index: mir.field_index 0]: <(mir.slice <builtin.fp32 ,mutable:true,kind:UniqueRef>) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>)>;\n    c_elem = mir.ptr_offset (c_ptr, idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>)>;\n    mir.store (c_elem, sum) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>, builtin.fp32) -> ()>;",
+                "    c1_u64 = mir.constant () [] [value: builtin.integer <1: ui64>]: <() -> (builtin.integer ui64)>;\n    idx_next = mir.add (idx, c1_u64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;\n    c_ptr = mir.extract_field (c) [] [index: mir.field_index 0]: <(mir.slice <builtin.fp32 ,mutable:true,kind:UniqueRef>) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>)>;\n    c_next_ptr = mir.ptr_offset (c_ptr, idx_next) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>)>;\n    c_neighbor = mir.load (c_next_ptr) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>) -> (builtin.fp32)>;\n    sum2 = mir.add (sum, c_neighbor) [] []: <(builtin.fp32, builtin.fp32) -> (builtin.fp32)>;\n    c_elem = mir.ptr_offset (c_ptr, idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>)>;\n    mir.store (c_elem, sum2) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>, builtin.fp32) -> ()>;",
+            )
+        )
+        racy_mut_lean = require_export(racy_mut_mir, "vecadd_mut_slice")
+        racy_mut_file = temporary / "VecaddMutRacy.lean"
+        racy_mut_file.write_text(
+            "\n".join(line for line in racy_mut_lean.splitlines() if not line.startswith("#print axioms"))
+        )
+        res_racy_mut = run_lake("env", "lean", str(racy_mut_file))
+        if res_racy_mut.returncode == 0:
+            raise RuntimeError(f"Expected racy `c[idx] = ... + c[idx + 1]` on `&mut [f32]` to fail in Lean:\n{res_racy_mut.stdout}")
+        print("REJECTED as expected: cross-thread `c[idx + 1]` read alongside `c[idx]` write on `&mut [f32]` fails in Lean 4.", flush=True)
 
     print("Exporter checks passed for scalar, 1D vecadd, 2D SGEMM, Stage 3 warp/block reductions, Stage 4 sub-warp multi-buffer, Stage 5 async mbarrier, and Stage 6 Blackwell tcgen05/TMEM fixtures.")
 

@@ -1196,6 +1196,51 @@ fn contracted_mut_slice_is_rejected_in_favor_of_disjoint_slice() {
 }
 
 #[test]
+fn contracted_mut_slice_requires_both_no_oob_idx_and_disjoint_writes_in_verify() {
+    let missing_disjoint: ItemMod = parse_quote! {
+        mod kernels {
+            #[kernel]
+            #[launch_contract(domain = 1, block = (64, 1, 1))]
+            #[verify(no_oob_idx(out))]
+            pub fn missing_dw(out: &mut [u32]) {}
+        }
+    };
+    let err1 = expand_cuda_module(missing_disjoint)
+        .expect_err("mutable slice without disjoint_writes must fail closed");
+    assert!(
+        err1.to_string()
+            .contains("requires both `no_oob_idx(out)` and `disjoint_writes(out)`")
+    );
+
+    let missing_oob: ItemMod = parse_quote! {
+        mod kernels {
+            #[kernel]
+            #[launch_contract(domain = 1, block = (64, 1, 1))]
+            #[verify(disjoint_writes(out))]
+            pub fn missing_bounds(out: &mut [u32]) {}
+        }
+    };
+    let err2 = expand_cuda_module(missing_oob)
+        .expect_err("mutable slice without no_oob_idx must fail closed");
+    assert!(
+        err2.to_string()
+            .contains("requires both `no_oob_idx(out)` and `disjoint_writes(out)`")
+    );
+
+    let valid_mut_slice: ItemMod = parse_quote! {
+        mod kernels {
+            #[kernel]
+            #[launch_contract(domain = 1, block = (64, 1, 1), requires = (a.len() >= out.len()))]
+            #[verify(no_oob_idx(a, out), disjoint_writes(out), writes_all_elems(out))]
+            pub fn verified_mut(a: &[f32], out: &mut [f32]) {}
+        }
+    };
+    let expanded = expand_to_compact_string(valid_mut_slice);
+    assert!(expanded.contains("fnprepare_verified_mut("));
+    assert!(expanded.contains("pubfnverified_mut("));
+}
+
+#[test]
 fn disjoint_slice_packet_shape_is_bound_to_the_resolved_type() {
     // The spelling `Rt` hides a runtime row width, so the macro selects
     // the two-word host ABI. The generated launch methods must carry the

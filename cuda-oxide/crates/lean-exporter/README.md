@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # `dialect-mir` to Lean 4 Exporter (`lean-exporter`)
 
-Turns `cuda-oxide`'s `dialect-mir` into Lean 4 code so Lean can prove kernel safety properties (`no_oob_idx`, `no_data_race`, `disjoint_writes`, `writes_all_elems`, `uniform_barriers`) before the compiler emits PTX.
+Thin, fail-closed transcriber that turns `cuda-oxide`'s `PostMem2Reg` `dialect-mir` into Lean 4 code (`KernelSummary1D`, `TiledKernelSummary2D`, and `ControlFlowCfg`) so Lean 4 proves kernel safety properties (`no_oob_idx`, `no_data_race`, `disjoint_writes`, `writes_all_elems`, `uniform_barriers`, `tmem_lifecycle`) before the compiler emits PTX.
 
 ---
 
@@ -45,14 +45,21 @@ Every `mir.func` goes through the same 4 steps:
 
 ## Module Map
 
-| File               | Job in plain English                                                 |
-|:-------------------|:---------------------------------------------------------------------|
-| `src/lib.rs`       | Parses `.mir` input and runs `translate` -> `codegen`                |
-| `src/ssa.rs`       | Defines `TypedSsa { lean_name, kind }`, `SsaKind`, and `SsaEnv`      |
-| `src/spec.rs`      | Reads `#[verify(...)]` and `#[launch_contract(...)]` on `mir.func`   |
-| `src/translate.rs` | Single MIR translator walking ops with `SsaEnv`                      |
-| `src/codegen.rs`   | Renders `TranslatedFunction` into a `.lean` file and `theorem`s      |
-| `src/runner.rs`    | Invokes `lake env lean` and audits proof axioms                      |
+| File                        | Job in plain English                                             |
+|:----------------------------|:-----------------------------------------------------------------|
+| `src/lib.rs`                | Parses `.mir` input and runs `translate` -> `codegen`            |
+| `src/ssa.rs`                | Defines `TypedSsa`, `IdxExpr`, `GuardExpr`, `ControlFlowCfg`     |
+| `src/spec.rs`               | Reads `#[verify(...)]` and `#[launch_contract(...)]` attributes  |
+| `src/translate.rs`          | Transcriber entry point and public summary types                 |
+| `src/translate/ir_utils.rs` | `BlockGraph` adjacency and shared Pliron operand/cast helpers    |
+| `src/translate/scalar.rs`   | Pure scalar `BitVec` function transcriber (`arithmetic.mir`)     |
+| `src/translate/slice_1d.rs` | Barrier-free 1D slice kernel transcriber (`vecadd`)              |
+| `src/translate/strips_2d.rs`| Hoisted 2D `RowBand` / `ColBand` provenance (`sgemm_tiled_raw`)  |
+| `src/translate/ssa_prop.rs` | Fixed-point `SsaEnv` propagation (`IdxExpr`, `SmemDesc`)         |
+| `src/translate/tcgen05.rs`  | Blackwell `tcgen05` / `TMEM`, `mbarrier`, and TMA transcription  |
+| `src/translate/phased.rs`   | Phased shared-memory / barrier / async kernel driver             |
+| `src/codegen.rs`            | Renders `TranslatedFunction` into `.lean` code and `theorem`s    |
+| `src/runner.rs`             | Invokes `lake env lean` and audits proof axioms                  |
 
 ---
 

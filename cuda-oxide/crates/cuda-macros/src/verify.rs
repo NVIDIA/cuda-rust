@@ -468,11 +468,41 @@ fn is_shared_array_type(ty: &Type) -> bool {
         .is_some_and(|seg| seg.ident == "SharedArray")
 }
 
+/// Ensure every `&mut [T]` parameter on a contracted/verified kernel is covered by
+/// both `no_oob_idx(param)` and `disjoint_writes(param)` (or `no_data_race(param)`).
+pub(crate) fn validate_mutable_slice_verify_coverage(
+    verify_args: Option<&VerifyArgs>,
+    params: &[CudaModuleParam],
+) -> syn::Result<()> {
+    for param in params.iter().filter(|p| p.mutable_slice) {
+        let Some(args) = verify_args else {
+            return Err(syn::Error::new(
+                param.name.span(),
+                "contracted kernels cannot take `&mut [T]`; use `DisjointSlice<T, IndexSpace>` so the launch domain and per-thread write ownership are explicit, or prove exclusivity with `#[verify(no_oob_idx(...), disjoint_writes(...))]`",
+            ));
+        };
+        let has_no_oob = args.no_oob_idx.iter().any(|id| id == &param.name);
+        let has_disjoint = args.disjoint_writes.iter().any(|id| id == &param.name)
+            || args.no_data_race.iter().any(|id| id == &param.name);
+        if !has_no_oob || !has_disjoint {
+            return Err(syn::Error::new(
+                param.name.span(),
+                format!(
+                    "mutable slice parameter `{0}` (`&mut [T]`) requires both `no_oob_idx({0})` and `disjoint_writes({0})` in `#[verify(...)]`; otherwise use `DisjointSlice<T>`",
+                    param.name
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn build_verify_marker_stmts(
     args: &VerifyArgs,
     params: &[CudaModuleParam],
     shared_statics: &[Ident],
 ) -> syn::Result<Vec<Stmt>> {
+    validate_mutable_slice_verify_coverage(Some(args), params)?;
     let mut stmts = Vec::new();
     for ident in &args.no_oob_idx {
         if let Some(shared_idx) = shared_statics.iter().position(|name| name == ident) {

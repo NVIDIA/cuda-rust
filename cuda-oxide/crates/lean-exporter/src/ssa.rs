@@ -21,7 +21,7 @@
 //!   `cond`  (op 3)  ──► `{ lean_name: "v3",   kind: IndexLtLen { guard_param: 2 } }`
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, VecDeque};
 
 use pliron::value::Value;
 
@@ -373,6 +373,10 @@ pub enum GuardExpr {
     Ne(IdxExpr, IdxExpr),
     /// Conjunction of two dominating branch guards (`p /\ q`).
     And(Box<GuardExpr>, Box<GuardExpr>),
+    /// Unmodeled or data-dependent branch condition (`if flag`, `if data[tid] > 0.0`).
+    /// Yields no narrowing assumption (`True`) on bounds obligations while poisoning
+    /// warp-collective and block-uniformity checks.
+    Unknown,
 }
 
 impl GuardExpr {
@@ -384,7 +388,7 @@ impl GuardExpr {
             Self::Ge(a, b) => Self::Lt(a.clone(), b.clone()),
             Self::Eq(a, b) => Self::Ne(a.clone(), b.clone()),
             Self::Ne(a, b) => Self::Eq(a.clone(), b.clone()),
-            Self::And(_, _) => Self::True,
+            Self::And(_, _) | Self::Unknown => Self::Unknown,
         }
     }
 
@@ -417,6 +421,18 @@ impl GuardExpr {
         }
     }
 
+    /// Return true if this guard includes a CTA-wide thread-0 check (`tx == 0`).
+    pub fn has_cta_leader_zero_check(&self) -> bool {
+        match self {
+            Self::Eq(lhs, rhs) => matches!(
+                (lhs, rhs),
+                (IdxExpr::Tx, IdxExpr::Const(0)) | (IdxExpr::Const(0), IdxExpr::Tx)
+            ),
+            Self::And(p, q) => p.has_cta_leader_zero_check() || q.has_cta_leader_zero_check(),
+            _ => false,
+        }
+    }
+
     /// Extract the tightest `tx < bound` upper bound implied by this guard (defaulting to `default_bound`).
     pub fn active_threads_bound(&self, default_bound: u64) -> u64 {
         match self {
@@ -428,11 +444,11 @@ impl GuardExpr {
         }
     }
 
-    /// Extract any conjuncts that are not already represented by `active_threads` (`tx < N`)
-    /// or `leader_only` (`tx % G == 0` / `tx == 0`).
+    /// Extract any coordinate conjuncts that are not already represented by `active_threads`
+    /// (`tx < N`), `leader_only` (`tx % G == 0` / `tx == 0`), or unmodeled `Unknown` guards.
     pub fn custom_residual(&self) -> Self {
         match self {
-            Self::True => Self::True,
+            Self::True | Self::Unknown => Self::True,
             Self::Lt(IdxExpr::Tx, IdxExpr::Const(_)) => Self::True,
             Self::Eq(_, _) if self.has_zero_leader_check() => Self::True,
             Self::And(p, q) => p.custom_residual().and(q.custom_residual()),
@@ -440,51 +456,12 @@ impl GuardExpr {
         }
     }
 
-    /// Return true if this guard restricts execution to a sub-warp subset of lanes
-    /// (such as `tx == 0`, `tx % G == c`, or `tx < k` where `k % 32 != 0`), which
-    /// cannot satisfy warp-synchronous `.sync.aligned` instructions like `tcgen05.alloc`.
-    pub fn has_subwarp_lane_filter(&self) -> bool {
-        match self {
-            Self::True => false,
-            Self::Lt(IdxExpr::Tx, IdxExpr::Const(bound)) => *bound != 32,
-            Self::Eq(IdxExpr::Div(b, 32), IdxExpr::Const(_))
-            | Self::Eq(IdxExpr::Const(_), IdxExpr::Div(b, 32))
-                if **b == IdxExpr::Tx =>
-            {
-                false
-            }
-            Self::And(p, q) => p.has_subwarp_lane_filter() || q.has_subwarp_lane_filter(),
-            _ => true,
-        }
-    }
-
-    /// Return `Some(warp_idx)` when this dominating guard selects exactly one full
-    /// 32-lane hardware warp (`32 * (warp_idx + 1) <= block_size` in a 1D block)
-    /// with no intra-warp lane divergence.
-    pub fn selects_single_full_warp(&self, block_size: u32, block_y: u32) -> Option<u64> {
-        if block_y != 1 || self.has_subwarp_lane_filter() {
-            return None;
-        }
-        let bx = u64::from(block_size);
-        match self {
-            Self::True if bx == 32 => Some(0),
-            Self::Lt(IdxExpr::Tx, IdxExpr::Const(32)) if bx >= 32 => Some(0),
-            Self::Eq(IdxExpr::Div(b, 32), IdxExpr::Const(w))
-            | Self::Eq(IdxExpr::Const(w), IdxExpr::Div(b, 32))
-                if **b == IdxExpr::Tx && w.checked_add(1).is_some_and(|n| n * 32 <= bx) =>
-            {
-                Some(*w)
-            }
-            Self::And(p, q) => match (
-                p.selects_single_full_warp(block_size, block_y),
-                q.selects_single_full_warp(block_size, block_y),
-            ) {
-                (Some(w1), Some(w2)) if w1 == w2 => Some(w1),
-                (Some(w), None) | (None, Some(w)) => Some(w),
-                _ => None,
-            },
-            _ => None,
-        }
+    /// Return true if this guard tests a bounded inner loop counter (`i < bound` or `i >= bound`).
+    pub fn is_loop_bound_test(&self) -> bool {
+        matches!(
+            self,
+            Self::Lt(a, _) | Self::Ge(a, _) if a.loop_bound() > 1
+        )
     }
 }
 
@@ -536,6 +513,227 @@ pub enum TileAccessPatternKind {
     Expr(IdxExpr),
 }
 
+/// Outgoing basic-block terminator branch condition transcribed into
+/// `CudaOxide.Mir.ControlFlow.BranchCond`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CfgBranchCond {
+    /// Unconditional `mir.goto`.
+    Always,
+    /// Thread-coordinate predicate (`tid == 0`, `warp_id == 0`, `tid < 64`, `lane == 0`).
+    Coord(GuardExpr),
+    /// `mbarrier_try_wait*` ready branch (`ready == true`).
+    MbarReady(usize),
+    /// `mbarrier_try_wait*` spin branch (`ready == false`).
+    MbarSpin(usize),
+    /// CTA-uniform loop bound condition (`tile < k`, `col < 128`).
+    Uniform,
+    /// Data-dependent or unmodeled runtime condition (`if flag`, `if data[tid] > 0.0`).
+    Unknown,
+}
+
+/// Control-flow-sensitive GPU or shared-memory instruction transcribed in block
+/// order into `CudaOxide.Mir.ControlFlow.CfgOp`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CfgOpItem {
+    /// Block-wide `thread::sync_threads()` (`nvvm.barrier0`).
+    SyncThreads,
+    /// Generic-proxy shared-memory load on `shared_id`.
+    SharedRead {
+        /// Index of the `SharedArray` static (`0..num_shared`).
+        shared_id: usize,
+    },
+    /// Generic-proxy shared-memory store on `shared_id`.
+    SharedWrite {
+        /// Index of the `SharedArray` static (`0..num_shared`).
+        shared_id: usize,
+    },
+    /// `mbarrier_init(&BAR, count)` via generic proxy.
+    MbarInit {
+        /// Index of the `Barrier` static (`0..num_barriers`).
+        bar_id: usize,
+        /// Expected thread arrival count.
+        count: u64,
+    },
+    /// `fence_proxy_async_shared_cta()` flushing generic writes to the async proxy.
+    ProxyFenceAsyncShared,
+    /// Plain arrival `mbarrier_arrive(&BAR)`.
+    MbarArrive {
+        /// Index of the `Barrier` static (`0..num_barriers`).
+        bar_id: usize,
+    },
+    /// Byte-counted arrival `mbarrier_arrive_expect_tx(&BAR, count, tx_bytes)`.
+    MbarArriveExpectTx {
+        /// Index of the `Barrier` static (`0..num_barriers`).
+        bar_id: usize,
+        /// Expected asynchronous byte transfer count.
+        tx_bytes: u64,
+    },
+    /// Asynchronous TMA copy `cp_async_bulk_tensor_*_g2s(SMEM, BAR, ...)`.
+    TmaCopyG2S {
+        /// Destination `SharedArray` static index (`0..num_shared`).
+        shared_id: usize,
+        /// Completion `Barrier` static index (`0..num_barriers`).
+        bar_id: usize,
+    },
+    /// Warp-collective `tcgen05_alloc(&TMEM_ADDR[0], cols)`.
+    TmemAlloc {
+        /// `SharedArray` slot receiving the allocated `TMEM` base column address.
+        shared_id: usize,
+        /// Requested `TMEM` column count.
+        cols: u64,
+        /// True for `.cta_group::2` (`_cg2`) allocation.
+        is_cg2: bool,
+    },
+    /// Warp-collective `tcgen05_dealloc(tmem_addr, cols)`.
+    TmemDealloc {
+        /// Freed `TMEM` column count.
+        cols: u64,
+        /// True for `.cta_group::2` (`_cg2`) deallocation.
+        is_cg2: bool,
+    },
+    /// Single-thread async `tcgen05_mma*` or `tcgen05_cp*` reading `smem_ids` into `TMEM`.
+    TmemAsyncIssue {
+        /// Backing `SharedArray` indices of all 64-bit SMEM descriptors read by the op.
+        smem_ids: Vec<usize>,
+    },
+    /// Single-thread `tcgen05_commit*(&BAR)` tying prior `TmemAsyncIssue` to `bar_id`.
+    TmemCommit {
+        /// Signaled `Barrier` static index (`0..num_barriers`).
+        bar_id: usize,
+    },
+    /// Warp-restricted async `tcgen05_ld_*` producing register token `ld_id`.
+    TmemLoad {
+        /// Deterministic load identifier (`0, 1, ...`).
+        ld_id: usize,
+    },
+    /// `tcgen05_load_wait()` retiring in-flight `TmemLoad` operations.
+    TmemLoadWait,
+    /// Consumer read of the register produced by `TmemLoad { ld_id }`.
+    TmemLoadUse {
+        /// Identifier of the consumed `TmemLoad` result.
+        ld_id: usize,
+    },
+}
+
+/// One basic block transcribed into `CudaOxide.Mir.ControlFlow.CfgBlock`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TranscribedCfgBlock {
+    /// Ordered control-flow operations inside this basic block.
+    pub ops: Vec<CfgOpItem>,
+    /// Outgoing `(condition, target_block_idx)` edges.
+    pub succs: Vec<(CfgBranchCond, usize)>,
+    /// True when this basic block ends with `mir.return`.
+    pub is_return: bool,
+}
+
+/// Compact kernel control-flow graph transcribed 1-to-1 into
+/// `CudaOxide.Mir.ControlFlow.ControlFlowCfg` for Lean 4 state-machine verification.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TranscribedControlFlowCfg {
+    /// Number of static `SharedArray` allocations in the kernel.
+    pub num_shared: usize,
+    /// Number of static `Barrier` (`mbarrier`) allocations in the kernel.
+    pub num_barriers: usize,
+    /// Transcribed basic blocks (`0` is entry).
+    pub blocks: Vec<TranscribedCfgBlock>,
+}
+
+impl TranscribedControlFlowCfg {
+    /// Strip no-op pass-through `goto` trampolines (`ops: [], succs: [(Always, next)]`),
+    /// collapse empty reconverging diamonds (`[(c0, d), (c1, d)]` with non-`mbarrier` edges),
+    /// and prune unreachable blocks while preserving `protected` block indices.
+    ///
+    /// Returns a map from original block indices to compacted `0..K` block indices.
+    pub fn compact(&mut self, protected: &BTreeSet<usize>) -> HashMap<usize, usize> {
+        let n = self.blocks.len();
+        if n == 0 {
+            return HashMap::new();
+        }
+        let resolve_chain = |blocks: &[TranscribedCfgBlock], mut u: usize| -> usize {
+            for _ in 0..n {
+                if protected.contains(&u) || u >= n {
+                    break;
+                }
+                let blk = &blocks[u];
+                if blk.ops.is_empty()
+                    && !blk.is_return
+                    && let [(CfgBranchCond::Always, next)] = blk.succs.as_slice()
+                    && *next != u
+                {
+                    u = *next;
+                } else {
+                    break;
+                }
+            }
+            u
+        };
+
+        for _ in 0..n + 2 {
+            let mut changed = false;
+            let snap = self.blocks.clone();
+            for blk in &mut self.blocks {
+                for (_, dst) in &mut blk.succs {
+                    let resolved = resolve_chain(&snap, *dst);
+                    if resolved != *dst {
+                        *dst = resolved;
+                        changed = true;
+                    }
+                }
+                if let [(c0, d0), (c1, d1)] = blk.succs.as_slice()
+                    && d0 == d1
+                    && !matches!(c0, CfgBranchCond::MbarReady(_) | CfgBranchCond::MbarSpin(_))
+                    && !matches!(c1, CfgBranchCond::MbarReady(_) | CfgBranchCond::MbarSpin(_))
+                {
+                    let target = *d0;
+                    blk.succs = vec![(CfgBranchCond::Always, target)];
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        let entry = resolve_chain(&self.blocks, 0);
+        let mut reachable_order = Vec::new();
+        let mut old_to_new: HashMap<usize, usize> = HashMap::new();
+        let mut queue = VecDeque::from([entry]);
+        while let Some(u) = queue.pop_front() {
+            if u >= n || old_to_new.contains_key(&u) {
+                continue;
+            }
+            let new_idx = reachable_order.len();
+            old_to_new.insert(u, new_idx);
+            reachable_order.push(u);
+            for &(_, dst) in &self.blocks[u].succs {
+                if !old_to_new.contains_key(&dst) {
+                    queue.push_back(dst);
+                }
+            }
+        }
+
+        let mut full_remap = HashMap::new();
+        for old_idx in 0..n {
+            let target = resolve_chain(&self.blocks, old_idx);
+            if let Some(&new_idx) = old_to_new.get(&target) {
+                full_remap.insert(old_idx, new_idx);
+            }
+        }
+
+        let mut new_blocks = Vec::with_capacity(reachable_order.len());
+        for old_idx in reachable_order {
+            let mut blk = self.blocks[old_idx].clone();
+            blk.succs.retain(|(_, dst)| old_to_new.contains_key(dst));
+            for (_, dst) in &mut blk.succs {
+                *dst = old_to_new[dst];
+            }
+            new_blocks.push(blk);
+        }
+        self.blocks = new_blocks;
+        full_remap
+    }
+}
+
 /// 2D global slice strip indexing shape in a tiled 2D kernel (`sgemm_tiled_raw`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum GlobalStripKind {
@@ -566,6 +764,56 @@ pub enum SsaKind {
     LaunchContextAlloca,
     /// `ThreadIndex` struct returned by `__internal::index_1d`.
     ThreadIndexStruct,
+    /// Hardware `threadIdx_x` special register (`nvvm.read_ptx_sreg_tid_x`).
+    SregTidX {
+        /// Integer bit width (`32` raw, `64` after widening cast to `usize`).
+        bit_width: u32,
+    },
+    /// Hardware `blockIdx_x` special register (`nvvm.read_ptx_sreg_ctaid_x`).
+    SregCtaidX {
+        /// Integer bit width (`32` raw, `64` after widening cast to `usize`).
+        bit_width: u32,
+    },
+    /// Hardware `blockDim_x` special register (`nvvm.read_ptx_sreg_ntid_x`).
+    SregNtidX {
+        /// Integer bit width (`32` raw, `64` after widening cast to `usize`).
+        bit_width: u32,
+    },
+    /// Validated `blockIdx_x * blockDim_x` base product before adding `threadIdx_x`.
+    BlockBase1D {
+        /// Integer bit width (`64`, or `32` when `u32_coordinates` is active).
+        bit_width: u32,
+    },
+    /// 1D global thread or group-slot index (`(blockIdx * blockDim + tx) / group_size + offset`).
+    Global1DIdx {
+        /// Constant element offset added to the index.
+        offset: u64,
+        /// Thread group size (`1` for per-thread `idx`, `block_size` for `blockIdx_x` leader).
+        group_size: u64,
+    },
+    /// Pointer to `&buf[global_idx + offset]` on a global slice in a phased kernel.
+    Global1DElementPtr {
+        /// Target slice parameter index (`0..arity`).
+        param: usize,
+        /// Constant element offset.
+        offset: u64,
+        /// Thread group size (`1` or `block_size`).
+        group_size: u64,
+    },
+    /// Boolean comparison `global_idx < param.len()` in a phased kernel.
+    Global1DLtLen {
+        /// Slice parameter whose `.len()` bounds the index.
+        guard_param: usize,
+        /// Thread group size (`1` or `block_size`) of the compared index.
+        group_size: u64,
+    },
+    /// Negated comparison `!(global_idx < param.len())` in a phased kernel.
+    Global1DGeLen {
+        /// Slice parameter whose `.len()` bounds the index.
+        guard_param: usize,
+        /// Thread group size (`1` or `block_size`) of the compared index.
+        group_size: u64,
+    },
     /// 1D global thread index plus a constant element offset (`idx + offset`).
     Index1D {
         /// Constant offset added to `thread::index_1d()`.
@@ -697,7 +945,8 @@ pub enum SsaKind {
         /// Constant element offset added to the strip index (`0` when exact).
         offset: u64,
     },
-    /// `.shared::cta` byte offset returned by `nvvm.cvta_generic_to_shared_offset(&SMEM)`.
+    /// `.shared::cta` byte offset returned by `nvvm.cvta_generic_to_shared_offset(&SMEM)`
+    /// (plus any constant byte offset added before descriptor packing).
     SmemSharedOffset {
         /// Index of the verified `SharedArray` static (`0`, `1`, ...).
         shared_id: usize,
@@ -705,6 +954,8 @@ pub enum SsaKind {
         size: u64,
         /// Byte width of one element in the `SharedArray`.
         elem_bytes: u64,
+        /// Constant byte offset from the start of the `SharedArray` (`0` at base).
+        byte_offset: u64,
     },
     /// 64-bit `tcgen05` shared-memory matrix descriptor derived from [`Self::SmemSharedOffset`].
     SmemDesc {
@@ -714,6 +965,8 @@ pub enum SsaKind {
         size: u64,
         /// Byte width of one element in the `SharedArray`.
         elem_bytes: u64,
+        /// Constant byte offset from the start of the `SharedArray`.
+        byte_offset: u64,
     },
     /// 32-bit Blackwell Tensor Memory (`TMEM`) address (`base + (lane << 16) + col`)
     /// derived from an allocated `TMEM_ADDR` shared-memory slot.
@@ -725,6 +978,14 @@ pub enum SsaKind {
         /// Compositional `TMEM` column offset expression (`0..alloc_cols`).
         col_expr: IdxExpr,
     },
+    /// Register value returned by `nvvm.tcgen05_ld_*` that requires `tcgen05_load_wait()`
+    /// before being read by downstream instructions.
+    TmemLoadedReg {
+        /// Deterministic load site identifier (`0, 1, ...`).
+        ld_id: usize,
+    },
+    /// CTA-uniform scalar integer parameter or uniform loop counter (`m`, `n`, `k`, `tile`).
+    UniformScalar,
     /// Field-wise SSA provenance of a `mir.construct_struct` value (such as
     /// `Tcgen05SmemDescriptor` or `Tcgen05SmemDescriptorBuilder`).
     StructFields(Vec<SsaKind>),

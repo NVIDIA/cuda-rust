@@ -10,9 +10,9 @@ use cutile_kernels::experimental::{attention_f16, gemm_variants, moe_f16};
 
 pub type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-fn values(n: usize, salt: usize) -> Vec<f16> {
+fn values(n: usize, offset: usize) -> Vec<f16> {
     (0..n)
-        .map(|i| f16::from_f32(((i * 13 + salt) % 31) as f32 / 64.0 - 0.25))
+        .map(|i| f16::from_f32(((i * 13 + offset) % 31) as f32 / 64.0 - 0.25))
         .collect()
 }
 fn upload(v: &[f16], shape: &[usize], stream: &Arc<Stream>) -> Result<Tensor<f16>> {
@@ -179,7 +179,16 @@ fn checked_elements(dims: &[usize]) -> Result<usize> {
 
 /// Validate routed FP16 MoE against a host reference, including skewed routes.
 pub fn moe() -> Result {
+    use cutile_compiler::cuda_tile_runtime_utils::ToolkitCapabilities;
+    use cutile_ir::{ir::Location, requirements::Feature};
     use moe_f16::kernels as k;
+    // Only the MoE variants use explicit inbounds TMA loads. Discovery and
+    // execution errors still propagate; only an unmet capability is a skip.
+    let capabilities = ToolkitCapabilities::for_device(0)?;
+    if let Err(reason) = Feature::Inbounds.check(&capabilities.target, &Location::Unknown) {
+        eprintln!("SKIP kernel_variants/moe: {reason}");
+        return Ok(());
+    }
     let stream = Context::new(0)?.new_stream()?;
     const H: usize = 256;
     const I: usize = 256;

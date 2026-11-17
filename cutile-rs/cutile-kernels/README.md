@@ -57,6 +57,8 @@ These are experimental building blocks, not an automatic dispatch policy. Tile
 sizes, layout constraints and scratch requirements are documented beside the
 entries. Raw-pointer and gather entry points have explicit unsafe contracts.
 The FP16 MoE path is separate from the block-scaled NVFP4 pipeline below.
+It requires Tile IR 13.4 or newer for explicit inbounds TMA loads; its host
+example and GPU regression skip only the MoE variants on older assemblers.
 
 From `cutile-rs/`, run the [host example](examples/kernel_variants.rs):
 

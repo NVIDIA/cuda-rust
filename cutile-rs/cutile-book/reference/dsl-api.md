@@ -810,6 +810,7 @@ let (values, token): (Tile<f32, { [128] }>, Token) =
     load_ptr_tko(ptrs, ordering::Weak, None::<scope::TileBlock>, None, None, None, Latency::<0>);
 ```
 
+(masked-pointer-loads)=
 #### Masked pointer loads
 
 `load_ptr_tko` accepts a mask with the pointer tile's shape and an optional

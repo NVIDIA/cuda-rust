@@ -41,7 +41,7 @@ Existing APIs expose several independent choices:
   retaining tensor padding. Establish partition access with
   `check_partition_access` when calling this low-level operation directly.
 - `load_ptr_tko` supports masked gathers with scalar padding, including
-  multidimensional pointer tiles. See [pointer loads](../reference/dsl-api.md#masked-pointer-loads).
+  multidimensional pointer tiles. See [pointer loads](masked-pointer-loads).
 - `permute` can express transposed MMA accumulation, followed by an output
   transpose. This changes the tile layout and can change the generated schedule.
 - Load-latency hints and `CompileOptions::num_cta_in_cga` expose scheduling choices

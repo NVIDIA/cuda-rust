@@ -143,10 +143,10 @@ jobs:
   # cuda.h crates. A container is chosen per job, so these cannot share the
   # rust image above without also handing cargo-oxide a toolkit.
   rust-unit-tests-cuda:
-    name: cargo test -p ${{ matrix.package }}
+    name: cargo test -p ${{ matrix.test.package }}${{ matrix.cuda.suffix }}
     runs-on: linux-amd64-cpu4
     container:
-      image: nvidia/cuda:13.3.1-devel-ubuntu24.04
+      image: ${{ matrix.cuda.image }}
       env:
         DEBIAN_FRONTEND: noninteractive
     env:
@@ -154,8 +154,18 @@ jobs:
     timeout-minutes: 30
     strategy:
       fail-fast: false
+      # Every crate below runs against each toolkit image. The baseline keeps its
+      # existing job names (empty suffix); the newer image is a separate lane.
       matrix:
-        include:
+        cuda:
+          - image: nvidia/cuda:13.3.1-devel-ubuntu24.04
+            suffix: ""
+          # Same image digest as Docker Hub's nvidia/cuda:13.5.0-devel-ubuntu24.04;
+          # nvcr.io has no anonymous pull limit. Pinned to the newest CUDA
+          # release published as of 2026-11-09.
+          - image: nvcr.io/nvidia/cuda:13.5.0-devel-ubuntu24.04
+            suffix: " (CUDA 13.5.0)"
+        test:
           # Includes a real llc -> ptxas spine-kernel validation.
           - package: cuda-oxide-codegen
           # Facade macro tests compile host metadata through cuda-host.
@@ -178,7 +188,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install LLVM 21 (llc/opt for the NVPTX backend)
-        if: matrix.package == 'cuda-oxide-codegen'
+        if: matrix.test.package == 'cuda-oxide-codegen'
         run: |
           set -euo pipefail
           source /etc/os-release
@@ -198,7 +208,7 @@ jobs:
           sysroot="$(rustc --print sysroot)"
           export LIBRARY_PATH="${sysroot}/lib:${LIBRARY_PATH:-}"
           export LD_LIBRARY_PATH="${sysroot}/lib:${LD_LIBRARY_PATH:-}"
-          cargo test -p ${{ matrix.package }} ${{ matrix.test_args || '--all-targets' }}
+          cargo test -p ${{ matrix.test.package }} ${{ matrix.test.test_args || '--all-targets' }}
 
   rustc-codegen-cuda-unit-tests:
     name: cargo test --lib (rustc-codegen-cuda)

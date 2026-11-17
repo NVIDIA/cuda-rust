@@ -167,3 +167,13 @@ CUTILE_REFERENCE_TRANSLATE=$HOME/.cargo/bin/cuda-tile-translate \
 
 An explicitly configured translator must pass; an incompatible version is a
 test failure rather than a skipped check.
+
+The `cutile` static tile-library GPU tests (`cutile/tests/gpu/static_tilelib.rs`)
+assemble their library from `.mlir` sources with `cuda-tile-translate`, which
+the CUDA toolkit does not ship. Name the installed translator with
+`CUTILE_TILE_TRANSLATE`; without one those tests skip:
+
+```bash
+CUTILE_TILE_TRANSLATE=$HOME/.cargo/bin/cuda-tile-translate \
+    cargo test -p cutile --test gpu static_tilelib
+```

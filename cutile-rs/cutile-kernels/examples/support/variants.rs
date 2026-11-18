@@ -36,7 +36,7 @@ fn compare(actual: &[f32], reference: &[f32], atol: f32, rtol: f32) -> Result {
 pub fn gemm() -> Result {
     use gemm_variants::kernels as k;
     let stream = Context::new(0)?.new_stream()?;
-    for (m, n, inner) in [(48usize, 80usize, 96usize), (35, 53, 71)] {
+    for (m, n, inner) in [(48usize, 80usize, 96usize), (35, 53, 71), (35, 80, 96)] {
         let av = values(m * inner, 3);
         let bv = values(inner * n, 7);
         let mut reference = vec![0.0; m * n];
@@ -84,6 +84,29 @@ pub fn gemm() -> Result {
             let actual = result.0.unpartition().to_host_vec().sync_on(&stream)?;
             compare(&actual, &reference, 0.002, 0.002)?;
             println!("GEMM {m}x{n}x{inner} {mode}: PASS");
+        }
+        if inner % 32 == 0 && n % 8 == 0 {
+            let out = api::full(f16::NAN, &[m, n]).sync_on(&stream)?;
+            // SAFETY: K is divisible by BK, row strides are TMA aligned,
+            // and the output is disjoint. Partial M/N tiles are masked.
+            let result = unsafe {
+                cutile_kernels::experimental::gemm_f16(
+                    out.partition([32, 32]),
+                    a.clone(),
+                    b.clone(),
+                )
+            }
+            .generics(vec![
+                "32".into(),
+                "32".into(),
+                "32".into(),
+                inner.to_string(),
+            ])
+            .sync_on(&stream)?;
+            let actual = result.0.unpartition().to_host_vec().sync_on(&stream)?;
+            let actual = actual.iter().map(|x| x.to_f32()).collect::<Vec<_>>();
+            compare(&actual, &reference, 0.002, 0.002)?;
+            println!("GEMM {m}x{n}x{inner} f16 output: PASS");
         }
     }
     Ok(())

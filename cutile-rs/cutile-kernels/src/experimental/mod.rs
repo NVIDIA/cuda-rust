@@ -23,7 +23,7 @@ pub mod qkv;
 
 pub use attention::{
     attention_decode_kernel_grouped, fmha_prefill_gqa_lpt, fmha_prefill_gqa_lpt_split,
-    prefill_splitk_reduce_merge,
+    fmha_prefill_gqa_lpt_split_strided, fmha_prefill_gqa_lpt_strided, prefill_splitk_reduce_merge,
 };
 pub use fused_transformer::{qk_norm_rope_kv_decode_raw_f16, qk_norm_rope_kv_prefill_raw_f16};
 pub use gemm::gemm_f16;

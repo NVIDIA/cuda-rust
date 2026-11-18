@@ -450,6 +450,16 @@ fn smoke_compile_experimental() {
             grid: Some((1, 1, 1)),
         },
         SmokeCase {
+            name: "fmha_prefill_gqa_lpt_strided",
+            module_ast:
+                cutile_kernels::experimental::attention::fmha_prefill_gqa_lpt_module::__module_ast_self,
+            module_name: "fmha_prefill_gqa_lpt_module",
+            function_name: "fmha_prefill_gqa_lpt_strided",
+            generics: g(&["16", "32", "64", "4", "64", "1", "1", "1", "1", "1"]),
+            strides: vec![],
+            grid: Some((1, 1, 1)),
+        },
+        SmokeCase {
             name: "attention_decode_kernel_grouped",
             module_ast:
                 cutile_kernels::experimental::attention::attention_decode_kernel_grouped_module::__module_ast_self,
@@ -637,6 +647,15 @@ fn smoke_compile_split_prefill_schedules() {
             module_ast: cutile_kernels::experimental::attention::fmha_prefill_gqa_lpt_split_module::__module_ast_self,
             module_name: "fmha_prefill_gqa_lpt_split_module",
             function_name: "fmha_prefill_gqa_lpt_split",
+            generics: g(&["16", "32", "64", "2", "32", &even_k.to_string(), "4", "128", "1", &schedule.to_string()]),
+            strides: vec![],
+            grid: Some((6, 4, 1)),
+        },
+        SmokeCase {
+            name: "fmha_prefill_gqa_lpt_split_strided",
+            module_ast: cutile_kernels::experimental::attention::fmha_prefill_gqa_lpt_split_module::__module_ast_self,
+            module_name: "fmha_prefill_gqa_lpt_split_module",
+            function_name: "fmha_prefill_gqa_lpt_split_strided",
             generics: g(&["16", "32", "64", "2", "32", &even_k.to_string(), "4", "128", "1", &schedule.to_string()]),
             strides: vec![],
             grid: Some((6, 4, 1)),

@@ -1745,17 +1745,36 @@ impl<'a> ModuleExportState<'a> {
             }
         }
 
-        // Every device call is emitted `convergent` (attr group #0). GPU code is
-        // convergent-by-default (as in Clang/nvcc): if the callee transitively
-        // performs a barrier / shuffle / vote, `opt -O2` must not sink or
-        // duplicate the call across divergent control flow. opt strips the
-        // attribute from calls it proves never reach a convergent op.
+        // Device function calls, direct or indirect, are emitted `convergent`
+        // (attr group #0). GPU code is convergent-by-default (as in
+        // Clang/nvcc): if the callee transitively performs a barrier /
+        // shuffle / vote, `opt -O2` must not sink or duplicate the call
+        // across divergent control flow. opt strips the attribute from calls
+        // it proves never reach a convergent op.
+        //
+        // An LLVM intrinsic has no body for opt to inspect, so the call is
+        // marked exactly when its `declare` line is. A call-site `#0` on a
+        // per-thread intrinsic such as `llvm.nvvm.read.ptx.sreg.tid.x` would
+        // stay forever and stop LLVM from runtime-unrolling the loop around
+        // it, which is how block-stride loops lost their unrolling.
+        let is_convergent_call = match (&callee, &direct_callee_name) {
+            (CallOpCallable::Direct(identifier), Some(name))
+                if identifier.to_string().starts_with("llvm_") =>
+            {
+                Self::is_convergent_intrinsic(name)
+            }
+            _ => true,
+        };
         write!(output, ")").unwrap();
         if let Some(attrs) = llvm_call_attrs.as_deref() {
             self.export_llvm_attributes(attrs, output)?;
         }
-        writeln!(output, " #0").unwrap();
-        self.convergent_used = true;
+        if is_convergent_call {
+            writeln!(output, " #0").unwrap();
+            self.convergent_used = true;
+        } else {
+            writeln!(output).unwrap();
+        }
 
         if normalize_pointer_result {
             let decl = device_extern.as_ref().unwrap();

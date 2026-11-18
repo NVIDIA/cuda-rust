@@ -103,6 +103,116 @@ fn intrinsic_export_preserves_legacy_dots_and_literal_underscores() {
 }
 
 #[test]
+fn call_sites_are_convergent_for_device_functions_and_convergent_intrinsics_only() {
+    let mut ctx = Context::new();
+    let module = ModuleOp::new(&mut ctx, "call_site_convergence".try_into().unwrap());
+    let module_block = module_top_block(&mut ctx, &module);
+    let void_ty = VoidType::get(&ctx);
+    let i32_ty = IntegerType::get(&ctx, 32, Signedness::Signless);
+    let void_fn_ty = FuncType::get(&ctx, void_ty.into(), vec![], false);
+    let i32_fn_ty = FuncType::get(&ctx, i32_ty.into(), vec![], false);
+    // a warp collective, and a per-thread special-register read
+    let convergent_intrinsic = "llvm_nvvm_activemask";
+    let sreg_intrinsic = "llvm_nvvm_read_ptx_sreg_tid_x";
+
+    for name in [convergent_intrinsic, sreg_intrinsic] {
+        FuncOp::new(&mut ctx, name.try_into().unwrap(), i32_fn_ty)
+            .get_operation()
+            .insert_at_back(module_block, &ctx);
+    }
+
+    let helper = FuncOp::new(&mut ctx, "helper".try_into().unwrap(), void_fn_ty);
+    let helper_entry = helper.get_or_create_entry_block(&mut ctx);
+    ReturnOp::new(&mut ctx, None)
+        .get_operation()
+        .insert_at_back(helper_entry, &ctx);
+    helper.get_operation().insert_at_back(module_block, &ctx);
+
+    // the callee pointer is a parameter so the exporter cannot fold the
+    // indirect call into a direct one
+    let fn_ptr_ty = PointerType::get(&ctx, 0);
+    let caller_ty = FuncType::get(&ctx, void_ty.into(), vec![fn_ptr_ty.into()], false);
+    let caller = FuncOp::new(&mut ctx, "caller".try_into().unwrap(), caller_ty);
+    let entry = caller.get_or_create_entry_block(&mut ctx);
+    let callee_pointer = entry.deref(&ctx).get_argument(0);
+    for (name, ty) in [
+        (convergent_intrinsic, i32_fn_ty),
+        (sreg_intrinsic, i32_fn_ty),
+        ("helper", void_fn_ty),
+    ] {
+        CallOp::new(
+            &mut ctx,
+            CallOpCallable::Direct(name.try_into().unwrap()),
+            ty,
+            vec![],
+        )
+        .get_operation()
+        .insert_at_back(entry, &ctx);
+    }
+    CallOp::new(
+        &mut ctx,
+        CallOpCallable::Indirect(callee_pointer),
+        void_fn_ty,
+        vec![],
+    )
+    .get_operation()
+    .insert_at_back(entry, &ctx);
+    ReturnOp::new(&mut ctx, None)
+        .get_operation()
+        .insert_at_back(entry, &ctx);
+    caller.get_operation().insert_at_back(module_block, &ctx);
+
+    let outputs = [
+        export_module_to_string(&ctx, &module).expect("PTX export succeeds"),
+        export_module_to_string_with_config(
+            &ctx,
+            &module,
+            &NvvmExportConfig::new(NvvmIrDialect::LegacyLlvm7),
+        )
+        .expect("legacy NVVM export succeeds"),
+        export_module_to_string_with_config(
+            &ctx,
+            &module,
+            &NvvmExportConfig::new(NvvmIrDialect::Modern),
+        )
+        .expect("modern NVVM export succeeds"),
+    ];
+    for ir in &outputs {
+        let line_with = |needle: &str| {
+            ir.lines()
+                .find(|line| line.contains(needle))
+                .unwrap_or_else(|| panic!("no line contains `{needle}`:\n{ir}"))
+        };
+
+        // the call matches the declaration: a collective keeps `convergent`
+        assert!(
+            line_with("call i32 @llvm.nvvm.activemask()").ends_with(") #0"),
+            "{ir}"
+        );
+        assert!(
+            line_with("declare i32 @llvm.nvvm.activemask()").ends_with(") #0"),
+            "{ir}"
+        );
+
+        // a special-register read is not convergent, at the call or the declare
+        assert!(
+            line_with("call i32 @llvm.nvvm.read.ptx.sreg.tid.x()").ends_with("()"),
+            "{ir}"
+        );
+        assert!(
+            line_with("declare i32 @llvm.nvvm.read.ptx.sreg.tid.x()").ends_with("()"),
+            "{ir}"
+        );
+
+        // device function calls stay convergent, direct or indirect, since
+        // the callee may reach a collective
+        assert!(line_with("call void @helper()").ends_with(") #0"), "{ir}");
+        assert!(line_with("call void %").ends_with(") #0"), "{ir}");
+        assert!(ir.contains("attributes #0 = { convergent }"), "{ir}");
+    }
+}
+
+#[test]
 fn legacy_function_address_defined_later_round_trips_through_indirect_call() {
     let mut ctx = Context::new();
     let module = ModuleOp::new(&mut ctx, "function_address".try_into().unwrap());

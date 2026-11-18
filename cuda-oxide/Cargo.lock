@@ -1018,6 +1018,7 @@ dependencies = [
  "pliron-llvm",
  "reserved-oxide-symbols",
  "rustc-hash",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 

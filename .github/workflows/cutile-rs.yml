@@ -73,6 +73,7 @@ jobs:
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
               - '.github/workflows/cutile-rs.yml'
+              - '.github/actions/setup-cutile-rs/**'
               - '.github/copy-pr-bot.yaml'
             # `*` covers a root file such as AGENTS.md. `**` covers every nested path.
             any_changed:

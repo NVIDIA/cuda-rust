@@ -5,7 +5,7 @@
 
 //! FP16-input, FP32-output GEMM with selectable memory and MMA schedules.
 //!
-//! Tensors represent A[M,K], B[K,N] and C[M,N]. Use an output partition [BM,BN]
+//! Tensors represent `A[M,K]`, `B[K,N]` and `C[M,N]`. Use an output partition `[BM,BN]`
 //! and grid (ceil(M/BM), ceil(N/BN), 1), with target-supported MMA tile sizes.
 //! L is a load-latency hint. MODE=0 uses TMA loads/stores, MODE=1 disables TMA
 //! stores, and MODE=2 disables TMA loads and stores.
@@ -102,7 +102,7 @@ pub mod kernels {
     /// Gather GEMM for contiguous row-major inputs with masked tails.
     ///
     /// # Safety
-    /// A/B must have strides [K,1]/[N,1] and matching K. C has shape [M,N]
+    /// A/B must have strides `[K,1]`/`[N,1]` and matching K. C has shape `[M,N]`
     /// and does not alias inputs. Use the documented grid and partition.
     /// Padded coordinates must fit i32; AEL=BM*BK and BEL=BK*BN.
     /// Pointer offsets are computed in i64 before multiplication.

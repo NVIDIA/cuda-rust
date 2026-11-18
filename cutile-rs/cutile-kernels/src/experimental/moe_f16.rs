@@ -20,10 +20,10 @@
 //! two >= ceil(NR/BM). CAP >= ceil(NR/BM)+E. All sizes, padded indices and
 //! intermediate integer products must fit i32. FK=BM*BK, FN=BM*BN.
 //!
-//! Required element capacities: input[T,H], up[E,I,H], down[E,H,I],
-//! expert_ids[NR] (each in [0,E)), route_weights[NR], map[E,NR], counts[E],
-//! tasks[CAP,2], total[1], output[T,H]. With PACKED, packed[CAP*BM,H] and
-//! activation[CAP*BM,I]; otherwise activation[NR,I]. A route identifies
+//! Required element capacities: `input[T,H]`, `up[E,I,H]`, `down[E,H,I]`,
+//! `expert_ids[NR]` (each in `[0,E)`), `route_weights[NR]`, `map[E,NR]`, `counts[E]`,
+//! `tasks[CAP,2]`, `total[1]`, `output[T,H]`. With PACKED, `packed[CAP*BM,H]` and
+//! `activation[CAP*BM,I]`; otherwise `activation[NR,I]`. A route identifies
 //! token=floor(route/R); repeated expert IDs are allowed.
 //!
 //! prepare_small requires NR <= 2*BM and a nonempty 1-D grid. prepare_large

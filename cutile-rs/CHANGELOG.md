@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Add strided long-prefill attention entries with independent K/V head strides,
+  including split-K prefill. Existing contiguous entry signatures are unchanged.
 - Add experimental FP16 GEMM, causal attention and routed MoE variants with
   shared host examples, correctness coverage and optimization guidance.
 
@@ -65,6 +67,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Keep FP16 operands in the experimental FP16-output GEMM instead of widening
+  them before MMA; retain FP32 accumulation and a final FP16 conversion.
 - Fix scalar padding broadcasts for multidimensional masked pointer loads.
 
 - Keep masked QKV tail-row slot pointers in bounds, retaining the original

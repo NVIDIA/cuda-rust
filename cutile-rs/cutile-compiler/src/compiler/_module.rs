@@ -299,7 +299,7 @@ impl CUDATileModules {
 
     /// Build a `Vec<Module>` by looking up each absolute path in the
     /// linker-registry [`crate::registry::CUTILE_MODULES`] and invoking
-    /// its `build` closure.
+    /// its source's `build` fn.
     ///
     /// LINKING Phase A entry point: lets callers exercise the registry
     /// path while [`CUDATileModules::new`] still consumes the legacy
@@ -313,7 +313,7 @@ impl CUDATileModules {
         use crate::registry::CUTILE_MODULES;
         let registry: HashMap<&str, fn() -> Module> = CUTILE_MODULES
             .iter()
-            .map(|e| (e.absolute_path, e.build))
+            .map(|e| (e.absolute_path, e.source.build))
             .collect();
         paths
             .iter()
@@ -361,7 +361,7 @@ impl CUDATileModules {
 
         let registry: HashMap<&str, fn() -> Module> = CUTILE_MODULES
             .iter()
-            .map(|e| (e.absolute_path, e.build))
+            .map(|e| (e.absolute_path, e.source.build))
             .collect();
 
         let mut working_set: Vec<Module> = vec![kernel];

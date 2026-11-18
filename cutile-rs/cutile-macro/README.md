@@ -18,19 +18,27 @@ used by operation signatures in `_core.rs`.
 
 ## Linker-registry module discovery
 
-`#[cutile::module]` emits two items used by the JIT to discover this module at runtime:
+`#[cutile::module]` emits three items used by the JIT to discover this module at runtime:
 
 ```rust
 // Per-module AST builder. Returns just *this* module's `Module` value
 // (re-parsed source text + span base). No recursive dep aggregation.
 pub fn __module_ast_self() -> cutile_compiler::ast::Module { /* … */ }
 
+// The builder plus a SHA-256 of its inputs (name, source text, file, span
+// anchor), shared by every entry that registers this module.
+pub static __MODULE_SOURCE: cutile_compiler::registry::ModuleSource =
+    cutile_compiler::registry::ModuleSource {
+        build: __module_ast_self,
+        identity: "…",
+    };
+
 // Self-registers this module into the global registry at link time.
 #[linkme::distributed_slice(cutile_compiler::registry::CUTILE_MODULES)]
 static __CUTILE_MODULE_ENTRY_FOO: cutile_compiler::registry::CutileModuleEntry =
     cutile_compiler::registry::CutileModuleEntry {
         absolute_path: ::std::module_path!(),
-        build: __module_ast_self,
+        source: &__MODULE_SOURCE,
     };
 ```
 
@@ -41,7 +49,7 @@ static __CUTILE_MODULE_ENTRY_FOO: cutile_compiler::registry::CutileModuleEntry =
 `CUDATileModules::from_kernel(kernel)` walks the kernel's `use` statements iteratively against the registry:
 
 1. Seed the working set with the kernel module.
-2. For each `use path::*;` (or `use path::item;`) in the kernel, find the longest prefix that's registered in `CUTILE_MODULES`. If found and not yet visited, call its `build` closure to produce that module's AST, add it to the working set, recurse on its own `use` statements.
+2. For each `use path::*;` (or `use path::item;`) in the kernel, find the longest prefix that's registered in `CUTILE_MODULES`. If found and not yet visited, call its source's `build` fn to produce that module's AST, add it to the working set, recurse on its own `use` statements.
 3. Continue until the working set stabilizes (cycle detection by visited absolute paths).
 4. Build a `NameResolver` from the final working set.
 
@@ -63,7 +71,7 @@ then a `use cutile::core::*;` in user code won't match the registered `cutile::_
 static __CUTILE_REEXPORT_CORE: cutile_compiler::registry::CutileModuleEntry =
     cutile_compiler::registry::CutileModuleEntry {
         absolute_path: "cutile::core",
-        build: _core::core::__module_ast_self,
+        source: &_core::core::__MODULE_SOURCE,
     };
 ```
 

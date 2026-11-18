@@ -196,6 +196,7 @@ dependencies = [
  "half",
  "once_cell",
  "rustc-hash",
+ "sha2",
  "thiserror",
 ]
 
@@ -256,6 +257,7 @@ dependencies = [
  "quote",
  "serde",
  "serde_json",
+ "sha2",
  "syn",
 ]
 
@@ -285,6 +287,7 @@ version = "0.6.0"
 dependencies = [
  "half",
  "indexmap",
+ "sha2",
  "thiserror",
  "uuid",
 ]

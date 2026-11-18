@@ -1273,7 +1273,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             crate::passes::typed_dispatch_lowering::lower_function(&typed_fn_item, &typeck_results);
         let previous_typeck_results = self.typeck_results.replace(Some(typeck_results));
 
-        if std::env::var("CUTILE_DEBUG_COMPILER2").is_ok() {
+        if crate::dump::compiler2_trace_enabled() {
             eprintln!(
                 "compiler2: lowered entry function body:\n{}",
                 quote::quote!(#lowered_fn_item)

@@ -9,7 +9,7 @@
 //! walks the kernel's `use` graph against the registry to discover deps.
 
 use cutile_compiler::compiler::CUDATileModules;
-use cutile_compiler::registry::{CutileModuleEntry, CUTILE_MODULES};
+use cutile_compiler::registry::{registry_digest, CutileModuleEntry, CUTILE_MODULES};
 
 #[cutile::module]
 mod registry_phase_a_module {
@@ -45,7 +45,7 @@ fn registry_contains_phase_a_module() {
             )
         });
 
-    let module = (test_entry.build)();
+    let module = (test_entry.source.build)();
     assert!(
         module.absolute_path().ends_with(test_path_suffix),
         "build closure should yield Module with absolute_path matching the entry; \
@@ -53,6 +53,31 @@ fn registry_contains_phase_a_module() {
         test_entry.absolute_path,
         module.absolute_path()
     );
+}
+
+#[test]
+fn aliases_share_their_module_source_and_digest_covers_registry() {
+    let entry = |path: &str| {
+        CUTILE_MODULES
+            .iter()
+            .find(|e| e.absolute_path == path)
+            .unwrap_or_else(|| panic!("`{path}` not registered"))
+    };
+    for (alias, canonical) in [
+        ("cutile::core", "cutile::_core::core"),
+        ("cutile::tileir", "cutile::_tileir::tileir"),
+    ] {
+        assert!(std::ptr::eq(entry(alias).source, entry(canonical).source));
+    }
+    let is_digest = |s: &str| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit());
+    assert!(CUTILE_MODULES.iter().all(|e| is_digest(e.source.identity)));
+    assert_ne!(
+        entry("cutile::_core::core").source.identity,
+        entry("cutile::_tileir::tileir").source.identity
+    );
+    let digest = registry_digest();
+    assert!(is_digest(digest));
+    assert_eq!(digest, registry_digest());
 }
 
 #[test]

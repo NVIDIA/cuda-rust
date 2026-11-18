@@ -29,5 +29,8 @@ cutile-ir = { workspace = true }
 linkme = { workspace = true }
 sha2 = { workspace = true }
 
+[build-dependencies]
+sha2 = { workspace = true }
+
 [lints]
 workspace = true

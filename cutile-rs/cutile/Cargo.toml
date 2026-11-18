@@ -35,6 +35,9 @@ serde_json = { workspace = true }
 dashmap = { workspace = true }
 once_cell = { workspace = true }
 
+[build-dependencies]
+sha2 = { workspace = true }
+
 [dev-dependencies]
 tokio = { workspace = true }
 sha2 = { workspace = true }

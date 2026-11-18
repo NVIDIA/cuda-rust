@@ -32,9 +32,11 @@
 //! To keep this example runnable anywhere, the backend here is an in-process
 //! `HashMap`. That is useless as a real cache (it dies with the process, and
 //! the in-memory kernel cache already covers the process lifetime) — it stands
-//! in for your S3/database client so the *shape* is visible end to end: the
-//! kernel below compiles once, the store records one `put`, and a `get` of the
-//! same key returns the encoded entry.
+//! in for your S3/database client so the *shape* is visible end to end: each
+//! kernel (`add` below and the fill behind `ones` and `zeros`) compiles once,
+//! each compile records two `put`s (the front end's specialization entry and
+//! the cubin entry), and a `get` of any recorded key returns its encoded
+//! entry.
 
 use cutile::api::{ones, zeros};
 use cutile::jit_cache::{self, JitStore};
@@ -133,9 +135,6 @@ fn main() {
         stats.io_errors,
     );
     for (key, value) in entries.iter() {
-        println!(
-            "  {key} → {} bytes (encoded entry: header + cubin)",
-            value.len()
-        );
+        println!("  {key} → {} bytes (encoded entry)", value.len());
     }
 }

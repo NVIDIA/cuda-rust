@@ -395,6 +395,7 @@ dependencies = [
  "half",
  "once_cell",
  "rustc-hash",
+ "sha2",
  "thiserror 1.0.69",
 ]
 

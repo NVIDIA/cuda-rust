@@ -13,6 +13,9 @@ keywords = ["mlir", "cutile", "compiler"]
 [lib]
 proc-macro = true
 
+[build-dependencies]
+sha2 = { workspace = true }
+
 [dev-dependencies]
 trybuild = { workspace = true }
 

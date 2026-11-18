@@ -9,8 +9,10 @@
 use crate::compile_control::{CompileControl, CompileInterrupted};
 use crate::error::JITError;
 use crate::hints::CodegenMode;
+use crate::jit_cache::{hex, put_field};
 use cuda_core::{get_device_sm_name, Context};
 use cutile_ir::bytecode::{write_bytecode_version, BytecodeVersion};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::env;
 use std::ffi::OsString;
@@ -95,6 +97,25 @@ impl ToolkitCapabilities {
 /// Returns the cutile compiler version (from the workspace Cargo.toml).
 pub fn get_compiler_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
+}
+
+/// Hex SHA-256 identifying the code the JIT front end runs: the version and
+/// sources of this crate, `cutile-ir` and `cuda-async`. Unlike
+/// [`get_compiler_version`] it changes with every source edit.
+pub fn compiler_build_digest() -> &'static str {
+    static DIGEST: OnceLock<String> = OnceLock::new();
+    DIGEST.get_or_init(|| {
+        let mut h = Sha256::new();
+        for field in [
+            env!("CARGO_PKG_VERSION"),
+            env!("CUTILE_COMPILER_SOURCE_DIGEST"),
+            cutile_ir::SOURCE_DIGEST,
+            cuda_async::SOURCE_DIGEST,
+        ] {
+            put_field(&mut h, field.as_bytes());
+        }
+        hex(&h.finalize())
+    })
 }
 
 // The `CUTILE_DISABLE_CHECK_HOISTING` / `CUTILE_FORCE_DEVICE_CHECKS`
@@ -1019,7 +1040,6 @@ fn compile_bytecode_cached_at_controlled(
     control: Option<&CompileControl>,
 ) -> Result<(Vec<u8>, Stage2Source), JITError> {
     use crate::jit_cache::{self, EntryParams};
-    use sha2::{Digest, Sha256};
     use std::sync::atomic::Ordering;
 
     if let Some(control) = control {
@@ -1555,6 +1575,21 @@ while :; do :; done
                 assert!(!path.exists(), "orphaned {}", path.display());
             }
         });
+    }
+
+    #[test]
+    fn compiler_build_digest_folds_every_source_digest() {
+        let is_digest = |s: &str| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit());
+        for digest in [
+            env!("CUTILE_COMPILER_SOURCE_DIGEST"),
+            cutile_ir::SOURCE_DIGEST,
+            cuda_async::SOURCE_DIGEST,
+            compiler_build_digest(),
+        ] {
+            assert!(is_digest(digest), "{digest}");
+        }
+        assert_ne!(cutile_ir::SOURCE_DIGEST, cuda_async::SOURCE_DIGEST);
+        assert_eq!(compiler_build_digest(), compiler_build_digest());
     }
 
     #[test]

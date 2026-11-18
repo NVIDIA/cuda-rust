@@ -53,8 +53,8 @@ runs:
     # nightly lives in cuda-oxide/rust-toolchain.toml.
     - name: Install Rust
       shell: bash
-      # relative path to land at the rust-toolchain.toml regardless of use of $ or ./ syntax
-      working-directory: ${{ github.action_path }}/../../..
+      # relative path to land at cutile-rs/rust-toolchain.toml regardless of use of $ or ./ syntax
+      working-directory: ${{ github.action_path }}/../../../cutile-rs
       env:
         RUST_COMPONENTS: ${{ inputs.components }}
       run: |

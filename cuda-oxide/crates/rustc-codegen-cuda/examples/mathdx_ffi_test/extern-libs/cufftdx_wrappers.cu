@@ -60,7 +60,7 @@ extern "C" __device__ int cufftdx_fft_8_elements_per_thread() {
 
 /**
  * Execute an 8-point forward FFT in-place.
- * 
+ *
  * @param data  Pointer to complex data (8 complex floats = 16 floats).
  *              Data must be in thread-local memory (registers/local).
  *              Result is written back to the same location.
@@ -68,11 +68,11 @@ extern "C" __device__ int cufftdx_fft_8_elements_per_thread() {
 extern "C" __device__ void cufftdx_fft_8_c2c_f32_forward(float* data) {
     using FFT = FFT_8_C2C_F32_FWD;
     using complex_type = typename FFT::value_type;
-    
+
     // cuFFTDx expects complex_type array (cuda::std::complex<float>)
     // which has same memory layout as float2 or float[2]
     complex_type* cdata = reinterpret_cast<complex_type*>(data);
-    
+
     // Execute in-place FFT
     FFT().execute(cdata);
 }
@@ -83,7 +83,7 @@ extern "C" __device__ void cufftdx_fft_8_c2c_f32_forward(float* data) {
 extern "C" __device__ void cufftdx_fft_8_c2c_f32_inverse(float* data) {
     using FFT = FFT_8_C2C_F32_INV;
     using complex_type = typename FFT::value_type;
-    
+
     complex_type* cdata = reinterpret_cast<complex_type*>(data);
     FFT().execute(cdata);
 }

@@ -29,12 +29,12 @@
 // Note: Must use actual SM architecture value at compile time
 template<unsigned int Arch>
 using GEMM_32x32x32_F32_T = decltype(
-    cublasdx::Size<32, 32, 32>() + 
-    cublasdx::Precision<float>() + 
+    cublasdx::Size<32, 32, 32>() +
+    cublasdx::Precision<float>() +
     cublasdx::Type<cublasdx::type::real>() +
     cublasdx::Arrangement<cublasdx::row_major, cublasdx::col_major>() +
-    cublasdx::Function<cublasdx::function::MM>() + 
-    cublasdx::SM<Arch>() + 
+    cublasdx::Function<cublasdx::function::MM>() +
+    cublasdx::SM<Arch>() +
     cublasdx::Block() +
     cublasdx::BlockDim<256>()
 );
@@ -54,21 +54,21 @@ __device__ void gemm_registers_impl(
     auto a_global_tensor = cublasdx::make_tensor(a, GEMM::get_layout_gmem_a());
     auto b_global_tensor = cublasdx::make_tensor(b, GEMM::get_layout_gmem_b());
     auto c_global_tensor = cublasdx::make_tensor(c, GEMM::get_layout_gmem_c());
-    
+
     // Make shared memory tensors for A and B only
     auto [smem_a, smem_b] = cublasdx::slice_shared_memory_ab<GEMM>(smem);
     auto a_shared_tensor = cublasdx::make_tensor(smem_a, GEMM::get_layout_smem_a());
     auto b_shared_tensor = cublasdx::make_tensor(smem_b, GEMM::get_layout_smem_b());
-    
+
     // Load data from global memory to shared memory
     using alignment = cublasdx::alignment_of<GEMM>;
     cublasdx::copy<GEMM, alignment::a>(a_global_tensor, a_shared_tensor);
     cublasdx::copy<GEMM, alignment::b>(b_global_tensor, b_shared_tensor);
     cublasdx::copy_wait();
-    
+
     // Execute GEMM and get accumulator
     auto accumulator = GEMM().execute(a_shared_tensor, b_shared_tensor);
-    
+
     // Store results to global memory
     accumulator.partition_and_store(c_global_tensor);
 }
@@ -86,24 +86,24 @@ __device__ void gemm_shared_impl(
     auto a_global_tensor = cublasdx::make_tensor(a, GEMM::get_layout_gmem_a());
     auto b_global_tensor = cublasdx::make_tensor(b, GEMM::get_layout_gmem_b());
     auto c_global_tensor = cublasdx::make_tensor(c, GEMM::get_layout_gmem_c());
-    
+
     // Make shared memory tensors
     auto [smem_a, smem_b, smem_c] = cublasdx::slice_shared_memory<GEMM>(smem);
     auto a_shared_tensor = cublasdx::make_tensor(smem_a, GEMM::get_layout_smem_a());
     auto b_shared_tensor = cublasdx::make_tensor(smem_b, GEMM::get_layout_smem_b());
     auto c_shared_tensor = cublasdx::make_tensor(smem_c, GEMM::get_layout_smem_c());
-    
+
     // Load data from global memory to shared memory
     using alignment = cublasdx::alignment_of<GEMM>;
     cublasdx::copy<GEMM, alignment::a>(a_global_tensor, a_shared_tensor);
     cublasdx::copy<GEMM, alignment::b>(b_global_tensor, b_shared_tensor);
     cublasdx::copy<GEMM, alignment::c>(c_global_tensor, c_shared_tensor);
     cublasdx::copy_wait();
-    
+
     // Execute GEMM
     GEMM().execute(alpha, a_shared_tensor, b_shared_tensor, beta, c_shared_tensor);
     __syncthreads();
-    
+
     // Store data from shared memory to global memory
     cublasdx::copy<GEMM, alignment::c>(c_shared_tensor, c_global_tensor);
 }

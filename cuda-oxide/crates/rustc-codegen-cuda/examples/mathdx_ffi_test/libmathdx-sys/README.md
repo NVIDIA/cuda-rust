@@ -74,9 +74,9 @@ unsafe {
     // Create descriptor for 32-point forward FFT
     let mut desc: cufftdxDescriptor = 0;
     cufftdxCreateDescriptor(&mut desc);
-    
+
     cufftdxSetOperatorInt64(desc, cufftdxOperatorType_t_CUFFTDX_OPERATOR_SIZE, 32);
-    cufftdxSetOperatorInt64(desc, cufftdxOperatorType_t_CUFFTDX_OPERATOR_DIRECTION, 
+    cufftdxSetOperatorInt64(desc, cufftdxOperatorType_t_CUFFTDX_OPERATOR_DIRECTION,
                            cufftdxDirection_t_CUFFTDX_DIRECTION_FORWARD as i64);
     cufftdxSetOperatorInt64(desc, cufftdxOperatorType_t_CUFFTDX_OPERATOR_PRECISION,
                            commondxPrecision_t_COMMONDX_PRECISION_F32 as i64);
@@ -85,25 +85,25 @@ unsafe {
                            commondxExecution_t_COMMONDX_EXECUTION_BLOCK as i64);
     cufftdxSetOperatorInt64(desc, cufftdxOperatorType_t_CUFFTDX_OPERATOR_API,
                            cufftdxApi_t_CUFFTDX_API_LMEM as i64);
-    
+
     // Create code handle and set target architecture
     let mut code: commondxCode = 0;
     commondxCreateCode(&mut code);
     commondxSetCodeOptionInt64(code, commondxOption_t_COMMONDX_OPTION_TARGET_SM, 900);
     commondxSetCodeOptionInt64(code, commondxOption_t_COMMONDX_OPTION_CODE_CONTAINER,
                               commondxCodeContainer_t_COMMONDX_CODE_CONTAINER_LTOIR as i64);
-    
+
     // Finalize descriptor into code handle
     cufftdxFinalizeCode(code, desc);
-    
+
     // Extract LTOIR bytes
     let mut lto_size: usize = 0;
     commondxGetCodeLTOIRSize(code, &mut lto_size);
     let mut lto = vec![0u8; lto_size];
     commondxGetCodeLTOIR(code, lto_size, lto.as_mut_ptr() as *mut _);
-    
+
     // lto now contains LTOIR that can be linked with nvJitLink
-    
+
     cufftdxDestroyDescriptor(desc);
     commondxDestroyCode(code);
 }

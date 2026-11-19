@@ -171,6 +171,11 @@ pub(crate) fn defer(cleanup: impl FnOnce() + Send + 'static) {
     enqueue(&QUEUE, "cuda-owner-cleanup", Box::new(cleanup));
 }
 
+pub(crate) fn defer_stream(cleanup: impl FnOnce() + Send + 'static) {
+    static QUEUE: OnceLock<Option<mpsc::Sender<Cleanup>>> = OnceLock::new();
+    enqueue(&QUEUE, "cuda-stream-retirement", Box::new(cleanup));
+}
+
 /// Keeps an owner or access lease alive until work already queued on `stream`
 /// completes. Dropping the caller's future cannot shorten this lifetime.
 ///

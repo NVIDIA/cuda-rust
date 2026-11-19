@@ -570,12 +570,15 @@ pub struct PoolMemStats {
 /// (created via [`Stream::borrow_with_owner`], holds a liveness token so the
 /// external owner outlives it).
 ///
-/// Drop returns without waiting for queued GPU work. An event-backed retirement
-/// queue retains the context and foreign owner until completion. Idle default
-/// priority streams on owned contexts enter a pool keyed by CUDA context
-/// identity; streams on borrowed contexts and priority streams are destroyed
-/// after completion. Completion errors retain resources rather than reuse a
-/// handle that may still be active.
+/// Owned streams enqueue retirement without CUDA driver calls on the dropping
+/// thread. Background workers wait for queued GPU work. Borrowed streams capture
+/// completion on the dropping thread; their CUDA calls can block on Driver
+/// contention. Retirement then waits only for that snapshot.
+/// An event-backed retirement queue retains the context and foreign owner until
+/// completion. Idle default-priority streams on owned contexts enter a pool keyed
+/// by CUDA context identity. Streams on borrowed contexts and priority streams
+/// are destroyed after completion. Completion errors retain resources rather
+/// than reuse a handle that may still be active.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Stream {
     pub(crate) cu_stream: cuda_bindings::CUstream,
@@ -758,6 +761,34 @@ impl Drop for RetiredStream {
     }
 }
 
+impl RetiredStream {
+    fn retire_owned(mut self) {
+        // The retained handle is private to retirement and cannot be added
+        // to a later capture. Its completion event is private as well.
+        let event = crate::completion::with_retirement_capture_mode(&self.context, || {
+            self.context.bind_to_thread()?;
+            let mut priority = 0;
+            // SAFETY: this worker retains the live stream and its bound context.
+            self.reusable &=
+                unsafe { cuda_bindings::cuStreamGetPriority(self.handle as _, &mut priority) } == 0
+                    && priority == 0;
+            // SAFETY: retirement exclusively owns this live stream handle.
+            if unsafe { stream::query(self.handle as _) }? {
+                return Ok(None);
+            }
+            let event = self.context.new_event_with_flags(None)?;
+            // SAFETY: both resources are live in the retained, current context.
+            unsafe { crate::cudarc_shim::event::record(event.cu_event(), self.handle as _)? };
+            Ok(Some(Arc::new(event)))
+        });
+        match event {
+            Ok(Some(event)) => crate::completion::retain_until_event(self, event),
+            Ok(None) => drop(self),
+            Err(_) => std::mem::forget(self),
+        }
+    }
+}
+
 impl Drop for Stream {
     fn drop(&mut self) {
         let retired = RetiredStream {
@@ -766,16 +797,27 @@ impl Drop for Stream {
             owned: self.owned,
             // Preserve priority semantics: only default-priority streams enter
             // the pool used by Context::new_stream.
-            reusable: self.context.owned && self.priority().ok() == Some(0),
-            _keep_alive: self._keep_alive.clone(),
+            reusable: self.context.owned,
+            _keep_alive: std::mem::take(&mut self._keep_alive),
         };
-        match self.query() {
-            Ok(true) => drop(retired),
-            Ok(false) => {
-                let _ = crate::completion::retain_until_complete(retired, self);
+        if !self.owned {
+            // Raw borrows expire when this destructor returns. Even an owner
+            // token cannot prevent external capture of the borrowed handle
+            // after Drop, so capture completion before returning in both cases.
+            match self.query() {
+                Ok(true) if retired._keep_alive.0.is_some() => {
+                    crate::completion::defer_stream(move || drop(retired));
+                }
+                Ok(true) => crate::completion::defer(move || drop(retired)),
+                Ok(false) => {
+                    let _ = crate::completion::retain_until_complete(retired, self);
+                }
+                Err(_) => std::mem::forget(retired),
             }
-            Err(_) => std::mem::forget(retired),
+            return;
         }
+        // Ordinary owned streams enqueue only CPU work on the dropping thread.
+        crate::completion::defer_stream(move || retired.retire_owned());
     }
 }
 
@@ -1192,6 +1234,30 @@ mod tests {
             .unwrap_or_default()
     }
 
+    fn wait_until_parked(context: &Context, handle: usize) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !pooled_handles(context).contains(&handle) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "stream was not retired to its pool"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    fn wait_until_context_released(context: Arc<Context>) {
+        let weak = Arc::downgrade(&context);
+        drop(context);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while weak.upgrade().is_some() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "context retirement did not complete"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
     fn borrow(owner: &Arc<Context>) -> Arc<Context> {
         // SAFETY: `owner` retains the primary context for the duration of
         // every test below, and nothing destroys it concurrently.
@@ -1227,12 +1293,16 @@ mod tests {
         let first = owner.new_stream().unwrap();
         let handle = first.cu_stream() as usize;
         drop(first);
+        wait_until_parked(&owner, handle);
         assert!(
             pooled_handles(&owner).contains(&handle),
             "an owned device's stream is parked, not destroyed"
         );
         let second = owner.new_stream().unwrap();
         assert_eq!(second.cu_stream() as usize, handle, "and handed out again");
+        drop(second);
+        // Keep the pool-test lock until asynchronous teardown has finished.
+        wait_until_context_released(owner);
     }
 
     #[test]
@@ -1248,6 +1318,7 @@ mod tests {
             let seed = owner.new_stream().unwrap();
             seed.cu_stream() as usize
         };
+        wait_until_parked(&owner, parked);
         assert!(pooled_handles(&owner).contains(&parked));
 
         let borrowed = borrow(&owner);
@@ -1271,6 +1342,9 @@ mod tests {
              where a later owned Context for this ordinal could pop it"
         );
         assert!(pooled_handles(&owner).contains(&parked));
+        // The borrowed handle must finish retirement before releasing its raw context.
+        wait_until_context_released(borrowed);
+        wait_until_context_released(owner);
     }
 
     #[test]

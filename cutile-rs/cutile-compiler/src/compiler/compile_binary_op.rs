@@ -49,6 +49,22 @@ fn get_cmp_predicate_attr_ir(expr: &TileBinaryOp) -> Result<Option<NamedAttr>, J
     }
 }
 
+/// Which ordering a float comparison uses.
+///
+/// `Ne` is the odd one out. Rust's `PartialEq` wants `a != b` to be the same
+/// as `!(a == b)`, and `NaN == NaN` is false, so `NaN != NaN` has to be true.
+/// Only the unordered predicate does that. The rest stay ordered, which is
+/// what rustc's `bin_op_to_fcmp_predicate` does too.
+///
+/// `mir-lower`'s `convert_cmp` already makes this split on the SIMT side,
+/// where an ordered `not_equal` was turning `x != x` into `false` (#123).
+fn float_cmp_ordering(expr: &TileBinaryOp) -> &'static str {
+    match expr {
+        TileBinaryOp::Ne => "unordered",
+        _ => "ordered",
+    }
+}
+
 /// Construct a tile-ir bool (i1) result type that mirrors the shape of `lhs_type`.
 ///
 /// If `lhs_type` is a `Tile`, the result is a tile with the same shape but `I1`
@@ -540,7 +556,8 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 if let Some(comparison_predicate) =
                     get_cmp_predicate_attr_ir(tile_rust_arithmetic_op)?
                 {
-                    let comparison_ordering = cmp_ordering_attr("ordered");
+                    let comparison_ordering =
+                        cmp_ordering_attr(float_cmp_ordering(tile_rust_arithmetic_op));
                     is_cmp = true;
                     let bool_result_ty = make_bool_result_type(&operand_result_ty);
                     OpBuilder::new(Opcode::CmpF, self.ir_location(span))
@@ -692,5 +709,32 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         tr_value.term = facts.term;
         tr_value.floor_div = facts.floor_div;
         Ok(tr_value)
+    }
+}
+
+#[cfg(test)]
+mod float_cmp_ordering_tests {
+    use super::float_cmp_ordering;
+    use crate::bounds::TileBinaryOp;
+
+    /// `x != x` is the usual way to test for NaN, and it only works if the
+    /// compare is unordered.
+    #[test]
+    fn not_equal_is_unordered() {
+        assert_eq!(float_cmp_ordering(&TileBinaryOp::Ne), "unordered");
+    }
+
+    /// The other five were already correct, so they should not move.
+    #[test]
+    fn other_comparisons_stay_ordered() {
+        for op in [
+            TileBinaryOp::Eq,
+            TileBinaryOp::Lt,
+            TileBinaryOp::Le,
+            TileBinaryOp::Gt,
+            TileBinaryOp::Ge,
+        ] {
+            assert_eq!(float_cmp_ordering(&op), "ordered", "{op:?} must be ordered");
+        }
     }
 }

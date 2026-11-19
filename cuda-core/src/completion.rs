@@ -176,6 +176,42 @@ pub(crate) fn defer_stream(cleanup: impl FnOnce() + Send + 'static) {
     enqueue(&QUEUE, "cuda-stream-retirement", Box::new(cleanup));
 }
 
+// Context workers have a separate registry: a blocked owner in one context
+// must not hold up another context's retirement.
+pub(crate) fn defer_context(key: usize, cleanup: impl FnOnce() + Send + 'static) {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    static WORKERS: OnceLock<Mutex<HashMap<usize, mpsc::Sender<Cleanup>>>> = OnceLock::new();
+    let workers = WORKERS.get_or_init(Default::default);
+    let mut queues = workers.lock().unwrap_or_else(|e| e.into_inner());
+    let queue = queues.entry(key).or_insert_with(|| {
+        let (sender, receiver) = mpsc::channel::<Cleanup>();
+        let _ = std::thread::Builder::new()
+            .name("cuda-context-retirement".into())
+            .spawn(move || loop {
+                let job = match receiver.recv_timeout(Duration::from_millis(100)) {
+                    Ok(job) => job,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        let mut queues = workers.lock().unwrap_or_else(|e| e.into_inner());
+                        match receiver.try_recv() {
+                            Ok(job) => job,
+                            Err(_) => {
+                                queues.remove(&key);
+                                break;
+                            }
+                        }
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                };
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
+            });
+        sender
+    });
+    if let Err(error) = queue.send(Box::new(cleanup)) {
+        std::mem::forget(error.0);
+    }
+}
+
 /// Keeps an owner or access lease alive until work already queued on `stream`
 /// completes. Dropping the caller's future cannot shorten this lifetime.
 ///

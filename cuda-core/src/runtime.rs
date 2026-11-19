@@ -571,9 +571,11 @@ pub struct PoolMemStats {
 /// external owner outlives it).
 ///
 /// Owned streams enqueue retirement without CUDA driver calls on the dropping
-/// thread. Background workers wait for queued GPU work. Borrowed streams capture
-/// completion on the dropping thread; their CUDA calls can block on Driver
-/// contention. Retirement then waits only for that snapshot.
+/// thread. Background workers wait for queued GPU work. Borrowed streams and per-thread
+/// default streams capture completion on the dropping thread; their CUDA calls
+/// can block on Driver contention. A per-thread default stream captures
+/// context-wide completion and must not be dropped during an active capture in
+/// that context. Retirement then waits only for that snapshot.
 /// An event-backed retirement queue retains the context and foreign owner until
 /// completion. Idle default-priority streams on owned contexts enter a pool keyed
 /// by CUDA context identity. Streams on borrowed contexts and priority streams
@@ -735,6 +737,9 @@ struct RetiredStream {
     _keep_alive: KeepAlive,
 }
 
+// CUDA defines CU_STREAM_PER_THREAD as the special handle value 2.
+const PER_THREAD_STREAM_HANDLE: usize = 2;
+
 impl Drop for RetiredStream {
     fn drop(&mut self) {
         if !self.owned || self.handle == 0 {
@@ -762,6 +767,36 @@ impl Drop for RetiredStream {
 }
 
 impl RetiredStream {
+    fn retire_per_thread(self) {
+        // CU_STREAM_PER_THREAD may have been used on another host thread.
+        // Snapshot all preceding context work before Drop returns: a later
+        // context-wide call on the worker could invalidate a new capture.
+        let completion = self.context.new_event_with_flags(None).and_then(|event| {
+            // SAFETY: both handles belong to the retained context. Unlike a
+            // stream event, this includes per-thread work from other threads.
+            unsafe {
+                cuda_bindings::cuCtxRecordEvent(self.context.cu_ctx(), event.cu_event())
+                    .result()?;
+            }
+            Ok(event)
+        });
+        match completion {
+            Ok(event) => {
+                let context = self.context.clone();
+                crate::completion::defer_context(Arc::as_ptr(&context) as usize, move || {
+                    context.record_err(crate::completion::cleanup_after_event(event, move || {
+                        drop(self)
+                    }));
+                })
+            }
+            Err(error) => {
+                self.context.record_err(Err::<(), _>(error));
+                // Completion is unknown; retain both the context and owner.
+                std::mem::forget(self);
+            }
+        }
+    }
+
     fn retire_owned(mut self) {
         // The retained handle is private to retirement and cannot be added
         // to a later capture. Its completion event is private as well.
@@ -800,6 +835,10 @@ impl Drop for Stream {
             reusable: self.context.owned,
             _keep_alive: std::mem::take(&mut self._keep_alive),
         };
+        if retired.handle == PER_THREAD_STREAM_HANDLE {
+            retired.retire_per_thread();
+            return;
+        }
         if !self.owned {
             // Raw borrows expire when this destructor returns. Even an owner
             // token cannot prevent external capture of the borrowed handle

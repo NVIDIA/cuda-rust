@@ -50,7 +50,7 @@ impl<F: Fn() -> Module> Specialization<F> {
                 anyhow::anyhow!("toolchain changed while resolving compilation job").into(),
             );
         }
-        let effective_options = self.key.compile_options.with_jit_env_overrides()?;
+        let effective_options = self.compile_options.with_jit_env_overrides()?;
         Ok(KernelCompileJob {
             specialization: self,
             capabilities,
@@ -205,9 +205,15 @@ impl PreparedKernel {
 }
 
 fn check_environment(key: &TileFunctionKey, effective: &CompileOptions) -> Result<(), Error> {
+    // The key holds the options without the tile libraries; the snapshot
+    // checks those.
+    let effective_without_libraries = CompileOptions {
+        tile_libraries: Vec::new(),
+        ..effective.clone()
+    };
     if bytecode_override() != key.bytecode_override
         || tileiras_fingerprint() != key.tileiras_fingerprint
-        || key.compile_options.with_jit_env_overrides()? != *effective
+        || key.compile_options.with_jit_env_overrides()? != effective_without_libraries
     {
         return Err(
             anyhow::anyhow!("compiler configuration changed during kernel preparation").into(),

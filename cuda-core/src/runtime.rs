@@ -431,6 +431,25 @@ impl Context {
         }))
     }
 
+    /// Creates a new memory pool on this context with specified props.
+    ///
+    /// The returned pool is owned — it will be destroyed when the last `Arc`
+    /// is dropped. Pair with [`MemPool::set_release_threshold`] to control
+    /// when the pool returns memory to the OS.
+    pub fn new_mem_pool_with_props(
+        self: &Arc<Self>,
+        mut props: cuda_bindings::CUmemPoolProps,
+    ) -> Result<Arc<MemPool>, DriverError> {
+        self.bind_to_thread()?;
+        cuda_bindings::set_mem_location_id(&mut props.location, self.ordinal as c_int);
+        let cu_pool = unsafe { pool::create(&props) }?;
+        Ok(Arc::new(MemPool {
+            cu_pool,
+            context: self.clone(),
+            owned: true,
+        }))
+    }
+
     /// Returns the driver-owned default memory pool for this context.
     ///
     /// The returned wrapper is **not owned** — dropping it does not destroy the

@@ -40,4 +40,9 @@ fn stored_kernel_arguments_require_unsafe_impl() {
     let t = trybuild::TestCases::new();
     t.compile_fail("tests/ui/kernel_output_stored_requires_unsafe.rs");
     t.compile_fail("tests/ui/kernel_input_stored_requires_unsafe.rs");
+    // The four `tests/ui/aggregation_tensor_*.rs` cases are registered in
+    // `tests/ui_aggregation.rs`, not here: that target is in CPU CI and this
+    // one cannot be (see that file's header). Registering them in both would
+    // build each case twice and give their expectations two places to be
+    // re-blessed from.
 }

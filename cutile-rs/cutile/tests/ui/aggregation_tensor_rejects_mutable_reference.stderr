@@ -1,0 +1,5 @@
+error: `&mut AddTensor<..>` is not a kernel parameter type. Atomic updates go through a shared `&AddTensor<..>`, like Rust's own atomics.
+ --> tests/ui/aggregation_tensor_rejects_mutable_reference.rs:9:24
+  |
+9 |     fn accumulate(out: &mut AddTensor<f32, { [-1, -1] }>) {
+  |                        ^

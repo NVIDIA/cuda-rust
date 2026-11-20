@@ -545,6 +545,7 @@ and child-process environment:
 backend = "/path/to/librustc_codegen_cuda.so"
 default-arch = "sm_86"
 extra-rustflags = ["--cfg", "my_device_cfg"]
+short-pointers = false   # OptiX programs; see below
 
 [env]
 MY_BUILD_FLAG = "1"
@@ -560,6 +561,29 @@ config.
 Relative backend paths are resolved from the `.cargo` directory containing the
 config file. Each `extra-rustflags` array element remains one rustc argument,
 including values that contain spaces.
+
+### 64-bit pointers in every address space (OptiX)
+
+By default `llc` runs with `--nvptx-short-ptr`: shared, constant and local
+pointers are 32-bit, and a function's `.local` depot is addressed through
+32-bit registers (`cvt.u32.u64 %r, %SPL; st.local [%r]`). OptiX programs fault
+(`CUDA_ERROR_ILLEGAL_ADDRESS`) on that addressing, and nvcc never emits it for
+OptiX code. A project that builds OptiX programs opts out with
+
+```toml
+short-pointers = false
+```
+
+(or the presence switch `CUDA_OXIDE_NO_SHORT_PTR=1` in the environment).
+`llc` then runs without `--nvptx-short-ptr` and the exported module declares
+the matching data layout (`e-p:64:64:64-...`, no `p3:32`), so every address
+space uses 64-bit pointers. `short-pointers = true` states the default; setting
+it and `[env] CUDA_OXIDE_NO_SHORT_PTR` together is a config error.
+
+The setting exists only on the `llc` PTX route. NVVM IR/LTOIR output
+(`--emit-nvvm-ir`, `emit-ltoir`, `--materialize-cubin`), a libdevice module
+that falls back to libNVVM, and the CUTLASS backend fail with an error naming
+`CUDA_OXIDE_NO_SHORT_PTR` instead of compiling short pointers.
 
 Configuration values are defaults. Precedence is:
 

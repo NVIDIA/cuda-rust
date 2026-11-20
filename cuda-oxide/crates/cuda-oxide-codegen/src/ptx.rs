@@ -6,7 +6,7 @@
 use crate::error::PipelineError;
 use crate::generated::GeneratedModuleRequirements;
 use crate::llvm_tools::LlvmToolchain;
-use crate::options::BackendOptions;
+use crate::options::{BackendOptions, PtxPointerWidth};
 use crate::pipeline::ValidatedBackendOptions;
 use crate::target::{
     ModuleRequirements, PtxIsaRequirement, detect_module_requirements_in_llvm_file,
@@ -341,18 +341,22 @@ const DISABLE_BRANCH_FOLD: &str = "-disable-branch-fold";
 /// off or the folded form comes back.
 const DISABLE_BLOCK_PLACEMENT: &str = "-disable-block-placement";
 
-/// The unconditional head of every `llc` invocation: target selection plus
-/// the branch-layout controls ptxas depends on (see
+/// The unconditional head of every `llc` invocation: target selection, the
+/// pointer model, and the branch-layout controls ptxas depends on (see
 /// [`DISABLE_BRANCH_FOLD`]). Kept as a function so the tests can assert
 /// the argument list verbatim.
-fn base_llc_args(target: &str) -> Vec<String> {
-    vec![
-        "-march=nvptx64".to_string(),
-        format!("-mcpu={target}"),
-        "--nvptx-short-ptr".to_string(),
-        DISABLE_BRANCH_FOLD.to_string(),
-        DISABLE_BLOCK_PLACEMENT.to_string(),
-    ]
+///
+/// `--nvptx-short-ptr` follows [`PtxPointerWidth`]; the exported module's
+/// data layout follows the same value (`render_exported_llvm_ir`), so `opt`
+/// and `llc` see one pointer model.
+fn base_llc_args(target: &str, pointer_width: PtxPointerWidth) -> Vec<String> {
+    let mut args = vec!["-march=nvptx64".to_string(), format!("-mcpu={target}")];
+    if pointer_width == PtxPointerWidth::Short {
+        args.push("--nvptx-short-ptr".to_string());
+    }
+    args.push(DISABLE_BRANCH_FOLD.to_string());
+    args.push(DISABLE_BLOCK_PLACEMENT.to_string());
+    args
 }
 
 /// Full-debug modules need PTX ISA 7.5 or newer declared, whatever the
@@ -794,7 +798,7 @@ fn generate_ptx_impl(
     }
 
     let mut llc_cmd = std::process::Command::new(&toolchain.llc_path);
-    llc_cmd.args(base_llc_args(&target.sm()));
+    llc_cmd.args(base_llc_args(&target.sm(), opts.ptx_pointer_width));
     if let Some(feature) = required_ptx_feature(
         &target,
         ptx_isa_with_debug_floor(requirements.ptx_isa, debug_kind),
@@ -1296,11 +1300,31 @@ mod tests {
     #[test]
     fn llc_base_args_keep_the_ptxas_friendly_branch_layout() {
         assert_eq!(
-            base_llc_args("sm_90"),
+            base_llc_args("sm_90", PtxPointerWidth::Short),
             [
                 "-march=nvptx64",
                 "-mcpu=sm_90",
                 "--nvptx-short-ptr",
+                "-disable-branch-fold",
+                "-disable-block-placement",
+            ]
+        );
+    }
+
+    /// `PtxPointerWidth::Wide` drops `--nvptx-short-ptr` and nothing else;
+    /// the default stays short.
+    #[test]
+    fn llc_base_args_follow_the_pointer_width() {
+        assert_eq!(PtxPointerWidth::default(), PtxPointerWidth::Short);
+        assert_eq!(
+            BackendOptions::default().ptx_pointer_width,
+            PtxPointerWidth::Short
+        );
+        assert_eq!(
+            base_llc_args("sm_86", PtxPointerWidth::Wide),
+            [
+                "-march=nvptx64",
+                "-mcpu=sm_86",
                 "-disable-branch-fold",
                 "-disable-block-placement",
             ]

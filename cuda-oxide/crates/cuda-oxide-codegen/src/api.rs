@@ -674,6 +674,7 @@ impl Compiler {
             device_arch_hint: None,
             no_opt: options.optimization == Optimization::None,
             no_fma: !options.fma_contraction,
+            ptx_pointer_width: crate::options::PtxPointerWidth::Short,
             verbose: options.verbose,
             llc_override: None,
             opt_override: None,

@@ -4,6 +4,7 @@
  */
 
 use crate::backend;
+use reserved_oxide_symbols::NO_SHORT_PTR_ENV;
 use std::path::{Path, PathBuf};
 
 use super::*;
@@ -363,6 +364,26 @@ pub(super) fn inspect_oxide_config(workspace_root: &Path) -> OxideConfigInspecti
             }
         },
     };
+    let mut env = env;
+    // `short-pointers = false` is sugar for `[env] CUDA_OXIDE_NO_SHORT_PTR`
+    // (64-bit pointers in every address space, needed by OptiX programs), so
+    // it reaches the backend and the codegen fingerprint like `cubin-archs`.
+    // `true` states the default; either spelling next to the `[env]` key is
+    // a conflict rather than a silent precedence rule.
+    match optional_config_bool(table, "short-pointers", &config_path) {
+        Ok(None) => {}
+        Ok(Some(short)) => {
+            if env.iter().any(|(key, _)| key == NO_SHORT_PTR_ENV) {
+                errors.push(format!(
+                    "cuda-oxide config {} sets both `short-pointers` and `[env] {NO_SHORT_PTR_ENV}`; keep one",
+                    config_path.display()
+                ));
+            } else if !short {
+                env.push((NO_SHORT_PTR_ENV.to_string(), "1".to_string()));
+            }
+        }
+        Err(error) => errors.push(error),
+    }
 
     if !errors.is_empty() {
         return OxideConfigInspection::Invalid { errors, warnings };
@@ -454,6 +475,22 @@ fn optional_config_string(
         Some(value) => value.as_str().map(|s| Some(s.to_string())).ok_or_else(|| {
             format!(
                 "cuda-oxide config {} field `{key}` must be a string",
+                config_path.display()
+            )
+        }),
+    }
+}
+
+fn optional_config_bool(
+    table: &toml::Table,
+    key: &str,
+    config_path: &Path,
+) -> Result<Option<bool>, String> {
+    match table.get(key) {
+        None => Ok(None),
+        Some(value) => value.as_bool().map(Some).ok_or_else(|| {
+            format!(
+                "cuda-oxide config {} field `{key}` must be a boolean",
                 config_path.display()
             )
         }),

@@ -11,6 +11,16 @@
 /// shared-memory pointers (`p3:32:32:32`) and 64-bit generic/global pointers.
 pub(super) const NVPTX_DATALAYOUT_PTX: &str = NVPTX_DATALAYOUT_FULL;
 
+/// Data layout for PTX mode with 64-bit pointers in every address space.
+///
+/// [`NVPTX_DATALAYOUT_FULL`] without the `p3:32:32:32` entry: it matches what
+/// `llc` derives for `nvptx64` when `--nvptx-short-ptr` is not passed, so the
+/// module's layout and `llc`'s agree on every pointer width (shared, constant
+/// and local included). See [`PtxWideExportConfig`].
+pub(super) const NVPTX_DATALAYOUT_PTX_WIDE: &str = "e-p:64:64:64-i1:8:8-i8:8:8-\
+    i16:16:16-i32:32:32-i64:64:64-i128:128:128-f32:32:32-f64:64:64-f128:128:128-\
+    v16:16:16-v32:32:32-v64:64:64-v128:128:128-n16:32:64-a:8:8";
+
 /// Full NVPTX data layout for libNVVM/LTOIR mode (Blackwell+, modern dialect).
 ///
 /// This matches nvcc's output for sm_100+ and is required for full NVVM compatibility.
@@ -192,6 +202,41 @@ impl ExportBackendConfig for PtxExportConfig {
     }
 }
 
+/// PTX export for an `llc` run without `--nvptx-short-ptr`.
+///
+/// Identical to [`PtxExportConfig`] except for the data layout, which
+/// declares 64-bit pointers in every address space
+/// ([`NVPTX_DATALAYOUT_PTX_WIDE`]). OptiX programs need this model: OptiX
+/// faults on `.local` depots addressed through 32-bit registers.
+#[derive(Clone, Debug, Default)]
+pub struct PtxWideExportConfig;
+
+impl ExportBackendConfig for PtxWideExportConfig {
+    fn datalayout(&self) -> &str {
+        NVPTX_DATALAYOUT_PTX_WIDE
+    }
+
+    fn emit_llvm_used(&self) -> bool {
+        PtxExportConfig.emit_llvm_used()
+    }
+
+    fn emit_nvvmir_version(&self) -> bool {
+        PtxExportConfig.emit_nvvmir_version()
+    }
+
+    fn nvvmir_version(&self) -> [i32; 4] {
+        PtxExportConfig.nvvmir_version()
+    }
+
+    fn emit_all_kernel_annotations(&self) -> bool {
+        PtxExportConfig.emit_all_kernel_annotations()
+    }
+
+    fn emit_ptx_kernel_keyword(&self) -> bool {
+        PtxExportConfig.emit_ptx_kernel_keyword()
+    }
+}
+
 /// Export configuration for NVVM IR output.
 ///
 /// Emits LLVM IR with full NVVM compatibility:
@@ -254,6 +299,46 @@ impl ExportBackendConfig for NvvmExportConfig {
 
     fn nvvm_ir_dialect(&self) -> Option<NvvmIrDialect> {
         Some(self.dialect)
+    }
+}
+
+#[cfg(test)]
+mod ptx_datalayout_tests {
+    use super::*;
+
+    /// The wide layout is the short one minus the 32-bit shared-pointer
+    /// entry, and declares no other per-address-space width.
+    #[test]
+    fn wide_ptx_layout_has_64_bit_pointers_in_every_address_space() {
+        assert_eq!(
+            NVPTX_DATALAYOUT_PTX.replace("-p3:32:32:32", ""),
+            NVPTX_DATALAYOUT_PTX_WIDE
+        );
+        let pointer_entries: Vec<&str> = NVPTX_DATALAYOUT_PTX_WIDE
+            .split('-')
+            .filter(|entry| entry.starts_with('p'))
+            .collect();
+        assert_eq!(pointer_entries, ["p:64:64:64"]);
+        assert_eq!(PtxWideExportConfig.datalayout(), NVPTX_DATALAYOUT_PTX_WIDE);
+        assert_eq!(PtxExportConfig.datalayout(), NVPTX_DATALAYOUT_PTX);
+    }
+
+    /// Only the data layout differs between the two PTX configurations.
+    #[test]
+    fn wide_ptx_config_matches_short_except_layout() {
+        let (short, wide) = (PtxExportConfig, PtxWideExportConfig);
+        assert_eq!(short.emit_llvm_used(), wide.emit_llvm_used());
+        assert_eq!(short.emit_nvvmir_version(), wide.emit_nvvmir_version());
+        assert_eq!(short.nvvmir_version(), wide.nvvmir_version());
+        assert_eq!(
+            short.emit_all_kernel_annotations(),
+            wide.emit_all_kernel_annotations()
+        );
+        assert_eq!(
+            short.emit_ptx_kernel_keyword(),
+            wide.emit_ptx_kernel_keyword()
+        );
+        assert_eq!(short.nvvm_ir_dialect(), wide.nvvm_ir_dialect());
     }
 }
 

@@ -51,7 +51,7 @@ mod types;
 
 pub use config::{
     DebugKind, ExportBackendConfig, FunctionLocalStaticPlacement, NvvmExportConfig, NvvmIrDialect,
-    PtxExportConfig,
+    PtxExportConfig, PtxWideExportConfig,
 };
 pub use externs::{AsDeviceExtern, DeviceExternAttrs, DeviceExternDecl, DeviceExternType};
 

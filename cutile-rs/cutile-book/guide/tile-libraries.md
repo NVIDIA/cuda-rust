@@ -353,19 +353,24 @@ source can link a debug or a release build of a library, or one built for
 each architecture:
 
 ```rust
-use cutile::tile_kernel::{set_default_tile_libraries, CompileOptions, TileLibrarySpec};
+use cutile::tile_kernel::{set_default_tile_libraries, TileLibrarySpec};
 
 // Libraries every kernel links, for the rest of the process.
 set_default_tile_libraries([TileLibrarySpec::new("/opt/tilelibs/solver.tilelib")]);
 
 // A library one launch links in addition to the defaults.
 let (y,) = kernels::fft_kernel(y)
-    .compile_options(CompileOptions::new().tile_library(TileLibrarySpec::new(fft_path)))
+    .tile_library(TileLibrarySpec::new(fft_path))
     .sync()?;
 ```
 
+- A launch adds libraries with `.tile_library(spec)` or
+  `.tile_libraries(specs)`, which keep its other compile options, or with
+  `CompileOptions::tile_library` in `.compile_options(options)`. Options set
+  with `.compile_options` replace the launch's options, libraries included,
+  so set them before adding libraries.
 - The defaults (`set_default_tile_libraries`, `add_default_tile_library`)
-  and a launch's `CompileOptions::tile_library` list are combined,
+  and a launch's libraries are combined,
   canonicalized, sorted and de-duplicated before `tileiras` links them. A
   relative path is relative to the current directory. Adding a library that
   is already a default changes nothing.

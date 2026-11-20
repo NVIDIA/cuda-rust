@@ -1073,6 +1073,10 @@ pub fn kernel_launcher(
                 self._compile_options = options;
                 self
             }
+            fn tile_library(mut self, library: TileLibrarySpec) -> Self {
+                self._compile_options = std::mem::take(&mut self._compile_options).tile_library(library);
+                self
+            }
         }
         impl #into_future_impl_type_params IntoFuture for #launcher_ident #struct_args {
             type Output = Result<#returned_args_type, DeviceError>;

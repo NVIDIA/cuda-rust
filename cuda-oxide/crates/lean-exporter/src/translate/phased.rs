@@ -18,13 +18,12 @@ use pliron::{
 };
 
 use super::{
-    AccessKind, GlobalStripAccess2D, PhasedGlobal1DAccess, TranslatedFunction,
+    AccessKind, PhasedGlobal1DAccess, TranslatedFunction,
     ir_utils::{
         BlockGraph, bin_kinds, int_attr_u64, is_mbarrier_shared_alloc, op_kind, op_name,
         push_shared_access, shared_alloc_elem_bytes,
     },
     ssa_prop::propagate_phased_ssa,
-    strips_2d::populate_verified_2d_strips,
     tcgen05::{AsyncTranscribeCtx, transcribe_async_or_tcgen05_op},
 };
 use crate::{
@@ -282,8 +281,8 @@ pub(super) fn translate_phased_kernel(
         acyclic_dom_count(b_idx, seen_in_blk)
     };
 
-    // 3. Propagate `SsaEnv` + optional 2D global slice strips (`sgemm_tiled_raw`).
-    let mut env = propagate_phased_ssa(
+    // 3. Propagate `SsaEnv`.
+    let env = propagate_phased_ssa(
         ctx,
         &graph,
         &spec,
@@ -292,9 +291,6 @@ pub(super) fn translate_phased_kernel(
         &shared_elem_bytes_map,
         &tmem_ld_id_map,
     );
-    if !spec.no_oob_idx.is_empty() {
-        populate_verified_2d_strips(ctx, &graph, &mut env);
-    }
 
     // 4. Transcribe block terminators into `cfg_blocks` once, and collect `mbarrier` / TMA operand facts.
     let mut cfg_blocks: Vec<TranscribedCfgBlock> = vec![TranscribedCfgBlock::default(); num_blocks];
@@ -531,7 +527,6 @@ pub(super) fn translate_phased_kernel(
     let mut ptr_asserts = pair_shared_ptr_asserts(ctx, &graph, &spec, &env);
 
     // 6. Populate `cfg_blocks[b_idx].ops` and access obligations in program order.
-    let mut global_strip_accesses = Vec::new();
     let mut global_1d_accesses = Vec::new();
     let mut shared_accesses = Vec::new();
     let mut tmem_accesses = Vec::new();
@@ -639,18 +634,13 @@ pub(super) fn translate_phased_kernel(
                             || spec.mutable_slice_params.contains(&param))
                         && !matches!(
                             env.get_kind(&op.get_result(0)),
-                            Some(
-                                SsaKind::GlobalStripElementPtr { .. }
-                                    | SsaKind::Global1DElementPtr { .. }
-                            )
+                            Some(SsaKind::Global1DElementPtr { .. })
                         )
                     {
-                        let reason = if spec.domain == 2 {
-                            "2D global slice pointer offset must use a row-strip (`start + col`) or col-strip (`start + row * stride`) index"
-                        } else {
-                            "verified global slice pointer offset must use the 1D thread index (`(blockIdx_x as usize) * (blockDim_x as usize) + (threadIdx_x as usize)` or `thread::index_1d()`)"
-                        };
-                        return Err(reject("mir.ptr_offset", reason));
+                        return Err(reject(
+                            "mir.ptr_offset",
+                            "verified global slice pointer offset must use the 1D thread index",
+                        ));
                     }
                 }
                 "mir.assert" => match op_kind(&env, &op, 0) {
@@ -744,17 +734,6 @@ pub(super) fn translate_phased_kernel(
                                 active_threads,
                                 guard,
                             );
-                        }
-                        Some(SsaKind::GlobalStripElementPtr {
-                            param,
-                            kind,
-                            offset,
-                        }) if !is_store => {
-                            global_strip_accesses.push(GlobalStripAccess2D {
-                                param,
-                                kind,
-                                offset,
-                            });
                         }
                         Some(SsaKind::Global1DElementPtr {
                             param,
@@ -880,7 +859,6 @@ pub(super) fn translate_phased_kernel(
         arity,
         spec,
         num_barriers: effective_num_barriers,
-        global_strip_accesses,
         global_1d_accesses,
         shared_accesses,
         control_flow_cfg,

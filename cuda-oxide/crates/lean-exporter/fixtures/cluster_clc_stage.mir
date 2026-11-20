@@ -1,0 +1,122 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+// PostMem2Reg dialect-mir fixture for Stage 9 2-CTA cluster + DSMEM + remote mbarrier + CLC work-stealing.
+builtin.module @safe_cluster_clc {
+  ^entry():
+    mir.func @cluster_clc_stage: builtin.function <(mir.disjoint_slice <builtin.integer ui32 ,[]>) -> ()>
+      [cluster_dim_x: builtin.integer <2: ui32>, cluster_dim_y: builtin.integer <1: ui32>, cluster_dim_z: builtin.integer <1: ui32>, gpu_kernel: builtin.string "true", launch_contract_domain: builtin.integer <1: ui32>, reqntid_x: builtin.integer <128: ui32>, reqntid_y: builtin.integer <1: ui32>, reqntid_z: builtin.integer <1: ui32>, verify_no_data_race: builtin.string "0,1", verify_no_oob_shared: builtin.string "0,1", verify_uniform_barriers: builtin.string "true"]
+    {
+      ^entry(out: mir.disjoint_slice <builtin.integer ui32 ,[]>):
+        tx_u32 = nvvm.read_ptx_sreg_tid_x () [] []: <() -> (builtin.integer ui32)>;
+        tid = mir.cast (tx_u32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+        c32_u32 = mir.constant () [] [value: builtin.integer <32: ui32>]: <() -> (builtin.integer ui32)>;
+        warp_id = mir.div (tx_u32, c32_u32) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;
+        lane_id = mir.rem (tx_u32, c32_u32) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;
+        my_rank = nvvm.read_ptx_sreg_cluster_ctaid_x () [] []: <() -> (builtin.integer ui32)>;
+        one_u32 = mir.constant () [] [value: builtin.integer <1: ui32>]: <() -> (builtin.integer ui32)>;
+        two_u32 = mir.constant () [] [value: builtin.integer <2: ui32>]: <() -> (builtin.integer ui32)>;
+        zero_u32 = mir.constant () [] [value: builtin.integer <0: ui32>]: <() -> (builtin.integer ui32)>;
+        zero_u64 = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+        one_u64 = mir.constant () [] [value: builtin.integer <1: ui64>]: <() -> (builtin.integer ui64)>;
+        c2_u64 = mir.constant () [] [value: builtin.integer <2: ui64>]: <() -> (builtin.integer ui64)>;
+        c128_u64 = mir.constant () [] [value: builtin.integer <128: ui64>]: <() -> (builtin.integer ui64)>;
+        peer_rank = mir.bitxor (my_rank, one_u32) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;
+        is_tid0 = mir.eq (tid, zero_u64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        mir.cond_br (is_tid0) [^init_bars, ^stage_local] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^init_bars():
+        clc_bar_init = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string "CLC_BAR", source_name: builtin.string "safe_cluster_clc::kernels::cluster_clc_stage::CLC_BAR"]: <() -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;
+        peer_bar_init = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string "PEER_DONE", source_name: builtin.string "safe_cluster_clc::kernels::cluster_clc_stage::PEER_DONE"]: <() -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;
+        nvvm.mbarrier_init_shared (clc_bar_init, one_u32) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui32) -> ()>;
+        nvvm.mbarrier_init_shared (peer_bar_init, two_u32) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui32) -> ()>;
+        nvvm.fence_proxy_async_shared_cta () [] []: <() -> ()>;
+        mir.goto () [^stage_local] []: <() -> ()>
+
+      ^stage_local():
+        local_w_base = mir.shared_alloc () [] [alignment: builtin.integer <16: i64>, elem_type: builtin.type builtin.integer ui32, size: builtin.integer <128: i64>, alloc_key: builtin.string "LOCAL_STAGE", source_name: builtin.string "safe_cluster_clc::kernels::cluster_clc_stage::LOCAL_STAGE"]: <() -> (mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:3,kind:Erased>)>;
+        ok_w = mir.lt (tid, c128_u64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        mir.assert (ok_w) [] []: <(builtin.integer i1) -> ()>;
+        local_w_ptr = mir.ptr_offset (local_w_base, tid) [] []: <(mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:3,kind:Erased>)>;
+        mir.store (local_w_ptr, tx_u32) [] []: <(mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui32) -> ()>;
+        nvvm.cluster_sync () [] []: <() -> ()>;
+        local_r_base = mir.shared_alloc () [] [alignment: builtin.integer <16: i64>, elem_type: builtin.type builtin.integer ui32, size: builtin.integer <128: i64>, alloc_key: builtin.string "LOCAL_STAGE", source_name: builtin.string "safe_cluster_clc::kernels::cluster_clc_stage::LOCAL_STAGE"]: <() -> (mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:3,kind:Erased>)>;
+        local_r_ref = mir.cast (local_r_base) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority Reborrow]: <(mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:3,kind:Erased>) -> (mir.ptr <builtin.integer ui32 ,mutable:false,addrspace:3,kind:SharedRef>)>;
+        local_r_ptr = mir.ptr_offset (local_r_ref, tid) [] []: <(mir.ptr <builtin.integer ui32 ,mutable:false,addrspace:3,kind:SharedRef>, builtin.integer ui64) -> (mir.ptr <builtin.integer ui32 ,mutable:false,addrspace:3,kind:SharedRef>)>;
+        _local_val = mir.load (local_r_ptr) [] []: <(mir.ptr <builtin.integer ui32 ,mutable:false,addrspace:3,kind:SharedRef>) -> (builtin.integer ui32)>;
+        local_r_raw = mir.cast (local_r_ptr) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority RawAddress]: <(mir.ptr <builtin.integer ui32 ,mutable:false,addrspace:3,kind:SharedRef>) -> (mir.ptr <builtin.integer ui32 ,mutable:false,addrspace:3,kind:RawConst>)>;
+        mapped_peer_ptr = nvvm.mapa_shared_cluster (local_r_raw, peer_rank) [] []: <(mir.ptr <builtin.integer ui32 ,mutable:false,addrspace:3,kind:RawConst>, builtin.integer ui32) -> (mir.ptr <builtin.integer ui32 ,mutable:false,addrspace:7,kind:RawConst>)>;
+        _peer_val = mir.load (mapped_peer_ptr) [] []: <(mir.ptr <builtin.integer ui32 ,mutable:false,addrspace:7,kind:RawConst>) -> (builtin.integer ui32)>;
+        mir.cond_br (is_tid0) [^arrive_peer_done, ^maybe_wait_peer_done] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^arrive_peer_done():
+        is_rank0 = mir.eq (my_rank, zero_u32) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer i1)>;
+        mir.cond_br (is_rank0) [^arrive_local, ^arrive_remote] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^arrive_local():
+        peer_bar_l = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string "PEER_DONE", source_name: builtin.string "safe_cluster_clc::kernels::cluster_clc_stage::PEER_DONE"]: <() -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;
+        _tok_p0 = nvvm.mbarrier_arrive_shared (peer_bar_l) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>) -> (builtin.integer ui64)>;
+        mir.goto () [^maybe_wait_peer_done] []: <() -> ()>
+
+      ^arrive_remote():
+        peer_bar_r = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string "PEER_DONE", source_name: builtin.string "safe_cluster_clc::kernels::cluster_clc_stage::PEER_DONE"]: <() -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;
+        peer_bar_rc = mir.cast (peer_bar_r) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority RawAddress]: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>) -> (mir.ptr <builtin.integer ui64 ,mutable:false,addrspace:3,kind:RawConst>)>;
+        mapped_bar = nvvm.mapa_shared_cluster (peer_bar_rc, zero_u32) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:false,addrspace:3,kind:RawConst>, builtin.integer ui32) -> (mir.ptr <builtin.integer ui64 ,mutable:false,addrspace:7,kind:RawConst>)>;
+        remote_bar_addr = nvvm.cvta_generic_to_shared_offset (mapped_bar) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:false,addrspace:7,kind:RawConst>) -> (builtin.integer ui64)>;
+        nvvm.mbarrier_arrive_cluster (remote_bar_addr) [] []: <(builtin.integer ui64) -> ()>;
+        mir.goto () [^maybe_wait_peer_done] []: <() -> ()>
+
+      ^maybe_wait_peer_done():
+        is_rank0_w = mir.eq (my_rank, zero_u32) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer i1)>;
+        mir.cond_br (is_rank0_w) [^wait_peer_hdr, ^clc_warp_check] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^wait_peer_hdr():
+        peer_bar_w = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string "PEER_DONE", source_name: builtin.string "safe_cluster_clc::kernels::cluster_clc_stage::PEER_DONE"]: <() -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;
+        peer_ready = nvvm.mbarrier_try_wait_parity_shared (peer_bar_w, zero_u32) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui32) -> (builtin.integer i1)>;
+        peer_not_ready = mir.not (peer_ready) [] []: <(builtin.integer i1) -> (builtin.integer i1)>;
+        mir.cond_br (peer_not_ready) [^wait_peer_spin, ^clc_warp_check] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^wait_peer_spin():
+        mir.goto () [^wait_peer_hdr] []: <() -> ()>
+
+      ^clc_warp_check():
+        is_warp0 = mir.eq (warp_id, zero_u32) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer i1)>;
+        mir.cond_br (is_warp0) [^clc_lane_check, ^wait_clc_hdr] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^clc_lane_check():
+        is_lane0 = mir.eq (lane_id, zero_u32) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer i1)>;
+        mir.cond_br (is_lane0) [^clc_arm, ^wait_clc_hdr] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^clc_arm():
+        clc_bar_a = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string "CLC_BAR", source_name: builtin.string "safe_cluster_clc::kernels::cluster_clc_stage::CLC_BAR"]: <() -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;
+        c16_u32 = mir.constant () [] [value: builtin.integer <16: ui32>]: <() -> (builtin.integer ui32)>;
+        _tok_clc = nvvm.mbarrier_arrive_expect_tx_shared (clc_bar_a, c16_u32) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui32) -> (builtin.integer ui64)>;
+        is_rank0_clc = mir.eq (my_rank, zero_u32) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer i1)>;
+        mir.cond_br (is_rank0_clc) [^clc_issue, ^wait_clc_hdr] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^clc_issue():
+        clc_resp_w = mir.shared_alloc () [] [alignment: builtin.integer <16: i64>, elem_type: builtin.type builtin.integer ui64, size: builtin.integer <2: i64>, alloc_key: builtin.string "CLC_RESPONSE", source_name: builtin.string "safe_cluster_clc::kernels::cluster_clc_stage::CLC_RESPONSE"]: <() -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;
+        clc_bar_i = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string "CLC_BAR", source_name: builtin.string "safe_cluster_clc::kernels::cluster_clc_stage::CLC_BAR"]: <() -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;
+        nvvm.clc_try_cancel_multicast (clc_resp_w, clc_bar_i) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>, mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>) -> ()>;
+        mir.goto () [^wait_clc_hdr] []: <() -> ()>
+
+      ^wait_clc_hdr():
+        clc_bar_w = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string "CLC_BAR", source_name: builtin.string "safe_cluster_clc::kernels::cluster_clc_stage::CLC_BAR"]: <() -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;
+        clc_ready = nvvm.mbarrier_try_wait_parity_shared (clc_bar_w, zero_u32) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui32) -> (builtin.integer i1)>;
+        clc_not_ready = mir.not (clc_ready) [] []: <(builtin.integer i1) -> (builtin.integer i1)>;
+        mir.cond_br (clc_not_ready) [^wait_clc_spin, ^consume_clc] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^wait_clc_spin():
+        mir.goto () [^wait_clc_hdr] []: <() -> ()>
+
+      ^consume_clc():
+        clc_resp_r = mir.shared_alloc () [] [alignment: builtin.integer <16: i64>, elem_type: builtin.type builtin.integer ui64, size: builtin.integer <2: i64>, alloc_key: builtin.string "CLC_RESPONSE", source_name: builtin.string "safe_cluster_clc::kernels::cluster_clc_stage::CLC_RESPONSE"]: <() -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;
+        clc_resp_ref = mir.cast (clc_resp_r) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority Reborrow]: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>) -> (mir.ptr <builtin.integer ui64 ,mutable:false,addrspace:3,kind:SharedRef>)>;
+        p0 = mir.ptr_offset (clc_resp_ref, zero_u64) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:false,addrspace:3,kind:SharedRef>, builtin.integer ui64) -> (mir.ptr <builtin.integer ui64 ,mutable:false,addrspace:3,kind:SharedRef>)>;
+        p1 = mir.ptr_offset (clc_resp_ref, one_u64) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:false,addrspace:3,kind:SharedRef>, builtin.integer ui64) -> (mir.ptr <builtin.integer ui64 ,mutable:false,addrspace:3,kind:SharedRef>)>;
+        lo = mir.load (p0) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:false,addrspace:3,kind:SharedRef>) -> (builtin.integer ui64)>;
+        hi = mir.load (p1) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:false,addrspace:3,kind:SharedRef>) -> (builtin.integer ui64)>;
+        _is_canc = nvvm.clc_query_is_canceled (lo, hi) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui32)>;
+        _stolen = nvvm.clc_query_get_first_ctaid_x (lo, hi) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui32)>;
+        mir.return () [] []: <() -> ()>
+    }
+}

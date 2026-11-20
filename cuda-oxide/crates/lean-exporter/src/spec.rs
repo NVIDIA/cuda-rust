@@ -45,6 +45,8 @@ pub struct KernelVerificationSpec {
     pub block_size: u32,
     /// Static block Y dimension from `reqntid_y` (`1` for 1D kernels).
     pub block_y: u32,
+    /// Static CTA cluster X dimension from `cluster_dim_x` (`1` when non-clustered).
+    pub cluster_dim_x: u32,
     /// True when `u32_coordinates` was set on `#[launch_contract]` (`grid * block <= u32::MAX`).
     pub u32_coordinates: bool,
     /// Indices of `&mut [T]` (`MirSliceType` with `mutable: true`) parameters.
@@ -222,6 +224,17 @@ pub(crate) fn parse_kernel_verification_spec(
             format!("expected 2D block (x > 0, y > 0, 1), found ({block_x}, {block_y}, {block_z})"),
         ));
     }
+    let cluster_dim_x = get_u32_attr(attrs, "cluster_dim_x").unwrap_or(1);
+    let cluster_dim_y = get_u32_attr(attrs, "cluster_dim_y").unwrap_or(1);
+    let cluster_dim_z = get_u32_attr(attrs, "cluster_dim_z").unwrap_or(1);
+    if cluster_dim_x == 0 || cluster_dim_x > 16 || cluster_dim_y != 1 || cluster_dim_z != 1 {
+        return Err(reject(
+            "kernel contract",
+            format!(
+                "verified cluster launches require 1D X cluster (1..=16, 1, 1), found ({cluster_dim_x}, {cluster_dim_y}, {cluster_dim_z})"
+            ),
+        ));
+    }
 
     let type_attr = attrs
         .0
@@ -318,6 +331,7 @@ pub(crate) fn parse_kernel_verification_spec(
             domain,
             block_size: block_x,
             block_y,
+            cluster_dim_x,
             u32_coordinates,
             mutable_slice_params,
             requires_len_ge,

@@ -456,17 +456,6 @@ fn eval_phased_ssa_op(
                     guard_param: *guard_param,
                     group_size: u64::from(spec.block_size),
                 })
-            } else if let (
-                Some(SsaKind::VerifiedGlobalStripIdx {
-                    param, offset: 0, ..
-                }),
-                Some(SsaKind::SliceLen(guard_param)),
-            ) = (&lhs, &rhs)
-                && param == guard_param
-            {
-                Some(SsaKind::IndexLtLen {
-                    guard_param: *guard_param,
-                })
             } else {
                 Some(uniform_if_both(&lhs, &rhs))
             }
@@ -676,21 +665,6 @@ fn eval_phased_ssa_op(
                     param: *param,
                     offset: 0,
                     group_size: u64::from(spec.block_size),
-                })
-            } else if let (
-                Some(SsaKind::SlicePtr(param)),
-                Some(SsaKind::VerifiedGlobalStripIdx {
-                    param: strip_param,
-                    kind,
-                    offset,
-                }),
-            ) = (lhs, rhs)
-                && param == strip_param
-            {
-                Some(SsaKind::GlobalStripElementPtr {
-                    param,
-                    kind,
-                    offset,
                 })
             } else {
                 (op.get_num_results() == 1).then_some(SsaKind::DataValue)

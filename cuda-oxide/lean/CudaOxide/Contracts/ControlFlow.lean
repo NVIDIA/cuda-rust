@@ -4,7 +4,6 @@ SPDX-License-Identifier: Apache-2.0
 -/
 
 import CudaOxide.Mir.ControlFlow
-import CudaOxide.Contracts.Access
 
 /-!
 # Declarative Control-Flow & Lifecycle Contracts (`CudaOxide.Contracts.ControlFlow`)
@@ -27,8 +26,16 @@ checker. Reusable decision checkers and soundness proofs live in
 `CudaOxide.Proofs.ControlFlow`.
 -/
 namespace CudaOxide.Contracts.ControlFlow
-open CudaOxide.Mir.Kernel
 open CudaOxide.Mir.ControlFlow
+
+/-- Valid non-exclusive Blackwell `tcgen05.alloc` column counts (PTX ISA Table 58:
+    power of two in `[32, 512]`). -/
+def TmemValidCols (nCols : Nat) : Prop :=
+  nCols = 32 ∨                                              -- 32 columns (minimum allocation unit), OR
+  nCols = 64 ∨                                              -- 64 columns, OR
+  nCols = 128 ∨                                             -- 128 columns, OR
+  nCols = 256 ∨                                             -- 256 columns, OR
+  nCols = 512                                               -- 512 columns (full per-SM TMEM capacity).
 
 /-- Inductive directed path from block `u` to block `v` in `cfg` where every
     visited block is in bounds (`< cfg.blocks.length`) and outside `avoid`. -/
@@ -52,19 +59,19 @@ inductive CtaReachable (cfg : ControlFlowCfg) : Nat → CtaState → Prop where
   /-- Kernel entry reaches block `0` in the initial clean/unallocated CTA state. -/
   | entry (hpos : 0 < cfg.blocks.length) :
       CtaReachable cfg 0 (CtaState.initial cfg)
-  /-- Stepping through block `b`'s ops and taking CTA edge `(cond, dst)` reaches `(dst, nextSt)`. -/
+  /-- Stepping through block `b`'s ops and taking enabled CTA edge `(cond, dst)` reaches `(dst, nextSt)`. -/
   | step {b dst : Nat} {st outSt nextSt : CtaState} {cond : BranchCond}
       (hreach : CtaReachable cfg b st)
       (hblk   : b < cfg.blocks.length)
       (hops   : execBlockOps cfg b st (cfg.blockAt b).ops = some outSt)
-      (hedge  : (cond, dst) ∈ ctaSuccs cfg b)
+      (hedge  : (cond, dst) ∈ enabledCtaSuccs cfg b outSt)
       (hdst   : dst < cfg.blocks.length)
-      (htrans : stepEdge outSt cond = some nextSt) :
+      (htrans : stepEdge cfg b outSt cond = some nextSt) :
       CtaReachable cfg dst nextSt
 
 /-- Every reachable CTA state `(b, st)` in `cfg` executes all operations in block `b`
     without violating any hardware precondition, satisfies clean return invariants
-    on `mir.return`, and transitions cleanly across every outgoing CTA edge. -/
+    on `mir.return`, and transitions cleanly across every outgoing enabled CTA edge. -/
 def SafeCtaExecution (requireTmem : Bool) (cfg : ControlFlowCfg) : Prop :=
   0 < cfg.blocks.length ∧                                   -- The kernel CFG has an entry block `0`, AND
   ∀ b : Nat, ∀ st : CtaState,                               -- For ANY block `b` and CTA state `st`:
@@ -73,10 +80,10 @@ def SafeCtaExecution (requireTmem : Bool) (cfg : ControlFlowCfg) : Prop :=
       execBlockOps cfg b st (cfg.blockAt b).ops = some outSt ∧
       ((cfg.blockAt b).isReturn = true →                    --      (2) if `b` is a `return` block, `TMEM` is freed
         validReturnState requireTmem outSt = true) ∧        --          and no async MMA or `ld` remains pending,
-      (∀ cond : BranchCond, ∀ dst : Nat,                    --      (3) for every outgoing CTA edge `(cond, dst)`,
-        (cond, dst) ∈ ctaSuccs cfg b →                      --          `dst` is a valid block index AND the edge
+      (∀ cond : BranchCond, ∀ dst : Nat,                    --      (3) for every outgoing enabled CTA edge `(cond, dst)`,
+        (cond, dst) ∈ enabledCtaSuccs cfg b outSt →         --          `dst` is a valid block index AND the edge
         dst < cfg.blocks.length ∧                           --          precondition (e.g. `mbarReady` armed) holds.
-        ∃ nextSt : CtaState, stepEdge outSt cond = some nextSt)
+        ∃ nextSt : CtaState, stepEdge cfg b outSt cond = some nextSt)
 
 /-- Every cyclic asynchronous TMA or `tcgen05` loop in `cfg` enforces reverse
     back-pressure (`EMPTY_BAR` wait or `thread::sync_threads()`) between consumer
@@ -121,7 +128,7 @@ def UniformBarriers (cfg : ControlFlowCfg) : Prop :=
     count after `sync_threads()` on every kernel exit path. -/
 def TmemLifecycle (cfg : ControlFlowCfg) : Prop :=
   (∃ cols : Nat,                                            -- There EXISTS an allocation column count `cols` with:
-    CudaOxide.Contracts.TmemValidCols cols ∧                --   (1) `cols ∈ {32, 64, 128, 256, 512}`,
+    TmemValidCols cols ∧                                    --   (1) `cols ∈ {32, 64, 128, 256, 512}`,
     tmemAllocSites cfg = [cols] ∧                           --   (2) a single `tcgen05_alloc` of `cols` columns,
     tmemDeallocSites cfg ≠ [] ∧                             --   (3) at least one `tcgen05_dealloc` site, AND
     (∀ d : Nat, d ∈ tmemDeallocSites cfg → d = cols)) ∧     --   (4) every `tcgen05_dealloc` frees `cols`, AND

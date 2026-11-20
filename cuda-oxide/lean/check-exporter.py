@@ -19,6 +19,8 @@ WARP_REDUCE_FIXTURE = REPO / "crates/lean-exporter/fixtures/warp_reduce.mir"
 SUBWARP_MULTIBUF_FIXTURE = REPO / "crates/lean-exporter/fixtures/subwarp_multibuf.mir"
 ASYNC_COPY_FIXTURE = REPO / "crates/lean-exporter/fixtures/async_copy_stage.mir"
 TCGEN05_MATMUL_FIXTURE = REPO / "crates/lean-exporter/fixtures/tcgen05_matmul.mir"
+WARP_RING_FIXTURE = REPO / "crates/lean-exporter/fixtures/warp_ring_stage.mir"
+CLUSTER_CLC_FIXTURE = REPO / "crates/lean-exporter/fixtures/cluster_clc_stage.mir"
 PROOFS = """
 namespace CudaOxide.Generated
 
@@ -213,7 +215,7 @@ def main():
         require_success("env", "lean", str(sgemm_raw_valid))
         print("PASS: exported 2D sgemm_tiled_raw MIR proves global RowStrip/ColStrip and shared-memory obligations.", flush=True)
 
-        # Mutate sgemm_tiled_raw MIR to index `a` with an unguarded/non-strip offset `a_len`:
+        # Mutate sgemm_tiled_raw MIR to index `a` with an unguarded offset `a_len` (`a[a.len()]`):
         bad_strip_mir = temporary / "sgemm_bad_strip.mir"
         bad_strip_mir.write_text(
             sgemm_source.replace(
@@ -222,10 +224,15 @@ def main():
                 1,
             )
         )
-        rejected_strip = export(bad_strip_mir, "sgemm_tiled_raw")
-        if rejected_strip.returncode == 0 or "2D global slice pointer offset must use a row-strip" not in rejected_strip.stderr:
-            raise RuntimeError(f"Expected non-strip 2D global slice access to be rejected:\n{rejected_strip.stderr}")
-        print("REJECTED as expected: non-strip 2D global slice access is rejected before Lean.", flush=True)
+        bad_strip_lean = require_export(bad_strip_mir, "sgemm_tiled_raw")
+        bad_strip_file = temporary / "SgemmBadStrip.lean"
+        bad_strip_file.write_text(
+            "\n".join(line for line in bad_strip_lean.splitlines() if not line.startswith("#print axioms"))
+        )
+        res_bad_strip = run_lake("env", "lean", str(bad_strip_file))
+        if res_bad_strip.returncode == 0 or "error: omega could not prove the goal:" not in res_bad_strip.stdout:
+            raise RuntimeError(f"Expected OOB `a[a.len()]` 2D global slice access to fail in Lean:\n{res_bad_strip.stdout}")
+        print("REJECTED as expected: OOB `a[a.len()]` 2D global slice access fails `MirNoOobGlobal` in Lean 4.", flush=True)
 
         # Mutate sgemm_tiled_raw MIR to check `a_col < k` instead of `a_col < a_eff` (ignoring band check):
         unguarded_strip_mir = temporary / "sgemm_unguarded_strip.mir"
@@ -236,10 +243,15 @@ def main():
                 1,
             )
         )
-        rejected_unguarded_strip = export(unguarded_strip_mir, "sgemm_tiled_raw")
-        if rejected_unguarded_strip.returncode == 0 or "2D global slice pointer offset must use a row-strip" not in rejected_unguarded_strip.stderr:
-            raise RuntimeError(f"Expected unguarded 2D global slice strip access to be rejected:\n{rejected_unguarded_strip.stderr}")
-        print("REJECTED as expected: unguarded 2D global slice strip access is rejected before Lean.", flush=True)
+        unguarded_strip_lean = require_export(unguarded_strip_mir, "sgemm_tiled_raw")
+        unguarded_strip_file = temporary / "SgemmUnguardedStrip.lean"
+        unguarded_strip_file.write_text(
+            "\n".join(line for line in unguarded_strip_lean.splitlines() if not line.startswith("#print axioms"))
+        )
+        res_unguarded_strip = run_lake("env", "lean", str(unguarded_strip_file))
+        if res_unguarded_strip.returncode == 0 or "error: omega could not prove the goal:" not in res_unguarded_strip.stdout:
+            raise RuntimeError(f"Expected unguarded 2D global slice access (`a_col < k`) to fail in Lean:\n{res_unguarded_strip.stdout}")
+        print("REJECTED as expected: unguarded 2D global slice access (`a_col < k`) fails `MirNoOobGlobal` in Lean 4.", flush=True)
 
         # Mutate sgemm_tiled_raw MIR with off-by-one `a[a_start + a_col + 1]`:
         oob_strip_mir = temporary / "sgemm_oob_strip.mir"
@@ -302,10 +314,15 @@ def main():
                 1,
             )
         )
-        rejected_post_loop = export(post_loop_mir, "block_reduce_sum")
-        if rejected_post_loop.returncode == 0 or "shared memory pointer offset must use a recognized 2D tile coordinate" not in rejected_post_loop.stderr:
-            raise RuntimeError(f"Expected post-loop `WARP_SUMS[w]` access to be rejected:\n{rejected_post_loop.stderr}")
-        print("REJECTED as expected: post-loop `WARP_SUMS[w]` access (`w == 8`) is rejected before Lean.", flush=True)
+        post_loop_lean = require_export(post_loop_mir, "block_reduce_sum")
+        post_loop_file = temporary / "BlockReducePostLoop.lean"
+        post_loop_file.write_text(
+            "\n".join(line for line in post_loop_lean.splitlines() if not line.startswith("#print axioms"))
+        )
+        res_post_loop = run_lake("env", "lean", str(post_loop_file))
+        if res_post_loop.returncode == 0 or "error: omega could not prove the goal:" not in res_post_loop.stdout:
+            raise RuntimeError(f"Expected post-loop `WARP_SUMS[w]` access (`!(w < 8)`) to fail in Lean:\n{res_post_loop.stdout}")
+        print("REJECTED as expected: post-loop `WARP_SUMS[w]` access (`!(w < 8)`) fails `MirNoOobShared` in Lean 4.", flush=True)
 
         # Stage 4: Sub-warp bitwise coordinate splits & multi-buffer shared staging
         subwarp_source = SUBWARP_MULTIBUF_FIXTURE.read_text()
@@ -368,10 +385,15 @@ def main():
                 1,
             )
         )
-        rejected_bitor = export(bad_bitor_mir, "subwarp_bit_split_stage")
-        if rejected_bitor.returncode == 0 or "shared memory pointer offset must use a recognized 2D tile coordinate" not in rejected_bitor.stderr:
-            raise RuntimeError(f"Expected overlapping `tid | 1` bitor to be rejected:\n{rejected_bitor.stderr}")
-        print("REJECTED as expected: overlapping `tid | 1` bitwise OR is rejected before Lean.", flush=True)
+        bad_bitor_lean = require_export(bad_bitor_mir, "subwarp_bit_split_stage")
+        bad_bitor_file = temporary / "SubwarpBadBitor.lean"
+        bad_bitor_file.write_text(
+            "\n".join(line for line in bad_bitor_lean.splitlines() if not line.startswith("#print axioms"))
+        )
+        res_bad_bitor = run_lake("env", "lean", str(bad_bitor_file))
+        if res_bad_bitor.returncode == 0 or "error: omega could not prove the goal:" not in res_bad_bitor.stdout:
+            raise RuntimeError(f"Expected overlapping `tid | 1` bitor to fail MirNoSharedRace in Lean:\n{res_bad_bitor.stdout}")
+        print("REJECTED as expected: overlapping `tid | 1` bitwise OR fails `MirNoSharedRace` in Lean 4.", flush=True)
 
         # Mutate subwarp_bit_split_stage MIR with narrowing `((tid * 2) as u8) as u64` wraparound:
         narrow_cast_mir = temporary / "subwarp_narrow_cast.mir"
@@ -567,7 +589,172 @@ def main():
             raise RuntimeError(f"Expected racy `c[idx] = ... + c[idx + 1]` on `&mut [f32]` to fail in Lean:\n{res_racy_mut.stdout}")
         print("REJECTED as expected: cross-thread `c[idx + 1]` read alongside `c[idx]` write on `&mut [f32]` fails in Lean 4.", flush=True)
 
-    print("Exporter checks passed for scalar, 1D vecadd, 2D SGEMM, Stage 3 warp/block reductions, Stage 4 sub-warp multi-buffer, Stage 5 async mbarrier, and Stage 6 Blackwell tcgen05/TMEM fixtures.")
+        # Stage 8: Warp-specialized 4-stage TMA + metadata + SharedArray<Barrier, 4, 8> ring
+        ring_source = WARP_RING_FIXTURE.read_text()
+        ring_lean = require_export(WARP_RING_FIXTURE, "warp_ring_stage")
+        ring_valid = temporary / "WarpRingValid.lean"
+        ring_valid.write_text(ring_lean)
+        require_success("env", "lean", str(ring_valid))
+        print("PASS: exported warp_ring_stage MIR proves 4-stage SharedArray<Barrier, 4> bounds, slot-ordered TMA/metadata handoff, and cyclic back-pressure.", flush=True)
+
+        # Stage 8 negative check 1: Off-by-one `p_inc == 5` wraparound on 4-stage ring fails `MirNoOobShared` in Lean 4:
+        ring_wrap_oob_mir = temporary / "warp_ring_wrap_oob.mir"
+        ring_wrap_oob_mir.write_text(
+            ring_source.replace(
+                "p_wrap = mir.eq (p_inc, c4_u64)",
+                "c5_u64 = mir.constant () [] [value: builtin.integer <5: ui64>]: <() -> (builtin.integer ui64)>;\n        p_wrap = mir.eq (p_inc, c5_u64)",
+                1,
+            )
+        )
+        ring_wrap_oob_lean = require_export(ring_wrap_oob_mir, "warp_ring_stage")
+        ring_wrap_oob_file = temporary / "WarpRingWrapOob.lean"
+        ring_wrap_oob_file.write_text(
+            "\n".join(line for line in ring_wrap_oob_lean.splitlines() if not line.startswith("#print axioms"))
+        )
+        res_ring_oob = run_lake("env", "lean", str(ring_wrap_oob_file))
+        if res_ring_oob.returncode == 0 or "error: omega could not prove the goal:" not in res_ring_oob.stdout:
+            raise RuntimeError(f"Expected off-by-one `p_inc == 5` ring wrap to fail MirNoOobShared in Lean:\n{res_ring_oob.stdout}")
+        print("REJECTED as expected: off-by-one `stage + 1 == 5` wrap on 4-stage ring fails `no_oob_idx`.", flush=True)
+
+        # Stage 8 negative check 2: Mismatched barrier slot (`FULL_BAR[c_stage]`) vs data slot (`RING_BUF[(c_stage + 1) & 3]`) fails `MirNoSharedRace`:
+        ring_slot_mismatch_mir = temporary / "warp_ring_slot_mismatch.mir"
+        ring_slot_mismatch_mir.write_text(
+            ring_source.replace(
+                "c_off = mir.mul (c_stage, c1024_u64)",
+                "c3_mask = mir.constant () [] [value: builtin.integer <3: ui64>]: <() -> (builtin.integer ui64)>;\n        c_plus1 = mir.add (c_stage, one_u64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;\n        c_wrong = mir.bitand (c_plus1, c3_mask) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;\n        c_off = mir.mul (c_wrong, c1024_u64)",
+                1,
+            )
+        )
+        ring_slot_mismatch_lean = require_export(ring_slot_mismatch_mir, "warp_ring_stage")
+        ring_slot_mismatch_file = temporary / "WarpRingSlotMismatch.lean"
+        ring_slot_mismatch_file.write_text(
+            "\n".join(line for line in ring_slot_mismatch_lean.splitlines() if not line.startswith("#print axioms"))
+        )
+        res_slot_mismatch = run_lake("env", "lean", str(ring_slot_mismatch_file))
+        if res_slot_mismatch.returncode == 0 or "error: omega could not prove the goal:" not in res_slot_mismatch.stdout:
+            raise RuntimeError(f"Expected mismatched barrier/data stage slot to fail MirNoSharedRace in Lean:\n{res_slot_mismatch.stdout}")
+        print("REJECTED as expected: awaiting `FULL_BAR[c_stage]` while reading `RING_BUF[(c_stage + 1) & 3]` fails `no_data_race`.", flush=True)
+
+        # Stage 8 negative check 3: Missing `EMPTY_BAR` wait in producer warp fails `UniformBarriers` (`NoUnbackpressuredLoop`) in Lean 4:
+        ring_no_bp_mir = temporary / "warp_ring_no_backpressure.mir"
+        ring_no_bp_mir.write_text(
+            ring_source.replace(
+                "mir.cond_br (empty_not_ready) [^prod_wait_spin, ^prod_issue] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>",
+                "mir.goto () [^prod_issue] []: <() -> ()>",
+                1,
+            )
+        )
+        ring_no_bp_lean = require_export(ring_no_bp_mir, "warp_ring_stage")
+        ring_no_bp_file = temporary / "WarpRingNoBackpressure.lean"
+        ring_no_bp_file.write_text(
+            "\n".join(line for line in ring_no_bp_lean.splitlines() if not line.startswith("#print axioms"))
+        )
+        res_ring_no_bp = run_lake("env", "lean", str(ring_no_bp_file))
+        if res_ring_no_bp.returncode == 0:
+            raise RuntimeError(f"Expected missing producer EMPTY_BAR wait to fail UniformBarriers in Lean:\n{res_ring_no_bp.stdout}")
+        print("REJECTED as expected: warp-specialized TMA ring missing `EMPTY_BAR` wait fails `uniform_barriers`.", flush=True)
+
+        # Stage 9: 2-CTA cluster + DSMEM (`map_shared_rank`) + remote `mbarrier_arrive_cluster` + Blackwell `CLC`
+        clc_source = CLUSTER_CLC_FIXTURE.read_text()
+        clc_lean = require_export(CLUSTER_CLC_FIXTURE, "cluster_clc_stage")
+        clc_valid = temporary / "ClusterClcValid.lean"
+        clc_valid.write_text(clc_lean)
+        require_success("env", "lean", str(clc_valid))
+        print("PASS: exported cluster_clc_stage MIR proves 2-CTA DSMEM rank/sync safety, remote mbarrier arrival, and 16-byte CLC response bounds/ordering.", flush=True)
+
+        # Stage 9 negative check 1: OOB peer rank `my_rank + 1` on 2-CTA cluster fails `MirNoOobClusterRank` in Lean 4:
+        clc_oob_rank_mir = temporary / "cluster_clc_oob_rank.mir"
+        clc_oob_rank_mir.write_text(
+            clc_source.replace(
+                "peer_rank = mir.bitxor (my_rank, one_u32)",
+                "peer_rank = mir.add (my_rank, one_u32)",
+                1,
+            )
+        )
+        clc_oob_rank_lean = require_export(clc_oob_rank_mir, "cluster_clc_stage")
+        clc_oob_rank_file = temporary / "ClusterClcOobRank.lean"
+        clc_oob_rank_file.write_text(
+            "\n".join(line for line in clc_oob_rank_lean.splitlines() if not line.startswith("#print axioms"))
+        )
+        res_oob_rank = run_lake("env", "lean", str(clc_oob_rank_file))
+        if res_oob_rank.returncode == 0 or "error: omega could not prove the goal:" not in res_oob_rank.stdout:
+            raise RuntimeError(f"Expected OOB `my_rank + 1` on 2-CTA cluster to fail MirNoOobClusterRank in Lean:\n{res_oob_rank.stdout}")
+        print("REJECTED as expected: `map_shared_rank(..., my_rank + 1)` on 2-CTA cluster fails `MirNoOobClusterRank`.", flush=True)
+
+        # Stage 9 negative check 2: CTA-local `sync_threads()` instead of `cluster_sync()` before DSMEM read fails `UniformBarriers`:
+        clc_local_sync_mir = temporary / "cluster_clc_local_sync.mir"
+        clc_local_sync_mir.write_text(
+            clc_source.replace(
+                "nvvm.cluster_sync () [] []: <() -> ()>;",
+                "nvvm.barrier0 () [] []: <() -> ()>;",
+                1,
+            )
+        )
+        clc_local_sync_lean = require_export(clc_local_sync_mir, "cluster_clc_stage")
+        clc_local_sync_file = temporary / "ClusterClcLocalSync.lean"
+        clc_local_sync_file.write_text(
+            "\n".join(line for line in clc_local_sync_lean.splitlines() if not line.startswith("#print axioms"))
+        )
+        res_local_sync = run_lake("env", "lean", str(clc_local_sync_file))
+        if res_local_sync.returncode == 0:
+            raise RuntimeError(f"Expected CTA-local sync_threads() before DSMEM read to fail UniformBarriers in Lean:\n{res_local_sync.stdout}")
+        print("REJECTED as expected: cross-CTA DSMEM read without `cluster_sync()` fails `uniform_barriers`.", flush=True)
+
+        # Stage 10: Dual-commit `_cg2` (`MMA_BAR` + post-loop `ACCUM_FULL`) positive + unarmed `_cg2` TMA negative check:
+        tcgen_source = TCGEN05_MATMUL_FIXTURE.read_text()
+        stage10_cg2_source = (
+            tcgen_source
+            .replace(
+                '[gpu_kernel: builtin.string "true", ',
+                '[cluster_dim_x: builtin.integer <2: ui32>, cluster_dim_y: builtin.integer <1: ui32>, cluster_dim_z: builtin.integer <1: ui32>, gpu_kernel: builtin.string "true", ',
+                1,
+            )
+            .replace("nvvm.tcgen05_alloc (", "nvvm.tcgen05_alloc_cg2 (", 1)
+            .replace(
+                "      ^sync_after_alloc():\n        nvvm.barrier0 () [] []: <() -> ()>;",
+                "      ^sync_after_alloc():\n        nvvm.cluster_sync () [] []: <() -> ()>;",
+                1,
+            )
+            .replace("nvvm.tcgen05_mma_f16 (", "nvvm.tcgen05_mma_f16_cg2 (", 1)
+            .replace(
+                "        nvvm.tcgen05_commit_shared_cluster (mma_bar_p) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>) -> ()>;\n        mir.goto () [^wait_mma_hdr] []: <() -> ()>",
+                '        nvvm.tcgen05_commit_shared_cluster_cg2 (mma_bar_p) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>) -> ()>;\n        mir.goto () [^commit_accum] []: <() -> ()>\n\n      ^commit_accum():\n        mma_bar_p2 = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string "MMA_BAR", source_name: builtin.string "safe_tcgen05_matmul::kernels::tcgen05_matmul_verified::MMA_BAR"]: <() -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;\n        nvvm.tcgen05_commit_shared_cluster_cg2 (mma_bar_p2) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>) -> ()>;\n        mir.goto () [^wait_mma_hdr] []: <() -> ()>',
+                1,
+            )
+            .replace(
+                "      ^sync_before_dealloc():\n        nvvm.barrier0 () [] []: <() -> ()>;\n        mir.cond_br (is_warp0) [^dealloc_tmem, ^exit]",
+                "      ^sync_before_dealloc():\n        mir.cond_br (is_warp0) [^relinquish_cg2, ^cluster_sync_dealloc] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>\n\n      ^relinquish_cg2():\n        nvvm.tcgen05_relinquish_alloc_permit_cg2 () [] []: <() -> ()>;\n        mir.goto () [^cluster_sync_dealloc] []: <() -> ()>\n\n      ^cluster_sync_dealloc():\n        nvvm.cluster_sync () [] []: <() -> ()>;\n        mir.cond_br (is_warp0) [^dealloc_tmem, ^exit]",
+                1,
+            )
+            .replace("nvvm.tcgen05_dealloc (", "nvvm.tcgen05_dealloc_cg2 (", 1)
+        )
+        stage10_valid_mir = temporary / "stage10_dual_commit_cg2.mir"
+        stage10_valid_mir.write_text(stage10_cg2_source)
+        stage10_valid_lean = require_export(stage10_valid_mir, "tcgen05_matmul_verified")
+        stage10_valid_file = temporary / "Stage10DualCommitValid.lean"
+        stage10_valid_file.write_text(stage10_valid_lean)
+        require_success("env", "lean", str(stage10_valid_file))
+        print("PASS: Stage 10 2-CTA `_cg2` dual-commit (`MMA_BAR` + `ACCUM_FULL`) proves `TmemLifecycle` and `UniformBarriers`.", flush=True)
+
+        stage10_no_mma_mir = temporary / "stage10_no_mma.mir"
+        stage10_no_mma_mir.write_text(
+            stage10_cg2_source.replace(
+                "        nvvm.tcgen05_mma_f16_cg2 (tmem_addr, a_desc, b_desc, idesc, false_i1) [] []: <(builtin.integer ui32, builtin.integer ui64, builtin.integer ui64, builtin.integer ui32, builtin.integer i1) -> ()>;\n",
+                "",
+                1,
+            )
+        )
+        stage10_no_mma_lean = require_export(stage10_no_mma_mir, "tcgen05_matmul_verified")
+        stage10_no_mma_file = temporary / "Stage10NoMma.lean"
+        stage10_no_mma_file.write_text(
+            "\n".join(line for line in stage10_no_mma_lean.splitlines() if not line.startswith("#print axioms"))
+        )
+        res_stage10_no_mma = run_lake("env", "lean", str(stage10_no_mma_file))
+        if res_stage10_no_mma.returncode == 0:
+            raise RuntimeError(f"Expected tcgen05_commit_cg2 without tcgen05_mma_cg2 to fail TmemLifecycle in Lean:\n{res_stage10_no_mma.stdout}")
+        print("REJECTED as expected: `tcgen05_commit_cg2` without any `tcgen05_mma_cg2` fails `tmem_lifecycle`.", flush=True)
+
+    print("Exporter checks passed for scalar, 1D vecadd, 2D SGEMM, Stage 3 warp/block reductions, Stage 4 sub-warp multi-buffer, Stage 5 async mbarrier, Stage 6 Blackwell tcgen05/TMEM, Stage 8 warp-specialized ring, Stage 9 2-CTA cluster + CLC, and Stage 10 dual-commit `_cg2` fixtures.")
 
 
 if __name__ == "__main__":

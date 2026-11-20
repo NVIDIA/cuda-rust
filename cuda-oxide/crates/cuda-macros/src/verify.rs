@@ -221,9 +221,36 @@ fn expr_targets_static(expr: &Expr, allowed: &[Ident]) -> bool {
         Expr::Paren(paren) => expr_targets_static(&paren.expr, allowed),
         Expr::Group(group) => expr_targets_static(&group.expr, allowed),
         Expr::MethodCall(mc)
-            if mc.args.is_empty() && (mc.method == "as_ptr" || mc.method == "as_mut_ptr") =>
+            if (mc.args.is_empty()
+                && (mc.method == "as_ptr"
+                    || mc.method == "as_mut_ptr"
+                    || mc.method == "cast"
+                    || mc.method == "expose_provenance"))
+                || (mc.args.len() == 1 && mc.method == "add") =>
         {
             expr_targets_static(&mc.receiver, allowed)
+        }
+        Expr::Binary(bin) if matches!(bin.op, syn::BinOp::BitAnd(_)) => {
+            expr_targets_static(&bin.left, allowed) || expr_targets_static(&bin.right, allowed)
+        }
+        Expr::Call(call) => {
+            if let Expr::Path(p) = &*call.func
+                && let Some(last) = p.path.segments.last()
+                && matches!(
+                    last.ident.to_string().as_str(),
+                    "map_shared_rank"
+                        | "map_shared_rank_mut"
+                        | "cvta_generic_to_shared_offset"
+                        | "with_exposed_provenance_mut"
+                        | "with_exposed_provenance"
+                )
+            {
+                call.args
+                    .first()
+                    .is_some_and(|a| expr_targets_static(a, allowed))
+            } else {
+                false
+            }
         }
         _ => false,
     }
@@ -267,12 +294,36 @@ impl VerifiedSharedArrayRewriter {
             | "mbarrier_inval"
             | "mbarrier_arrive"
             | "mbarrier_arrive_expect_tx"
+            | "mbarrier_arrive_expect_tx_cluster"
+            | "mbarrier_arrive_cluster"
+            | "mbarrier_arrive_cluster_relaxed"
             | "mbarrier_try_wait"
             | "mbarrier_try_wait_parity"
+            | "mbarrier_try_wait_parity_cluster"
+            | "mbarrier_try_wait_parity_cluster_relaxed"
             | "mbarrier_test_wait" => call_expr
                 .args
                 .first()
                 .is_some_and(|arg| expr_targets_static(arg, &self.barrier_statics)),
+            "map_shared_rank" | "map_shared_rank_mut" => call_expr.args.first().is_some_and(|arg| {
+                expr_targets_static(arg, &self.verified_shared)
+                    || expr_targets_static(arg, &self.barrier_statics)
+            }),
+            "clc_try_cancel" | "clc_try_cancel_multicast" => {
+                call_expr
+                    .args
+                    .first()
+                    .is_some_and(|dst| expr_targets_static(dst, &self.verified_shared))
+                    && call_expr
+                        .args
+                        .get(1)
+                        .is_some_and(|bar| expr_targets_static(bar, &self.barrier_statics))
+            }
+            "clc_query_is_canceled"
+            | "clc_query_get_first_ctaid_x"
+            | "clc_query_get_first_ctaid_y"
+            | "clc_query_get_first_ctaid_z"
+            | "cvt_bf16x2_f32" => true,
             _ if name.starts_with("cp_async_bulk_tensor_") && name.contains("_g2s") => {
                 call_expr
                     .args
@@ -283,10 +334,10 @@ impl VerifiedSharedArrayRewriter {
                         .iter()
                         .any(|bar| expr_targets_static(bar, &self.barrier_statics))
             }
-            "cvta_generic_to_shared_offset" if self.tmem_lifecycle => call_expr
-                .args
-                .first()
-                .is_some_and(|ptr| expr_targets_static(ptr, &self.verified_shared)),
+            "cvta_generic_to_shared_offset" => call_expr.args.first().is_some_and(|ptr| {
+                (self.tmem_lifecycle && expr_targets_static(ptr, &self.verified_shared))
+                    || expr_targets_static(ptr, &self.barrier_statics)
+            }),
             "tcgen05_alloc" | "tcgen05_alloc_cg2" if self.tmem_lifecycle => call_expr
                 .args
                 .first()
@@ -306,6 +357,8 @@ impl VerifiedSharedArrayRewriter {
             }
             "tcgen05_dealloc"
             | "tcgen05_dealloc_cg2"
+            | "tcgen05_relinquish_alloc_permit"
+            | "tcgen05_relinquish_alloc_permit_cg2"
             | "tcgen05_load_wait"
             | "tcgen05_store_wait"
             | "tcgen05_fence_before_thread_sync"
@@ -372,6 +425,33 @@ impl VisitMut for VerifiedSharedArrayRewriter {
                 *expr = parse_quote! { unsafe { #inner } };
                 return;
             }
+            if let Expr::Unary(unary) = expr
+                && matches!(unary.op, syn::UnOp::Deref(_))
+                && expr_targets_static(&unary.expr, &self.verified_shared)
+            {
+                self.in_unsafe = true;
+                visit_mut::visit_expr_mut(self, &mut unary.expr);
+                self.in_unsafe = false;
+                let inner = expr.clone();
+                *expr = parse_quote! { unsafe { #inner } };
+                return;
+            }
+            if let Expr::MethodCall(mc) = expr
+                && mc.method == "add"
+                && mc.args.len() == 1
+                && (expr_targets_static(&mc.receiver, &self.verified_shared)
+                    || expr_targets_static(&mc.receiver, &self.barrier_statics))
+            {
+                self.in_unsafe = true;
+                visit_mut::visit_expr_mut(self, &mut mc.receiver);
+                for arg in &mut mc.args {
+                    visit_mut::visit_expr_mut(self, arg);
+                }
+                self.in_unsafe = false;
+                let inner = expr.clone();
+                *expr = parse_quote! { unsafe { #inner } };
+                return;
+            }
             if self.is_verified_async_barrier_call(expr) {
                 self.in_unsafe = true;
                 if let Expr::Call(call_expr) = expr {
@@ -388,6 +468,25 @@ impl VisitMut for VerifiedSharedArrayRewriter {
 
         visit_mut::visit_expr_mut(self, expr);
     }
+
+    fn visit_local_mut(&mut self, local: &mut syn::Local) {
+        if let syn::Pat::Ident(pat_ident) = &local.pat
+            && let Some(init) = &local.init
+        {
+            let id = pat_ident.ident.clone();
+            if expr_targets_static(&init.expr, &self.verified_shared)
+                && !self.verified_shared.contains(&id)
+            {
+                self.verified_shared.push(id.clone());
+            }
+            if expr_targets_static(&init.expr, &self.barrier_statics)
+                && !self.barrier_statics.contains(&id)
+            {
+                self.barrier_statics.push(id);
+            }
+        }
+        visit_mut::visit_local_mut(self, local);
+    }
 }
 
 /// Wrap Lean-verified `SharedArray` index operations and scoped async `mbarrier` /
@@ -400,18 +499,26 @@ fn rewrite_verified_shared_accesses(
     if args.uniform_barriers.is_none() {
         return;
     }
+    let barrier_array_statics = collect_barrier_array_statics(stmts);
     let verified_shared: Vec<Ident> = shared_statics
         .iter()
         .filter(|name| {
-            args.no_oob_idx.iter().any(|n| n == *name)
-                && args.no_data_race.iter().any(|n| n == *name)
+            let has_no_oob = args.no_oob_idx.iter().any(|n| n == *name);
+            let has_no_race = args.no_data_race.iter().any(|n| n == *name);
+            let is_bar_arr = barrier_array_statics.iter().any(|n| n == *name);
+            has_no_oob && (has_no_race || is_bar_arr)
         })
         .cloned()
         .collect();
     if verified_shared.is_empty() {
         return;
     }
-    let barrier_statics = collect_barrier_statics(stmts);
+    let mut barrier_statics = collect_barrier_statics(stmts);
+    for bar_arr in barrier_array_statics {
+        if args.no_oob_idx.iter().any(|n| n == &bar_arr) && !barrier_statics.contains(&bar_arr) {
+            barrier_statics.push(bar_arr);
+        }
+    }
     let mut rewriter = VerifiedSharedArrayRewriter {
         verified_shared,
         barrier_statics,
@@ -440,6 +547,50 @@ fn collect_barrier_statics(stmts: &[Stmt]) -> Vec<Ident> {
     }
     names.sort_by_key(|a| a.to_string());
     names
+}
+
+/// Collect in-body `static mut NAME: SharedArray<Barrier, ...>` declarations so
+/// barrier arrays listed in `no_oob_idx(...)` receive scoped `mbarrier` lifting.
+fn collect_barrier_array_statics(stmts: &[Stmt]) -> Vec<Ident> {
+    let mut names = Vec::new();
+    for stmt in stmts {
+        if let Stmt::Item(Item::Static(item_static)) = stmt
+            && is_barrier_shared_array_type(&item_static.ty)
+        {
+            names.push(item_static.ident.clone());
+        }
+    }
+    names.sort_by_key(|a| a.to_string());
+    names
+}
+
+/// Return true when `ty` is `SharedArray<Barrier, ...>`.
+fn is_barrier_shared_array_type(ty: &Type) -> bool {
+    let Type::Path(type_path) = ty else {
+        return false;
+    };
+    let Some(seg) = type_path.path.segments.last() else {
+        return false;
+    };
+    if seg.ident != "SharedArray" {
+        return false;
+    }
+    let syn::PathArguments::AngleBracketed(angle) = &seg.arguments else {
+        return false;
+    };
+    angle.args.iter().find_map(|arg| {
+        if let syn::GenericArgument::Type(Type::Path(inner)) = arg {
+            Some(
+                inner
+                    .path
+                    .segments
+                    .last()
+                    .is_some_and(|s| s.ident == "Barrier"),
+            )
+        } else {
+            None
+        }
+    }) == Some(true)
 }
 
 /// Collect in-body `static mut NAME: SharedArray<T, N>` declarations sorted by
@@ -726,6 +877,32 @@ mod tests {
             rendered_tmem.matches("unsafe").count(),
             7,
             "expected 7 scoped tcgen05/cvta calls wrapped in unsafe (leaving OTHER_TILE and OTHER_BAR unwrapped): {rendered_tmem}"
+        );
+
+        // Stage 8: `SharedArray<Barrier, 4, 8>` listed in `no_oob_idx(...)` lifts indexed
+        // `&raw mut FULL_BAR[s]` / `mbarrier_*`, while leaving omitted `UNVERIFIED_BAR[s]` unwrapped!
+        let mut ring_fn: ItemFn = parse_quote! {
+            pub fn ring_k(a: &[f32], mut c: DisjointSlice<f32>) {
+                static mut RING_BUF: SharedArray<f32, 256, 16> = SharedArray::UNINIT;
+                static mut FULL_BAR: SharedArray<Barrier, 4, 8> = SharedArray::UNINIT;
+                static mut UNVERIFIED_BAR: SharedArray<Barrier, 4, 8> = SharedArray::UNINIT;
+                mbarrier_init(&raw mut FULL_BAR[0], 1);
+                mbarrier_arrive(&raw const FULL_BAR[0]);
+                let _ = mbarrier_try_wait_parity(&raw const FULL_BAR[0], 0);
+                mbarrier_init(&raw mut UNVERIFIED_BAR[0], 1);
+            }
+        };
+        let ring_shared = collect_shared_array_statics(&ring_fn.block.stmts);
+        let ring_args: VerifyArgs = syn::parse_str(
+            "no_oob_idx(RING_BUF, FULL_BAR), no_data_race(RING_BUF), uniform_barriers",
+        )
+        .unwrap();
+        rewrite_verified_shared_accesses(&ring_args, &ring_shared, &mut ring_fn.block.stmts);
+        let rendered_ring = quote!(#ring_fn).to_string();
+        assert_eq!(
+            rendered_ring.matches("unsafe").count(),
+            3,
+            "expected 3 FULL_BAR mbarrier calls wrapped in unsafe while leaving UNVERIFIED_BAR unwrapped: {rendered_ring}"
         );
     }
 }

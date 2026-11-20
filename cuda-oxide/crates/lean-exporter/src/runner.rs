@@ -90,6 +90,9 @@ pub fn check_generated_lean(lean_source: &str, lean_package_dir: &Path) -> Resul
     let olean_dir = lean_package_dir.join(".lake/build/lib/lean");
     let use_direct_lean = lean_bin.is_file() && olean_dir.join("CudaOxide.olean").is_file();
 
+    if let Ok(dump_path) = env::var("CUDA_OXIDE_DUMP_LEAN") {
+        let _ = fs::write(dump_path, lean_source);
+    }
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -167,7 +170,7 @@ fn combine_lean_modules(modules: &[String]) -> String {
         return modules[0].clone();
     }
     let mut combined = String::from(
-        "import CudaOxide\n\nset_option linter.unusedSimpArgs false\nset_option maxRecDepth 4096\n\n",
+        "import CudaOxide\n\nset_option linter.unusedSimpArgs false\nset_option maxRecDepth 4096\nset_option maxHeartbeats 800000\n\n",
     );
     for (idx, src) in modules.iter().enumerate() {
         let body = src
@@ -240,20 +243,8 @@ pub fn verify_module_kernels(
     check_generated_lean(&batched_source, &lean_dir)?;
 
     for (name, translated) in &prepared {
-        let strip_slice: &[crate::translate::GlobalStripAccess2D] = match translated {
-            TranslatedFunction::TiledKernel2D {
-                global_strip_accesses,
-                ..
-            } => global_strip_accesses,
-            _ => &[],
-        };
         match translated {
-            TranslatedFunction::Kernel {
-                spec,
-                proven_assert_ops,
-                ..
-            }
-            | TranslatedFunction::TiledKernel2D {
+            TranslatedFunction::MirProgram {
                 spec,
                 proven_assert_ops,
                 ..
@@ -276,7 +267,7 @@ pub fn verify_module_kernels(
                     spec.domain, spec.block_size, spec.block_y
                 );
                 eprintln!("  requires:      {requires_list}");
-                for obligation in proved_obligation_descriptions(spec, strip_slice) {
+                for obligation in proved_obligation_descriptions(spec) {
                     eprintln!("  proved:        {obligation}");
                 }
                 eprintln!(

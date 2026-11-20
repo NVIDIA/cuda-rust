@@ -5,13 +5,15 @@ SPDX-License-Identifier: Apache-2.0
 
 import CudaOxide.Mir.Launch
 import CudaOxide.Mir.Scalar
-import CudaOxide.Mir.Kernel
 import CudaOxide.Mir.ControlFlow
+import CudaOxide.Mir.Program
 import CudaOxide.Contracts.Access
 import CudaOxide.Contracts.ControlFlow
+import CudaOxide.Contracts.Program
 import CudaOxide.Proofs.Bounds
 import CudaOxide.Proofs.Launch
 import CudaOxide.Proofs.ControlFlow
+import CudaOxide.Proofs.Program
 
 /-!
 # `CudaOxide` Lean Verification Library
@@ -26,12 +28,12 @@ from `PostMem2Reg` `dialect-mir` by `crates/lean-exporter`.
   ┌─────────────────────────────────────────────────────────────────────┐
   │ import CudaOxide                                                    │
   │                                                                     │
-  │ -- 1. Construct the kernel's MIR representation using `Mir.*`       │
-  │ def kernel : CudaOxide.Mir.Kernel.KernelSummary1D ...               │
+  │ -- 1. Transcribe the kernel 1-to-1 using `Mir.Program` & `Mir.CF`   │
+  │ def mirFunc : CudaOxide.Mir.Program.MirFunc := ...                  │
+  │ def controlFlowCfg : CudaOxide.Mir.ControlFlow.ControlFlowCfg := .. │
   │                                                                     │
   │ -- 2. State `Contracts.*` and prove them using `Proofs.*`           │
-  │ theorem no_oob_idx_a : CudaOxide.Contracts.NoOobIdx ... :=          │
-  │   CudaOxide.Proofs.Bounds.no_oob_idx_of_guard_le ...                │
+  │ theorem verify_no_oob_idx_param0 : MirNoOobGlobal mirFunc 0 := ...  │
   └──────────┬───────────────────────────┬──────────────────────────┬───┘
              │                           │                          │
              ▼                           ▼                          ▼
@@ -39,9 +41,10 @@ from `PostMem2Reg` `dialect-mir` by `crates/lean-exporter`.
   │ 1. `CudaOxide.Mir`  │     │ 2. `Contracts`      │    │ 3. `CudaOxide.Proofs│
   │ (MIR & GPU Types)   │     │ (The Questions)     │    │ (The Answers)       │
   ├─────────────────────┤     ├─────────────────────┤    ├─────────────────────┤
-  │ • `Mir.Scalar`      │     │ • `NoOobIdx`        │    │ • `Proofs.Bounds`   │
-  │ • `Mir.Launch`      │     │ • `DisjointWrites`  │    │ • `Proofs.Launch`   │
-  │ • `Mir.Kernel`      │     │ • `WritesAllElems`  │    │                     │
+  │ • `Mir.Program`     │     │ • `MirNoOobGlobal`  │    │ • `Proofs.Program`  │
+  │ • `Mir.ControlFlow` │     │ • `MirNoOobShared`  │    │ • `Proofs.ControlFl`│
+  │ • `Mir.Scalar`      │     │ • `MirNoSharedRace` │    │ • `Proofs.Launch`   │
+  │ • `Mir.Launch`      │     │ • `UniformBarriers` │    │ • `Proofs.Bounds`   │
   └─────────────────────┘     └─────────────────────┘    └─────────────────────┘
 ```
 -/

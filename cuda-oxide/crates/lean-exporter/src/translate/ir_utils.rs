@@ -3,15 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! Shared `dialect-mir` basic-block graph (`BlockGraph`) and Pliron operand,
-//! constant, cast, and attribute helpers reused across all exporter stages.
+//! Shared `dialect-mir` basic-block graph (`BlockGraph`) and Pliron attribute,
+//! constant, and `tcgen05` shape helpers reused across the exporter.
 
 use std::collections::BTreeSet;
 
+use dialect_mir::types::MirStructType;
 use pliron::{
     attribute::AttributeDict,
     basic_block::BasicBlock,
     builtin::{
+        attr_interfaces::TypedAttrInterface,
         attributes::{IntegerAttr, TypeAttr},
         types::IntegerType,
     },
@@ -19,15 +21,11 @@ use pliron::{
     linked_list::ContainsLinkedList,
     operation::Operation,
     printable::Printable,
-    r#type::Typed,
+    r#type::TypeHandle,
 };
 
-use super::{AccessKind, PhasedSharedAccess};
-use crate::ssa::{GuardExpr, IdxExpr, LoopScopeCheck, SsaEnv, SsaKind, TileAccessPatternKind};
-
 /// Shared basic-block adjacency and structural metadata for a multi-block `mir.func`.
-/// Centralizes live successor edges, pure `mir.unreachable` exhaustiveness sinks,
-/// `nvvm.barrier0` sites, and reachability queries used during SSA operand resolution.
+/// Centralizes live successor edges and pure `mir.unreachable` exhaustiveness sinks.
 pub(super) struct BlockGraph {
     /// Ordered basic-block pointers (`0` is the entry block).
     pub(super) blocks: Vec<Ptr<BasicBlock>>,
@@ -35,15 +33,11 @@ pub(super) struct BlockGraph {
     pub(super) succs: Vec<Vec<usize>>,
     /// Blocks ending in `mir.unreachable` without `nvvm.trap` (exhaustive enum fallthroughs).
     pub(super) pure_unreachable: BTreeSet<usize>,
-    /// Coordinates `(block_idx, ord_in_block)` of every `nvvm.barrier0` operation.
-    pub(super) barrier_sites: Vec<(usize, usize)>,
-    /// Indices of all basic blocks ending in `mir.return`.
-    pub(super) return_blocks: Vec<usize>,
 }
 
 impl BlockGraph {
-    /// Scan all basic blocks of `blocks` once to populate adjacency lists, pure
-    /// `mir.unreachable` sinks, `nvvm.barrier0` sites, and `mir.return` blocks.
+    /// Scan all basic blocks of `blocks` once to populate adjacency lists and pure
+    /// `mir.unreachable` sinks.
     pub(super) fn build(ctx: &Context, blocks: Vec<Ptr<BasicBlock>>) -> Self {
         let n = blocks.len();
         let mut pure_unreachable = BTreeSet::new();
@@ -62,30 +56,19 @@ impl BlockGraph {
             }
         }
         let mut succs = vec![Vec::new(); n];
-        let mut barrier_sites = Vec::new();
-        let mut return_blocks = Vec::new();
         for (b_idx, &b_ptr) in blocks.iter().enumerate() {
-            let mut ord = 0usize;
             for op_ptr in b_ptr.deref(ctx).iter(ctx) {
                 let opid = op_name(ctx, op_ptr);
                 let op = op_ptr.deref(ctx);
-                match opid.as_str() {
-                    "nvvm.barrier0" => {
-                        barrier_sites.push((b_idx, ord));
-                        ord += 1;
-                    }
-                    "mir.return" => return_blocks.push(b_idx),
-                    "mir.goto" | "mir.cond_br" => {
-                        for s in 0..op.get_num_successors() {
-                            if let Some(dst) = blocks.iter().position(|&b| b == op.get_successor(s))
-                                && !pure_unreachable.contains(&dst)
-                                && !succs[b_idx].contains(&dst)
-                            {
-                                succs[b_idx].push(dst);
-                            }
+                if matches!(opid.as_str(), "mir.goto" | "mir.cond_br") {
+                    for s in 0..op.get_num_successors() {
+                        if let Some(dst) = blocks.iter().position(|&b| b == op.get_successor(s))
+                            && !pure_unreachable.contains(&dst)
+                            && !succs[b_idx].contains(&dst)
+                        {
+                            succs[b_idx].push(dst);
                         }
                     }
-                    _ => {}
                 }
             }
         }
@@ -93,8 +76,6 @@ impl BlockGraph {
             blocks,
             succs,
             pure_unreachable,
-            barrier_sites,
-            return_blocks,
         }
     }
 
@@ -109,132 +90,12 @@ impl BlockGraph {
     pub(super) fn idx_of(&self, target: Ptr<BasicBlock>) -> Option<usize> {
         self.blocks.iter().position(|&b| b == target)
     }
-
-    /// Return true if `start` can reach `target` without visiting `avoid1` or `avoid2`.
-    /// Used for dominance, loop-header, and cyclic barrier ordering queries.
-    pub(super) fn can_reach_avoiding_two(
-        &self,
-        start: usize,
-        target: usize,
-        avoid1: usize,
-        avoid2: usize,
-    ) -> bool {
-        if start == avoid1 || start == avoid2 || start >= self.len() {
-            return false;
-        }
-        let mut visited = vec![false; self.len()];
-        let mut stack = vec![start];
-        visited[start] = true;
-        while let Some(curr) = stack.pop() {
-            if curr == target {
-                return true;
-            }
-            for &next in &self.succs[curr] {
-                if next != avoid1 && next != avoid2 && !visited[next] {
-                    visited[next] = true;
-                    stack.push(next);
-                }
-            }
-        }
-        false
-    }
-
-    /// Return true if `start` can reach `target` without visiting `forbidden`.
-    /// Delegates to [`Self::can_reach_avoiding_two`] with `usize::MAX` as the second sentinel.
-    pub(super) fn can_reach_without(&self, start: usize, target: usize, forbidden: usize) -> bool {
-        self.can_reach_avoiding_two(start, target, forbidden, usize::MAX)
-    }
-
-    /// Return true if `start` can reach `target` along live CFG edges.
-    /// Excludes pure `mir.unreachable` enum-exhaustiveness fallthrough sinks.
-    pub(super) fn can_reach(&self, start: usize, target: usize) -> bool {
-        self.can_reach_without(start, target, usize::MAX)
-    }
-
-    /// Return true when block `b` lies on a directed cycle (`b ->+ b`).
-    /// Distinguishes loop-body blocks from acyclic prologue and epilogue blocks.
-    pub(super) fn is_cyclic(&self, b: usize) -> bool {
-        self.succs[b].iter().any(|&s| self.can_reach(s, b))
-    }
-
-    /// Return true if `expr` uses at most one `LoopVar` and `b_idx` sits inside its `< bound` body.
-    /// Rejects post-loop `LoopVar` leaks (`i == bound`) and conflicting multi-loop expressions.
-    pub(super) fn is_loop_expr_in_scope(&self, expr: &IdxExpr, b_idx: usize) -> bool {
-        match expr.single_loop_scope() {
-            LoopScopeCheck::None => true,
-            LoopScopeCheck::Single {
-                header_block,
-                body_block,
-                exit_block,
-                ..
-            } => {
-                !self.can_reach_without(0, b_idx, body_block)
-                    && !self.can_reach_without(exit_block, b_idx, header_block)
-            }
-            LoopScopeCheck::Conflict => false,
-        }
-    }
 }
 
 /// Return the string opcode identifier (`"mir.add"`, `"nvvm.barrier0"`, ...) of `op_ptr`.
 /// Avoids repeating `Operation::get_opid(op_ptr, ctx).to_string()` at every match site.
 pub(super) fn op_name(ctx: &Context, op_ptr: Ptr<Operation>) -> String {
     Operation::get_opid(op_ptr, ctx).to_string()
-}
-
-/// Look up the [`SsaKind`] of operand `idx` on `op` when `idx < op.get_num_operands()`.
-/// Returns `None` if `op` has fewer than `idx + 1` operands or the operand is not yet bound.
-pub(super) fn op_kind(env: &SsaEnv, op: &Operation, idx: usize) -> Option<SsaKind> {
-    (idx < op.get_num_operands())
-        .then(|| env.get_kind(&op.get_operand(idx)))
-        .flatten()
-}
-
-/// Look up the `(lhs, rhs)` [`SsaKind`] pair of a binary MIR or NVVM operation.
-/// Safely returns `None` for missing or not-yet-bound operands.
-pub(super) fn bin_kinds(env: &SsaEnv, op: &Operation) -> (Option<SsaKind>, Option<SsaKind>) {
-    (op_kind(env, op, 0), op_kind(env, op, 1))
-}
-
-/// Extract a compositional [`IdxExpr`] from an [`SsaKind`] (`Index` or `ConstInt`).
-/// Returns `None` for non-index SSA values (`DataValue`, `UniformScalar`, pointers).
-pub(super) fn as_idx_expr(kind: &SsaKind) -> Option<IdxExpr> {
-    match kind {
-        SsaKind::Index(expr) => Some(expr.clone()),
-        SsaKind::ConstInt { value, .. } => u64::try_from(*value).ok().map(IdxExpr::Const),
-        _ => None,
-    }
-}
-
-/// Extract `(lhs_idx, rhs_idx)` when both operands of a binary op convert to [`IdxExpr`].
-/// Used across `mir.add`, `mir.mul`, `mir.bitor`, and coordinate comparison ops.
-pub(super) fn bin_idx_exprs(
-    lhs: &Option<SsaKind>,
-    rhs: &Option<SsaKind>,
-) -> Option<(IdxExpr, IdxExpr)> {
-    Some((
-        lhs.as_ref().and_then(as_idx_expr)?,
-        rhs.as_ref().and_then(as_idx_expr)?,
-    ))
-}
-
-/// Return true when `kind` is a CTA-uniform scalar parameter/counter or integer literal.
-/// Used to distinguish uniform loop bounds (`tile < num_tiles`) from thread-divergent branches.
-pub(super) fn is_uniform_or_const(kind: Option<&SsaKind>) -> bool {
-    matches!(
-        kind,
-        Some(SsaKind::UniformScalar | SsaKind::ConstInt { .. })
-    )
-}
-
-/// Return `SsaKind::UniformScalar` when both `lhs` and `rhs` are CTA-uniform, else `DataValue`.
-/// Serves as the default fallback for binary arithmetic and comparison operations.
-pub(super) fn uniform_if_both(lhs: &Option<SsaKind>, rhs: &Option<SsaKind>) -> SsaKind {
-    if is_uniform_or_const(lhs.as_ref()) && is_uniform_or_const(rhs.as_ref()) {
-        SsaKind::UniformScalar
-    } else {
-        SsaKind::DataValue
-    }
 }
 
 /// Decode an integer constant attribute (`"value"` or `"builtin_constant_value"`) as `(width, value)`.
@@ -258,78 +119,6 @@ pub(super) fn decode_int_constant(op: &Operation, opid: &str) -> Option<(u32, u1
         .ok()?;
     let width = u32::try_from(int_attr.value().bw()).unwrap_or(64);
     Some((width, value))
-}
-
-/// Evaluate an integer/pointer `mir.cast` on `kind`, preserving widening unsigned `IdxExpr`s
-/// and wrapping narrowing unsigned casts in `Mod(..., 2^w)` when wraparound is possible.
-pub(super) fn eval_int_cast(
-    ctx: &Context,
-    op: &Operation,
-    kind: SsaKind,
-    block_size: u32,
-    block_y: u32,
-) -> SsaKind {
-    let src_ty = op.get_operand(0).get_type(ctx).deref(ctx);
-    let dst_ty = op.get_result(0).get_type(ctx).deref(ctx);
-    match (
-        src_ty.downcast_ref::<IntegerType>(),
-        dst_ty.downcast_ref::<IntegerType>(),
-    ) {
-        (Some(si), Some(di)) => {
-            if si.is_unsigned() && di.is_unsigned() {
-                if di.width() >= si.width() {
-                    match kind {
-                        SsaKind::SregTidX { .. } => SsaKind::SregTidX {
-                            bit_width: di.width(),
-                        },
-                        SsaKind::SregCtaidX { .. } => SsaKind::SregCtaidX {
-                            bit_width: di.width(),
-                        },
-                        SsaKind::SregNtidX { .. } => SsaKind::SregNtidX {
-                            bit_width: di.width(),
-                        },
-                        SsaKind::BlockBase1D { .. } => SsaKind::BlockBase1D {
-                            bit_width: di.width(),
-                        },
-                        other => other,
-                    }
-                } else {
-                    match kind {
-                        SsaKind::ConstInt { value, .. } => {
-                            let mask = if di.width() >= 128 {
-                                u128::MAX
-                            } else {
-                                (1u128 << di.width()) - 1
-                            };
-                            SsaKind::ConstInt {
-                                width: di.width(),
-                                value: value & mask,
-                            }
-                        }
-                        SsaKind::Index(expr) if di.width() < 64 => {
-                            let modulus = 1u64 << di.width();
-                            if expr
-                                .exclusive_upper_bound(block_size, block_y)
-                                .is_some_and(|ub| ub <= modulus)
-                            {
-                                SsaKind::Index(expr)
-                            } else {
-                                SsaKind::Index(IdxExpr::Mod(Box::new(expr), modulus))
-                            }
-                        }
-                        SsaKind::UniformScalar => SsaKind::UniformScalar,
-                        _ => SsaKind::DataValue,
-                    }
-                }
-            } else if matches!(kind, SsaKind::UniformScalar | SsaKind::ConstInt { .. }) {
-                SsaKind::UniformScalar
-            } else {
-                SsaKind::DataValue
-            }
-        }
-        (None, None) => kind,
-        _ => SsaKind::DataValue,
-    }
 }
 
 /// Extract the numeric index from a `mir.field_index` or enum-variant attribute on `attrs`.
@@ -364,8 +153,27 @@ pub(super) fn int_attr_u64(attrs: &AttributeDict, key: &str) -> Option<u64> {
         })
 }
 
+/// Peel single-field `MirStructType` wrappers (such as `Barrier(UnsafeCell<u64>)`)
+/// down to their underlying leaf `TypeHandle`.
+fn peel_single_field_structs(ctx: &Context, mut ty: TypeHandle) -> TypeHandle {
+    for _ in 0..8 {
+        let next = {
+            let ty_ref = ty.deref(ctx);
+            let Some(st) = ty_ref.downcast_ref::<MirStructType>() else {
+                break;
+            };
+            if st.field_types.len() != 1 {
+                break;
+            }
+            st.field_types[0]
+        };
+        ty = next;
+    }
+    ty
+}
+
 /// Compute the byte width of one element in a `mir.shared_alloc` operation (`0` if unknown).
-/// Resolves integer bit widths (`u8`, `u16`, `u32`, `u64`) and standard floating-point types.
+/// Resolves integer bit widths (`u8`, `u16`, `u32`, `u64`), floats, and 1-field wrapper structs.
 pub(super) fn shared_alloc_elem_bytes(ctx: &Context, op: &Operation) -> u64 {
     op.attributes
         .0
@@ -373,7 +181,7 @@ pub(super) fn shared_alloc_elem_bytes(ctx: &Context, op: &Operation) -> u64 {
         .find(|(k, _)| k.to_string() == "elem_type")
         .and_then(|(_, v)| v.downcast_ref::<TypeAttr>())
         .map(|ta| {
-            let ty_handle = ta.get_type(ctx);
+            let ty_handle = peel_single_field_structs(ctx, ta.get_type(ctx));
             let ty_ref = ty_handle.deref(ctx);
             if let Some(int_ty) = ty_ref.downcast_ref::<IntegerType>() {
                 u64::from(int_ty.width()).div_ceil(8)
@@ -389,10 +197,11 @@ pub(super) fn shared_alloc_elem_bytes(ctx: &Context, op: &Operation) -> u64 {
         .unwrap_or(0)
 }
 
-/// Return true if `op` is a `mir.shared_alloc` for a 64-bit hardware `Barrier` (`mbarrier`).
-/// Matches `size == 1` with a 64-bit integer element type (`ui64` / `i64`).
+/// Return true if `op` is a `mir.shared_alloc` for a scalar `static mut BAR: Barrier`.
+/// Matches `size == 1`, direct 64-bit integer element type (`ui64` / `i64`), and no `SharedArray` alignment attribute.
 pub(super) fn is_mbarrier_shared_alloc(ctx: &Context, op: &Operation) -> bool {
     int_attr_u64(&op.attributes, "size") == Some(1)
+        && !op.attributes.0.iter().any(|(k, _)| k.to_string() == "alignment")
         && op.attributes.0.iter().any(|(k, v)| {
             k.to_string() == "elem_type"
                 && v.downcast_ref::<TypeAttr>()
@@ -406,36 +215,48 @@ pub(super) fn is_mbarrier_shared_alloc(ctx: &Context, op: &Operation) -> bool {
         })
 }
 
-/// Append a [`PhasedSharedAccess`] entry using the resolved `SharedArray` short name.
-/// Shared across TMA copies, `tcgen05_alloc`, `tcgen05_mma`/`cp`, and generic `load`/`store` sites.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn push_shared_access(
-    out: &mut Vec<PhasedSharedAccess>,
-    shared_raw_list: &[(String, u64)],
-    kind: AccessKind,
-    shared_id: usize,
-    buffer_len: u64,
-    phase: usize,
-    pattern: TileAccessPatternKind,
-    loop_bound: u64,
-    leader_only: bool,
-    active_threads: u64,
-    guard: GuardExpr,
-) {
-    let shared_name = shared_raw_list
-        .get(shared_id)
-        .map(|(n, _)| n.clone())
-        .unwrap_or_else(|| format!("SHARED_{shared_id}"));
-    out.push(PhasedSharedAccess {
-        kind,
-        shared_id,
-        shared_name,
-        buffer_len,
-        phase,
-        pattern,
-        loop_bound,
-        leader_only,
-        active_threads,
-        guard,
-    });
+/// Parse `(height_lanes, width_cols)` from an `nvvm.tcgen05_ld_*` operation name.
+/// Covers `32x32b`, `16x64b`, `16x128b`, `16x256b`, and `16x32bx2` register shapes.
+pub(super) fn parse_tcgen05_ld_shape(opid: &str) -> Option<(u64, u64)> {
+    let rest = opid.strip_prefix("nvvm.tcgen05_ld_")?;
+    let rest = rest.strip_suffix("_raw").unwrap_or(rest);
+    let rest = rest.strip_suffix("_pure").unwrap_or(rest);
+    let rest = rest.strip_suffix("_pack16").unwrap_or(rest);
+    let (shape_part, mult_part) = rest.split_once("_x")?;
+    let mult = mult_part.parse::<u64>().ok()?;
+    match shape_part {
+        "32x32b" => Some((32, mult)),
+        "16x64b" => Some((16, 2 * mult)),
+        "16x128b" => Some((16, 4 * mult)),
+        "16x256b" => Some((16, 8 * mult)),
+        "16x32bx2" => Some((32, mult)),
+        _ => None,
+    }
+}
+
+/// Parse `(height_lanes, width_cols)` from an `nvvm.tcgen05_cp_*` operation name.
+/// Covers 128-lane and warpx2/warpx4 SMEM-to-TMEM async matrix copy shapes.
+pub(super) fn parse_tcgen05_cp_shape(opid: &str) -> Option<(u64, u64)> {
+    let rest = opid.strip_prefix("nvvm.tcgen05_cp_")?;
+    let rest = rest.strip_suffix("_cg2").unwrap_or(rest);
+    match rest {
+        "128x256b" => Some((128, 8)),
+        "128x128b" => Some((128, 4)),
+        "4x256b" => Some((4, 8)),
+        "32x128b_warpx2_01_13" | "32x128b_warpx2_02_13" => Some((64, 4)),
+        "32x128b_warpx4" => Some((128, 4)),
+        _ => None,
+    }
+}
+
+/// Decode `(height_lanes, width_cols)` from a constant 32-bit `Tcgen05InstructionDescriptor`.
+/// Halves the per-CTA `M` lane height when `.cta_group::2` (`is_cg2`) is active.
+pub(super) fn decode_tcgen05_idesc_shape(raw: u128, is_cg2: bool) -> Option<(u64, u64)> {
+    let v = u32::try_from(raw).ok()?;
+    let n_dim = u64::from(((v >> 17) & 0x3F) * 8);
+    let m_full = u64::from(((v >> 24) & 0x1F) * 16);
+    if n_dim == 0 || m_full == 0 {
+        return None;
+    }
+    Some((if is_cg2 { m_full / 2 } else { m_full }, n_dim))
 }

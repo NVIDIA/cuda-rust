@@ -61,5 +61,13 @@ example (i : Nat) (hi : i < 1000) :
 #print axioms CudaOxide.Proofs.ControlFlow.uniform_barriers_sound
 #print axioms CudaOxide.Proofs.ControlFlow.tmem_lifecycle_sound
 #print axioms CudaOxide.Proofs.ControlFlow.writes_on_active_paths_sound
+#print axioms CudaOxide.Proofs.Program.symReachable_sound
+#print axioms CudaOxide.Proofs.Program.vcNoOobGlobal_of_table
+#print axioms CudaOxide.Proofs.Program.vcNoOobShared_of_table
+#print axioms CudaOxide.Proofs.Program.vcDisjointWrites_of_table
+#print axioms CudaOxide.Proofs.Program.vcNoSharedRace_of_table
+#print axioms CudaOxide.Proofs.Program.vcAssertRedundant_of_table
+#print axioms CudaOxide.Proofs.Program.vcNoOobTmem_of_table
+#print axioms CudaOxide.Proofs.Program.or_eq_add_of_mod_two_pow
 
 end Accepted

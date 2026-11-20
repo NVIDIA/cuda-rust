@@ -535,8 +535,8 @@ pub(super) fn translate_mir_program(
             let op = op_ptr.deref(ctx);
             for r_idx in 0..op.get_num_results() {
                 let res = op.get_result(r_idx);
-                if !val_ids.contains_key(&res) {
-                    val_ids.insert(res, cur_local);
+                if let std::collections::hash_map::Entry::Vacant(entry) = val_ids.entry(res) {
+                    entry.insert(cur_local);
                     cur_local += 1;
                 }
             }
@@ -1206,15 +1206,15 @@ pub(super) fn translate_mir_program(
                 && let Some(&po) = ptr_const_offset.get(&op.get_operand(0))
             {
                 ptr_const_offset.insert(op.get_result(0), po);
-            } else if on.starts_with("nvvm.cp_async_bulk_tensor_g2s") && op.get_num_operands() >= 2 {
-                if let Some(LocalTag::BarrierPtr { bar_id, .. }) =
+            } else if on.starts_with("nvvm.cp_async_bulk_tensor_g2s")
+                && op.get_num_operands() >= 2
+                && let Some(LocalTag::BarrierPtr { bar_id, .. }) =
                     tags.get(&op.get_operand(1)).copied()
-                {
-                    tma_dests_per_bar
-                        .entry(bar_id)
-                        .or_default()
-                        .push(op.get_operand(0));
-                }
+            {
+                tma_dests_per_bar
+                    .entry(bar_id)
+                    .or_default()
+                    .push(op.get_operand(0));
             }
         }
     }

@@ -5,17 +5,18 @@
 
 #![warn(missing_docs, clippy::missing_docs_in_private_items)]
 
-//! Translates `dialect-mir` functions into Lean 4 code using a single typed SSA
-//! environment ([`ssa::SsaEnv`]).
+//! Transcribes `PostMem2Reg` `dialect-mir` functions into Lean 4 (`MirFunc` +
+//! `ControlFlowCfg`, or `Scalar.Expr` for standalone integer functions) so
+//! Lean 4 proves kernel safety before PTX lowering.
 //!
 //! ```text
-//!   mir.func
+//!   mir.func (`PostMem2Reg` SSA)
 //!     │
-//!     ├─► 1. `spec.rs`      Read signature & optional `#[verify(...)]` attributes
-//!     ├─► 2. `ssa.rs`       Typed SSA lookup table (`Value -> TypedSsa { lean_name, kind }`)
-//!     ├─► 3. `translate.rs` Walk MIR instructions using `SsaEnv` -> `TranslatedFunction`
-//!     ├─► 4. `codegen.rs`   Render `TranslatedFunction` into `.lean` code + theorems
-//!     └─► 5. `runner.rs`    Run `lake env lean` & reject failed proofs or `sorryAx`
+//!     ├─► 1. `spec.rs`               Read signature, `#[launch_contract]`, & `#[verify(...)]`
+//!     ├─► 2. `translate/scalar.rs`   Single-block `BitVec` AST (`CudaOxide.Mir.Scalar`)
+//!     ├─► 2. `translate/program.rs`  1-to-1 `MirFunc` + `ControlFlowCfg` (`CudaOxide.Mir.Program`)
+//!     ├─► 3. `codegen.rs`            Render `.lean` definitions & `theorem` obligations
+//!     └─► 4. `runner.rs`             Run `lake env lean`, reject `sorryAx`, erase proven `mir.assert`s
 //! ```
 
 pub mod codegen;

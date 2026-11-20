@@ -41,10 +41,10 @@ from `PostMem2Reg` `dialect-mir` by `crates/lean-exporter`.
   │ 1. `CudaOxide.Mir`  │     │ 2. `Contracts`      │    │ 3. `CudaOxide.Proofs│
   │ (MIR & GPU Types)   │     │ (The Questions)     │    │ (The Answers)       │
   ├─────────────────────┤     ├─────────────────────┤    ├─────────────────────┤
-  │ • `Mir.Program`     │     │ • `MirNoOobGlobal`  │    │ • `Proofs.Program`  │
-  │ • `Mir.ControlFlow` │     │ • `MirNoOobShared`  │    │ • `Proofs.ControlFl`│
-  │ • `Mir.Scalar`      │     │ • `MirNoSharedRace` │    │ • `Proofs.Launch`   │
-  │ • `Mir.Launch`      │     │ • `UniformBarriers` │    │ • `Proofs.Bounds`   │
+  │ • `Mir.Program`     │     │ • `MirNoOobGlobal`  │    │ • `Program.Expr`    │
+  │ • `Mir.ControlFlow` │     │ • `MirNoOobShared`  │    │ • `Program.Exec`    │
+  │ • `Mir.Scalar`      │     │ • `MirNoSharedRace` │    │ • `Program.Invariant│
+  │ • `Mir.Launch`      │     │ • `UniformBarriers` │    │ • `Program.Vc`      │
   └─────────────────────┘     └─────────────────────┘    └─────────────────────┘
 ```
 -/

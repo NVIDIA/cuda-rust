@@ -5,76 +5,83 @@ SPDX-License-Identifier: Apache-2.0
 
 # `dialect-mir` to Lean 4 Exporter (`lean-exporter`)
 
-Thin, fail-closed transcriber that turns `cuda-oxide`'s `PostMem2Reg` `dialect-mir` into Lean 4 code (`KernelSummary1D`, `TiledKernelSummary2D`, and `ControlFlowCfg`) so Lean 4 proves kernel safety properties (`no_oob_idx`, `no_data_race`, `disjoint_writes`, `writes_all_elems`, `uniform_barriers`, `tmem_lifecycle`) before the compiler emits PTX.
+Thin, fail-closed transcriber that converts `PostMem2Reg` `dialect-mir` into Lean 4 (`MirFunc` + `ControlFlowCfg`) so Lean 4 proves kernel safety before `cuda-oxide` lowers MIR to PTX.
 
 ---
 
-## How It Works: One Typed SSA Lookup Table (`SsaEnv`)
+## 1. One Concrete Example
 
-By the time `lean-exporter` runs (at `PostMem2Reg`), `dialect-mir` is already in **SSA form**: every instruction produces a numbered Pliron `Value`, and later instructions pass those `Value`s as inputs.
+Rust kernel code:
 
-The exporter keeps **one typed lookup table (`SsaEnv`)** that maps each Pliron `Value` to a `TypedSsa { lean_name, kind }`:
-
-```text
-  Pliron `Value`       `TypedSsa { lean_name, kind }`
-  ───────────────      ────────────────────────────────────────────────────
-  `block` (arg 0)  ──► `{ lean_name: "arg0", kind: ScalarWord { width: 64 } }`
-  `a`     (arg 0)  ──► `{ lean_name: "arg0", kind: BufferParam(0) }`
-  `prod`  (op 0)   ──► `{ lean_name: "v0",   kind: ScalarWord { width: 64 } }`
-  `idx`   (op 1)   ──► `{ lean_name: "v1",   kind: Index1D { offset: 0 } }`
-  `c_len` (op 2)   ──► `{ lean_name: "v2",   kind: SliceLen(2) }`
-  `cond`  (op 3)   ──► `{ lean_name: "v3",   kind: IndexLtLen { guard_param: 2 } }`
+```rust
+#[launch_contract(domain = 1, block = (128, 1, 1))]
+#[verify(no_oob_idx(TILE))]
+#[kernel]
+pub fn stage_tile() {
+    static mut TILE: SharedArray<f32, 256> = SharedArray::UNINIT;
+    let tid = thread::threadIdx_x() as usize;
+    if tid < 64 {
+        TILE[tid * 4 + 3] = 1.0;
+    }
+}
 ```
 
-Every `mir.func` goes through the same 4 steps:
+What `lean-exporter` transcribes 1-to-1 at `PostMem2Reg` (before loop unrolling):
 
 ```text
-  1. `spec.rs`       Read function signature & optional `#[verify(...)]` attributes
-        │
-        ▼
-  2. `translate.rs`  Walk MIR instructions using `SsaEnv` (`ssa.rs`), checking
-        │            operand `SsaKind`s and recording outputs -> `TranslatedFunction`
-        ▼
-  3. `codegen.rs`    Render `TranslatedFunction` into `.lean` code + `theorem`s
-        │
-        ▼
-  4. `runner.rs`     Run `lake env lean` and verify zero `sorry`s / unexpected axioms
+  PostMem2Reg `dialect-mir`                     Generated `.lean` (`CudaOxide.Generated`)
+  ------------------------------------------    -------------------------------------------------------
+  tx   = nvvm.read_ptx_sreg_tid_x()        -->  (.assign 0 (.sreg .tidX))
+  lt64 = mir.lt(tid, 64)                   -->  (.assign 2 (.cmpOp .lt 1 3))
+  mir.cond_br(lt64) [^write, ^exit]        -->  (.condBr 2 1 [] 2 [])
+  ok   = mir.lt(off, 256)                  -->  (.assign 7 (.cmpOp .lt 6 8))
+  mir.assert(ok)                           -->  (.assertCond 0 7)
+  ptr  = mir.ptr_offset(TILE, off)         -->  (.assign 9 (.ptrOffset 4 6))
+  mir.store(ptr, 1.0)                      -->  (.store 9 10)
 ```
 
----
-
-## Module Map
-
-| File                        | Job in plain English                                             |
-|:----------------------------|:-----------------------------------------------------------------|
-| `src/lib.rs`                | Parses `.mir` input and runs `translate` -> `codegen`            |
-| `src/ssa.rs`                | Defines `TypedSsa`, `IdxExpr`, `GuardExpr`, `ControlFlowCfg`     |
-| `src/spec.rs`               | Reads `#[verify(...)]` and `#[launch_contract(...)]` attributes  |
-| `src/translate.rs`          | Transcriber entry point and public summary types                 |
-| `src/translate/ir_utils.rs` | `BlockGraph` adjacency and shared Pliron operand/cast helpers    |
-| `src/translate/scalar.rs`   | Pure scalar `BitVec` function transcriber (`arithmetic.mir`)     |
-| `src/translate/slice_1d.rs` | Barrier-free 1D slice kernel transcriber (`vecadd`)              |
-| `src/translate/strips_2d.rs`| Hoisted 2D `RowBand` / `ColBand` provenance (`sgemm_tiled_raw`)  |
-| `src/translate/ssa_prop.rs` | Fixed-point `SsaEnv` propagation (`IdxExpr`, `SmemDesc`)         |
-| `src/translate/tcgen05.rs`  | Blackwell `tcgen05` / `TMEM`, `mbarrier`, and TMA transcription  |
-| `src/translate/phased.rs`   | Phased shared-memory / barrier / async kernel driver             |
-| `src/codegen.rs`            | Renders `TranslatedFunction` into `.lean` code and `theorem`s    |
-| `src/runner.rs`             | Invokes `lake env lean` and audits proof axioms                  |
+Once `lake env lean` proves `MirNoOobShared mirFunc 0` and `MirAssertRedundant mirFunc 0` with zero `sorryAx`, `runner.rs` erases the proven `mir.assert` op in memory and PTX lowering continues with zero bounds-check overhead.
 
 ---
 
-## Try It Out
+## 2. Pipeline & Module Map
 
-Run from the `cuda-oxide/` directory:
+```text
+  mir.func (`PostMem2Reg` SSA)
+     │
+     ├─► 1. `spec.rs`               Parse `#[launch_contract]` & `#[verify(...)]`
+     ├─► 2. `translate/scalar.rs`   Pure integer `BitVec` AST (`arithmetic.mir`)
+     ├─► 2. `translate/program.rs`  1-to-1 `MirFunc` blocks + `ControlFlowCfg`
+     ├─► 3. `codegen.rs`            Render `.lean` definitions & safety `theorem`s
+     └─► 4. `runner.rs`             Run `lake env lean`, audit axioms, erase `mir.assert`s
+```
+
+| File                        | Role                                              |
+|:----------------------------|:--------------------------------------------------|
+| `src/lib.rs`                | Entry API, MIR parser, and fail-closed attributes |
+| `src/spec.rs`               | Parses `#[launch_contract]` and `#[verify(...)]`  |
+| `src/ssa.rs`                | `ControlFlowCfg` graph types and scalar `SsaEnv`  |
+| `src/translate.rs`          | Routes functions to `scalar.rs` or `program.rs`   |
+| `src/translate/ir_utils.rs` | `BlockGraph` queries and Pliron operand helpers   |
+| `src/translate/scalar.rs`   | Single-block scalar `BitVec` transcriber          |
+| `src/translate/program.rs`  | 1-to-1 `MirFunc` + `ControlFlowCfg` transcriber   |
+| `src/codegen.rs`            | Renders `.lean` modules and `theorem` obligations |
+| `src/runner.rs`             | Invokes `lake env lean` and audits proof axioms   |
+
+---
+
+## 3. Try It Out
+
+Run from `cuda-oxide/`:
 
 ```sh
-# 1. Inspect the scalar arithmetic MIR demo and its generated Lean:
+# 1. Inspect scalar BitVec export:
 cargo oxide lean-export
 
-# 2. Inspect the verified vecadd kernel MIR and its generated Lean theorems:
+# 2. Inspect exported MirFunc + theorems for a verified GPU kernel:
 cargo oxide lean-export crates/lean-exporter/fixtures/vecadd.mir --function vecadd
 
-# 3. Run unit and mutation tests:
+# 3. Run unit, negative, and Lean proof tests:
 cargo test -p lean-exporter
 python3 lean/check-exporter.py
 ```

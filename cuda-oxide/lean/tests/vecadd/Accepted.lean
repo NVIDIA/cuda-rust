@@ -58,8 +58,8 @@ example (i : Nat) (hi : i < 1000) :
 #print axioms thread_index_bound
 #print axioms thread_address
 #print axioms thread_index_injective
-#print axioms CudaOxide.Proofs.ControlFlow.uniform_barriers_sound
-#print axioms CudaOxide.Proofs.ControlFlow.tmem_lifecycle_sound
+#print axioms CudaOxide.Proofs.ControlFlow.uniform_barriers_of_stateMap
+#print axioms CudaOxide.Proofs.ControlFlow.tmem_lifecycle_of_stateMap
 #print axioms CudaOxide.Proofs.ControlFlow.writes_on_active_paths_sound
 #print axioms CudaOxide.Proofs.Program.symReachable_sound
 #print axioms CudaOxide.Proofs.Program.vcNoOobGlobal_of_table

@@ -673,8 +673,11 @@ pub mod core {
 
     #[cuda_tile::variadic_impl(N = 6)]
     impl<E: ElementType, const D: [i32; N]> Tile<E, D> {
+        /// Returns the compile-time dimensions of this tile.
         pub fn shape(&self) -> Shape<'_, D> {
-            unreachable!()
+            // The JIT needs the struct literal's type even when the caller omits it.
+            let shape: Shape<D> = Shape::<D> { dims: &D };
+            shape
         }
         pub fn broadcast<const R: [i32; N]>(self, shape: Shape<R>) -> Tile<E, R> {
             broadcast(self, shape)

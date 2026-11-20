@@ -932,3 +932,58 @@ fn generated_scalar_math_floors_admit_turing() {
         "sm_75"
     );
 }
+
+/// Regression guard for NVBug 7101256: `mma_m16n8k32_mxf8f6f4_f32_e4m3_e4m3`
+/// (`v1:i0876`) honors the detected GPU hint on both `sm_120a` and `sm_121a`
+/// (GB10), and falls back to `sm_120a` when no compatible GPU hint is present.
+#[test]
+fn generated_mxf8f6f4_mma_honors_sm121a_hint_and_falls_back_to_sm120a() {
+    use crate::generated_intrinsic_targets::{
+        GeneratedIntrinsicBackend, generated_intrinsic_target_by_marker,
+    };
+
+    let mma = generated_intrinsic_target_by_marker("v1:i0876").unwrap();
+    assert_eq!(mma.id, "mma_m16n8k32_mxf8f6f4_f32_e4m3_e4m3");
+    let llvm = GeneratedModuleRequirements::from_targets(vec![mma])
+        .for_backend(GeneratedIntrinsicBackend::LlvmNvptx);
+
+    for supported_hint in ["sm_120a", "sm_121a"] {
+        let hint = supported_hint
+            .parse::<cuda_target_spec::DeviceArch>()
+            .unwrap();
+        assert_eq!(
+            resolve_ptx_target_with_generated(
+                None,
+                "CUDA_OXIDE_TARGET",
+                Some(&hint),
+                DetectedFeatures::Basic,
+                &llvm,
+            )
+            .unwrap(),
+            (supported_hint.parse().unwrap(), "detected GPU"),
+            "{supported_hint}"
+        );
+    }
+
+    for fallback_hint in [
+        None,
+        Some("sm_80"),
+        Some("sm_90a"),
+        Some("sm_100a"),
+        Some("sm_107a"),
+    ] {
+        let hint = fallback_hint.map(|h| h.parse::<cuda_target_spec::DeviceArch>().unwrap());
+        assert_eq!(
+            resolve_ptx_target_with_generated(
+                None,
+                "CUDA_OXIDE_TARGET",
+                hint.as_ref(),
+                DetectedFeatures::Basic,
+                &llvm,
+            )
+            .unwrap(),
+            ("sm_120a".parse().unwrap(), "feature requirement"),
+            "{fallback_hint:?}"
+        );
+    }
+}

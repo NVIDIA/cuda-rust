@@ -199,6 +199,14 @@ run_gpu_step \
     gpu_test tile cutile-kernels gpu --ignored --serial
 
 run_gpu_step \
+    "GEMM, causal attention and routed FP16 MoE variants" \
+    gpu_test tile cutile-kernels variants_gpu --ignored --serial
+
+run_gpu_step \
+    "multidimensional pointer padding" \
+    gpu_test tile cutile pointer_padding --ignored
+
+run_gpu_step \
     "cutile GPU aggregate tests" \
     gpu_test tile cutile gpu
 

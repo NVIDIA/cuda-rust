@@ -882,7 +882,7 @@ fn classify_constant(const_op: &mir::ConstOperand) -> WriteClass {
             // `#[constant]` statics live in addrspace(4) and are recognised
             // by the `ConstantMemory<T>` wrapper on the static's declared type.
             // Other statics live in addrspace(1).
-            let static_ty = static_def.ty();
+            let static_ty = crate::device_static_ty(&static_def);
             if is_constant_wrapper_type(&static_ty) {
                 WriteClass::Classified(address_space::CONSTANT)
             } else {

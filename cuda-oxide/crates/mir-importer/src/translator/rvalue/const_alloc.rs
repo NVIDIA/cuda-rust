@@ -312,7 +312,7 @@ pub(super) fn translate_static_array_as_slice(
     let is_mutable = origin.is_mutable();
 
     let (data_ptr, prev_after_data) = if byte_offset == 0 {
-        let static_ty = static_def.ty();
+        let static_ty = crate::device_static_ty(static_def);
         let array_mir_ty = types::translate_type(ctx, &static_ty)?;
 
         // Thin pointer to the full array object (exact Rust `&[T; N]` shape).
@@ -711,7 +711,7 @@ fn translate_slice_at_alloc_offset(
         );
     };
 
-    let static_ty = static_target.static_def.ty();
+    let static_ty = crate::device_static_ty(&static_target.static_def);
     let slice_region = if static_target.byte_offset == 0 {
         array_to_slice_unsize_info(&static_ty, &pointee_ty, loc.clone())?
     } else {

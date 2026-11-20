@@ -318,7 +318,7 @@ pub fn translate_operand(
                 && let Some(static_target) = static_target_from_constant(constant, loc.clone())?
             {
                 let is_mutable = origin.is_mutable();
-                let static_ty = static_target.static_def.ty();
+                let static_ty = crate::device_static_ty(&static_target.static_def);
                 let pointee_mir_ty = types::translate_type(ctx, &pointee_ty)?;
                 let static_mir_ty = types::translate_type(ctx, &static_ty)?;
 

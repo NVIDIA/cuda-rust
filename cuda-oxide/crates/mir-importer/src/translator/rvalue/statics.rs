@@ -230,7 +230,7 @@ impl StaticStorage {
     pub(super) fn of(static_def: &rustc_public::mir::mono::StaticDef) -> Self {
         use rustc_public::ty::{RigidTy, TyKind};
 
-        let ty = static_def.ty();
+        let ty = crate::device_static_ty(static_def);
         if is_constant_wrapper_type(&ty) {
             return Self::Constant;
         }
@@ -734,7 +734,11 @@ pub(super) fn static_initializer_data(
     })?;
     let description = format!("device static {}", static_def.name());
     if !alloc.provenance.ptrs.is_empty() {
-        refuse_stored_shared_memory_pointer(&static_def.ty(), &description, loc.clone())?;
+        refuse_stored_shared_memory_pointer(
+            &crate::device_static_ty(static_def),
+            &description,
+            loc.clone(),
+        )?;
     }
     allocation_initializer_data(&alloc, &description, loc)
 }

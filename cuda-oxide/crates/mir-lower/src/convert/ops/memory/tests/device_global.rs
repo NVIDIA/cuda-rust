@@ -289,6 +289,66 @@ fn convert_global_alloc_places_in_global_or_constant_addrspace() {
     assert!(!global_addr_global.is_host_written(&ctx));
 }
 
+/// A user-named ordinary static (`#[no_mangle]` / `#[export_name]`, export key
+/// domain) keeps its name in `addrspace(1)` and stays rooted for host lookup;
+/// a mangled one keeps the generated name; a second key claiming an existing
+/// symbol is refused.
+#[test]
+fn exported_device_global_keeps_its_user_symbol() {
+    let mut ctx = make_ctx();
+    let (module_ptr, block) = build_kernel(&mut ctx, vec![], vec![]);
+    let exported = dialect_mir::ops::encode_exported_rust_static_global_key("ODT_SYM_IN");
+    let mangled = dialect_mir::ops::encode_rust_static_global_key("_ZN3odt6SYM_INE");
+    append_global_alloc(&mut ctx, block, &exported, false);
+    append_global_alloc(&mut ctx, block, &mangled, false);
+    append_mir_return(&mut ctx, block, vec![]);
+
+    crate::lower_mir_to_llvm(&mut ctx, module_ptr).expect("lowering failed");
+
+    let top = module_top_block(&ctx, module_ptr);
+    let globals: Vec<_> = top
+        .deref(&ctx)
+        .iter(&ctx)
+        .filter_map(|op| Operation::get_op::<llvm::GlobalOp>(op, &ctx))
+        .collect();
+    assert_eq!(globals.len(), 2);
+    let named = globals
+        .iter()
+        .find(|g| g.get_symbol_name(&ctx).to_string() == "ODT_SYM_IN")
+        .expect("the user-named static keeps its symbol");
+    assert_eq!(named.address_space(&ctx), llvm_addr::GLOBAL);
+    assert!(named.is_retained(&ctx));
+    assert!(!named.is_host_written(&ctx));
+    let generated = globals
+        .iter()
+        .find(|g| g.get_symbol_name(&ctx).to_string() != "ODT_SYM_IN")
+        .unwrap();
+    assert!(
+        generated
+            .get_symbol_name(&ctx)
+            .to_string()
+            .starts_with("__device_global_")
+    );
+    assert!(!generated.is_retained(&ctx));
+
+    // Another key whose user symbol equals an existing global's name.
+    let mut ctx = make_ctx();
+    let (module_ptr, block) = build_kernel(&mut ctx, vec![], vec![]);
+    append_global_alloc(&mut ctx, block, &exported, false);
+    let clash = dialect_mir::ops::encode_rust_static_global_key("ODT_SYM_IN");
+    let clash_name = super::super::common::keyed_global_name(&ctx, "__device_global", &clash);
+    let colliding = dialect_mir::ops::encode_exported_rust_static_global_key(&clash_name);
+    append_global_alloc(&mut ctx, block, &colliding, false);
+    append_global_alloc(&mut ctx, block, &clash, false);
+    append_mir_return(&mut ctx, block, vec![]);
+    let error = crate::lower_mir_to_llvm(&mut ctx, module_ptr)
+        .expect_err("two keys mapping to one symbol must be refused");
+    assert!(
+        format!("{error:?}").contains("map to the same symbol"),
+        "{error:?}"
+    );
+}
+
 #[test]
 fn as1_and_as4_global_debug_info_survive_lowering_with_distinct_semantic_types() {
     let mut ctx = make_ctx();

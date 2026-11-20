@@ -312,11 +312,45 @@ pub struct DebugGlobalVariableIdentity {
 /// domain tag so neither form can alias a compiler-made promoted key, then used
 /// only as a join key within one compilation; source-facing debug names and
 /// namespaces are carried separately.
+///
+/// A user-named symbol (`#[no_mangle]`, `#[export_name = "..."]`) gets the
+/// export domain ([`dialect_mir::ops::encode_exported_rust_static_global_key`]),
+/// so lowering emits an ordinary device global under that name for host
+/// lookup instead of a generated `__device_global_*` one.
 pub fn device_static_global_key(static_def: &rustc_public::mir::mono::StaticDef) -> String {
     let symbol = rustc_public::mir::mono::Instance::from(*static_def)
         .mangled_name()
         .to_string();
-    dialect_mir::ops::encode_rust_static_global_key(&symbol)
+    if static_has_user_symbol(static_def) {
+        dialect_mir::ops::encode_exported_rust_static_global_key(&symbol)
+    } else {
+        dialect_mir::ops::encode_rust_static_global_key(&symbol)
+    }
+}
+
+/// Whether the user fixed the static's linkage name with `#[no_mangle]` or
+/// `#[export_name = "..."]`, read from rustc's resolved codegen attributes
+/// (the same facts rustc's own symbol naming uses).
+fn static_has_user_symbol(static_def: &rustc_public::mir::mono::StaticDef) -> bool {
+    use rustc_public::CrateDef as _;
+    rustc_middle::ty::tls::with(|tcx| {
+        let def_id = rustc_public::rustc_internal::internal(tcx, static_def.def_id());
+        let attrs = tcx.codegen_fn_attrs(def_id);
+        attrs
+            .flags
+            .contains(rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags::NO_MANGLE)
+            || attrs.symbol_name.is_some()
+    })
+}
+
+/// The type of a device static with every constant in it evaluated.
+///
+/// `StaticDef::ty()` is the declared type as written: `[u32; N]` keeps `N` an
+/// unevaluated constant, which no array-length reader can use. The static's
+/// mono instance type is normalized in a fully monomorphic environment (what
+/// rustc's own codegen uses for a static), so `N` becomes its value.
+pub fn device_static_ty(static_def: &rustc_public::mir::mono::StaticDef) -> Ty {
+    rustc_public::mir::mono::Instance::from(*static_def).ty()
 }
 
 /// Combine rustc-owned identity with a stable-MIR semantic type.
@@ -1617,5 +1651,117 @@ fn adversarial_export_name() -> u64 {
             backend_options_for(&config).target_arch_source,
             "CUDA_OXIDE_TARGET"
         );
+    }
+    /// A user-named static (`#[no_mangle]`, `#[export_name]`) gets the export
+    /// key domain with its exact symbol, a mangled one does not; and a static
+    /// whose array length is a named constant translates with the evaluated
+    /// length instead of being refused.
+    #[test]
+    fn device_statics_keep_user_symbols_and_evaluate_named_array_lengths() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "cuda_oxide_static_names_{}_{}",
+            std::process::id(),
+            unique
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let fixture = root.join("static_names.rs");
+        fs::write(
+            &fixture,
+            r#"
+#![allow(dead_code, static_mut_refs)]
+const N: usize = 8;
+static NAMED_LEN: [u32; N] = [0; N];
+static NESTED_LEN: [[u16; N / 2]; 3] = [[0; N / 2]; 3];
+#[unsafe(no_mangle)]
+static mut NO_MANGLE: [u32; 4] = [0; 4];
+#[unsafe(export_name = "explicit_name")]
+static EXPORTED: u32 = 1;
+static PLAIN: u32 = 2;
+"#,
+        )
+        .unwrap();
+
+        let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+        let sysroot_output = std::process::Command::new(rustc)
+            .args(["--print", "sysroot"])
+            .output()
+            .expect("query rustc sysroot");
+        assert!(sysroot_output.status.success(), "rustc --print sysroot");
+        let sysroot = String::from_utf8(sysroot_output.stdout)
+            .expect("sysroot path is UTF-8")
+            .trim()
+            .to_string();
+        let args = vec![
+            "rustc".to_string(),
+            "--edition=2024".to_string(),
+            "--crate-type=rlib".to_string(),
+            "--crate-name=static_names".to_string(),
+            "--emit=metadata".to_string(),
+            format!("--out-dir={}", root.display()),
+            format!("--sysroot={sysroot}"),
+            fixture.display().to_string(),
+        ];
+
+        // (leaf name, exported symbol, every array length outermost first)
+        let statics = std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                rustc_public::run!(&args, || {
+                    use rustc_public::CrateDef as _;
+                    let mut ctx = pliron::context::Context::new();
+                    dialect_mir::register(&mut ctx);
+                    let results = rustc_public::local_crate()
+                        .statics()
+                        .into_iter()
+                        .map(|static_def| {
+                            let key = device_static_global_key(&static_def);
+                            let exported =
+                                dialect_mir::ops::exported_rust_static_symbol_from_global_key(&key)
+                                    .map(str::to_owned);
+                            let mut ty = crate::translator::types::translate_type(
+                                &mut ctx,
+                                &device_static_ty(&static_def),
+                            )
+                            .expect("every fixture static type translates");
+                            let mut lengths = Vec::new();
+                            loop {
+                                let next = ty
+                                    .deref(&ctx)
+                                    .downcast_ref::<dialect_mir::types::MirArrayType>()
+                                    .map(|array| (array.size(), array.element_type()));
+                                let Some((length, element)) = next else { break };
+                                lengths.push(length);
+                                ty = element;
+                            }
+                            let name = static_def.name();
+                            let leaf = name.rsplit("::").next().unwrap().to_string();
+                            (leaf, exported, lengths)
+                        })
+                        .collect::<Vec<_>>();
+                    std::ops::ControlFlow::<(), _>::Continue(results)
+                })
+            })
+            .unwrap()
+            .join()
+            .unwrap()
+            .expect("in-process fixture compilation succeeds");
+        fs::remove_dir_all(&root).ok();
+
+        let get = |leaf: &str| {
+            statics
+                .iter()
+                .find(|(name, _, _)| name == leaf)
+                .map(|(_, exported, lengths)| (exported.as_deref(), lengths.as_slice()))
+                .unwrap_or_else(|| panic!("fixture static `{leaf}` was not found"))
+        };
+        assert_eq!(get("NAMED_LEN"), (None, &[8][..]));
+        assert_eq!(get("NESTED_LEN"), (None, &[3, 4][..]));
+        assert_eq!(get("NO_MANGLE"), (Some("NO_MANGLE"), &[4][..]));
+        assert_eq!(get("EXPORTED"), (Some("explicit_name"), &[][..]));
+        assert_eq!(get("PLAIN"), (None, &[][..]));
     }
 }

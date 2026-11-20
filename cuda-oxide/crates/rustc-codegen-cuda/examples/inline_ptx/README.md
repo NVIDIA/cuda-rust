@@ -47,8 +47,8 @@ unsafe {
 }
 ```
 
-The macro supports at most 16 output operands across `out` and `inout`, plus at
-most 16 explicit `in` operands. Template placeholders use `%N` (zero-based) for
+The macro supports at most 64 output operands across `out` and `inout`, plus at
+most 256 explicit `in` operands. Template placeholders use `%N` (zero-based) for
 user-visible operands and `%%reg` for literal PTX registers, such as
 `%%laneid` and `%%tid.x`.
 

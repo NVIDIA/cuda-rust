@@ -44,15 +44,43 @@ pub(super) fn collect_cuda_module_constants(
                 ),
             ));
         }
+        // An explicit `#[constant(export_name = "...")]` is a contract with something outside
+        // this crate that looks the symbol up by name (OptiX finds its launch parameters by
+        // `pipelineLaunchParamsVariableName`), so it wins over the generated unique symbol.
+        let symbol = match user_export_name(&item_static.attrs)? {
+            Some(name) => name,
+            None => cuda_module_constant_symbol(module_ident, &item_static.ident),
+        };
         constants.push(CudaModuleConstant {
             ident: item_static.ident.clone(),
             ty: item_static.ty.clone(),
             cfg_attrs: cuda_module_cfg_attrs(&item_static.attrs)?,
             method_attrs: cuda_module_method_attrs(&item_static.attrs),
-            symbol: cuda_module_constant_symbol(module_ident, &item_static.ident),
+            symbol,
         });
     }
     Ok(constants)
+}
+
+/// The `export_name` of a `#[constant(export_name = "...")]` attribute, if the user wrote one.
+fn user_export_name(attrs: &[syn::Attribute]) -> syn::Result<Option<String>> {
+    for attr in attrs {
+        if !attr_path_ends_with(attr, "constant") {
+            continue;
+        }
+        let syn::Meta::List(list) = &attr.meta else {
+            continue;
+        };
+        let pair: syn::MetaNameValue = list.parse_args()?;
+        if !pair.path.is_ident("export_name") {
+            return Err(syn::Error::new_spanned(&pair.path, "expected `export_name = \"...\"`"));
+        }
+        let syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(name), .. }) = &pair.value else {
+            return Err(syn::Error::new_spanned(&pair.value, "`export_name` must be a string literal"));
+        };
+        return Ok(Some(name.value()));
+    }
+    Ok(None)
 }
 
 fn cuda_module_constant_symbol(module_ident: &Ident, ident: &Ident) -> String {

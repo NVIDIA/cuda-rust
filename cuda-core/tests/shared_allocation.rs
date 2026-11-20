@@ -135,3 +135,69 @@ fn empty_and_peeled_buffers_preserve_shared_read_access() {
     let peeled = wrapped.peel_elem::<u32>();
     assert!(!peeled.shared_access_writes());
 }
+
+/// Regression test for NVBug 7090395: dropping buffers right before unloading a
+/// module and exiting the process must quiesce `"cuda-resource-retirement"`
+/// before `libcuda` and Compute Sanitizer run exit destructors.
+#[test]
+fn process_exit_right_after_buffer_and_module_drop_quiesces_retirement_worker() {
+    const CHILD_ENV: &str = "CUDA_CORE_EXIT_RACE_CHILD";
+    const NOOP_PTX: &str = "\
+.version 7.0
+.target sm_70
+.address_size 64
+.visible .entry noop_entry() { ret; }
+";
+
+    if std::env::var_os(CHILD_ENV).is_some() {
+        let ctx = Context::new(0).unwrap();
+        let stream = ctx.default_stream();
+        let _module = ctx.load_module_from_ptx_src(NOOP_PTX).unwrap();
+        for len in [256usize, 256, 2] {
+            let buf = DeviceBuffer::<u32>::zeroed(&stream, len).unwrap();
+            stream.synchronize().unwrap();
+            let host = buf.to_host_vec(&stream).unwrap();
+            assert_eq!(host.len(), len);
+        }
+        return;
+    }
+
+    let _guard = GPU_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let exe = std::env::current_exe().unwrap();
+    let test_name = "process_exit_right_after_buffer_and_module_drop_quiesces_retirement_worker";
+
+    for _ in 0..5 {
+        let output = std::process::Command::new(&exe)
+            .env(CHILD_ENV, "1")
+            .args(["--exact", test_name, "--nocapture"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "child exit race failed: status={:?}, stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let has_sanitizer = std::process::Command::new("compute-sanitizer")
+        .arg("--version")
+        .output()
+        .is_ok_and(|out| out.status.success());
+    if has_sanitizer {
+        let output = std::process::Command::new("compute-sanitizer")
+            .args(["--tool", "synccheck", "--error-exitcode", "86"])
+            .arg(&exe)
+            .env(CHILD_ENV, "1")
+            .args(["--exact", test_name, "--nocapture"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "synccheck child exit failed: status={:?}\nstdout={}\nstderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}

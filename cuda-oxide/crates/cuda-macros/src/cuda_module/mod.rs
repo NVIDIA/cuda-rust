@@ -26,7 +26,8 @@ use crate::cuda_module::launchers::{
     cuda_kernel_marker_name, cuda_module_function_field, generate_cuda_module_async_launch_method,
     generate_cuda_module_kernel_signature, generate_cuda_module_launch_contract_impl,
     generate_cuda_module_launch_method, generate_cuda_module_owned_async_launch_method,
-    generate_cuda_module_prepare_launch_methods, has_codegen_generics,
+    generate_cuda_module_prepare_contract_diagnostic, generate_cuda_module_prepare_launch_methods,
+    has_codegen_generics,
 };
 use crate::cuda_module::model::{
     CudaModuleKernel, add_cuda_module_disjoint_abi_bounds,
@@ -214,6 +215,9 @@ pub(crate) fn expand_cuda_module_inner(
     let prepare_launch_methods = direct_kernels
         .iter()
         .filter_map(generate_cuda_module_prepare_launch_methods);
+    let prepare_contract_diagnostics = direct_kernels
+        .iter()
+        .filter_map(generate_cuda_module_prepare_contract_diagnostic);
     let launch_methods = direct_kernels
         .iter()
         .map(generate_cuda_module_launch_method);
@@ -395,6 +399,7 @@ pub(crate) fn expand_cuda_module_inner(
         quote! {
             #(#kernel_signatures)*
             #(#launch_contract_impls)*
+            #(#prepare_contract_diagnostics)*
 
             #[derive(Clone, Debug)]
             #[allow(non_snake_case)]
@@ -692,6 +697,9 @@ fn generate_nested_cuda_module_support(
     let prepare_launch_methods = kernels
         .iter()
         .filter_map(generate_cuda_module_prepare_launch_methods);
+    let prepare_contract_diagnostics = kernels
+        .iter()
+        .filter_map(generate_cuda_module_prepare_contract_diagnostic);
     let non_generic_kernels = kernels.iter().filter(|kernel| !kernel.is_generic);
     let function_fields = non_generic_kernels.clone().map(|kernel| {
         let cfg_attrs = &kernel.cfg_attrs;
@@ -732,6 +740,7 @@ fn generate_nested_cuda_module_support(
     quote! {
         #(#kernel_signatures)*
         #(#launch_contract_impls)*
+        #(#prepare_contract_diagnostics)*
 
         #[derive(Clone, Debug)]
         #[allow(non_snake_case)]

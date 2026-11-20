@@ -85,6 +85,7 @@ for test_target in \
     partition_index_schedules \
     pointer_padding \
     reduce_scan_ops \
+    reduce_symbolic_shape \
     registry_phase_a \
     span_source_location \
     trait_dispatch_probe \

@@ -1,0 +1,64 @@
+---
+name: cutile-rs cargo-deny
+
+# ci.yml's path filters omit cutile-rs/**, and this check is a job of that
+# workflow. A pull request that only touches the Tile lock, a Tile manifest,
+# or cutile-rs/deny.toml would otherwise skip the audit. Calling the whole
+# SIMT workflow for those paths would also run fmt, clippy, and the unit
+# tests. This workflow runs the one cutile-rs command.
+#
+# pull_request is the right event: path filters see the pull request diff.
+# cutile-rs.yml cannot host this. Its runners do not accept pull_request, and
+# a path filter on the copy-pr-bot mirror push is dropped when GitHub reports
+# that push as having no changed files.
+#
+# `cutile-rs/**/Cargo.toml` does not match `cutile-rs/Cargo.toml`; `**` does
+# not consume the slash in front of it. The root manifest and lock are listed
+# on their own. Paper benchmark manifests match the same globs. This job still
+# does not audit those workspaces.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cutile-rs/Cargo.toml'
+      - 'cutile-rs/Cargo.lock'
+      - 'cutile-rs/**/Cargo.toml'
+      - 'cutile-rs/**/Cargo.lock'
+      - 'cutile-rs/deny.toml'
+      - '.github/workflows/cutile-cargo-deny.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'cutile-rs/Cargo.toml'
+      - 'cutile-rs/Cargo.lock'
+      - 'cutile-rs/**/Cargo.toml'
+      - 'cutile-rs/**/Cargo.lock'
+      - 'cutile-rs/deny.toml'
+      - '.github/workflows/cutile-cargo-deny.yml'
+
+# Each commit on main gets its own group, so it starts at once. Any other ref
+# still shares one group and cancels the older run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}${{ github.ref_name == 'main' && format('-{0}', github.sha) || '' }}
+  cancel-in-progress: ${{ github.ref_name != 'main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: cargo deny over the cutile-rs workspace
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@v4
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+
+      # cutile-rs/deny.toml is a separate policy. A walk that starts at this
+      # manifest finds that file before the root deny.toml. --locked so a
+      # stale committed lock fails instead of being rewritten.
+      - name: Run cargo-deny over the cutile-rs workspace
+        run: cargo deny --manifest-path cutile-rs/Cargo.toml --locked check

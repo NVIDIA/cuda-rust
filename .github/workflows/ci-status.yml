@@ -9,7 +9,7 @@ name: CI status
 # self-hosted runners, which reject pull_request, so both trigger on push to
 # main and to the copy-pr-bot mirror branches.
 #
-# This workflow runs whenever either of them completes on main. For each
+# This workflow runs whenever one of them completes on main. For each
 # pipeline it finds the newest completed push run on main that actually
 # executed jobs and fails if that run failed. Two kinds of run say nothing
 # about the pipeline and are skipped over: a run whose jobs were all skipped
@@ -17,11 +17,15 @@ name: CI status
 # cancelled run. Taking either at face value would turn the badge green while
 # the last real run was red.
 #
+# cutile-cargo-deny.yml is included so a Tile lock or deny.toml failure on
+# main fails this badge. A push that does not match its path filters creates
+# no run, and the loop keeps the newest run that did.
+#
 # The badge in README.md points here. To cover another pipeline, add its
 # workflow name to the trigger list and its file name to the loop below.
 on:
   workflow_run:
-    workflows: [CI, cutile-rs-pr]
+    workflows: [CI, cutile-rs-pr, cutile-rs cargo-deny]
     types: [completed]
     branches: [main]
 
@@ -41,7 +45,7 @@ jobs:
         run: |
           set -euo pipefail
           failed=0
-          for workflow in ci.yml cutile-rs.yml; do
+          for workflow in ci.yml cutile-rs.yml cutile-cargo-deny.yml; do
             verdict=none
             url=-
             while read -r id conclusion run_url; do

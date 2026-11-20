@@ -105,6 +105,21 @@ mod tensor_and_matrix_ops_module {
         output.store(result);
     }
 
+    /// Mean square of the positive parts of the row sums.
+    #[cutile::entry()]
+    fn tile_shape_kernel<const M: i32, const N: i32>(
+        input: &Tensor<f32, { [M, N] }>,
+        output: &mut Tensor<f32, { [1] }>,
+    ) {
+        let matrix = input.load_tile(shape![M, N], [0, 0]);
+        let sums: Tile<f32, { [M] }> = reduce_sum(matrix, 1);
+        let zero: Tile<f32, { [M] }> = constant(0.0f32, sums.shape());
+        let positive = max_tile(sums, zero);
+        let energy: Tile<f32, { [] }> = reduce_sum(positive * positive, 0);
+        let count: f32 = convert_scalar(sums.shape()[0]);
+        output.store((energy / scalar_to_tile(count)).reshape(shape![1]));
+    }
+
     #[cutile::entry()]
     fn transpose_tile_kernel(
         output: &mut Tensor<f32, { [8, 16] }>,
@@ -394,6 +409,40 @@ fn compile_raw_mmaf() {
             module_op_str.contains("= mmaf"),
             "Expected raw mmaf operation in MLIR output"
         );
+    });
+}
+
+#[test]
+fn compile_tile_shape() {
+    common::with_test_stack(|| {
+        let ir = compile_ir(
+            "tile_shape_kernel",
+            &["2".into(), "4".into()],
+            &[("input", &[4, 1]), ("output", &[1])],
+        );
+        assert!(ir.contains("tile<2xf32>"));
+    });
+}
+
+#[test]
+fn execute_tile_shape() {
+    common::with_test_stack(|| {
+        let values = Arc::new(vec![-2.0f32, 1.0, 0.0, -1.0, 3.0, 1.0, -1.0, 0.0]);
+        for (rows, cols, expected) in [(2, 4, 4.5f32), (4, 2, 4.0)] {
+            let input = api::copy_host_vec_to_device(&values)
+                .reshape(&[rows, cols])
+                .sync()
+                .expect("input");
+            let output = api::zeros::<f32>(&[1]).sync().expect("output");
+            let (_, output) = tensor_and_matrix_ops_module::tile_shape_kernel(
+                Arc::new(input),
+                output.partition([1]),
+            )
+            .sync()
+            .expect("tile_shape_kernel");
+            let actual = output.unpartition().to_host_vec().sync().expect("to_host");
+            assert_eq!(actual, [expected]);
+        }
     });
 }
 

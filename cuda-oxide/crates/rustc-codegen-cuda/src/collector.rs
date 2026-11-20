@@ -662,6 +662,14 @@ pub fn is_device_function(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
     is_device_symbol(&tcx.def_path_str(def_id))
 }
 
+/// Whether a device function is an OptiX callable program (`__direct_callable__*` or
+/// `__continuation_callable__*`), which OptiX resolves by name through the shader binding
+/// table: nothing in the module calls it, so the collector roots it like a kernel.
+fn is_optix_callable(raw_name: &str) -> bool {
+    let user = device_base_name(raw_name).unwrap_or(raw_name);
+    user.starts_with("__direct_callable__") || user.starts_with("__continuation_callable__")
+}
+
 /// Checks if an Instance is fully monomorphized (no unresolved type or const parameters).
 ///
 /// For generic kernels like `scale<T>`, the CGU may contain both:
@@ -1312,11 +1320,12 @@ pub fn collect_device_functions<'tcx>(
     }
 
     // Find standalone device function roots (Phase 2: device functions without kernels).
-    // Only scan when there are NO kernels — when kernels exist, device functions are
-    // already collected transitively via the call graph walk. Tile export
-    // implementations were rooted above and are skipped here so their export
-    // names are not computed twice.
-    if !has_kernels {
+    // When kernels exist, device functions are collected transitively via the call
+    // graph walk, except OptiX callable programs: OptiX calls those by name through the
+    // shader binding table, nothing in the module calls them, so they are roots too
+    // (`is_optix_callable`). Tile export implementations were rooted above and are
+    // skipped here so their export names are not computed twice.
+    {
         for cgu in cgus {
             for (item, _data) in cgu.items() {
                 if let MonoItem::Fn(instance) = item
@@ -1330,6 +1339,9 @@ pub fn collect_device_functions<'tcx>(
 
                     // Skip closures inside device functions
                     if raw_name.contains("{closure") || raw_name.contains("::closure") {
+                        continue;
+                    }
+                    if has_kernels && !is_optix_callable(&raw_name) {
                         continue;
                     }
 
@@ -3739,5 +3751,20 @@ mod tests {
             let ascii = "a".repeat(count);
             assert_eq!(truncate_path_for_box(&ascii, 48).chars().count(), 48);
         }
+    }
+}
+
+#[cfg(test)]
+mod optix_callable_tests {
+    use super::is_optix_callable;
+    use reserved_oxide_symbols::{DEVICE_PREFIX, LEGACY_DEVICE_PREFIX};
+
+    #[test]
+    fn optix_callables_are_recognized_by_program_name() {
+        assert!(is_optix_callable(&format!("my_crate::{DEVICE_PREFIX}__direct_callable__shade")));
+        assert!(is_optix_callable(&format!("{DEVICE_PREFIX}__continuation_callable__bounce")));
+        assert!(is_optix_callable(&format!("m::{LEGACY_DEVICE_PREFIX}__direct_callable__x")));
+        assert!(!is_optix_callable(&format!("my_crate::{DEVICE_PREFIX}helper")));
+        assert!(!is_optix_callable(&format!("my_crate::{DEVICE_PREFIX}helper__direct_callable__")));
     }
 }

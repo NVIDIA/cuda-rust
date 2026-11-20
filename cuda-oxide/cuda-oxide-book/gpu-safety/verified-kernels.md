@@ -83,27 +83,23 @@ Unlike a C or CUDA C++ verifier, Lean 4 does not need to prove pointer validity,
 | **Shared-memory exclusivity**             | Lean 4 (`no_data_race` + barriers)     | Phase 0 writes one slot per thread or leader; Phase 1 reads    |
 | **In-bounds indexing**                    | Lean 4 (`no_oob_idx` + host check)     | Proved across all active threads before erasing bounds checks  |
 
-### We Summarize the Kernel Instead of Translating Every Line
+### Line-by-Line MIR Translation (Zero Shape Guessing)
 
-The Lean exporter has two modes:
-- **Scalar mode**: Translates a pure integer function line-by-line into fixed-width bitvector math.
-- **Kernel mode**: Walks the kernel's control-flow graph using two buckets of state (**Bucket 1**: an SSA map that builds compositional index expressions `IdxExpr` and branch conditions `GuardExpr`, and **Bucket 2**: CFG lists tracking each basic block's barrier phase and dominating guards) to extract a **kernel summary** and emit one theorem per verification clause. Floating-point math is ignored because it cannot change array indices.
+`lean-exporter` pauses right after `mem2reg` (before loop unrolling, so loops stay compact) and translates the kernel in two thin, fail-closed pieces:
+1. **`MirFunc` (1-to-1 basic blocks)**: Copies each integer, bitwise, branch, pointer-offset, `mir.assert`, shared/global load or store, and `TMEM` instruction 1-to-1 into Lean 4. Floating-point math becomes `.unk` because float values cannot change array indices.
+2. **`ControlFlowCfg` (barrier and hardware state machine)**: Transcribes basic-block edges and collective/async operations (`sync_threads`, `cluster_sync`, `mbarrier_*`, PTX proxy fences, TMA, DSMEM `map_shared_rank`, `CLC`, and `tcgen05` / `TMEM`).
 
-How one `no_oob_idx` clause maps to the right reusable proof in Lean:
-- **1D global slice**: proved from the `if` guard and the host length check.
-- **2D global row or column strip**: proved from the strip start check and loop bound.
-- **2D shared memory tile**: proved from the 2D thread coordinates (`tx < 16`, `ty < 16`) and loop bound (`i < 16`).
-- **Shared warp-leader slot and scan**: proved from the block size (`tid < 256` implies `tid / 32 < 8`) and scan loop bound (`w < 8`).
-- **Sub-warp bit-splits and packed multi-buffer staging**: proved from the bit-split bijection (`(tid >> 4) * 16 + (tid & 15) = tid`), active-thread guards (`if tid < 64`), and packed loop bounds (`w < 4` implies `tid * 4 + w < 256`).
-- **Asynchronous TMA bulk copies and `mbarrier` token handoffs**: proved from single-leader TMA issue (`if tid == 0`), expected-byte arrival (`mbarrier_arrive_expect_tx`), proxy coherence (`fence_proxy_async_shared_cta`), and dominating `mbarrier_try_wait_parity` completion before consumer reads.
-- **Blackwell `tcgen05` Tensor Cores and `TMEM` lifecycle (`tmem_lifecycle`)**: `lean-exporter` transcribes the kernel's basic-block control-flow graph (`ControlFlowCfg`), and Lean 4 proves full-warp `tcgen05_alloc` / `tcgen05_dealloc` symmetry, `mma -> commit -> wait -> ld -> load_wait` ordering, `128`-lane and `allocCols <= 512` bounds, and warpgroup 32-lane `tcgen05_ld` slice bounds.
+Lean 4 then proves 100% of the arithmetic, race-freedom, and hardware lifecycle obligations (`0 sorryAx`) without any pattern-matched indexing templates in the Rust compiler:
+- **Global and shared bounds (`no_oob_idx`)**: Symbolic execution (`inferSymTable`, validated by `rfl`) extracts plain integer **Verification Conditions (`VC`)** from every load, store, TMA transfer, and `Barrier` slot, and discharges them with `omega`.
+- **Shared-memory and `&mut [T]` race freedom (`no_data_race`, `disjoint_writes`)**: Prunes accesses separated by `sync_threads()` phases or `mbarrier` completion tokens, and proves that any remaining same-phase accesses hit distinct slots across threads.
+- **Barriers, rings, 2-CTA clusters, and `TMEM` (`uniform_barriers`, `tmem_lifecycle`)**: Proves block/cluster barrier uniformity, cyclic producer/consumer ring back-pressure, peer CTA rank bounds (`rank < clusterDimX`), and full-warp `tcgen05` / `TMEM` allocation and deallocation symmetry.
 
 ### Trusted Computing Base
 
 Lean 4's kernel checks every proof obligation and rejects any proof that uses `sorryAx` or custom axioms. Everything outside that proof check is part of the **Trusted Computing Base (TCB)**:
 - **MIR import and SSA promotion**: Translating Rust into MIR and promoting stack locals to SSA registers.
-- **The Lean translator**: Extracting the kernel summary and proof obligations from MIR (fails closed on unsupported ops, unguarded accesses, or unknown attributes).
-- **Downstream lowering**: Erasing proven bounds checks, unrolling loops, and lowering MIR to LLVM and PTX after verification succeeds.
+- **The Lean transcriber**: Copying `PostMem2Reg` basic blocks and control-flow operations 1-to-1 into Lean 4 (failing closed on unsupported ops or unknown attributes).
+- **Downstream lowering**: Erasing proven `mir.assert` bounds checks, unrolling loops, and lowering MIR to LLVM and PTX after verification succeeds.
 - **Host launch checks and CUDA runtime**: Enforcing launch-contract block dimensions and buffer length relations before the kernel runs.
 
 ---
@@ -503,10 +499,10 @@ pub fn async_copy_stage(
 }
 ```
 
-How `lean-exporter` and Lean 4 verify the asynchronous token chain:
-- **Single-leader producer (`no_data_race_single_leader`)**: Because the TMA copy is guarded by `if tid == 0`, Lean 4 proves only thread 0 issues the write to `TILE`.
-- **Transfer byte bounds (`no_oob_idx(TILE)`)**: The exporter extracts the expected byte count from `mbarrier_arrive_expect_tx` (`16384` bytes = `4096` floats) and proves in Lean 4 that the transfer fits inside `TILE`'s capacity.
-- **Token-ordered phase separation (`StageProduced` -> `StageReady`)**: The exporter checks that `BAR` is armed by `mbarrier_arrive_expect_tx`, bound to `TILE` by `cp_async_bulk_tensor_2d_g2s_cta`, and awaited on all paths to `TILE[tid]` via `mbarrier_try_wait_parity(&raw const BAR, 0)`. Omitting `mbarrier_arrive_expect_tx`, skipping the wait, or waiting on a different barrier leaves `TILE[tid]` in the producer phase and is rejected by Lean 4 at compile time.
+How Lean 4 verifies the asynchronous handoff:
+- **Single-leader producer (`MirNoSharedRace`)**: Because the TMA copy is guarded by `if tid == 0`, Lean 4 proves only thread 0 issues the write to `TILE`.
+- **Transfer byte bounds (`MirNoOobShared`)**: Lean 4 checks that the `16384`-byte TMA transfer (`4096` floats) fits inside `TILE`'s capacity.
+- **Completion ordering (`UniformBarriers` + `asyncOrdered`)**: Lean 4 verifies `mbarrier_init` + `fence_proxy_async_shared_cta()` before `sync_threads()`, expected-byte arming via `mbarrier_arrive_expect_tx`, and `mbarrier_try_wait_parity` before `TILE[tid]` is read. Omitting `mbarrier_arrive_expect_tx` or skipping the wait is rejected at compile time.
 
 Inspect the exported Lean proof or run the TMA copy on the GPU with:
 
@@ -578,9 +574,80 @@ pub fn tcgen05_matmul_verified(
 }
 ```
 
-Inspect the transcribed `ControlFlowCfg` and Lean 4 theorems, or build and run on Blackwell (`sm_100a`):
+Inspect the transcribed `MirFunc` and `ControlFlowCfg` or build and run on Blackwell (`sm_100a`):
 
 ```console
 $ cargo oxide lean-export safe_tcgen05_matmul
 $ cargo oxide run safe_tcgen05_matmul --arch sm_100a
+```
+
+---
+
+### Example 7: Warp-Specialized Rings & `SharedArray<Barrier, N>`
+
+Persistent Hopper and Blackwell kernels dedicate one producer warp (`if warp_id == 4`) to streaming tiles into an `N`-stage ring buffer while consumer warps (`if warp_id < 4`) compute on earlier stages in parallel, synchronizing through indexed **`SharedArray<Barrier, N, 8>`** arrays (`FULL_BAR`, `EMPTY_BAR`, `META_BAR`):
+
+```text
+  Producer Warp 4 (lane 0)                     Consumer Warps 0..3 (128 threads)
+  -----------------------------------------    -----------------------------------------
+  wait EMPTY_BAR[stage] (parity starts at 1)   wait FULL_BAR[stage] & META_BAR[stage]
+  TMA copy -> RING_BUF[stage * 1024]           read RING_BUF[stage * 1024 + tid]
+  write TILE_META[stage] -> arrive META_BAR    arrive EMPTY_BAR[stage] (lane 0)
+```
+
+In `safe_warp_ring`, Lean 4 proves all 4 ring stages and erases all 9 shared-memory and barrier-array bounds checks (`0` `unsafe` blocks):
+- **Inductive ring wrap bounds**: Proves `stage < 4` across cyclic `if stage + 1 == 4 { 0 } else { stage + 1 }`, `% 4`, and `& 3` updates. Changing `== 4` to `== 5` fails `MirNoOobShared` with an `omega` counterexample.
+- **Slot-exact barrier correspondence**: Proves that awaiting `FULL_BAR[c_stage]` unlocks `RING_BUF[c_stage * 1024]`, and rejects mismatched indices such as reading `(c_stage + 1) & 3` after awaiting `c_stage`.
+- **Cyclic back-pressure**: Rejects producer loops that omit the `EMPTY_BAR[stage]` wait before overwriting the ring slot on the next lap.
+
+```console
+$ cargo oxide run safe_warp_ring
+```
+
+---
+
+### Example 8: 2-CTA Clusters, DSMEM & `CLC` Work-Stealing
+
+On Blackwell, two adjacent CTAs (`#[cluster_launch(2, 1, 1)]`) can exchange data over **Distributed Shared Memory (DSMEM)** (`cluster::map_shared_rank`), signal remote barriers (`mbarrier_arrive_cluster`), and dynamically steal output tiles via **Cluster Launch Control (`CLC`)** (`clc_try_cancel_multicast`):
+
+- **Peer CTA rank bounds (`MirNoOobClusterRank`)**: For `my_rank = cluster::cluster_ctaidX()`, Lean 4 proves `my_rank ^ 1 < 2` is always a valid peer rank in the 2-CTA cluster, and rejects out-of-bounds `my_rank + 1`.
+- **Cluster barrier ordering**: Lean 4 requires `cluster::cluster_sync()` (not CTA-local `thread::sync_threads()`) before cross-CTA DSMEM reads and before 2-CTA `tcgen05_dealloc_cg2`.
+- **16-byte `CLC` response protocol**: Proves `CLC_RESPONSE` holds at least 16 bytes (`SharedArray<u64, 2, 16>`) and is only queried after `CLC_BAR` completes.
+
+```console
+$ cargo oxide run safe_cluster_clc
+```
+
+---
+
+### Example 9: Speed-of-Light Blackwell GEMM (`safe_gemm_sol_final`)
+
+`safe_gemm_sol_final` combines every capability above on a full production Blackwell (`sm_100a`) FP16/BF16 GEMM (`338` MIR basic blocks, `192` threads = `6` warps per CTA in a `2 x 1 x 1` cluster):
+- **Warp 4 (TMA + `CLC`)**: Streams `A` and `B` tiles across a 7-stage, `224 KiB` multicast TMA ring (`SMEM_BUF`, `TMA_BAR[8]`, `MMA_BAR[8]`), steals work via `clc_try_cancel_multicast` (`CLC_RESPONSE`, `CLC_BAR`), and publishes coordinates through a 4-slot `TILE_INFO` mailbox (`TILE_READY[4]`).
+- **Warp 5 (2-CTA `tcgen05.mma`)**: Issues `tcgen05_mma_f16_cg2` across `M256xN256`, `M256xN224`, and `M256xN192` wave-tail descriptors into alternating 256-column halves of a `512`-column `TMEM` allocation (`ACCUM_FULL0/1`, `ACCUM_EMPTY0/1`).
+- **Warps 0..3 (Vectorized Epilogue)**: Unload `TMEM` via `tcgen05_ld_16x256b_x8_pure` + `tcgen05_load_wait()`, release `ACCUM_EMPTY0/1` locally or on CTA 0 via DSMEM `cluster::map_shared_rank`, transpose via `warp::shuffle_xor_sync`, and write 128-bit `U32x4` stores to global memory.
+
+```{figure} images/verified-blackwell-sol.svg
+:alt: Verified 2-CTA Blackwell GEMM pipeline in safe_gemm_sol_final
+:align: center
+:width: 100%
+
+Lean 4 proves all 7 shared-memory and barrier arrays, DSMEM peer ranks, CLC responses, and 512-column 2-stage TMEM lifecycles at compile time, erasing all 27 bounds checks with zero register spills.
+```
+
+All `224 KiB` of shared memory, all 11 `mbarrier`s, DSMEM, `CLC`, and all `512` `TMEM` columns run without `unsafe` (leaving only one 4-line `unsafe` block for the final `U32x4` global output store on dynamically stolen `CLC` tile coordinates).
+
+Measured back-to-back on an NVIDIA B200 (`sm_100a`, `2,000` warmup launches + median of `5 x 301` CUDA-event batches), the Lean-verified kernel matches **100%+** of the unsafe `--unchecked-indexing` reference across every problem size:
+
+| Shape (`M = N = K`) | Unsafe (`gemm_sol_final`)  | Verified (`safe_gemm_sol_final`) | Verified vs. Unsafe |
+|:--------------------|:---------------------------|:---------------------------------|:--------------------|
+| `4,096^3`           | `1,855.5 TFLOPS` (`74.1 us`)| `1,858.4 TFLOPS` (`74.0 us`)     | `100.15%`           |
+| `8,192^3`           | `2,081.4 TFLOPS` (`528.3 us`)| `2,082.3 TFLOPS` (`528.0 us`)   | `100.04%`           |
+| `16,384^3`          | `2,118.1 TFLOPS` (`4.15 ms`)| `2,118.4 TFLOPS` (`4.15 ms`)     | `100.01%`           |
+
+Build and benchmark on B200 with:
+
+```console
+$ cargo oxide build safe_gemm_sol_final --arch sm_100a
+$ cargo oxide run safe_gemm_sol_final --arch sm_100a
 ```

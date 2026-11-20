@@ -740,58 +740,58 @@ theorem symValEquivUnder_sound {env : InputEnv} {t : ThreadCtx} {havoc : Nat →
     expected.matchesVal env t havoc v := by
   unfold symValEquivUnder at heq
   cases expected with
-  | unk => trivial
-  | int e1 =>
+  | unk => trivial                                        -- `.unk` over-approximates any concrete runtime `Val`
+  | int e1 =>                                             -- `.int e1` subsumes `.int e2` via `symIntEquivUnder`
       cases actual with
       | int e2 =>
           simp only [SymVal.matchesVal] at heq hact ⊢
           rw [symIntEquivUnder_sound hhyp e1 e2 heq]; exact hact
       | _ => contradiction
-  | bool b1 =>
+  | bool b1 =>                                            -- `.bool b1` subsumes `.bool b2` via `symBoolEquivUnder`
       cases actual with
       | bool b2 =>
           simp only [SymVal.matchesVal] at heq hact ⊢
           rw [symBoolEquivUnder_sound hhyp b1 b2 heq]; exact hact
       | _ => contradiction
-  | ptr sp1 b1 o1 =>
+  | ptr sp1 b1 o1 =>                                      -- `.ptr` requires identical space/buffer + equal offset under `hyp`
       cases actual with
       | ptr sp2 b2 o2 =>
           simp only [Bool.and_eq_true, beq_iff_eq, SymVal.matchesVal] at heq hact ⊢
           rcases heq with ⟨⟨rfl, rfl⟩, ho⟩
           rw [symIntEquivUnder_sound hhyp o1 o2 ho]; exact hact
       | _ => contradiction
-  | smemOff s1 b1 =>
+  | smemOff s1 b1 =>                                      -- `.smemOff` requires identical `SharedArray` ID + equal byte offset
       cases actual with
       | smemOff s2 b2 =>
           simp only [Bool.and_eq_true, beq_iff_eq, SymVal.matchesVal] at heq hact ⊢
           rcases heq with ⟨rfl, hb⟩
           rw [symIntEquivUnder_sound hhyp b1 b2 hb]; exact hact
       | _ => contradiction
-  | smemDesc s1 b1 =>
+  | smemDesc s1 b1 =>                                     -- `.smemDesc` requires identical `SharedArray` ID + equal descriptor base
       cases actual with
       | smemDesc s2 b2 =>
           simp only [Bool.and_eq_true, beq_iff_eq, SymVal.matchesVal] at heq hact ⊢
           rcases heq with ⟨rfl, hb⟩
           rw [symIntEquivUnder_sound hhyp b1 b2 hb]; exact hact
       | _ => contradiction
-  | tmemPtr c1 b1 =>
+  | tmemPtr c1 b1 =>                                      -- `.tmemPtr` requires identical `allocCols` + equal `(lane << 16) + col`
       cases actual with
       | tmemPtr c2 b2 =>
           simp only [Bool.and_eq_true, beq_iff_eq, SymVal.matchesVal] at heq hact ⊢
           rcases heq with ⟨rfl, hb⟩
           rw [symIntEquivUnder_sound hhyp b1 b2 hb]; exact hact
       | _ => contradiction
-  | condPtr g1 sp1 b1 o1 =>
+  | condPtr g1 sp1 b1 o1 =>                               -- `Option` `.condPtr` join (`Some(ptr)` vs. `None` `.unk`)
       cases actual with
-      | ptr sp2 b2 o2 =>
+      | ptr sp2 b2 o2 =>                                  --   `Some` branch: valid pointer matches unconditionally
           simp only [Bool.and_eq_true, beq_iff_eq, SymVal.matchesVal] at heq hact ⊢
           rcases heq with ⟨⟨rfl, rfl⟩, ho⟩
           intro _; rw [symIntEquivUnder_sound hhyp o1 o2 ho]; exact hact
-      | unk =>
+      | unk =>                                            --   `None` branch: `hyp` forces guard `g1` to `false` (vacuously valid)
           simp only [SymVal.matchesVal] at heq ⊢
           intro hg1
           rw [symImpliesVal_sound hhyp g1 false heq] at hg1; contradiction
-      | condPtr g2 sp2 b2 o2 =>
+      | condPtr g2 sp2 b2 o2 =>                           --   Nested `condPtr` join: `hyp ∧ g1` implies `g2` and equal offsets
           simp only [Bool.and_eq_true, Bool.or_eq_true, beq_iff_eq, SymVal.matchesVal] at heq hact ⊢
           rcases heq with ⟨⟨rfl, rfl⟩, ⟨rfl, rfl⟩ | ⟨hg2t, ho⟩⟩
           · exact hact

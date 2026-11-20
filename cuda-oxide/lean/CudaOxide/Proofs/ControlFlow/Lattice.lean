@@ -265,7 +265,7 @@ theorem enabledCtaSuccs_mono {cfg : ControlFlowCfg} {b : Nat} {abs conc : CtaSta
   rw [List.mem_filter] at he ⊢
   refine ⟨he.1, ?_⟩
   cases cond with
-  | posLoopExit bodyBlk =>
+  | posLoopExit bodyBlk =>                                -- Case 2: Positive-trip loop exit requires `bodyBlk ∈ visitedPosBodies`
       dsimp only at he ⊢
       exact decide_eq_true (natSubset_mem hvp (of_decide_eq_true he.2))
   | _ => rfl
@@ -284,8 +284,8 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
   have hlenBS := listSubsumes_length hbs
   have hbImp : ∀ {x y : Bool}, (!x || y) = true → x = true → y = true := by decide
   have hbFalse : ∀ {x y : Bool}, (!x || y) = true → y = false → x = false := by decide
-  cases op with
-  | syncThreads =>
+  cases op with                                           -- Case-split on each hardware/memory `CfgOp`
+  | syncThreads =>                                        -- Case 1: CTA `sync_threads()` advances proxy & mbarrier sync states
       unfold stepOp at hstep ⊢
       injection hstep with hstep; subst hstep
       refine ⟨_, rfl, ?_⟩
@@ -300,7 +300,7 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
         have hc1 : conc.mmaHazard = false := hbFalse hmh ha.1
         have hc2 : conc.pendingLoads.isEmpty = true := natSubset_isEmpty hpl ha.2
         simp [hc1, hc2]
-  | clusterSync =>
+  | clusterSync =>                                        -- Case 2: 2-CTA `cluster_sync()` enables DSMEM & `_cg2` TMEM access/dealloc
       dsimp only [stepOp] at hstep ⊢
       by_cases hcdim : cfg.clusterDimX ≤ 1
       · rw [if_pos hcdim] at hstep; contradiction
@@ -321,7 +321,7 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
           listSubsumes_map proxyStepSync_mono hsp, hpt⟩, hrep⟩,
           listSubsumes_map proxyStepSync_mono hbp⟩,
           listSubsumes_map mbarStepSync_mono hbs⟩, htp⟩, rfl⟩, hmh⟩, hmi⟩, hcb⟩, htr⟩, hpl⟩, hcd⟩, hcd⟩, hrp⟩, hvp⟩
-  | proxyFenceAsyncShared =>
+  | proxyFenceAsyncShared =>                              -- Case 3: `fence_proxy_async_shared_cta()` flushes generic writes to `.clean`
       dsimp only [stepOp] at hstep ⊢
       injection hstep with hstep; subst hstep
       refine ⟨_, rfl, ?_⟩
@@ -329,13 +329,13 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
       exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
         listSubsumes_map proxyStepFence_mono hsp, hpt⟩, hsc⟩,
         listSubsumes_map proxyStepFence_mono hbp⟩, hbs⟩, htp⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htr⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩
-  | sharedRead s =>
+  | sharedRead s =>                                       -- Case 4: Generic-proxy shared read
       dsimp only [stepOp] at hstep ⊢
       rw [← hlenSP]
       by_cases hslt : s < abs.sharedProxy.length
       · rw [if_pos hslt] at hstep ⊢; injection hstep with hstep; subst hstep; exact ⟨conc, rfl, hsub⟩
       · rw [if_neg hslt] at hstep; contradiction
-  | dsmemAccess s =>
+  | dsmemAccess s =>                                      -- Case 5: Cross-CTA DSMEM access requires `sharedClusterSynced[s]`
       dsimp only [stepOp] at hstep ⊢
       rw [← hlenSC]
       by_cases hpre : (decide (cfg.clusterDimX ≤ 1) || decide (s ≥ abs.sharedClusterSynced.length)) = true
@@ -349,7 +349,7 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
           injection hstep with hstep; subst hstep
           simp only [hcOk, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
           exact ⟨conc, rfl, hsub⟩
-  | sharedWrite s =>
+  | sharedWrite s =>                                      -- Case 6: Generic-proxy shared write dirties `sharedProxy[s]`
       dsimp only [stepOp] at hstep ⊢
       rw [← hlenSP, ← hlenPT]
       by_cases hpre : (decide (s ≥ abs.sharedProxy.length) || decide (s ≥ abs.sharedPendingTma.length)) = true
@@ -368,7 +368,7 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
           exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
             listSubsumes_set hspS s hsp, hpt⟩,
             listSubsumes_set (sub := fun x y => !x || y) rfl s hsc⟩, hbp⟩, hbs⟩, htp⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htr⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩
-  | mbarInit barId count =>
+  | mbarInit barId count =>                               -- Case 7: `mbarrier_init` transitions `barState[barId]` to `.initNeedsSync`
       dsimp only [stepOp] at hstep ⊢
       rw [← hlenBS]
       by_cases hpre : (decide (barId ≥ abs.barState.length) || count == 0) = true
@@ -382,7 +382,7 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
           hsp, hpt⟩, hsc⟩,
           listSubsumes_set hbpB barId hbp⟩,
           listSubsumes_set rfl barId hbs⟩, htp⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htr⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩
-  | mbarArrive barId =>
+  | mbarArrive barId =>                                   -- Case 8: `mbarrier_arrive` arms `barId` (`.armedPlain`)
       dsimp only [stepOp] at hstep ⊢
       have hge := listSubsumes_getElem? barId hbs
       cases ha : abs.barState[barId]? with
@@ -403,7 +403,7 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
               rcases hvc with rfl | rfl | rfl | rfl <;>
                 (dsimp only; refine ⟨_, rfl, ?_⟩; unfold CtaState.subsumes; simp only [Bool.and_eq_true];
                  exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨hsp, hpt⟩, hsc⟩, hbp⟩, hset⟩, htp⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htr⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩)
-  | mbarArriveExpectTx barId txBytes =>
+  | mbarArriveExpectTx barId txBytes =>                   -- Case 9: `mbarrier_arrive_expect_tx` arms `barId` with byte count (`.armedTx`)
       dsimp only [stepOp] at hstep ⊢
       by_cases htx : (txBytes == 0) = true
       · rw [if_pos htx] at hstep; contradiction
@@ -427,7 +427,7 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
                 rcases hvc with rfl | rfl | rfl | rfl <;>
                   (dsimp only; refine ⟨_, rfl, ?_⟩; unfold CtaState.subsumes; simp only [Bool.and_eq_true];
                    exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨hsp, hpt⟩, hsc⟩, hbp⟩, hset⟩, htp⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htr⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩)
-  | tmaCopyG2S sharedId barId isCg2 =>
+  | tmaCopyG2S sharedId barId isCg2 =>                    -- Case 10: Async 2D TMA `g2s` checks `.clean` proxies & records pending TMA hazard
       dsimp only [stepOp] at hstep ⊢
       rw [← hlenSP, ← hlenPT, ← hlenBS]
       by_cases hp1 : ((isCg2 && cfg.clusterDimX != 2) || !((blkGuard.hasZeroLeaderCheck && !blkGuard.hasUnknown) || (cfg.blockDimY == 1 && blkGuard.selectsAtMostOneThread)) || decide (sharedId ≥ abs.sharedProxy.length) || decide (sharedId ≥ abs.sharedPendingTma.length) || decide (barId ≥ abs.barState.length)) = true
@@ -455,7 +455,7 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
           exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
             hsp, listSubsumes_set (sub := fun a c => natSubset c a) hptUpd sharedId hpt⟩,
             listSubsumes_set (sub := fun a c => !a || c) rfl sharedId hsc⟩, hbp⟩, hbs⟩, htp⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htr⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩
-  | clcTryCancel sharedId barId =>
+  | clcTryCancel sharedId barId =>                        -- Case 11: Blackwell `clc_try_cancel` checks `.armedTx` & records pending hazard
       dsimp only [stepOp] at hstep ⊢
       rw [← hlenSP, ← hlenPT, ← hlenBS]
       by_cases hp1 : (decide (cfg.clusterDimX < 1) || !((blkGuard.hasZeroLeaderCheck && !blkGuard.hasUnknown) || (cfg.blockDimY == 1 && blkGuard.selectsAtMostOneThread)) || decide (sharedId ≥ abs.sharedProxy.length) || decide (sharedId ≥ abs.sharedPendingTma.length) || decide (barId ≥ abs.barState.length)) = true
@@ -483,7 +483,7 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
             exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
               hsp, listSubsumes_set (sub := fun a c => natSubset c a) hptUpd sharedId hpt⟩,
               listSubsumes_set (sub := fun a c => !a || c) rfl sharedId hsc⟩, hbp⟩, hbs⟩, htp⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htr⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩
-  | tmemAlloc sharedId cols isCg2 =>
+  | tmemAlloc sharedId cols isCg2 =>                      -- Case 12: Full-warp `tcgen05_alloc*` transitions `.uninit` -> `.allocated`
       dsimp only [stepOp] at hstep ⊢
       rw [← hlenSP]
       by_cases hp1 : ((isCg2 && cfg.clusterDimX != 2) || inCycle || decide (sharedId ≥ abs.sharedProxy.length) || !validTmemColsBool cols) = true
@@ -506,7 +506,7 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
             exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
               hsp, hpt⟩, hsc⟩, hbp⟩, hbs⟩, tmemPhaseSub_refl _⟩, by cases isCg2 <;> rfl⟩,
               hmh⟩, hmi⟩, hcb⟩, htr⟩, hpl⟩, rfl⟩, rfl⟩, rfl⟩, hvp⟩
-  | tmemRelinquishPermit isCg2 =>
+  | tmemRelinquishPermit isCg2 =>                         -- Case 13: Full-warp `tcgen05_relinquish_alloc_permit_cg2` before dealloc
       dsimp only [stepOp] at hstep ⊢
       by_cases hp1 : (isCg2 && cfg.clusterDimX != 2) = true
       · rw [if_pos hp1] at hstep; contradiction
@@ -529,7 +529,7 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
             exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
               hsp, hpt⟩, hsc⟩, hbp⟩, hbs⟩, tmemPhaseSub_refl _⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htr⟩, hpl⟩, hss⟩, hcs⟩,
               by cases isCg2 <;> rfl⟩, hvp⟩
-  | tmemAsyncIssue smemIds isCg2 =>
+  | tmemAsyncIssue smemIds isCg2 =>                       -- Case 14: Leader `tcgen05_mma*` checks clean SMEM & sets `mmaHazard := true`
       dsimp only [stepOp] at hstep ⊢
       by_cases hp1 : ((isCg2 && cfg.clusterDimX != 2) || !((blkGuard.hasZeroLeaderCheck && !blkGuard.hasUnknown) || (cfg.blockDimY == 1 && blkGuard.selectsAtMostOneThread)) || !abs.allocClusterSynced) = true
       · rw [if_pos hp1] at hstep; contradiction
@@ -573,7 +573,7 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
             unfold CtaState.subsumes; simp only [Bool.and_eq_true]
             exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
               hsp, hpt⟩, hsc⟩, hbp⟩, hbs⟩, tmemPhaseSub_refl _⟩, hac⟩, rfl⟩, rfl⟩, hcb⟩, rfl⟩, hpl⟩, rfl⟩, rfl⟩, hrp⟩, hvp⟩
-  | tmemCommit barId isCg2 =>
+  | tmemCommit barId isCg2 =>                             -- Case 15: `tcgen05_commit*` ties prior MMA to `barId` & clears `mmaHazard`
       dsimp only [stepOp] at hstep ⊢
       rw [← hlenBS]
       by_cases hp1 : ((isCg2 && cfg.clusterDimX != 2) || !((blkGuard.hasZeroLeaderCheck && !blkGuard.hasUnknown) || (cfg.blockDimY == 1 && blkGuard.selectsAtMostOneThread)) || !(abs.mmaIssued || priorTmemIssueReaches cfg curBlk) || decide (barId ≥ abs.barState.length)) = true
@@ -614,7 +614,7 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
               rcases hcbValid with hcv | hcv | hcv | hcv <;>
                 (rw [hcv]; dsimp only; rw [if_neg hcg]; refine ⟨_, rfl, ?_⟩; unfold CtaState.subsumes; simp only [Bool.and_eq_true];
                  exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨hsp, hpt⟩, hsc⟩, hbp⟩, hset⟩, tmemPhaseSub_refl _⟩, hac⟩, rfl⟩, hmi⟩, hcbIns⟩, rfl⟩, hpl⟩, rfl⟩, rfl⟩, hrp⟩, hvp⟩))
-  | tmemLoad ldId =>
+  | tmemLoad ldId =>                                      -- Case 16: `tcgen05_ld` checks `tmemReady && !mmaHazard` & records `ldId`
       dsimp only [stepOp] at hstep ⊢
       cases hap : abs.tmemPhase <;> rw [hap] at hstep htp <;> try contradiction
       rename_i cols allocCg2
@@ -637,7 +637,7 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
         exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
           hsp, hpt⟩, hsc⟩, hbp⟩, hbs⟩, tmemPhaseSub_refl _⟩, by simp⟩, by simp⟩, hmi⟩, hcb⟩, by simp⟩,
           natSubset_insert ldId hpl⟩, rfl⟩, rfl⟩, hrp⟩, hvp⟩
-  | tmemLoadWait =>
+  | tmemLoadWait =>                                       -- Case 17: `tcgen05_load_wait()` drains `pendingLoads` to `[]`
       dsimp only [stepOp] at hstep ⊢
       cases hap : abs.tmemPhase <;> rw [hap] at hstep htp <;> try contradiction
       rename_i cols allocCg2
@@ -651,7 +651,7 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
       exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
         hsp, hpt⟩, hsc⟩, hbp⟩, hbs⟩, tmemPhaseSub_refl _⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htr⟩,
         natSubset_refl []⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩
-  | tmemLoadUse ldId =>
+  | tmemLoadUse ldId =>                                   -- Case 18: Register read of `ldId` requires `ldId ∉ pendingLoads`
       dsimp only [stepOp] at hstep ⊢
       by_cases hin : ldId ∈ abs.pendingLoads
       · rw [if_pos hin] at hstep; contradiction
@@ -659,7 +659,7 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
         have hcNotIn : ¬(ldId ∈ conc.pendingLoads) := fun hm => hin (natSubset_mem hpl hm)
         injection hstep with hstep; subst hstep
         rw [if_neg hcNotIn]; exact ⟨conc, rfl, hsub⟩
-  | tmemDealloc cols isCg2 =>
+  | tmemDealloc cols isCg2 =>                             -- Case 19: Full-warp `tcgen05_dealloc*` checks sync + permit & transitions `.deallocated`
       dsimp only [stepOp] at hstep ⊢
       by_cases hp1 : ((isCg2 && cfg.clusterDimX != 2) || inCycle || (blkGuard.selectsSingleFullWarp cfg.blockDimX cfg.blockDimY).isNone) = true
       · rw [if_pos hp1] at hstep; contradiction
@@ -755,8 +755,8 @@ theorem stepEdge_mono (cfg : ControlFlowCfg) (srcBlk : Nat) {abs conc nextAbs : 
   rcases hs with ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨hsp, hpt⟩, hsc⟩, hbp⟩, hbs⟩, htp⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htr⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩
   have hbImp : ∀ {x y : Bool}, (!x || y) = true → x = true → y = true := by decide
   have hbFalse : ∀ {x y : Bool}, (!x || y) = true → y = false → x = false := by decide
-  cases cond with
-  | always | coord _ | uniform | unknown =>
+  cases cond with                                         -- Case-split on outgoing `BranchCond` edge
+  | always | coord _ | uniform | unknown =>               -- Case 1: Non-`mbarrier` branch preserves `CtaState` unchanged
       dsimp only [stepEdge, stepEdgeWith] at hstep ⊢
       injection hstep with hstep; subst hstep; exact ⟨conc, rfl, hsub⟩
   | posLoopExit bodyBlk =>
@@ -766,7 +766,7 @@ theorem stepEdge_mono (cfg : ControlFlowCfg) (srcBlk : Nat) {abs conc nextAbs : 
       by_cases haMem : bodyBlk ∈ abs.visitedPosBodies
       · rw [if_pos haMem] at hstep; injection hstep with hstep; subst hstep; exact ⟨conc, rfl, hsub⟩
       · rw [if_neg haMem] at hstep; contradiction
-  | mbarSpin barId =>
+  | mbarSpin barId =>                                     -- Case 3: `mbarrier` spin-wait backedge requires initialized barrier
       dsimp only [stepEdge, stepEdgeWith] at hstep ⊢
       have hge := listSubsumes_getElem? barId hbs
       cases ha : abs.barState[barId]? with
@@ -783,7 +783,7 @@ theorem stepEdge_mono (cfg : ControlFlowCfg) (srcBlk : Nat) {abs conc nextAbs : 
               subst heqA
               rcases mbarSub_validArrive va vc hge hva with rfl | rfl | rfl | rfl <;>
                 (dsimp only; exact ⟨conc, rfl, hsub⟩)
-  | mbarReady barId initFree =>
+  | mbarReady barId initFree =>                           -- Case 4: `mbarrier` ready edge retires pending TMA/MMA on `barId`
       dsimp only [stepEdge, stepEdgeWith] at hstep ⊢
       have hge := listSubsumes_getElem? barId hbs
       cases ha : abs.barState[barId]? with

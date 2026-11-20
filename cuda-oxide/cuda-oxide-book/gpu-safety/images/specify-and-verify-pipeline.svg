@@ -101,11 +101,11 @@
     <text x="121" y="48" text-anchor="middle" font-size="11.5" style="fill: var(--green-sub)">lean-exporter + lake env lean</text>
 
     <rect x="16" y="60" width="210" height="112" rx="6" style="fill: var(--box); stroke: var(--green-border)"/>
-    <text x="26" y="81" font-family="'Roboto Mono', monospace" font-size="10.8" style="fill: var(--green-text)">def kernelSummary := ...</text>
+    <text x="26" y="81" font-family="'Roboto Mono', monospace" font-size="10.8" style="fill: var(--green-text)">def mirFunc : MirFunc := ...</text>
     <text x="26" y="102" font-family="'Roboto Mono', monospace" font-size="10.8" style="fill: var(--fg)">theorem verify_no_oob_idx :</text>
-    <text x="34" y="119" font-family="'Roboto Mono', monospace" font-size="10.8" style="fill: var(--green)">Contracts.NoOobIdx ... := by</text>
-    <text x="34" y="136" font-family="'Roboto Mono', monospace" font-size="10.8" style="fill: var(--text)">exact Proofs.Bounds...</text>
-    <text x="26" y="158" font-family="'Roboto Mono', monospace" font-size="10.5" style="fill: var(--muted)">#print axioms (no sorryAx)</text>
+    <text x="34" y="119" font-family="'Roboto Mono', monospace" font-size="10.8" style="fill: var(--green)">MirNoOobGlobal ... := by</text>
+    <text x="34" y="136" font-family="'Roboto Mono', monospace" font-size="10.8" style="fill: var(--text)">mir_vc mirFunc</text>
+    <text x="26" y="158" font-family="'Roboto Mono', monospace" font-size="10.5" style="fill: var(--muted)">#print axioms (0 sorryAx)</text>
   </g>
 
   <line x1="802" y1="189" x2="836" y2="189" style="stroke: var(--green)" stroke-width="2" marker-end="url(#arrow-green2)"/>

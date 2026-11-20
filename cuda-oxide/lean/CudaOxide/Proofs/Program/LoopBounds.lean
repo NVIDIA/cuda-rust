@@ -153,11 +153,11 @@ theorem symIntBoundedUnder_sound {env : InputEnv} {t : ThreadCtx} {havoc : Nat �
     ∀ e : SymInt, ∀ lim : Nat,
       symIntBoundedUnder hyp e lim = true →
       e.eval env t havoc < lim
-  | .const c, lim, hb => by
+  | .const c, lim, hb => by                                 -- Case: constant `c < lim` directly
       unfold symIntBoundedUnder at hb; exact of_decide_eq_true hb
-  | .ite c tv fv, lim, hb => by
+  | .ite c tv fv, lim, hb => by                             -- Case: conditional `if c then tv else fv` (incl. ring wraparound)
       unfold symIntBoundedUnder at hb
-      have stepEqHelper : ∀ {aw bnd : Nat} {x : SymInt},
+      have stepEqHelper : ∀ {aw bnd : Nat} {x : SymInt},    -- Helper: `x < bnd < 2^aw` guarantees `wordMod aw (x + 1) = x + 1 ≤ bnd`
           0 < aw → wordMod aw bnd = bnd → bnd ≤ lim →
           hypImpliesLt hyp x = some bnd →
           (SymInt.eval env t havoc (.binOp .add aw x (.const 1)) = x.eval env t havoc + 1 ∧
@@ -169,7 +169,7 @@ theorem symIntBoundedUnder_sound {env : InputEnv} {t : ThreadCtx} {havoc : Nat �
         exact ⟨by simp [SymInt.eval, evalBinOp, (wordMod_eq_iff_lt haw).mpr hsumPow], by omega⟩
       rcases Bool.or_eq_true_iff.mp hb with h12 | htvRing
       · rcases Bool.or_eq_true_iff.mp h12 with hboth | hfvRing
-        · rcases Bool.and_eq_true_iff.mp hboth with ⟨htv, hfv⟩
+        · rcases Bool.and_eq_true_iff.mp hboth with ⟨htv, hfv⟩ -- Subcase 1: both `tv < lim` and `fv < lim` hold independently
           simp only [SymInt.eval]
           by_cases hce : c.eval env t havoc = true
           · rw [if_pos hce]
@@ -177,7 +177,7 @@ theorem symIntBoundedUnder_sound {env : InputEnv} {t : ThreadCtx} {havoc : Nat �
           · rw [if_neg hce]
             have hcf : c.eval env t havoc = false := Bool.eq_false_iff.mpr hce
             exact symIntBoundedUnder_sound (by simp [SymBool.eval, hhyp, hcf]) fv lim hfv
-        · cases hfvA : asAddOne fv with
+        · cases hfvA : asAddOne fv with                     -- Subcase 2: `if x + 1 == B { 0 } else { x + 1 }` ring wrap
           | none => rw [hfvA] at hfvRing; contradiction
           | some p =>
               rcases p with ⟨aw, x⟩
@@ -193,7 +193,7 @@ theorem symIntBoundedUnder_sound {env : InputEnv} {t : ThreadCtx} {havoc : Nat �
                   have haddRaw : evalBinOp .add aw (x.eval env t havoc) 1 = x.eval env t havoc + 1 := haddEval
                   by_cases hce : c.eval env t havoc = true
                   · simp only [SymInt.eval]; rw [if_pos hce]; exact symIntBoundedUnder_sound hhyp tv lim htvB
-                  · have hgoal : SymInt.eval env t havoc fv < lim := by
+                  · have hgoal : SymInt.eval env t havoc fv < lim := by -- False arm (`x + 1 != bnd` and `x + 1 ≤ bnd`) gives `x + 1 < bnd ≤ lim`
                       rw [hfvEq, haddEval]
                       rcases hcCases with (hc1 | hc2) | hc3
                       · rw [hc1, hfvEq] at hce
@@ -206,7 +206,7 @@ theorem symIntBoundedUnder_sound {env : InputEnv} {t : ThreadCtx} {havoc : Nat �
                         simp only [SymBool.eval, evalCmpOp, SymInt.eval, haddRaw] at hce
                         have hnge : ¬(bnd ≤ x.eval env t havoc + 1) := fun he => hce (decide_eq_true he); omega
                     simp only [SymInt.eval]; rw [if_neg hce]; exact hgoal
-      · cases htvA : asAddOne tv with
+      · cases htvA : asAddOne tv with                       -- Subcase 3: inverted `if x + 1 != B { x + 1 } else { 0 }` ring wrap
         | none => rw [htvA] at htvRing; contradiction
         | some p =>
             rcases p with ⟨aw, x⟩
@@ -235,19 +235,19 @@ theorem symIntBoundedUnder_sound {env : InputEnv} {t : ThreadCtx} {havoc : Nat �
                       have hltB : x.eval env t havoc + 1 < bnd := of_decide_eq_true hce; omega
                   simp only [SymInt.eval]; rw [if_pos hce]; exact hgoal
                 · simp only [SymInt.eval]; rw [if_neg hce]; exact symIntBoundedUnder_sound hhyp fv lim hfvB
-  | .binOp op w a b, lim, hb => by
+  | .binOp op w a b, lim, hb => by                          -- Case: `a % m` (`< m ≤ lim`) or `a & mask` (`≤ mask < lim`)
       unfold symIntBoundedUnder at hb
       rcases Bool.or_eq_true_iff.mp hb with h123 | handL
       · clear hb
         rcases Bool.or_eq_true_iff.mp h123 with h12 | handR
         · clear h123
           rcases Bool.or_eq_true_iff.mp h12 with hh | hrem
-          · clear h12
+          · clear h12                                       -- Subcase: explicit `< bnd` guard in `hyp`
             revert hh
             cases hlt : hypImpliesLt hyp (.binOp op w a b)
             · intro hh; contradiction
             · intro hh; exact Nat.lt_of_lt_of_le (hypImpliesLt_sound hlt hhyp) (of_decide_eq_true hh)
-          · clear h12
+          · clear h12                                       -- Subcase: remainder `a % m < m ≤ lim` (`Nat.mod_lt`)
             rcases Bool.and_eq_true_iff.mp hrem with ⟨hop, hmB⟩
             have hop' : op = .rem := beq_iff_eq.mp hop; subst hop'
             clear hrem hop
@@ -260,7 +260,7 @@ theorem symIntBoundedUnder_sound {env : InputEnv} {t : ThreadCtx} {havoc : Nat �
               have hmod : a.eval env t havoc % m < m := Nat.mod_lt _ (of_decide_eq_true hm0)
               simp only [SymInt.eval, evalBinOp]
               exact Nat.lt_of_lt_of_le hmod (of_decide_eq_true hmle)
-        · clear h123
+        · clear h123                                        -- Subcase: bitwise mask `a & mask ≤ mask < lim` (`Nat.and_le_right`)
           rcases Bool.and_eq_true_iff.mp handR with ⟨hop, hmB⟩
           have hop' : op = .bitAnd := beq_iff_eq.mp hop; subst hop'
           clear handR hop
@@ -269,7 +269,7 @@ theorem symIntBoundedUnder_sound {env : InputEnv} {t : ThreadCtx} {havoc : Nat �
           · intro hmB; contradiction
           · intro hmB; rw [asConstInt_eq hc]
             exact Nat.lt_of_le_of_lt Nat.and_le_right (of_decide_eq_true hmB)
-      · clear hb
+      · clear hb                                            -- Subcase: commuted bitwise mask `mask & b ≤ mask < lim`
         rcases Bool.and_eq_true_iff.mp handL with ⟨hop, hmA⟩
         have hop' : op = .bitAnd := beq_iff_eq.mp hop; subst hop'
         clear handL hop
@@ -280,7 +280,7 @@ theorem symIntBoundedUnder_sound {env : InputEnv} {t : ThreadCtx} {havoc : Nat �
           exact Nat.lt_of_le_of_lt Nat.and_le_left (of_decide_eq_true hmA)
   | .tidX, lim, hb | .tidY, lim, hb | .ctaidX, lim, hb | .ctaidY, lim, hb
   | .index1D _, lim, hb | .paramScalar _, lim, hb | .sliceLen _, lim, hb
-  | .havoc _ _, lim, hb | .opaqueUint _ _, lim, hb | .intCast _ _, lim, hb => by
+  | .havoc _ _, lim, hb | .opaqueUint _ _, lim, hb | .intCast _ _, lim, hb => by -- Case: leaf bounded directly by `hypImpliesLt`
       unfold symIntBoundedUnder at hb
       cases hlt : hypImpliesLt hyp _ <;> rw [hlt] at hb
       · contradiction

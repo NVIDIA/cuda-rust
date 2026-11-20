@@ -695,14 +695,14 @@ theorem validSymEdge_sound {f : MirFunc} {tbl : List SymBlockInv} {env : InputEn
       ((bindBlockArgs outRegs outRegs (f.blockAt dst).args argVars) v) :=
     bindSymBlockArgs_correct hmatch (f.blockAt dst).args argVars outRegs outSR hmatch
   by_cases hhdr : (f.blockAt dst).isLoopHeader = false    -- Split: ordinary forward join vs. loop header
-  · rw [hhdr] at hedge                                    -- Case 1: Acyclic destination (`havoc' := havoc`)
+  · rw [hhdr] at hedge                                    -- Case 1: Acyclic destination (`havoc' := havoc` unchanged)
     simp only [Bool.not_false, ↓reduceIte, Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq] at hedge
     obtain ⟨_, ⟨⟨⟨_, _⟩, hreach⟩, hsub⟩, ⟨hlbsEmpty, hpcond⟩, hallV⟩ := hedge
     refine ⟨hreach, havoc, ?_, phaseSpec_subsumes_sound hsub hps, ?_⟩
-    · unfold SymBlockInv.effCond
+    · unfold SymBlockInv.effCond                          -- Goal 1a: `edgeCond` implies `dstInv.pathCond`
       rw [hlbsEmpty]
       exact symBool_conj_true (symImpliesVal_sound hecond _ true hpcond) rfl
-    · intro v
+    · intro v                                             -- Goal 1b: Every variable in `dstInv.regs` subsumes `passedSR`
       let passedSR := bindSymBlockArgs outSR outSR (f.blockAt dst).args argVars
       let dstInv := tbl.getD dst {}
       have heqv := checkRegsEquiv_getVar dstInv.regs passedSR v hallV
@@ -723,7 +723,7 @@ theorem validSymEdge_sound {f : MirFunc} {tbl : List SymBlockInv} {env : InputEn
       if hdrArgIds.contains k then
         Val.asInt ((bindBlockArgs outRegs outRegs dstBlk.args argVars) k)
       else havoc k
-    have hagree : ∀ k, k ∉ hdrArgIds → havoc' k = havoc k := by
+    have hagree : ∀ k, k ∉ hdrArgIds → havoc' k = havoc k := by -- Outer loop variables keep their previous `havoc` values
       intro k hk
       have hc : hdrArgIds.contains k = false := by
         cases hck : hdrArgIds.contains k
@@ -731,10 +731,10 @@ theorem validSymEdge_sound {f : MirFunc} {tbl : List SymBlockInv} {env : InputEn
         · exact False.elim (hk (List.contains_iff_mem.mp hck))
       dsimp only [havoc']; rw [hc]; simp
     refine ⟨hreach, havoc', ?_, phaseSpec_subsumes_sound hsub hps, ?_⟩
-    · apply symBool_conj_true
+    · apply symBool_conj_true                             -- Goal 2a: Both `pathCond` and inductive `loopBounds` hold under `havoc'`
       · rw [symBool_eval_congr hagree dstInv.pathCond hpcDisj]
         exact symImpliesVal_sound hecond dstInv.pathCond true hpcond
-      · apply loopBoundsCond_eval_true
+      · apply loopBoundsCond_eval_true                    -- Prove each ring counter `vid` stays `< lim` across this edge
         intro ⟨vid, w, lim⟩ hmemLb
         have hlb := List.all_eq_true.mp hlbsOk (vid, w, lim) hmemLb
         simp only [Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq] at hlb
@@ -751,9 +751,9 @@ theorem validSymEdge_sound {f : MirFunc} {tbl : List SymBlockInv} {env : InputEn
         dsimp only [Val.asInt]
         rw [symIntFitsWidth_sound hvalidIn hfitsW]
         exact symIntBoundedUnder_sound hecond eSym lim hbndE
-    · intro v
+    · intro v                                             -- Goal 2b: Every register in `dstInv.regs` matches under `havoc'`
       by_cases hmem : hdrArgIds.contains v = true         -- Split: loop-carried `BlockArg` vs. outer invariant var
-      · have hvMem : v ∈ hdrArgIds := List.contains_iff_mem.mp hmem
+      · have hvMem : v ∈ hdrArgIds := List.contains_iff_mem.mp hmem -- Subcase: loop-carried `BlockArg` (`SymInt.havoc vid w`)
         obtain ⟨fa, hfaMem, hfaId⟩ := List.mem_map.mp hvMem
         have hpOk := List.all_eq_true.mp hargsOk fa hfaMem
         subst hfaId
@@ -773,7 +773,7 @@ theorem validSymEdge_sound {f : MirFunc} {tbl : List SymBlockInv} {env : InputEn
           rw [hmem, if_pos rfl, hbVal]
           dsimp only [Val.asInt]
           rw [symIntFitsWidth_sound hvalidIn hfitsM]
-      · have hmf : hdrArgIds.contains (0 + v) = false := by
+      · have hmf : hdrArgIds.contains (0 + v) = false := by -- Subcase: outer variable unchanged across loop backedge
           cases hc : hdrArgIds.contains v <;> simp_all
         have hvOk := checkLoopRegsEquiv_getVar 0 dstInv.regs passedSR v hallV hmf
         have hmBase := symValEquivUnder_sound hecond _ _ _ hvOk.2 (hpassed v)
@@ -792,29 +792,29 @@ theorem symReachable_sound {f : MirFunc} {tbl : List SymBlockInv}
       (tbl.getD b {}).effCond.eval env t havoc = true ∧
       (tbl.getD b {}).phaseSpec.matchesPhase phase = true ∧
       ∀ v, ((tbl.getD b {}).regs.getVar v).matchesVal env t havoc (regs v) := by
-  have hvf := hvalid
+  have hvf := hvalid                                      -- Unpack top-level `validSymFunc` entry & per-block checks
   unfold validSymFunc at hvf
   dsimp only at hvf
   simp only [Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq] at hvf
   obtain ⟨⟨hpos, _⟩, ⟨⟨⟨⟨h0r, h0c⟩, h0lbs⟩, h0p⟩, h0regs⟩, hallB⟩ := hvf
-  induction hreach with                                   -- Induction on `Reachable` execution steps
-  | entry _ =>
+  induction hreach with                                   -- Induction on concrete `Reachable` execution steps
+  | entry _ =>                                            -- Base case: kernel entry at `block 0` (`phase = 0`)
       refine ⟨hpos, h0r, fun _ => 0, ?_, ?_, ?_⟩
       · unfold SymBlockInv.effCond; rw [h0c, h0lbs]; rfl
       · rw [h0p]; rfl
       · intro v; rw [h0regs]; exact initialSymRegs_correct f env t (fun _ => 0) v
-  | @stepGoto b0 dst p0 outP r0 outR evs tevs args _ hexec hterm hdst ih =>
-      obtain ⟨hb0, hr0, havoc, hpc0, hps0, hm0⟩ := ih
+  | @stepGoto b0 dst p0 outP r0 outR evs tevs args _ hexec hterm hdst ih => -- Inductive step: unconditional `goto dst`
+      obtain ⟨hb0, hr0, havoc, hpc0, hps0, hm0⟩ := ih     --   Apply IH at source block `b0`
       have hbOk := List.all_eq_true.mp hallB b0 (List.mem_range.mpr hb0)
       rw [hr0] at hbOk; simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte, Bool.and_eq_true] at hbOk
       obtain ⟨hmOut, hpsOut, _, _, _⟩ := symExecStmts_correct f env t havoc (tbl.getD b0 {}).effCond hpc0 (f.blockAt b0).term
         (f.blockAt b0).stmts r0 (tbl.getD b0 {}).regs p0 (tbl.getD b0 {}).phaseSpec hm0 hps0 hbOk.1.1.1 hbOk.1.2
-      rw [hexec] at hmOut hpsOut
+      rw [hexec] at hmOut hpsOut                          --   Step through `b0.stmts` via `symExecStmts_correct`
       rw [hterm] at hbOk hmOut hpsOut
-      obtain ⟨hrDst, havoc', hpcDst, hpsDst, hmDst⟩ :=
+      obtain ⟨hrDst, havoc', hpcDst, hpsDst, hmDst⟩ :=    --   Cross `(b0 -> dst)` via `validSymEdge_sound`
         validSymEdge_sound hvalidIn hbOk.2 hpc0 hmOut hpsOut
       exact ⟨hdst, hrDst, havoc', hpcDst, hpsDst, hmDst⟩
-  | @stepCondTrue b0 tBlk fBlk cond p0 outP r0 outR evs tevs tArgs fArgs _ hexec hterm hcond hdst ih =>
+  | @stepCondTrue b0 tBlk fBlk cond p0 outP r0 outR evs tevs tArgs fArgs _ hexec hterm hcond hdst ih => -- Inductive step: `condBr` true arm
       obtain ⟨hb0, hr0, havoc, hpc0, hps0, hm0⟩ := ih
       have hbOk := List.all_eq_true.mp hallB b0 (List.mem_range.mpr hb0)
       rw [hr0] at hbOk; simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte, Bool.and_eq_true] at hbOk
@@ -826,7 +826,7 @@ theorem symReachable_sound {f : MirFunc} {tbl : List SymBlockInv}
       dsimp only at hbrOk
       have hcv := hmOut cond; dsimp only at hcv
       cases hget : (symExecStmts f (tbl.getD b0 {}).effCond (tbl.getD b0 {}).regs (tbl.getD b0 {}).phaseSpec (.condBr cond tBlk tArgs fBlk fArgs) (f.blockAt b0).stmts).1.getVar cond with
-      | bool cSym =>
+      | bool cSym =>                                      --   Tracked boolean guard: strengthen `effCond` with `cSym = true`
           rw [hget] at hbrOk hcv
           rw [hcond, SymVal.matchesVal] at hcv
           injection hcv with hcTrue
@@ -835,7 +835,7 @@ theorem symReachable_sound {f : MirFunc} {tbl : List SymBlockInv}
           obtain ⟨hrDst, havoc', hpcDst, hpsDst, hmDst⟩ :=
             validSymEdge_sound hvalidIn hbrOk.1 hec hmOut hpsOut
           exact ⟨hdst, hrDst, havoc', hpcDst, hpsDst, hmDst⟩
-      | unk =>
+      | unk =>                                            --   Untracked float/runtime guard: preserve `effCond` conservatively
           rw [hget] at hbrOk
           simp only [Bool.and_eq_true] at hbrOk
           obtain ⟨hrDst, havoc', hpcDst, hpsDst, hmDst⟩ :=
@@ -843,7 +843,7 @@ theorem symReachable_sound {f : MirFunc} {tbl : List SymBlockInv}
           exact ⟨hdst, hrDst, havoc', hpcDst, hpsDst, hmDst⟩
       | int _ | ptr _ _ _ | condPtr _ _ _ _ | smemOff _ _ | smemDesc _ _ | tmemPtr _ _ =>
           rw [hget] at hbrOk; contradiction
-  | @stepCondFalse b0 tBlk fBlk cond p0 outP r0 outR evs tevs tArgs fArgs _ hexec hterm hcond hdst ih =>
+  | @stepCondFalse b0 tBlk fBlk cond p0 outP r0 outR evs tevs tArgs fArgs _ hexec hterm hcond hdst ih => -- Inductive step: `condBr` false arm
       obtain ⟨hb0, hr0, havoc, hpc0, hps0, hm0⟩ := ih
       have hbOk := List.all_eq_true.mp hallB b0 (List.mem_range.mpr hb0)
       rw [hr0] at hbOk; simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte, Bool.and_eq_true] at hbOk
@@ -855,7 +855,7 @@ theorem symReachable_sound {f : MirFunc} {tbl : List SymBlockInv}
       dsimp only at hbrOk
       have hcv := hmOut cond; dsimp only at hcv
       cases hget : (symExecStmts f (tbl.getD b0 {}).effCond (tbl.getD b0 {}).regs (tbl.getD b0 {}).phaseSpec (.condBr cond tBlk tArgs fBlk fArgs) (f.blockAt b0).stmts).1.getVar cond with
-      | bool cSym =>
+      | bool cSym =>                                      --   Tracked boolean guard: strengthen `effCond` with `!cSym = true`
           rw [hget] at hbrOk hcv
           rw [hcond, SymVal.matchesVal] at hcv
           injection hcv with hcFalse
@@ -866,7 +866,7 @@ theorem symReachable_sound {f : MirFunc} {tbl : List SymBlockInv}
           obtain ⟨hrDst, havoc', hpcDst, hpsDst, hmDst⟩ :=
             validSymEdge_sound hvalidIn hbrOk.2 hec hmOut hpsOut
           exact ⟨hdst, hrDst, havoc', hpcDst, hpsDst, hmDst⟩
-      | unk =>
+      | unk =>                                            --   Untracked float/runtime guard: preserve `effCond` conservatively
           rw [hget] at hbrOk
           simp only [Bool.and_eq_true] at hbrOk
           obtain ⟨hrDst, havoc', hpcDst, hpsDst, hmDst⟩ :=

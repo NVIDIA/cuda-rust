@@ -487,16 +487,16 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
           stev.pathCond = pCond) := by
   intro stmts
   induction stmts with                                    -- Structural induction on `stmts`
-  | nil =>
+  | nil =>                                                -- Base case (`[]`): registers & phase match immediately
       intro regs sregs phase ps hmatch hps _ _
       refine ⟨hmatch, hps, ?_, ?_, ?_⟩
       · intro _ hmem; cases hmem
       · intro pfx _ _ _ heq; cases pfx <;> contradiction
       · intro _ hmem; cases hmem
-  | cons stmt rest ih =>
+  | cons stmt rest ih =>                                  -- Inductive step (`stmt :: rest`): case-split by MIR statement
       intro regs sregs phase ps hmatch hps hallSome hallTmem
       cases stmt with
-      | assign dst rhs =>
+      | assign dst rhs =>                                 -- Case 1: `dst = rhs` register assignment
           have hnextGen : ∀ v, ((sregs.setVar dst (symEvalRhs f sregs rhs)).getVar v).matchesVal env t havoc
               ((regs.set dst (evalRhs f env t regs rhs)) v) := by
             intro v; unfold RegFile.set; rw [getVar_setVar]
@@ -504,7 +504,7 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
             · simp [hv]; exact symEvalRhs_correct f env t havoc regs sregs hmatch rhs
             · simp [hv]; exact hmatch v
           cases rhs with
-          | load ptr =>
+          | load ptr =>                                   --   Subcase 1a: `mir.load(ptr)` emits 1 read `SymMemEvent` + sets `dst := .unk`
               simp only [symExecStmts, List.all_append, List.all_cons, List.all_nil, Bool.and_true, Bool.and_eq_true] at hallSome hallTmem
               have hnext : ∀ v, ((sregs.setVar dst .unk).getVar v).matchesVal env t havoc
                   ((regs.set dst .unk) v) := by
@@ -529,7 +529,7 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
                     simp only [List.cons_append, List.cons.injEq] at heq
                     rcases heq with ⟨rfl, htl⟩
                     simpa [execStmts] using hmA tl sfx aid cond htl
-          | loadTmemBase ptr cols =>
+          | loadTmemBase ptr cols =>                      --   Subcase 1b: `TMEM_ADDR` load emits 1 shared read + sets `.tmemPtr cols 0`
               simp only [symExecStmts, List.all_append, List.all_cons, List.all_nil, Bool.and_true, Bool.and_eq_true] at hallSome hallTmem
               have hnext : ∀ v, ((sregs.setVar dst (.tmemPtr cols (.const 0))).getVar v).matchesVal env t havoc
                   ((regs.set dst (.tmemPtr cols 0)) v) := by
@@ -555,7 +555,7 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
                     simp only [List.cons_append, List.cons.injEq] at heq
                     rcases heq with ⟨rfl, htl⟩
                     simpa [execStmts] using hmA tl sfx aid cond htl
-          | _ =>
+          | _ =>                                          --   Subcase 1c: Pure arithmetic/pointer `Rhs` via `symEvalRhs_correct`
               simp only [execStmts, symExecStmts] at hallSome hallTmem ⊢
               obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih _ _ phase ps hnextGen hps hallSome hallTmem
               refine ⟨hmR, hmP, hmE, ?_, hmT⟩
@@ -566,7 +566,7 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
                   simp only [List.cons_append, List.cons.injEq] at heq
                   rcases heq with ⟨rfl, htl⟩
                   simpa [execStmts] using hmA tl sfx aid cond htl
-      | store ptr _ =>
+      | store ptr _ =>                                    -- Case 2: `mir.store(ptr, val)` emits 1 write `SymMemEvent` (+ optional `syncBar`)
           simp only [symExecStmts, List.all_append, Bool.and_eq_true] at hallSome hallTmem
           obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs phase ps hmatch hps hallSome.2 hallTmem
           simp only [execStmts, symExecStmts]
@@ -627,7 +627,7 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
                 simp only [List.cons_append, List.cons.injEq] at heq
                 rcases heq with ⟨rfl, htl⟩
                 simpa [execStmts] using hmA tl sfx aid cond htl
-      | barrierSlotCheck ptr =>
+      | barrierSlotCheck ptr =>                           -- Case 3: `SharedArray<Barrier, N>` slot bounds check
           simp only [symExecStmts, List.all_append, List.all_cons, List.all_nil, Bool.and_true, Bool.and_eq_true] at hallSome hallTmem
           obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs phase ps hmatch hps hallSome.2 hallTmem
           simp only [execStmts, symExecStmts]
@@ -646,7 +646,7 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
                 simp only [List.cons_append, List.cons.injEq] at heq
                 rcases heq with ⟨rfl, htl⟩
                 simpa [execStmts] using hmA tl sfx aid cond htl
-      | assertCond aid0 cond0 =>
+      | assertCond aid0 cond0 =>                          -- Case 4: `mir.assert` records `SymAssertEvent` for `MirAssertRedundant`
           simp only [symExecStmts] at hallSome hallTmem
           obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs phase ps hmatch hps hallSome hallTmem
           simp only [execStmts, symExecStmts]
@@ -673,7 +673,7 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
               rcases heq with ⟨rfl, htl⟩
               obtain ⟨aev, haev, ha, hp, hc⟩ := hmA tl sfx aid cond htl
               exact ⟨aev, List.Mem.tail _ haev, ha, hp, by simpa [execStmts] using hc⟩
-      | clusterRankCheck _ =>
+      | clusterRankCheck _ =>                             -- Case 5: `map_shared_rank` peer-rank check (no register/phase change)
           simp only [execStmts, symExecStmts] at hallSome hallTmem ⊢
           obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs phase ps hmatch hps hallSome hallTmem
           refine ⟨hmR, hmP, hmE, ?_, hmT⟩
@@ -684,7 +684,7 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
               simp only [List.cons_append, List.cons.injEq] at heq
               rcases heq with ⟨rfl, htl⟩
               simpa [execStmts] using hmA tl sfx aid cond htl
-      | mbarArrive _ _ =>
+      | mbarArrive _ _ =>                                 -- Case 6: `mbarrier_arrive` (tracked in `ControlFlowCfg` & `findTrailArrive`)
           simp only [execStmts, symExecStmts] at hallSome hallTmem ⊢
           obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs phase ps hmatch hps hallSome hallTmem
           refine ⟨hmR, hmP, hmE, ?_, hmT⟩
@@ -695,7 +695,7 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
               simp only [List.cons_append, List.cons.injEq] at heq
               rcases heq with ⟨rfl, htl⟩
               simpa [execStmts] using hmA tl sfx aid cond htl
-      | mbarArriveExpectTx _ _ _ =>
+      | mbarArriveExpectTx _ _ _ =>                       -- Case 7: `mbarrier_arrive_expect_tx`
           simp only [execStmts, symExecStmts] at hallSome hallTmem ⊢
           obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs phase ps hmatch hps hallSome hallTmem
           refine ⟨hmR, hmP, hmE, ?_, hmT⟩
@@ -706,7 +706,7 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
               simp only [List.cons_append, List.cons.injEq] at heq
               rcases heq with ⟨rfl, htl⟩
               simpa [execStmts] using hmA tl sfx aid cond htl
-      | syncThreads =>
+      | syncThreads =>                                    -- Case 8: `sync_threads()` increments `phase` and `ps.stepSync`
           simp only [execStmts, symExecStmts] at hallSome hallTmem ⊢
           obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs (phase + 1) ps.stepSync hmatch (phaseSpec_stepSync_sound hps) hallSome hallTmem
           refine ⟨hmR, hmP, hmE, ?_, hmT⟩
@@ -717,7 +717,7 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
               simp only [List.cons_append, List.cons.injEq] at heq
               rcases heq with ⟨rfl, htl⟩
               simpa [execStmts] using hmA tl sfx aid cond htl
-      | tmaCopyG2S ptr barId slotVar spanElems =>
+      | tmaCopyG2S ptr barId slotVar spanElems =>         -- Case 9: 2D TMA `g2s` emits `spanElems`-wide write released on `BAR[slot]`
           simp only [symExecStmts, List.all_append, Bool.and_eq_true] at hallSome hallTmem
           obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs phase ps hmatch hps hallSome.2 hallTmem
           simp only [execStmts, symExecStmts]
@@ -750,7 +750,7 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
                 simp only [List.cons_append, List.cons.injEq] at heq
                 rcases heq with ⟨rfl, htl⟩
                 simpa [execStmts] using hmA tl sfx aid cond htl
-      | tmemAlloc ptr _cols =>
+      | tmemAlloc ptr _cols =>                            -- Case 10: `tcgen05_alloc` writes `TMEM_ADDR` on warp lane `tx % 32 == 0`
           simp only [symExecStmts, List.all_append, List.all_cons, List.all_nil, Bool.and_true, Bool.and_eq_true] at hallSome hallTmem
           obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs phase ps hmatch hps hallSome.2 hallTmem
           simp only [execStmts, symExecStmts]
@@ -775,7 +775,7 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
                 simp only [List.cons_append, List.cons.injEq] at heq
                 rcases heq with ⟨rfl, htl⟩
                 simpa [execStmts] using hmA tl sfx aid cond htl
-      | smemDescRead descVar tileBytes =>
+      | smemDescRead descVar tileBytes =>                 -- Case 11: `tcgen05.mma` SMEM descriptor read (`tileBytes` span)
           simp only [symExecStmts, List.all_append, Bool.and_eq_true] at hallSome hallTmem
           obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs phase ps hmatch hps hallSome.2 hallTmem
           simp only [execStmts, symExecStmts]

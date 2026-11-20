@@ -16,56 +16,54 @@ open Lean Elab Tactic Meta in
 /-- Precomputes `symTable`, `symMemEvents`, `symAssertEvents`, `symTmemEvents`, and `symRankEvents`
     ONCE per module using a single native `evalExpr MirFunc` call. -/
 elab "mir_def_sym_table " f:ident : command => do
-  Command.liftTermElabM do
-    let ns ← getCurrNamespace
-    let fExpr ← Term.elabTerm (← `($f:ident)) (some (mkConst ``MirFunc))
-    let fVal ← unsafe evalExpr MirFunc (mkConst ``MirFunc) fExpr
-    let tblVal := inferSymTable fVal
+  Command.liftTermElabM do                                -- Enter Lean's term-elaboration environment
+    let ns ← getCurrNamespace                             -- Read current namespace (`CudaOxide.Generated`)
+    let fExpr ← Term.elabTerm (← `($f:ident)) (some (mkConst ``MirFunc)) -- Resolve `mirFunc` identifier to an `Expr`
+    let fVal ← unsafe evalExpr MirFunc (mkConst ``MirFunc) fExpr -- Evaluate `mirFunc` into a native compiled value
+    let tblVal := inferSymTable fVal                      -- Run `inferSymTable` once in compiled native code
     let invTy := mkConst ``SymBlockInv
     let mut invConsts : Array Expr := #[]
-    for h : i in [0 : tblVal.length] do
-      let invName := ns ++ Name.mkSimple s!"symInv_{i}"
+    for h : i in [0 : tblVal.length] do                   -- Emit one small `symInv_i` constant per basic block
+      let invName := ns ++ Name.mkSimple s!"symInv_{i}"   -- so `symTable.getD b` unfolds only block `b` in `whnf`
       addDecl <| Declaration.defnDecl {
         name := invName, levelParams := [], type := invTy, value := toExpr tblVal[i],
         hints := ReducibilityHints.abbrev, safety := DefinitionSafety.safe }
       invConsts := invConsts.push (mkConst invName)
     let tblTy ← Meta.mkAppM ``List #[invTy]
-    let tblSpine ← Meta.mkListLit invTy invConsts.toList
-    addDecl <| Declaration.defnDecl {
+    let tblSpine ← Meta.mkListLit invTy invConsts.toList  -- Build `[symInv_0, symInv_1, ...]` list spine
+    addDecl <| Declaration.defnDecl {                     -- Register `symTable` in the Lean environment
       name := ns ++ `symTable, levelParams := [], type := tblTy, value := tblSpine,
       hints := ReducibilityHints.abbrev, safety := DefinitionSafety.safe }
     let memTy ← Meta.mkAppM ``List #[mkConst ``SymMemEvent]
-    let memVal := collectSymMemEvents fVal tblVal
+    let memVal := collectSymMemEvents fVal tblVal         -- Pre-collect global and shared memory access events
     addAndCompile <| Declaration.defnDecl {
       name := ns ++ `symMemEvents, levelParams := [], type := memTy, value := toExpr memVal,
       hints := ReducibilityHints.abbrev, safety := DefinitionSafety.safe }
     let assTy ← Meta.mkAppM ``List #[mkConst ``SymAssertEvent]
-    let assVal := collectSymAssertEvents fVal tblVal
+    let assVal := collectSymAssertEvents fVal tblVal      -- Pre-collect `mir.assert` candidate events
     addAndCompile <| Declaration.defnDecl {
       name := ns ++ `symAssertEvents, levelParams := [], type := assTy, value := toExpr assVal,
       hints := ReducibilityHints.abbrev, safety := DefinitionSafety.safe }
     let tmemTy ← Meta.mkAppM ``List #[mkConst ``SymTmemEvent]
-    let tmemVal := collectSymTmemEvents fVal tblVal
+    let tmemVal := collectSymTmemEvents fVal tblVal       -- Pre-collect Blackwell `TMEM` access events
     addAndCompile <| Declaration.defnDecl {
       name := ns ++ `symTmemEvents, levelParams := [], type := tmemTy, value := toExpr tmemVal,
       hints := ReducibilityHints.abbrev, safety := DefinitionSafety.safe }
     let rankTy ← Meta.mkAppM ``List #[mkConst ``SymRankEvent]
-    let rankVal := collectSymRankEvents fVal tblVal
+    let rankVal := collectSymRankEvents fVal tblVal       -- Pre-collect 2-CTA `map_shared_rank` peer-rank events
     addAndCompile <| Declaration.defnDecl {
       name := ns ++ `symRankEvents, levelParams := [], type := rankTy, value := toExpr rankVal,
       hints := ReducibilityHints.abbrev, safety := DefinitionSafety.safe }
 
 open Lean Elab Tactic Meta in
-
-open Lean Elab Tactic Meta in
 /-- Generic `MetaM` witness binder: evaluates closed `lhs` to native value of type `α`,
     unifies `rhs` with `toExpr v`, and closes `lhs = rhs` in the kernel via `rfl`. -/
 def mirBindGoal (α : Type) [ToExpr α] : TacticM Unit := withMainContext do
-  let tgt ← instantiateMVars (← getMainTarget)
+  let tgt ← instantiateMVars (← getMainTarget)            -- Read the current proof goal (`lhs = ?rhs`)
   let some (ty, lhs, rhs) := tgt.eq? | throwError "mir_bind: expected equality goal"
-  let v ← unsafe evalExpr α ty lhs
-  let _ ← isDefEq rhs (toExpr v)
-  evalTactic (← `(tactic| rfl))
+  let v ← unsafe evalExpr α ty lhs                        -- Compute the concrete list/number `v` in compiled code
+  let _ ← isDefEq rhs (toExpr v)                          -- Fill the `?rhs` placeholder with `v`
+  evalTactic (← `(tactic| rfl))                           -- Have Lean's trusted kernel verify `lhs = v` by `rfl`
 
 elab "mir_bind_nat"          : tactic => mirBindGoal Nat
 elab "mir_bind_events"       : tactic => mirBindGoal (List SymMemEvent)
@@ -114,23 +112,23 @@ theorem land_mask_65535_rev  (a : Nat) : 65535      &&& a = a % 65536      := by
     `b < 2^k` (bits `≥ k` zero), `a ||| b = a + b`. Used by `mir_mul_mono` on bit-split indices. -/
 theorem or_eq_add_of_mod_two_pow {a b : Nat} (k : Nat) (ha : a % (2 ^ k) = 0) (hb : b < 2 ^ k) :
     a ||| b = a + b := by
-  let q := a / 2 ^ k
+  let q := a / 2 ^ k                                      -- Factor `a` as `q * 2^k` using `a % 2^k = 0`
   have ha1 : a = 2 ^ k * q := by
-    have hd := Nat.div_add_mod a (2 ^ k)
-    rw [ha, Nat.add_zero] at hd
+    have hd := Nat.div_add_mod a (2 ^ k)                  -- Standard Euclidean identity `2^k * (a / 2^k) + a % 2^k = a`
+    rw [ha, Nat.add_zero] at hd                           -- Remainder `a % 2^k` is `0`
     exact hd.symm
   have ha2 : a = q * 2 ^ k := by rw [ha1, Nat.mul_comm]
   apply Nat.eq_of_testBit_eq                              -- Prove `a ||| b = a + b` bit-by-bit across all bit indices `j`
   intro j
   have lhs_eq : (a ||| b).testBit j = ((q * 2 ^ k).testBit j || b.testBit j) := by
-    rw [← ha2, Nat.testBit_or]
+    rw [← ha2, Nat.testBit_or]                            -- Bit `j` of `a ||| b` is the boolean OR of bit `j` of each
   have rhs_eq : (a + b).testBit j = if j < k then b.testBit j else q.testBit (j - k) := by
-    rw [ha1, Nat.testBit_two_pow_mul_add q hb j]
+    rw [ha1, Nat.testBit_two_pow_mul_add q hb j]          -- Adding `b < 2^k` to `2^k * q` never carries across bit `k`
   rw [lhs_eq, rhs_eq, Nat.testBit_mul_two_pow]
   by_cases hjk : j < k                                    -- Split: low bit `j < k` vs. high bit `k ≤ j`
-  · have hnk : ¬(k ≤ j) := by omega
+  · have hnk : ¬(k ≤ j) := by omega                       -- Low bit `j < k`: `(q * 2^k).testBit j` is `false`
     simp [hjk, hnk]
-  · have hkj : k ≤ j := by omega
+  · have hkj : k ≤ j := by omega                          -- High bit `k ≤ j`: `b.testBit j` is `false` since `b < 2^k ≤ 2^j`
     have hbj : b.testBit j = false :=
       Nat.testBit_lt_two_pow (Nat.lt_of_lt_of_le hb (Nat.pow_le_pow_right (by omega) hkj))
     simp [hjk, hkj, hbj]
@@ -138,26 +136,26 @@ theorem or_eq_add_of_mod_two_pow {a b : Nat} (k : Nat) (ha : a % (2 ^ k) = 0) (h
 /-- Symmetric disjoint bitwise-OR identity when `a < 2^k` and `b % 2^k = 0`. -/
 theorem or_eq_add_of_lt_two_pow {a b : Nat} (k : Nat) (ha : a < 2 ^ k) (hb : b % (2 ^ k) = 0) :
     a ||| b = a + b := by
-  rw [Nat.or_comm, or_eq_add_of_mod_two_pow k hb ha, Nat.add_comm]
+  rw [Nat.or_comm, or_eq_add_of_mod_two_pow k hb ha, Nat.add_comm] -- Commute operands and reuse `or_eq_add_of_mod_two_pow`
 
 /-- Tight upper bound `(2^32 - 1)^2` on the product of any two 32-bit quantities, leaving
     `≥ 2^32` headroom below `2^64` so `a * b + c < 2^64` holds for every 32-bit offset `c`. -/
 theorem mul_lt_u64_of_u32 {a b : Nat} (ha : a < 4294967296) (hb : b < 4294967296) :
     a * b ≤ 18446744065119617025 := by
-  have ha' : a ≤ 4294967295 := by omega
-  have hb' : b ≤ 4294967295 := by omega
-  exact Nat.mul_le_mul ha' hb'
+  have ha' : a ≤ 4294967295 := by omega                   -- Convert strict `< 2^32` to `≤ 2^32 - 1`
+  have hb' : b ≤ 4294967295 := by omega                   -- Same for `b`
+  exact Nat.mul_le_mul ha' hb'                            -- Multiply both upper bounds via `Nat.mul_le_mul`
 
 open Lean Elab Tactic Meta in
 /-- Injects `Nat.mul_le_mul_right` / `Nat.mul_le_mul_left` monotonicity facts, 32x32->64
     non-overflow bounds (`mul_lt_u64_of_u32`), `Nat.and_le_left`/`right` bounds on residual
     `&&&` terms, and disjoint `a ||| b = a + b` identities (`or_eq_add_of_mod_two_pow`) for `omega`. -/
 elab "mir_mul_mono" : tactic => withMainContext do
-  let mulRef ← IO.mkRef (#[] : Array (Expr × Expr))
-  let andRef ← IO.mkRef (#[] : Array (Expr × Expr))
+  let mulRef ← IO.mkRef (#[] : Array (Expr × Expr))       -- Mutable buckets collecting nonlinear subterms (`*`, `&`, `|`, `^`)
+  let andRef ← IO.mkRef (#[] : Array (Expr × Expr))       -- because `omega` only reasons over linear `+` and constant `*`
   let orRef  ← IO.mkRef (#[] : Array (Expr × Expr))
   let xorRef ← IO.mkRef (#[] : Array (Expr × Expr))
-  let collect (e : Expr) : MetaM Unit := do
+  let collect (e : Expr) : MetaM Unit := do               -- Walk an expression tree recording binary `*`, `&`, `|`, `^` apps
     e.forEach fun sub => do
       if sub.isAppOfArity ``HMul.hMul 6 then
         let args := sub.getAppArgs
@@ -171,15 +169,15 @@ elab "mir_mul_mono" : tactic => withMainContext do
       else if sub.isAppOfArity ``HXor.hXor 6 then
         let args := sub.getAppArgs
         xorRef.modify fun acc => acc.push (args[4]!, args[5]!)
-  collect (← instantiateMVars (← getMainTarget))
-  for decl in (← getLCtx) do
+  collect (← instantiateMVars (← getMainTarget))          -- Scan the target proposition
+  for decl in (← getLCtx) do                              -- Scan all hypotheses in scope
     if !decl.isImplementationDetail then
       collect (← instantiateMVars decl.type)
   let mulTerms ← mulRef.get
   let andTerms ← andRef.get
   let orTerms  ← orRef.get
   let xorTerms ← xorRef.get
-  let proveByOmega (prop : Expr) : TacticM (Option Expr) := do
+  let proveByOmega (prop : Expr) : TacticM (Option Expr) := do -- Helper: speculatively try proving `prop` with `omega`
     try
       let sg ← mkFreshExprMVar prop
       let saved ← getGoals
@@ -189,7 +187,7 @@ elab "mir_mul_mono" : tactic => withMainContext do
       pure (some sg)
     catch _ => pure none
   let mut k := 0
-  for i in [:andTerms.size] do
+  for i in [:andTerms.size] do                            -- Pass 1 (`a &&& b`): add `a &&& b ≤ a` and `a &&& b ≤ b`
     let (a, b) := andTerms[i]!
     k := k + 1
     let pfL ← mkAppOptM ``Nat.and_le_left #[some a, some b]
@@ -209,7 +207,7 @@ elab "mir_mul_mono" : tactic => withMainContext do
       setGoals saved
       pure (some sg)
     catch _ => pure none
-  for i in [:orTerms.size] do
+  for i in [:orTerms.size] do                             -- Pass 2 (`a ||| b`): add `a ||| b = a + b` when bits are disjoint
     let (a, b) := orTerms[i]!
     let mut matched := false
     for shift in ([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 16, 20, 24, 30, 32] : List Nat) do
@@ -244,7 +242,7 @@ elab "mir_mul_mono" : tactic => withMainContext do
                   let (_, g'') ← g'.intro1P
                   replaceMainGoal [g'']
                   matched := true
-  for i in [:xorTerms.size] do
+  for i in [:xorTerms.size] do                            -- Pass 3 (`a ^^^ b`): add `a ^^^ b < 2^k` when `a, b < 2^k` (e.g. `rank ^ 1 < 2`)
     let (a, b) := xorTerms[i]!
     for shift in ([1, 2, 3, 4, 8, 16, 32] : List Nat) do
       let powVal : Nat := 2 ^ shift
@@ -262,7 +260,7 @@ elab "mir_mul_mono" : tactic => withMainContext do
               let (_, g'') ← g'.intro1P
               replaceMainGoal [g'']
   let u32Bound := toExpr (4294967296 : Nat)
-  for i in [:mulTerms.size] do
+  for i in [:mulTerms.size] do                            -- Pass 4 (`a * b`): add 32x32->64 bounds & `a1 ≤ a2 -> a1 * b ≤ a2 * b`
     let (a1, b1) := mulTerms[i]!
     if let some pa ← proveByOmega (← mkAppM ``LT.lt #[a1, u32Bound]) then
       if let some pb ← proveByOmega (← mkAppM ``LT.lt #[b1, u32Bound]) then
@@ -297,13 +295,13 @@ theorem prop_not_not (p : Prop) : (¬¬p) = p := propext Classical.not_not
 
 open Lean Elab Tactic Meta in
 /-- Recursively discharges structured VC goals (`∧`, `→`, `ite` splits via native `MVarId.byCases`,
-    and `omega` / `mir_mul_mono`) with bounded `iteFuel` (`≤ 6`) and zero `delab` fragility. -/
+    and `omega` / `mir_mul_mono`) with bounded `iteFuel` (`≤ 16`) and zero `delab` fragility. -/
 partial def solveVcGoals (fuel iteFuel : Nat) : TacticM Unit := do
   if fuel == 0 then return
   if (← getGoals).isEmpty then return
   if (← try evalTactic (← `(tactic| trivial)); pure true catch _ => pure false) then return
   let tgt ← withMainContext do whnfR (← instantiateMVars (← getMainTarget))
-  if tgt.isAppOfArity ``And 2 then
+  if tgt.isAppOfArity ``And 2 then                        -- Step 1: Split `P ∧ Q` goals first so each event is solved in isolation
     evalTactic (← `(tactic| constructor))
     let gs ← getGoals
     for g in gs do
@@ -311,12 +309,12 @@ partial def solveVcGoals (fuel iteFuel : Nat) : TacticM Unit := do
       solveVcGoals (fuel - 1) iteFuel
     setGoals []
     return
-  if tgt.isForall then
+  if tgt.isForall then                                    -- Step 2: Introduce `∀` variables and `→` premises into context
     let (_, g') ← (← getMainGoal).intro (Name.mkSimple s!"hvc_{fuel}")
     replaceMainGoal [g']
     solveVcGoals (fuel - 1) iteFuel
     return
-  let mut gRen ← getMainGoal
+  let mut gRen ← getMainGoal                              -- Step 3: Normalize hypothesis names so generated proofs never collide
   let mut rIdx := 0
   for d in (← gRen.getDecl).lctx do
     let nm := d.userName.toString
@@ -324,7 +322,7 @@ partial def solveVcGoals (fuel iteFuel : Nat) : TacticM Unit := do
       rIdx := rIdx + 1
       gRen ← gRen.rename d.fvarId (Name.mkSimple s!"hacc_{fuel}_{rIdx}")
   replaceMainGoal [gRen]
-  try evalTactic (← `(tactic|
+  try evalTactic (← `(tactic|                             -- Step 4: Unfold `SymInt.eval` / `SymBool.holds` into plain `Nat` math
     simp only [CudaOxide.Mir.Program.paramBoundsProp, SymInt.eval, SymBool.holds,
                SymBool.normDisc, extractIteOneCond, SymBool.holdsRaw,
                SymBool.eval, symSpanInBounds, symRankInBounds, symPairRaceOblig, symSlotGuardOpt,
@@ -354,8 +352,8 @@ partial def solveVcGoals (fuel iteFuel : Nat) : TacticM Unit := do
   catch _ => pure ()
   if (← getGoals).isEmpty then return
   withMainContext do
-    if (← try evalTactic (← `(tactic| omega)); pure true catch _ => pure false) then return
-    for d in (← getLCtx) do
+    if (← try evalTactic (← `(tactic| omega)); pure true catch _ => pure false) then return -- Step 5: Fast-path linear `omega`
+    for d in (← getLCtx) do                               -- Step 6: Split any `P ∧ Q` hypothesis into separate facts
       if !d.isImplementationDetail then
         let dTy ← whnfR (← instantiateMVars d.type)
         if dTy.isAppOfArity ``And 2 then
@@ -365,7 +363,7 @@ partial def solveVcGoals (fuel iteFuel : Nat) : TacticM Unit := do
             solveVcGoals (fuel - 1) iteFuel
           setGoals []
           return
-    if iteFuel > 0 then
+    if iteFuel > 0 then                                   -- Step 7: Case-split innermost `if cond then a else b` subterm
       let findInnerIte (root : Expr) : Option Expr :=
         let rec go (e : Expr) : Option Expr :=
           if e.isAppOfArity ``ite 5 then
@@ -406,7 +404,7 @@ partial def solveVcGoals (fuel iteFuel : Nat) : TacticM Unit := do
         solveVcGoals (fuel - 1) (iteFuel - 1)
         setGoals []
         return
-      for d in (← getLCtx) do
+      for d in (← getLCtx) do                             -- Step 8: Case-split any `P ∨ Q` disjunction hypothesis
         if !d.isImplementationDetail then
           let dTy ← whnfR (← instantiateMVars d.type)
           if dTy.isAppOfArity ``Or 2 then
@@ -416,8 +414,8 @@ partial def solveVcGoals (fuel iteFuel : Nat) : TacticM Unit := do
               solveVcGoals (fuel - 1) iteFuel
             setGoals []
             return
-    if (← try evalTactic (← `(tactic| (mir_mul_mono; omega))); pure true catch _ => pure false) then return
-    evalTactic (← `(tactic| omega))
+    if (← try evalTactic (← `(tactic| (mir_mul_mono; omega))); pure true catch _ => pure false) then return -- Step 9: Nonlinear bounds + `omega`
+    evalTactic (← `(tactic| omega))                       -- Final step: run `omega` directly so any failure prints a clean counterexample
 
 /-- Invoke `solveVcGoals` with structural fuel `512` and `ite` case-split fuel `16`. -/
 elab "mir_solve_vc" : tactic => solveVcGoals 512 16

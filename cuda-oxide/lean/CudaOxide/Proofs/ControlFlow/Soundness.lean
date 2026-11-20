@@ -186,14 +186,14 @@ theorem ctaReachable_subsumed {requireTmem : Bool} {cfg : ControlFlowCfg} {inv :
     (hvalid : validStateMap requireTmem cfg inv = true)
     (hreach : CtaReachable cfg b st) :
     ∃ abs ∈ inv.getD b [], abs.subsumes st = true := by
-  unfold validStateMap at hvalid
+  unfold validStateMap at hvalid                          -- Unpack `validStateMap` entry & per-block checks
   rcases Bool.and_eq_true_iff.mp hvalid with ⟨h01, hallB⟩
   rcases Bool.and_eq_true_iff.mp h01 with ⟨_, hinit⟩
-  induction hreach with
-  | entry _ =>
+  induction hreach with                                   -- Induction on concrete `CtaReachable` steps
+  | entry _ =>                                            -- Base case (`block 0`): `CtaState.initial` is subsumed by `inv[0]`
       exact List.any_eq_true.mp hinit
-  | @step blk dst st0 outSt nextSt cond _ hblk hops hedge _ htrans ih =>
-      obtain ⟨abs0, habs0, hsub0⟩ := ih
+  | @step blk dst st0 outSt nextSt cond _ hblk hops hedge _ htrans ih => -- Inductive step (`blk -> dst`)
+      obtain ⟨abs0, habs0, hsub0⟩ := ih                   --   Step 1: Obtain abstract `abs0` subsuming `st0` at `blk`
       have hblk_ok := List.all_eq_true.mp hallB blk (List.mem_range.mpr hblk)
       dsimp only at hblk_ok
       have hne : (inv.getD blk []).isEmpty = false := by
@@ -203,7 +203,7 @@ theorem ctaReachable_subsumed {requireTmem : Bool} {cfg : ControlFlowCfg} {inv :
       rw [execBlockOpsCached_eq] at hst_ok
       cases hopsA : execBlockOps cfg blk abs0 (cfg.blockAt blk).ops with
       | none => rw [hopsA] at hst_ok; contradiction
-      | some outAbs =>
+      | some outAbs =>                                    --   Step 2: `execBlockOps_mono` preserves subsumption across `blk.ops`
           rw [hopsA] at hst_ok
           obtain ⟨outConc', hopsC', hsubOut⟩ := execBlockOps_mono cfg blk (cfg.blockAt blk).ops hsub0 hopsA
           rw [hops] at hopsC'; injection hopsC' with heqOut; subst heqOut
@@ -216,7 +216,7 @@ theorem ctaReachable_subsumed {requireTmem : Bool} {cfg : ControlFlowCfg} {inv :
           rw [hse] at hstep_ok
           cases htrA : stepEdge cfg blk outAbs cond with
           | none => rw [htrA] at hstep_ok; contradiction
-          | some nextAbs =>
+          | some nextAbs =>                               --   Step 3: `stepEdge_mono` + `ctaSubsumes_trans` cover `nextSt` at `dst`
               rw [htrA] at hstep_ok
               obtain ⟨dstAbs, hdstMem, hdstSub⟩ := List.any_eq_true.mp hstep_ok
               have hconcEn : branchCondPosEn outSt cond = true := by
@@ -397,14 +397,14 @@ open Lean Elab Command Meta in
 /-- Precomputes `cfgStateMap : StateMap` in compiled `MetaM` bytecode (`addDecl` certificate
     checked in Lean's kernel by `validStateMap` inside `tmem_lifecycle_of_stateMap`). -/
 elab "cfg_def_state_map " c:ident : command => do
-  Command.liftTermElabM do
-    let ns ← getCurrNamespace
-    let cExpr ← Term.elabTerm (← `($c:ident)) (some (mkConst ``ControlFlowCfg))
-    let cVal ← unsafe evalExpr ControlFlowCfg (mkConst ``ControlFlowCfg) cExpr
-    let smVal := inferStateMap cVal
+  Command.liftTermElabM do                                -- Enter Lean's term-elaboration environment
+    let ns ← getCurrNamespace                             -- Read current namespace (`CudaOxide.Generated`)
+    let cExpr ← Term.elabTerm (← `($c:ident)) (some (mkConst ``ControlFlowCfg)) -- Resolve `controlFlowCfg`
+    let cVal ← unsafe evalExpr ControlFlowCfg (mkConst ``ControlFlowCfg) cExpr  -- Evaluate CFG in native code
+    let smVal := inferStateMap cVal                       -- Compute 1-summary-per-block `StateMap` in native code
     let stListTy ← Meta.mkAppM ``List #[mkConst ``CtaState]
     let smTy ← Meta.mkAppM ``List #[stListTy]
-    addDecl <| Declaration.defnDecl {
+    addDecl <| Declaration.defnDecl {                     -- Emit `cfgStateMap` constant (verified by `validStateMap` via `rfl`)
       name := ns ++ `cfgStateMap, levelParams := [], type := smTy, value := toExpr smVal,
       hints := ReducibilityHints.abbrev, safety := DefinitionSafety.safe }
 

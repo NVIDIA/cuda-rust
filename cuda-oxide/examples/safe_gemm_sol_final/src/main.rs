@@ -8,7 +8,11 @@
 //! overlapped `CLC` work-stealing, 4-slot `TILE_INFO` mailbox, and 2-stage `512`-column
 //! `TMEM` ping-pong (`tcgen05.mma.cta_group::2`).
 
+use std::collections::HashMap;
 use std::mem::MaybeUninit;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use std::sync::OnceLock;
 
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer, IntoResult, LaunchConfig1D};
 use cuda_device::{
@@ -33,6 +37,153 @@ use cuda_device::{
     verify, warp,
 };
 use half::{bf16, f16};
+
+/// Cached per-shape (`M -> TFLOPS`) live `cuBLASLt` FP16 reference measurements
+/// loaded at most once per process when `bench/cublaslt_bench` is available.
+static CUBLAS_BASELINE: OnceLock<Option<HashMap<usize, f64>>> = OnceLock::new();
+
+/// Locate the optional `cublaslt_bench` binary under `./bench` or `../gemm_sol_final/bench`.
+/// Returns `None` if neither candidate binary has been built on the current machine.
+fn find_cublaslt_bench_binary() -> Option<PathBuf> {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let local_bin = manifest_dir.join("bench").join("cublaslt_bench");
+    if local_bin.exists() {
+        return Some(local_bin);
+    }
+    let sibling_bin = manifest_dir
+        .parent()
+        .map(|p| p.join("gemm_sol_final").join("bench").join("cublaslt_bench"))?;
+    sibling_bin.exists().then_some(sibling_bin)
+}
+
+/// Parse `(M, TFLOPS)` rows from the `--- FP16 ---` section of `cublaslt_bench` stdout.
+/// Ignores lines outside the `--- FP16 ---` section.
+fn parse_cublas_fp16_rows(stdout: &str) -> HashMap<usize, f64> {
+    let mut map = HashMap::new();
+    let mut in_fp16 = false;
+    for line in stdout.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("--- FP16") {
+            in_fp16 = true;
+            continue;
+        }
+        if trimmed.starts_with("--- BF16") {
+            in_fp16 = false;
+            continue;
+        }
+        if !in_fp16 || !trimmed.starts_with("FP16 ") {
+            continue;
+        }
+        let toks: Vec<&str> = trimmed.split_whitespace().collect();
+        let size = toks.get(3).copied().unwrap_or("");
+        let m: Option<usize> = size.split('x').next().and_then(|s| s.trim().parse().ok());
+        let tf: Option<f64> = toks.iter().rev().nth(1).and_then(|s| s.parse().ok());
+        if let (Some(m), Some(tf)) = (m, tf) {
+            map.insert(m, tf);
+        }
+    }
+    map
+}
+
+/// Load or execute the optional `cublaslt_bench` helper binary to populate [`CUBLAS_BASELINE`].
+/// Skipped when `GEMM_CUBLAS_SKIP=1` is set or when `cublaslt_bench` is not built.
+fn load_cublas_baseline() -> Option<HashMap<usize, f64>> {
+    if std::env::var("GEMM_CUBLAS_SKIP").as_deref() == Ok("1") {
+        return None;
+    }
+    let Some(bin) = find_cublaslt_bench_binary() else {
+        eprintln!(
+            "No live cublasLt baseline binary found (optional; build via examples/gemm_sol_final/bench/build.sh)."
+        );
+        return None;
+    };
+    eprintln!("Measuring live cuBLASLt tuned FP16 reference on host GPU...");
+    let mut cmd = std::process::Command::new(&bin);
+    for (name, flag) in [
+        ("GEMM_SOL_WARMUP", "--warmup"),
+        ("GEMM_SOL_ITERS", "--iters"),
+        ("GEMM_SOL_REPEATS", "--repeats"),
+    ] {
+        if let Ok(value) = std::env::var(name) {
+            cmd.args([flag, value.as_str()]);
+        }
+    }
+    let out = cmd.output().ok()?;
+    if !out.status.success() {
+        eprintln!(
+            "{} exited with {}: {}",
+            bin.display(),
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+        return None;
+    }
+    let map = parse_cublas_fp16_rows(&String::from_utf8_lossy(&out.stdout));
+    (!map.is_empty()).then_some(map)
+}
+
+/// Print the `"vs cuBLAS"` comparison row for square dimension `m` when a baseline is present.
+/// Falls back to an informational note if `cublaslt_bench` was skipped or not built.
+fn print_cublas_comparison(tflops: f64, m: usize) {
+    match CUBLAS_BASELINE
+        .get_or_init(load_cublas_baseline)
+        .as_ref()
+        .and_then(|map| map.get(&m).copied())
+    {
+        Some(sol) => {
+            let pct = (tflops / sol) * 100.0;
+            println!(
+                "  vs cuBLAS:   {pct:.2}% of live cublasLt tuned FP16 reference ({sol:.0} TFLOPS)"
+            );
+        }
+        None => {
+            println!("  vs cuBLAS:   (no live cublasLt baseline; see examples/gemm_sol_final/bench/build.sh)");
+        }
+    }
+}
+
+/// Parse a positive integer count override (`GEMM_SOL_WARMUP`, `GEMM_SOL_ITERS`, `GEMM_SOL_REPEATS`)
+/// from the process environment, returning `default` when the variable is unset.
+fn benchmark_count(name: &str, default: usize) -> Result<usize, Box<dyn std::error::Error>> {
+    match std::env::var(name) {
+        Ok(value) => {
+            let count = value.parse::<usize>()?;
+            if count == 0 || count > 10_000_000 {
+                return Err(format!("{name} must be between 1 and 10000000").into());
+            }
+            Ok(count)
+        }
+        Err(std::env::VarError::NotPresent) => Ok(default),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Execution mode selected via the `GEMM_SOL_MODE` environment variable (`both`, `validate`, or `bench`).
+/// Defaults to [`RunMode::Both`] so running the binary validates correctness and prints B200 throughput.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RunMode {
+    /// Run only the full `16,777,216`-element exact-BF16 Walsh correctness check at `4096^3`.
+    Validate,
+    /// Run only the `4096^3`, `8192^3`, and `16384^3` throughput benchmarks.
+    Bench,
+    /// Run full `4096^3` correctness validation followed by the `4096^3` / `8192^3` / `16384^3` benchmarks.
+    Both,
+}
+
+impl FromStr for RunMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "validate" => Ok(Self::Validate),
+            "bench" => Ok(Self::Bench),
+            "both" => Ok(Self::Both),
+            other => Err(format!(
+                "invalid GEMM_SOL_MODE={other:?}; expected validate, bench, or both"
+            )),
+        }
+    }
+}
 
 /// Build a 64-bit `tcgen05` shared-memory matrix descriptor from base address, LBO, SBO, and swizzle mode.
 #[inline(always)]
@@ -205,8 +356,142 @@ fn validate_4096_walsh(
     Ok(())
 }
 
+/// Benchmark the Lean-verified `gemm_sol_clc_multicast_4_stage_pipeline` (`M256xN256`) entry at
+/// `m x n x k` using `2,000` warmup launches followed by the median of `5 x 301` CUDA-event batches.
+fn run_benchmark_clc_multicast_4_stage_pipeline(
+    stream: &CudaStream,
+    module: &kernels::LoadedModule,
+    m: usize,
+    n: usize,
+    k: usize,
+) -> Result<f64, Box<dyn std::error::Error>> {
+    let warmup = benchmark_count("GEMM_SOL_WARMUP", 2000)?;
+    let iters = benchmark_count("GEMM_SOL_ITERS", 301)?;
+    let repeats = benchmark_count("GEMM_SOL_REPEATS", 5)?;
+    if repeats.is_multiple_of(2) {
+        return Err("GEMM_SOL_REPEATS must be odd for the median".into());
+    }
+
+    let dev_a = DeviceBuffer::<u16>::zeroed(stream, m * k)?;
+    let dev_b = DeviceBuffer::<u16>::zeroed(stream, n * k)?;
+    let a_tma = encode_tma_2d_f16_swizzled(&dev_a, k as u64, m as u64, 64, 128)?;
+    let b_tma = encode_tma_2d_f16_swizzled(
+        &dev_b,
+        k as u64,
+        n as u64,
+        64,
+        if m == 4096 { 32 } else { 128 },
+    )?;
+
+    let tiles_m = (m / 256) as u32;
+    let tiles_n = (n / 128) as u32;
+    let wide_total = tiles_m * (tiles_n / 2);
+    let total_tiles = wide_total.div_ceil(B200_CLUSTER_PAIRS) * B200_CLUSTER_PAIRS;
+    let cfg = LaunchConfig1D::new(total_tiles * 2, 192, 0);
+    let prep = module.prepare_gemm_sol_clc_multicast_4_stage_pipeline(cfg)?;
+
+    let output_u32_count = m * n / 2;
+    let mut dev_out = DeviceBuffer::<u32>::zeroed(stream, output_u32_count)?;
+    let n_arg = n as i32;
+    let k_arg = k as i32;
+
+    for _ in 0..warmup {
+        // SAFETY: `a_tma`, `b_tma`, and `dev_out` match the validated `m x n x k` allocations on `stream`.
+        unsafe {
+            module.gemm_sol_clc_multicast_4_stage_pipeline(
+                stream,
+                &prep,
+                a_tma,
+                b_tma,
+                &mut dev_out,
+                n_arg,
+                k_arg,
+                tiles_m,
+                tiles_n,
+            )?;
+        }
+    }
+    stream.synchronize()?;
+
+    let mut samples_us = Vec::with_capacity(repeats);
+    for _ in 0..repeats {
+        let start_event =
+            stream.record_event(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+        for _ in 0..iters {
+            // SAFETY: `a_tma`, `b_tma`, and `dev_out` remain valid across the timed batch.
+            unsafe {
+                module.gemm_sol_clc_multicast_4_stage_pipeline(
+                    stream,
+                    &prep,
+                    a_tma,
+                    b_tma,
+                    &mut dev_out,
+                    n_arg,
+                    k_arg,
+                    tiles_m,
+                    tiles_n,
+                )?;
+            }
+        }
+        let end_event =
+            stream.record_event(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+        let elapsed_ms = start_event.elapsed_ms(&end_event)?;
+        samples_us.push(elapsed_ms as f64 * 1000.0 / iters as f64);
+    }
+
+    let mut ordered = samples_us.clone();
+    ordered.sort_by(f64::total_cmp);
+    let avg_us = ordered[repeats / 2];
+    let avg_ms = avg_us / 1000.0;
+    let flops = 2.0 * m as f64 * n as f64 * k as f64;
+    let tflops = (flops / (avg_ms / 1000.0)) / 1e12;
+
+    println!("=======================================================");
+    println!(
+        "  BENCHMARK: gemm_sol_clc_multicast_4_stage_pipeline (M256xN256, cg2, Lean-verified) {m}x{n}x{k} f16 -> bf16"
+    );
+    println!("=======================================================");
+    println!(
+        "  Grid:        {} CTAs (1D, CLC-managed, cluster=2, cg2)",
+        total_tiles * 2
+    );
+    println!("  K-loop:      {} outer iters (BK=64, 4 MMAs each)", k / 64);
+    println!("  Pipeline:    CLC + cta_group::2 + 7-stage SMEM (224 KiB) + 2-stage TMEM");
+    println!("  Iterations:  {iters} x {repeats} batches (after {warmup} warmup)");
+    println!("  Statistic:   median batch mean");
+    println!("  Samples us:  {samples_us:?}");
+    println!("  Average:     {avg_us:.3} us / kernel");
+    println!("  FLOPS/kern:  {flops:.3e}");
+    println!("  Throughput:  {tflops:.3} TFLOPS");
+    println!(
+        "RESULT {{\"implementation\":\"cuda-oxide-verified\",\"n\":{m},\"warmup\":{warmup},\"iters\":{iters},\"repeats\":{repeats},\"samples_us\":{samples_us:?},\"median_us\":{avg_us:.9},\"tflops\":{tflops:.9},\"variant\":\"M256xN256\",\"input\":\"fp16\",\"output\":\"bf16\",\"compute\":\"fp32\"}}"
+    );
+    print_cublas_comparison(tflops, m);
+    println!("=======================================================\n");
+
+    Ok(tflops)
+}
+
+/// Print a compact throughput summary table for all benchmarked `(M, TFLOPS)` problem sizes.
+/// Matches the summary banner printed by `examples/gemm_sol_final`.
+fn print_benchmark_summary(measurements: &[(usize, f64)]) {
+    println!("-- Individual fixed-size results ----------------------");
+    for (m, tflops) in measurements {
+        println!("  {m}^3: {tflops:.3} TFLOPS");
+    }
+    println!("-------------------------------------------------------");
+}
+
+/// Entry point: validates `gemm_sol_clc_multicast_4_stage_pipeline` bit-for-bit on `4096^3` and
+/// runs the `4096^3`, `8192^3`, and `16384^3` throughput benchmarks on datacenter Blackwell GPUs.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("=== Provably Safe Stage 10 Blackwell GEMM SoL (`safe_gemm_sol_final`) ===\n");
+    println!("=======================================================");
+    println!("  Provably Safe Stage 10 Blackwell GEMM SoL (`safe_gemm_sol_final`)");
+    println!("=======================================================\n");
+
+    let mode: RunMode = std::env::var("GEMM_SOL_MODE")
+        .unwrap_or_else(|_| "both".to_string())
+        .parse()?;
 
     let ctx = CudaContext::new(0)?;
     let stream = ctx.default_stream();
@@ -214,8 +499,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("GPU: sm_{major}{minor}");
 
     if !can_execute_tcgen05_ptx(major, minor) {
-        let ptx_path =
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("safe_gemm_sol_final.ptx");
+        let ptx_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("safe_gemm_sol_final.ptx");
         if ptx_path.exists() {
             let ptx = std::fs::read_to_string(&ptx_path)?;
             verify_tcgen05_ptx_contract(&ptx)?;
@@ -225,11 +509,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             return Ok(());
         }
-        println!("Note: sm_{major}{minor} does not have tcgen05/TMEM hardware; build with `--arch sm_100a` to verify PTX.");
+        println!(
+            "Note: sm_{major}{minor} does not have tcgen05/TMEM hardware; build with `--arch sm_100a` to verify PTX."
+        );
         return Ok(());
     }
 
+    println!("Loading embedded Lean-verified CUDA module");
+    // SAFETY: `ctx` is an initialized `sm_100a`+ CUDA context matching the compiled PTX target.
     let module = unsafe { kernels::load(&ctx) }?;
-    validate_4096_walsh(&stream, &module)?;
+    println!("Module loaded\n");
+
+    if matches!(mode, RunMode::Validate | RunMode::Both) {
+        println!("-- Full-output correctness test -----------------------\n");
+        validate_4096_walsh(&stream, &module)?;
+    }
+
+    if matches!(mode, RunMode::Bench | RunMode::Both) {
+        let _ = CUBLAS_BASELINE.get_or_init(load_cublas_baseline);
+        println!("\n-- Benchmarks -----------------------------------------\n");
+        let sizes = [(4096, 4096, 4096), (8192, 8192, 8192), (16384, 16384, 16384)];
+        let mut measurements = Vec::with_capacity(sizes.len());
+        for (m, n, k) in sizes {
+            let tflops = run_benchmark_clc_multicast_4_stage_pipeline(&stream, &module, m, n, k)?;
+            measurements.push((m, tflops));
+        }
+        print_benchmark_summary(&measurements);
+    }
+
+    println!("\n=======================================================");
+    println!("  Safe GEMM SoL target complete");
+    println!("=======================================================");
+    println!("PASS: requested Safe GEMM SoL work completed");
     Ok(())
 }

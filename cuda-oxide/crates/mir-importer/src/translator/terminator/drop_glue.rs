@@ -72,19 +72,22 @@
 use crate::error::{TranslationErr, TranslationResult};
 use crate::translator::values::{ValueMap, establish_declared_pointer_type};
 use crate::translator::{rvalue, types};
-use dialect_mir::attributes::MirPointerKindAuthorityAttr;
-use dialect_mir::ops::MirCallOp;
+use dialect_mir::attributes::{MirCastKindAttr, MirPointerKindAuthorityAttr};
+use dialect_mir::ops::{MirCallOp, MirCastOp, MirConstantOp};
 use pliron::basic_block::BasicBlock;
+use pliron::builtin::attributes::IntegerAttr;
 use pliron::context::{Context, Ptr};
 use pliron::identifier::Legaliser;
 use pliron::input_error;
 use pliron::location::Location;
 use pliron::op::Op;
 use pliron::operation::Operation;
-use pliron::r#type::Typed;
+use pliron::r#type::{TypeHandle, Typed};
+use pliron::utils::apint::APInt;
 use rustc_public::mir;
 use rustc_public::mir::mono::Instance;
 use rustc_public::ty::{RigidTy, Ty, TyKind};
+use std::num::NonZeroUsize;
 
 /// Cap on the call-chain depth the proof is willing to follow. Real
 /// no-op drop glue is shallow (the `IntoIter` case above is two levels:
@@ -216,8 +219,17 @@ pub(super) fn emit_drop_glue(
     //
     // For a simple local `_N`, this is just the alloca slot pointer.
     // For a projected place like `_N.field`, we compute the field address.
-    let (place_ptr, last_op) =
-        compute_drop_place_address(ctx, body, place, value_map, block_ptr, prev_op, loc.clone())?;
+    let (place_ptr, last_op) = compute_drop_place_address(
+        ctx,
+        body,
+        place,
+        dropped_ty,
+        declared_parameter_type,
+        value_map,
+        block_ptr,
+        prev_op,
+        loc.clone(),
+    )?;
     let (place_ptr, last_op) = establish_declared_pointer_type(
         ctx,
         place_ptr,
@@ -283,11 +295,16 @@ pub(super) fn emit_drop_glue(
 /// `drop_in_place::<T>` expects a `*mut T` argument. For a bare local `_N`
 /// this is just the local's alloca slot (which is already a pointer). For a
 /// projected place (`_N.field`, `(*_N)`, etc.) we walk the projection chain
-/// via `translate_place_address`.
+/// via `translate_place_address`. A bare zero-sized local has no slot and
+/// gets a dangling aligned address of type `pointer_ty`, the drop shim's
+/// declared parameter type (see [`emit_dangling_zst_address`]).
+#[allow(clippy::too_many_arguments)]
 fn compute_drop_place_address(
     ctx: &mut Context,
     body: &mir::Body,
     place: &mir::Place,
+    dropped_ty: Ty,
+    pointer_ty: TypeHandle,
     value_map: &ValueMap,
     block_ptr: Ptr<BasicBlock>,
     prev_op: Option<Ptr<Operation>>,
@@ -315,6 +332,19 @@ fn compute_drop_place_address(
         return Ok((slot, prev_op));
     }
 
+    // A zero-sized local is never given a slot, yet its destructor still
+    // needs a non-null, aligned `*mut T`. No byte is read or written through
+    // it, so no storage is needed either.
+    if place.projection.is_empty()
+        && let Ok(layout) = dropped_ty.layout()
+        && layout.shape().size.bytes() == 0
+    {
+        let align = layout.shape().abi_align;
+        return emit_dangling_zst_address(
+            ctx, dropped_ty, align, pointer_ty, block_ptr, prev_op, loc,
+        );
+    }
+
     Err(input_error!(
         loc,
         TranslationErr::unsupported(format!(
@@ -322,6 +352,84 @@ fn compute_drop_place_address(
             place
         ))
     ))
+}
+
+/// Emits the address rustc gives a zero-sized place that has no storage:
+/// `align as *mut T` (`NonNull::dangling()`), reborrowed as `&mut *ptr` when
+/// the drop shim takes `&mut T`. The result has type `pointer_ty`.
+///
+/// Taking a reference to the value instead (`mir.ref`) lowers to an
+/// `alloca {}` plus a store, which forces a `.local` stack frame for a
+/// 0-byte type, and an alloca per iteration when the drop sits in a loop
+/// (see #1756). A constant address costs nothing and is still non-null and
+/// aligned, which is all a zero-byte access requires.
+#[allow(clippy::too_many_arguments)]
+fn emit_dangling_zst_address(
+    ctx: &mut Context,
+    dropped_ty: Ty,
+    align: u64,
+    pointer_ty: TypeHandle,
+    block_ptr: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    loc: Location,
+) -> TranslationResult<(pliron::value::Value, Option<Ptr<Operation>>)> {
+    let usize_ty = types::get_usize_type(ctx);
+    let address = APInt::from_u64(align, NonZeroUsize::new(64).unwrap());
+    let int_op = Operation::new(
+        ctx,
+        MirConstantOp::get_concrete_op_info(),
+        vec![usize_ty.into()],
+        vec![],
+        vec![],
+        0,
+    );
+    int_op.deref_mut(ctx).set_loc(loc.clone());
+    let const_op = MirConstantOp::new(int_op);
+    const_op.set_attr_value(ctx, IntegerAttr::new(usize_ty, address));
+    if let Some(prev) = prev_op {
+        int_op.insert_after(ctx, prev);
+    } else {
+        int_op.insert_at_front(block_ptr, ctx);
+    }
+
+    // The dialect only lets an integer become a raw pointer, so build
+    // `*mut T` first, exactly as `NonNull::dangling()` does.
+    let raw_ptr_ty = types::translate_type(ctx, &Ty::new_ptr(dropped_ty, mir::Mutability::Mut))?;
+    let int_val = int_op.deref(ctx).get_result(0);
+    let raw_op = Operation::new(
+        ctx,
+        MirCastOp::get_concrete_op_info(),
+        vec![raw_ptr_ty],
+        vec![int_val],
+        vec![],
+        0,
+    );
+    raw_op.deref_mut(ctx).set_loc(loc.clone());
+    let raw_cast = MirCastOp::new(raw_op);
+    raw_cast.set_attr_cast_kind(ctx, MirCastKindAttr::PointerWithExposedProvenance);
+    raw_cast.set_pointer_kind_authority(ctx, MirPointerKindAuthorityAttr::StaticAddress);
+    raw_op.insert_after(ctx, int_op);
+    let raw_ptr = raw_op.deref(ctx).get_result(0);
+
+    if raw_ptr_ty == pointer_ty {
+        return Ok((raw_ptr, Some(raw_op)));
+    }
+
+    let reborrow_op = Operation::new(
+        ctx,
+        MirCastOp::get_concrete_op_info(),
+        vec![pointer_ty],
+        vec![raw_ptr],
+        vec![],
+        0,
+    );
+    reborrow_op.deref_mut(ctx).set_loc(loc);
+    let reborrow = MirCastOp::new(reborrow_op);
+    reborrow.set_attr_cast_kind(ctx, MirCastKindAttr::PtrToPtr);
+    reborrow.set_pointer_kind_authority(ctx, MirPointerKindAuthorityAttr::Reborrow);
+    reborrow_op.insert_after(ctx, raw_op);
+
+    Ok((reborrow_op.deref(ctx).get_result(0), Some(reborrow_op)))
 }
 
 // ============================================================================

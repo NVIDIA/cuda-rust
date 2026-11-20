@@ -271,6 +271,38 @@ pub fn unroll_annotated_loops(
     // afterwards instead. (Kept in the signature to match pliron's pass shape.)
     _analyses: &mut AnalysisManager,
 ) -> Result<Vec<HintWarning>> {
+    unroll_hinted_loops(module, ctx, &FxHashSet::default())
+}
+
+/// [`unroll_annotated_loops`], plus the loops that index a small local array
+/// with their counter: [`crate::auto_unroll`] plants a full-unroll hint in each
+/// first. An automatic hint that cannot be honored is dropped without a
+/// warning; `#[unroll]` and `#[unroll(N)]` behave exactly as in
+/// [`unroll_annotated_loops`].
+pub fn unroll_annotated_and_automatic_loops(
+    module: Ptr<Operation>,
+    ctx: &mut Context,
+    _analyses: &mut AnalysisManager,
+) -> Result<Vec<HintWarning>> {
+    let automatic = crate::auto_unroll::plant_auto_unroll_hints(module, ctx)?;
+    unroll_hinted_loops(module, ctx, &automatic)
+}
+
+/// Push `warning`, unless it is about an automatic hint: nobody asked for that
+/// unroll, so a loop that stays rolled is reported only in verbose builds.
+fn report(warnings: &mut Vec<HintWarning>, automatic: bool, warning: HintWarning) {
+    if !automatic {
+        warnings.push(warning);
+    } else if verbose() {
+        eprintln!("loop-unroll: automatic unroll skipped: {}", warning.message);
+    }
+}
+
+fn unroll_hinted_loops(
+    module: Ptr<Operation>,
+    ctx: &mut Context,
+    automatic: &FxHashSet<Ptr<Operation>>,
+) -> Result<Vec<HintWarning>> {
     // Nothing annotated => leave every function byte-for-byte untouched.
     let has_hints = collect_functions(module, ctx)
         .iter()
@@ -354,25 +386,40 @@ pub fn unroll_annotated_loops(
                 // No remaining hint sits in a recognizable loop. The author asked
                 // for unrolling, so say so loudly, then drop the markers and stop.
                 for (op, _block, factor) in &hints {
-                    warnings.push(not_unrolled_warning(
-                        &unroll_kind(*factor),
-                        "the annotation is not inside a recognizable loop",
-                        hint_location(ctx, *op),
-                    ));
+                    report(
+                        &mut warnings,
+                        automatic.contains(op),
+                        not_unrolled_warning(
+                            &unroll_kind(*factor),
+                            "the annotation is not inside a recognizable loop",
+                            hint_location(ctx, *op),
+                        ),
+                    );
                     op.unlink(ctx);
                 }
                 break;
             };
             let kind = unroll_kind(factor);
+            // A loop whose hints were all planted by `auto_unroll`. Its failures
+            // are not reported, and it unrolls only if `auto_unroll::check` agrees.
+            let auto_loop = !automatic.is_empty()
+                && hints
+                    .iter()
+                    .filter(|(_, block, _)| info.innermost_loop(*block) == Some(loop_id))
+                    .all(|(op, _, _)| automatic.contains(op));
 
             let Some(ph) = info.preheader(ctx, region, loop_id) else {
                 // The author asked for unrolling; never silently do nothing.
                 let location = take_loop_hints(ctx, &hints, &info, loop_id);
-                warnings.push(not_unrolled_warning(
-                    &kind,
-                    "it has no single preheader (it is entered from more than one place)",
-                    location,
-                ));
+                report(
+                    &mut warnings,
+                    auto_loop,
+                    not_unrolled_warning(
+                        &kind,
+                        "it has no single preheader (it is entered from more than one place)",
+                        location,
+                    ),
+                );
                 continue;
             };
 
@@ -395,7 +442,11 @@ pub fn unroll_annotated_loops(
                 }
                 CanonicalizeOutcome::Unsupported(reason) => {
                     let location = take_loop_hints(ctx, &hints, &info, loop_id);
-                    warnings.push(not_unrolled_warning(&kind, &reason, location));
+                    report(
+                        &mut warnings,
+                        auto_loop,
+                        not_unrolled_warning(&kind, &reason, location),
+                    );
                     continue;
                 }
             }
@@ -420,11 +471,15 @@ pub fn unroll_annotated_loops(
                 let exits = info.exit_blocks(ctx, region, loop_id);
                 if exiting.len() != 1 || exiting[0] != lp.header || exits.len() != 1 {
                     let location = take_loop_hints(ctx, &hints, &info, loop_id);
-                    warnings.push(not_unrolled_warning(
-                        &kind,
-                        "partial unrolling does not yet support an early `break` or multiple exits",
-                        location,
-                    ));
+                    report(
+                        &mut warnings,
+                        auto_loop,
+                        not_unrolled_warning(
+                            &kind,
+                            "partial unrolling does not yet support an early `break` or multiple exits",
+                            location,
+                        ),
+                    );
                     continue;
                 }
             }
@@ -443,11 +498,15 @@ pub fn unroll_annotated_loops(
                     }
                     CanonicalizeOutcome::Unsupported(reason) => {
                         let location = take_loop_hints(ctx, &hints, &info, loop_id);
-                        warnings.push(not_unrolled_warning(
-                            &kind,
-                            &format!("could not route its live-out values: {reason}"),
-                            location,
-                        ));
+                        report(
+                            &mut warnings,
+                            auto_loop,
+                            not_unrolled_warning(
+                                &kind,
+                                &format!("could not route its live-out values: {reason}"),
+                                location,
+                            ),
+                        );
                         continue;
                     }
                 }
@@ -466,11 +525,15 @@ pub fn unroll_annotated_loops(
                 }
                 CanonicalizeOutcome::Unsupported(reason) => {
                     let location = take_loop_hints(ctx, &hints, &info, loop_id);
-                    warnings.push(not_unrolled_warning(
-                        &kind,
-                        &format!("could not normalize its back-edges: {reason}"),
-                        location,
-                    ));
+                    report(
+                        &mut warnings,
+                        auto_loop,
+                        not_unrolled_warning(
+                            &kind,
+                            &format!("could not normalize its back-edges: {reason}"),
+                            location,
+                        ),
+                    );
                     continue;
                 }
             }
@@ -485,6 +548,12 @@ pub fn unroll_annotated_loops(
                     "loop-unroll: loop#{loop_id} factor={factor} trip={:?} primary_iv={:?}",
                     rec.trip_count, rec.primary_iv,
                 );
+            }
+            if auto_loop && let Err(reason) = crate::auto_unroll::check(ctx, &info, loop_id, &rec) {
+                if verbose() {
+                    eprintln!("loop-unroll: automatic unroll of loop#{loop_id} skipped: {reason}");
+                }
+                continue;
             }
             let outcome = if factor == 0 {
                 // Full unroll: only works when the trip count is a constant.
@@ -501,7 +570,11 @@ pub fn unroll_annotated_loops(
                 // Requested but unsupported shape: report exactly why, loudly, so
                 // it is never a silent no-op.
                 UnrollOutcome::Skipped(reason) => {
-                    warnings.push(not_unrolled_warning(&kind, &reason, location));
+                    report(
+                        &mut warnings,
+                        auto_loop,
+                        not_unrolled_warning(&kind, &reason, location),
+                    );
                 }
             }
         }

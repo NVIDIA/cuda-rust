@@ -243,12 +243,16 @@ pub fn prepare_mir_module(
         verify_operation(ctx, module, "module post-second-mem2reg")?;
     }
 
-    let warnings = mir_transforms::unroll::unroll_annotated_loops(module, ctx, &mut analyses)
-        .map_err(|error| PipelineError::Verification {
-            name: "loop-unroll".to_string(),
-            message: error.disp(ctx).to_string(),
-            operation: None,
-        })?;
+    // `#[unroll]` loops, plus the loops that index a small local array with
+    // their counter (`mir_transforms::auto_unroll`); unrolling those keeps the
+    // array in registers instead of `.local` memory.
+    let warnings =
+        mir_transforms::unroll::unroll_annotated_and_automatic_loops(module, ctx, &mut analyses)
+            .map_err(|error| PipelineError::Verification {
+                name: "loop-unroll".to_string(),
+                message: error.disp(ctx).to_string(),
+                operation: None,
+            })?;
     verify_operation(ctx, module, "module post-unroll")?;
     mir_transforms::forward_compiler_result_bundles::forward_constant_projected_aggregates(
         module,

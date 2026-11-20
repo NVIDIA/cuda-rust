@@ -29,8 +29,14 @@ ptx = re.sub(r"/\*.*?\*/|//[^\n]*", "", ptx, flags=re.S)
 # Kernels whose accumulator must stay in registers. A `.local` depot here
 # means the annotated loops were left for LLVM, which does not unroll
 # `nested_lane_range` or `const_generic_bound`. A generic kernel's entry name
-# carries a `_TID_<hash>` suffix.
-names = ("nested_lane_range", "isize_range_for", "const_generic_bound")
+# carries a `_TID_<hash>` suffix. `unannotated_range_accumulator` has no
+# annotation: the automatic unroll rule must unroll it (NVIDIA/cuda-rust#1815).
+names = (
+    "nested_lane_range",
+    "isize_range_for",
+    "const_generic_bound",
+    "unannotated_range_accumulator",
+)
 local_memory = re.compile(r"(?m)(?:^|\s)\.local\b|ld\.local|st\.local")
 
 

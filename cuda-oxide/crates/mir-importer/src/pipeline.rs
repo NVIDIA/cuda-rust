@@ -530,6 +530,7 @@ pub fn run_pipeline(
     );
 
     prepare_output_dir(&config.output_dir)?;
+    let _output_lock = lock_pipeline_output(&config.output_dir, &config.output_name)?;
 
     let mut ctx = Context::new();
 
@@ -746,6 +747,135 @@ fn prepare_output_dir(output_dir: &Path) -> Result<(), PipelineError> {
             e
         ))
     })
+}
+
+struct HeldPipelineLock {
+    owner: std::thread::ThreadId,
+    depth: usize,
+    file: std::fs::File,
+}
+
+struct PipelineLockState {
+    held: std::sync::Mutex<Option<HeldPipelineLock>>,
+    available: std::sync::Condvar,
+}
+
+static PIPELINE_OUTPUT_LOCKS: std::sync::LazyLock<
+    std::sync::Mutex<
+        std::collections::HashMap<std::path::PathBuf, std::sync::Arc<PipelineLockState>>,
+    >,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// Re-entrant per-thread and exclusive cross-thread/cross-process lock guarding
+/// `<output_dir>/<output_name>.*` pipeline artifacts.
+///
+/// Cargo invokes multiple `rustc` processes in parallel for the same crate name
+/// (for example `--lib` and `--test` during `cargo oxide test`), and both
+/// processes emit and read `<output_dir>/<output_name>.ll` / `.ptx`. Holding
+/// this guard across `run_pipeline` and subsequent artifact readback prevents
+/// one invocation from deleting or overwriting artifacts while another is
+/// linking or reading them.
+pub struct PipelineOutputLock {
+    state: std::sync::Arc<PipelineLockState>,
+}
+
+impl Drop for PipelineOutputLock {
+    fn drop(&mut self) {
+        let mut held = self
+            .state
+            .held
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(active) = held.as_mut()
+            && active.depth > 1
+        {
+            active.depth -= 1;
+            return;
+        }
+        if let Some(active) = held.take() {
+            if let Err(error) = active.file.unlock() {
+                eprintln!("[mir-importer] warning: failed to unlock pipeline lock file: {error}");
+            }
+            drop(active);
+        }
+        self.state.available.notify_one();
+    }
+}
+
+/// Acquires an exclusive cross-process and cross-thread lock for
+/// `<output_dir>/<output_name>`, allowing re-entrant acquisition on the same
+/// thread.
+pub fn lock_pipeline_output(
+    output_dir: &Path,
+    output_name: &str,
+) -> Result<PipelineOutputLock, PipelineError> {
+    prepare_output_dir(output_dir)?;
+    let canonical_dir = std::fs::canonicalize(output_dir).map_err(|error| {
+        PipelineError::Export(format!(
+            "failed to resolve output directory {}: {error}",
+            output_dir.display()
+        ))
+    })?;
+    let lock_path = canonical_dir.join(format!(".{output_name}.oxide-pipeline.lock"));
+
+    let state = {
+        let mut map = PIPELINE_OUTPUT_LOCKS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::sync::Arc::clone(map.entry(lock_path.clone()).or_insert_with(|| {
+            std::sync::Arc::new(PipelineLockState {
+                held: std::sync::Mutex::new(None),
+                available: std::sync::Condvar::new(),
+            })
+        }))
+    };
+
+    let current_thread = std::thread::current().id();
+    let mut held = state
+        .held
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    loop {
+        if let Some(active) = held.as_mut() {
+            if active.owner == current_thread {
+                active.depth += 1;
+                return Ok(PipelineOutputLock {
+                    state: std::sync::Arc::clone(&state),
+                });
+            }
+            held = state
+                .available
+                .wait(held)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            continue;
+        }
+
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)
+            .map_err(|error| {
+                PipelineError::Export(format!(
+                    "failed to open pipeline lock file {}: {error}",
+                    lock_path.display()
+                ))
+            })?;
+        file.lock().map_err(|error| {
+            PipelineError::Export(format!(
+                "failed to acquire pipeline lock {}: {error}",
+                lock_path.display()
+            ))
+        })?;
+        *held = Some(HeldPipelineLock {
+            owner: current_thread,
+            depth: 1,
+            file,
+        });
+        drop(held);
+        return Ok(PipelineOutputLock { state });
+    }
 }
 
 /// Records the resolved NVVM target alongside the emitted `.ll`.
@@ -1617,5 +1747,65 @@ fn adversarial_export_name() -> u64 {
             backend_options_for(&config).target_arch_source,
             "CUDA_OXIDE_TARGET"
         );
+    }
+
+    #[test]
+    fn lock_pipeline_output_is_reentrant_and_serializes_threads() {
+        use std::sync::{
+            Arc, Barrier,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "cuda_oxide_pipeline_lock_test_{}_{}",
+            std::process::id(),
+            unique
+        ));
+
+        let outer = lock_pipeline_output(&root, "shared_crate").expect("outer lock");
+        let inner = lock_pipeline_output(&root, "shared_crate").expect("re-entrant inner lock");
+        drop(inner);
+
+        let barrier = Arc::new(Barrier::new(2));
+        let active_holders = Arc::new(AtomicUsize::new(1));
+        let max_concurrent = Arc::new(AtomicUsize::new(1));
+
+        let root_for_worker = root.clone();
+        let barrier_for_worker = Arc::clone(&barrier);
+        let active_for_worker = Arc::clone(&active_holders);
+        let max_for_worker = Arc::clone(&max_concurrent);
+
+        let worker = std::thread::spawn(move || {
+            barrier_for_worker.wait();
+            let _guard = lock_pipeline_output(&root_for_worker, "shared_crate")
+                .expect("worker lock acquisition");
+            let current = active_for_worker.fetch_add(1, Ordering::SeqCst) + 1;
+            max_for_worker.fetch_max(current, Ordering::SeqCst);
+            let _nested = lock_pipeline_output(&root_for_worker, "shared_crate")
+                .expect("worker nested lock acquisition");
+            active_for_worker.fetch_sub(1, Ordering::SeqCst);
+        });
+
+        barrier.wait();
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        assert_eq!(
+            active_holders.fetch_sub(1, Ordering::SeqCst),
+            1,
+            "worker must wait while main thread holds outer lock"
+        );
+        drop(outer);
+
+        worker.join().expect("worker thread panicked");
+        assert_eq!(
+            max_concurrent.load(Ordering::SeqCst),
+            1,
+            "lock must serialize concurrent threads on the same output artifact"
+        );
+
+        fs::remove_dir_all(&root).expect("clean up temp output dir");
     }
 }

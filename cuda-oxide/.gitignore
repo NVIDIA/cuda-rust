@@ -23,6 +23,7 @@
 *.gpu
 *.fatbin
 .oxide-artifacts/
+.*.oxide-pipeline.lock
 vendor/
 
 # Generated intrinsic probes are checked-in fixtures.

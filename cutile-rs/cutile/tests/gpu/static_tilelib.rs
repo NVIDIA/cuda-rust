@@ -659,6 +659,50 @@ fn library_links_with_instrumented_and_line_info_builds() -> Result<(), Error> {
     Ok(())
 }
 
+/// The launcher's `tile_library` and `tile_libraries` add a library to the
+/// launch's compile options instead of replacing them; `compile_options`
+/// replaces them, libraries included.
+#[test]
+fn launcher_adds_tile_libraries_to_the_compile_options() -> Result<(), Error> {
+    if !test_tilelib_available() {
+        return Ok(());
+    }
+    let input = || -> Result<_, Error> {
+        let host: Vec<f32> = (0..32).map(|i| i as f32).collect();
+        Ok(api::copy_host_vec_to_device(&Arc::new(host))
+            .sync()?
+            .partition([32]))
+    };
+    let run = |x: Partition<Tensor<f32>>| -> Result<Vec<f32>, Error> {
+        Ok(x.unpartition().to_host_vec().sync()?)
+    };
+
+    let (x,) = kernels::add_one_kernel(input()?)
+        .tile_library(tilelib())
+        .sync()?;
+    assert_added_one(&run(x)?);
+
+    let (x,) = kernels::add_one_kernel(input()?)
+        .compile_options(CompileOptions::new().debug_info(DebugInfoLevel::Line))
+        .tile_library(tilelib())
+        .sync()?;
+    assert_added_one(&run(x)?);
+
+    // A library given twice links once.
+    let (x,) = kernels::add_one_kernel(input()?)
+        .tile_libraries([tilelib(), tilelib()])
+        .sync()?;
+    assert_added_one(&run(x)?);
+
+    // Options set afterwards replace the library.
+    let replaced = kernels::add_one_kernel(input()?)
+        .tile_library(tilelib())
+        .compile_options(CompileOptions::new())
+        .sync();
+    assert!(replaced.is_err(), "the library was replaced");
+    Ok(())
+}
+
 /// `l2_cache_key()` and the runtime compute the disk-cache key in separate
 /// code; for a kernel that links a tile library both must include it.
 #[test]

@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Add `TileKernel::tile_library` and `TileKernel::tile_libraries`: a launch
+  links a tile library without rebuilding its `CompileOptions`
+  (`kernel(args).tile_library(spec)`).
 - Add strided long-prefill attention entries with independent K/V head strides,
   including split-K prefill. Existing contiguous entry signatures are unchanged.
 - Add experimental FP16 GEMM, causal attention and routed MoE variants with

@@ -35,6 +35,9 @@ impl KernelOutputStored<u8> for Mislabelled {
     fn partition_shape(&self) -> &[usize] {
         KernelOutputStored::partition_shape(&self.0)
     }
+    fn strides(&self) -> &[i32] {
+        KernelOutputStored::strides(&self.0)
+    }
     fn strides_hint(&self) -> Vec<i32> {
         self.0.strides_hint()
     }

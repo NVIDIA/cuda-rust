@@ -2,9 +2,11 @@
  * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
+use cuda_async::device_context::{ValidParamType, Validator};
 use cutile::api;
 use cutile::tile_kernel::{DeviceOp, TileKernel};
 use cutile_compiler::compiler::utils::CompileOptions;
+use cutile_compiler::compiler::{CUDATileFunctionCompiler, CUDATileModules};
 use cutile_compiler::specialization::{DivHint, SpecializationBits};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -46,6 +48,16 @@ mod spec_test_module {
     /// scalar DivHints still lower when pointer args are present.
     #[cutile::entry(dump_mlir_dir = "/tmp/cutile_raw_ptr_scalar_mlir")]
     unsafe fn raw_ptr_scalar_kernel(_ptr: *mut f32, _n: i32) {}
+
+    #[cutile::entry()]
+    fn stride_validator_kernel(
+        _output: &mut Tensor<f32, { [4, 4] }>,
+        _input: &Tensor<f32, { [-1, -1] }>,
+    ) {
+    }
+
+    #[cutile::entry()]
+    fn mapped_stride_validator_kernel(_output: MappedPartitionMut<f32, { [4, 4] }, { [2, 2] }>) {}
 }
 
 use spec_test_module::{__module_ast_self, raw_ptr_scalar_kernel};
@@ -87,6 +99,61 @@ fn compile_kernel(
         options,
     )
     .expect("Failed to compile")
+}
+
+// -- Compiled tensor stride metadata --
+
+fn stride_validator(name: &str, strides: &[(&str, &[i32])]) -> Validator {
+    let modules = CUDATileModules::from_kernel(__module_ast_self()).expect("kernel module");
+    let options = CompileOptions::default();
+    let compiler = CUDATileFunctionCompiler::new(
+        &modules,
+        "spec_test_module",
+        name,
+        &[],
+        strides,
+        &[],
+        &[],
+        None,
+        "sm_120".to_string(),
+        &options,
+    )
+    .expect("entry point");
+    compiler.get_validator()
+}
+
+#[test]
+fn validator_preserves_input_and_output_stride_constants() {
+    common::with_test_stack(|| {
+        for (output_strides, input_strides) in [([8, 1], [-1, 1]), ([1, -1], [-1, 4])] {
+            let validator = stride_validator(
+                "stride_validator_kernel",
+                &[("_output", &output_strides), ("_input", &input_strides)],
+            );
+            assert_eq!(validator.params.len(), 2);
+            for (param, expected) in validator.params.iter().zip([output_strides, input_strides]) {
+                let ValidParamType::Tensor(tensor) = param else {
+                    panic!("expected a tensor validator");
+                };
+                assert_eq!(tensor.strides, expected);
+            }
+        }
+    });
+}
+
+#[test]
+fn validator_preserves_mapped_output_stride_constants() {
+    common::with_test_stack(|| {
+        for expected in [[8, 1], [-1, 1]] {
+            let validator =
+                stride_validator("mapped_stride_validator_kernel", &[("_output", &expected)]);
+            assert_eq!(validator.params.len(), 1);
+            let ValidParamType::Tensor(tensor) = &validator.params[0] else {
+                panic!("expected a mapped tensor validator");
+            };
+            assert_eq!(tensor.strides, expected);
+        }
+    });
 }
 
 // -- SpecializationBits produces correct assume_div_by in MLIR --

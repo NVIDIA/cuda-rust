@@ -236,9 +236,7 @@ fn create_tma_descriptor(
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!(
-        "=== Provably Safe Stage 8 Warp-Specialized Ring (`safe_warp_ring`) ===\n"
-    );
+    println!("=== Provably Safe Stage 8 Warp-Specialized Ring (`safe_warp_ring`) ===\n");
 
     let ctx = CudaContext::new(0)?;
     let stream = ctx.default_stream();
@@ -289,11 +287,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("Contract & Lean 4 Proof Summary:");
-    println!("  • Launch contract:   domain = 1, block = (160, 1, 1) (4 consumer warps + 1 producer warp)");
+    println!(
+        "  • Launch contract:   domain = 1, block = (160, 1, 1) (4 consumer warps + 1 producer warp)"
+    );
     println!("  • Verified statics:  RING_BUF, TILE_META, FULL_BAR[4], EMPTY_BAR[4], META_BAR[4]");
-    println!("  • Inductive ring:    Proved `stage < 4` across `if stage == 4 {{ stage = 0 }}` wraparound");
-    println!("  • Slot ordering:     Proved `symAsyncSlotGuard` (`stage != c_stage` unless barrier-awaited)");
-    println!("  • Kernel safety:     0 `unsafe` blocks in kernel; all SharedArray & Barrier bounds elided!");
+    println!(
+        "  • Inductive ring:    Proved `stage < 4` across `if stage == 4 {{ stage = 0 }}` wraparound"
+    );
+    println!(
+        "  • Slot ordering:     Proved `symAsyncSlotGuard` (`stage != c_stage` unless barrier-awaited)"
+    );
+    println!(
+        "  • Kernel safety:     0 `unsafe` blocks in kernel; all SharedArray & Barrier bounds elided!"
+    );
     println!(
         "\nVerified {NUM_TILES}-tile (3-lap) warp-specialized 4-stage TMA + Barrier ring across all {CONSUMER_THREADS} consumer threads!"
     );

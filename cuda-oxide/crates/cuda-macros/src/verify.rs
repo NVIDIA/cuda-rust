@@ -305,10 +305,12 @@ impl VerifiedSharedArrayRewriter {
                 .args
                 .first()
                 .is_some_and(|arg| expr_targets_static(arg, &self.barrier_statics)),
-            "map_shared_rank" | "map_shared_rank_mut" => call_expr.args.first().is_some_and(|arg| {
-                expr_targets_static(arg, &self.verified_shared)
-                    || expr_targets_static(arg, &self.barrier_statics)
-            }),
+            "map_shared_rank" | "map_shared_rank_mut" => {
+                call_expr.args.first().is_some_and(|arg| {
+                    expr_targets_static(arg, &self.verified_shared)
+                        || expr_targets_static(arg, &self.barrier_statics)
+                })
+            }
             "clc_try_cancel" | "clc_try_cancel_multicast" => {
                 call_expr
                     .args

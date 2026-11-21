@@ -142,9 +142,7 @@ mod kernels {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!(
-        "=== Provably Safe Stage 9 2-CTA Cluster + DSMEM + CLC (`safe_cluster_clc`) ===\n"
-    );
+    println!("=== Provably Safe Stage 9 2-CTA Cluster + DSMEM + CLC (`safe_cluster_clc`) ===\n");
 
     let ctx = CudaContext::new(0)?;
     let stream = ctx.default_stream();
@@ -173,9 +171,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Contract & Lean 4 Proof Summary:");
     println!("  • Cluster contract:  #[cluster_launch(2, 1, 1)], block = (128, 1, 1)");
-    println!("  • Verified DSMEM:    Proved `my_rank ^ 1 < 2` (`MirNoOobClusterRank`) + `cluster_sync()` ordering");
-    println!("  • Remote mbarrier:   Proved `map_shared_rank(&PEER_DONE, 0)` -> `mbarrier_arrive_cluster`");
-    println!("  • Verified CLC:      Proved 16-byte `CLC_RESPONSE[0..2]` bounds & `CLC_BAR` ordering");
+    println!(
+        "  • Verified DSMEM:    Proved `my_rank ^ 1 < 2` (`MirNoOobClusterRank`) + `cluster_sync()` ordering"
+    );
+    println!(
+        "  • Remote mbarrier:   Proved `map_shared_rank(&PEER_DONE, 0)` -> `mbarrier_arrive_cluster`"
+    );
+    println!(
+        "  • Verified CLC:      Proved 16-byte `CLC_RESPONSE[0..2]` bounds & `CLC_BAR` ordering"
+    );
     println!("  • Kernel safety:     0 `unsafe` blocks in kernel; all SharedArray bounds elided!");
     println!(
         "\nVerified 2-CTA cluster DSMEM exchange, remote mbarrier arrival, and CLC query on GPU!"

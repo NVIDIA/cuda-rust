@@ -18,7 +18,9 @@
 //! ```
 
 use std::{
-    env, fs,
+    env,
+    fs::{self, OpenOptions},
+    io::Write,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -29,6 +31,7 @@ use pliron::{
     context::{Context, Ptr},
     linked_list::ContainsLinkedList,
     operation::Operation,
+    printable::Printable,
 };
 
 use crate::{
@@ -38,6 +41,23 @@ use crate::{
     spec::has_verification_attributes,
     translate::{TranslatedFunction, translate_function},
 };
+
+/// Environment variable naming the output file where `cargo oxide lean-export`
+/// captures `=== MIR input ===` and `=== Generated Lean ===` at `PostMem2Reg`.
+pub const LEAN_EXPORT_FILE_ENV: &str = "CUDA_OXIDE_LEAN_EXPORT_FILE";
+
+/// Optional environment variable filtering `cargo oxide lean-export` capture
+/// to a single `#[verify(...)]` kernel symbol name.
+pub const LEAN_EXPORT_FUNCTION_ENV: &str = "CUDA_OXIDE_LEAN_EXPORT_FUNCTION";
+
+/// Sidecar file recording all `#[verify(...)]` kernel names seen during an
+/// export run, used to report available symbols when `--function` misses.
+pub const LEAN_EXPORT_DISCOVERED_ENV: &str = "CUDA_OXIDE_LEAN_EXPORT_DISCOVERED_FILE";
+
+/// Environment flag set by `cargo oxide lean-export` so `PostMem2Reg` captures
+/// the MIR and generated Lean module without invoking `lake env lean` or
+/// erasing `mir.assert` bounds checks.
+pub const LEAN_EXPORT_ONLY_ENV: &str = "CUDA_OXIDE_LEAN_EXPORT_ONLY";
 
 /// Locate the `cuda-oxide/lean` package directory relative to this crate.
 pub fn default_lean_package_dir() -> PathBuf {
@@ -226,6 +246,13 @@ pub fn verify_module_kernels(
         return Ok(());
     }
 
+    let export_file = env::var_os(LEAN_EXPORT_FILE_ENV).map(PathBuf::from);
+    let export_fn_filter = env::var(LEAN_EXPORT_FUNCTION_ENV)
+        .ok()
+        .filter(|name| !name.is_empty());
+    let discovered_file = env::var_os(LEAN_EXPORT_DISCOVERED_ENV).map(PathBuf::from);
+    let export_only = env::var_os(LEAN_EXPORT_ONLY_ENV).is_some_and(|val| val == "1");
+
     let lean_dir = default_lean_package_dir();
     let mut prepared = Vec::with_capacity(functions.len());
     let mut lean_modules = Vec::with_capacity(functions.len());
@@ -233,10 +260,31 @@ pub fn verify_module_kernels(
         let name = MirFuncOp::wrap(ctx, func)
             .map(|f| f.get_symbol_name(ctx).to_string())
             .unwrap_or_else(|| "<kernel>".to_string());
+        if let Some(ref disc_path) = discovered_file
+            && let Ok(mut file) = OpenOptions::new().create(true).append(true).open(disc_path)
+        {
+            let _ = writeln!(file, "{name}");
+        }
+        let mir_snapshot = if export_file.is_some() {
+            Some(func.deref(ctx).disp(ctx).to_string())
+        } else {
+            None
+        };
         let translated = translate_function(ctx, func)?;
         let lean_code = render_lean_module(&translated)?;
+        if let (Some(out_path), Some(mir_src)) = (&export_file, mir_snapshot)
+            && export_fn_filter
+                .as_deref()
+                .is_none_or(|wanted| wanted == name)
+        {
+            append_inspection_bundle(out_path, &mir_src, &lean_code)?;
+        }
         lean_modules.push(lean_code);
         prepared.push((name, translated));
+    }
+
+    if export_only {
+        return Ok(());
     }
 
     let batched_source = combine_lean_modules(&lean_modules);
@@ -278,4 +326,34 @@ pub fn verify_module_kernels(
         }
     }
     Ok(())
+}
+
+/// Append one `=== MIR input ===` + `=== Generated Lean ===` inspection block
+/// to `out_path`, inserting a blank separator line when earlier kernels were
+/// already written to the same capture file.
+fn append_inspection_bundle(
+    out_path: &Path,
+    mir_source: &str,
+    lean_source: &str,
+) -> Result<(), ExportError> {
+    let needs_separator = out_path.metadata().is_ok_and(|meta| meta.len() > 0);
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(out_path)
+        .map_err(|e| {
+            reject(
+                "lean-export",
+                format!("cannot open export capture {}: {e}", out_path.display()),
+            )
+        })?;
+    let mir_trimmed = mir_source.trim_end();
+    if needs_separator {
+        writeln!(file).map_err(|e| reject("lean-export", format!("cannot write export: {e}")))?;
+    }
+    write!(
+        file,
+        "=== MIR input ===\n{mir_trimmed}\n\n=== Generated Lean ===\n{lean_source}"
+    )
+    .map_err(|e| reject("lean-export", format!("cannot write export: {e}")))
 }

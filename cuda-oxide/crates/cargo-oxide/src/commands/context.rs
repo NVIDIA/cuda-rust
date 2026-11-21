@@ -68,11 +68,25 @@ impl Context {
 ///   holds it (see `backend::standalone_backend`). Commands like `run`
 ///   operate on the current directory directly.
 pub fn resolve_context() -> Context {
+    resolve_context_inner(false)
+}
+
+/// Same as [`resolve_context`], keeping `stdout` completely clean for commands
+/// whose stdout is the exported artifact stream (`lean-export`).
+pub fn resolve_context_quiet_stdout() -> Context {
+    resolve_context_inner(true)
+}
+
+fn resolve_context_inner(quiet_stdout: bool) -> Context {
     if let Some(workspace_root) = backend::find_workspace_root() {
         let codegen_crate = backend::codegen_crate_path(&workspace_root);
         let examples_dir = codegen_crate.join("examples");
         let config = load_oxide_config(&workspace_root);
-        let backend_so = backend::find_or_build_backend(&workspace_root, config.backend.as_deref());
+        let backend_so = if quiet_stdout {
+            backend::find_or_build_backend_quiet_stdout(&workspace_root, config.backend.as_deref())
+        } else {
+            backend::find_or_build_backend(&workspace_root, config.backend.as_deref())
+        };
         return Context {
             workspace_root,
             codegen_crate,
@@ -90,7 +104,11 @@ pub fn resolve_context() -> Context {
 
     if cwd.join("Cargo.toml").is_file() {
         let config = load_oxide_config(&cwd);
-        let backend_so = backend::find_or_build_backend(&cwd, config.backend.as_deref());
+        let backend_so = if quiet_stdout {
+            backend::find_or_build_backend_quiet_stdout(&cwd, config.backend.as_deref())
+        } else {
+            backend::find_or_build_backend(&cwd, config.backend.as_deref())
+        };
         return Context {
             workspace_root: cwd.clone(),
             codegen_crate: cwd.clone(),

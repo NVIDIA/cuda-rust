@@ -496,15 +496,24 @@ enum Commands {
         #[arg(long)]
         unchecked_indexing: bool,
     },
-    /// Inspect scalar MIR and its generated Lean model (source checkout only)
+    /// Export a kernel's MIR and generated Lean 4 safety proofs
     #[command(name = "lean-export")]
     LeanExport {
-        /// Verified example name (`safe_vecadd`, `safe_gemm_views`) or MIR file path
+        /// Verified example/crate name (`safe_vecadd`, `safe_gemm_sol_final`) or `.mir` file path
         #[arg(value_name = "INPUT")]
         input: Option<PathBuf>,
-        /// Exact MIR function symbol (required when INPUT is a `.mir` file)
-        #[arg(long, value_name = "NAME", requires = "input")]
+        /// Filter to a single kernel function symbol (required when INPUT is a `.mir` file)
+        #[arg(long, value_name = "NAME")]
         function: Option<String>,
+        /// Target GPU architecture (e.g., sm_90, sm_100a, sm_120)
+        #[arg(long)]
+        arch: Option<String>,
+        /// Comma-separated list of Cargo features to enable
+        #[arg(long)]
+        features: Option<String>,
+        /// Show verbose compilation output on stderr
+        #[arg(short, long)]
+        verbose: bool,
     },
     /// Format all crates (SIMT workspace, codegen backend, examples)
     Fmt {
@@ -1195,9 +1204,24 @@ fn main() {
             let ctx = commands::resolve_passive_context();
             commands::list_examples(&ctx, json);
         }
-        Commands::LeanExport { input, function } => {
+        Commands::LeanExport {
+            input,
+            function,
+            arch,
+            features,
+            verbose,
+        } => {
             let ctx = commands::resolve_passive_context();
-            commands::lean_export(&ctx, input.as_deref(), function.as_deref());
+            commands::lean_export(
+                &ctx,
+                commands::LeanExportOptions {
+                    input: input.as_deref(),
+                    function: function.as_deref(),
+                    arch: arch.as_deref(),
+                    features: features.as_deref(),
+                    verbose,
+                },
+            );
         }
         Commands::Fmt { check } => {
             // Formatting compiles no device code. `format_all` reads only
@@ -1354,7 +1378,10 @@ mod tests {
             demo.command,
             Commands::LeanExport {
                 input: None,
-                function: None
+                function: None,
+                arch: None,
+                features: None,
+                verbose: false,
             }
         ));
 
@@ -1366,25 +1393,33 @@ mod tests {
             "global_index",
         ])
         .unwrap();
-        let Commands::LeanExport { input, function } = custom.command else {
+        let Commands::LeanExport {
+            input, function, ..
+        } = custom.command
+        else {
             panic!("expected LeanExport");
         };
         assert_eq!(input, Some(PathBuf::from("path with spaces/input.mir")));
         assert_eq!(function.as_deref(), Some("global_index"));
-        let by_example =
-            Cli::try_parse_from(["cargo-oxide", "lean-export", "safe_vecadd"]).unwrap();
+
+        let by_example = Cli::try_parse_from([
+            "cargo-oxide",
+            "lean-export",
+            "safe_gemm_sol_final",
+            "--arch",
+            "sm_100a",
+        ])
+        .unwrap();
         assert!(matches!(
             by_example.command,
             Commands::LeanExport {
                 input: Some(_),
-                function: None
+                function: None,
+                arch: Some(_),
+                features: None,
+                verbose: false,
             }
         ));
-        let error =
-            Cli::try_parse_from(["cargo-oxide", "lean-export", "--function", "global_index"])
-                .err()
-                .expect("must require input when --function is passed");
-        assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
     }
 
     #[test]

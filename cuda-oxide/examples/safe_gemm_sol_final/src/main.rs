@@ -50,9 +50,11 @@ fn find_cublaslt_bench_binary() -> Option<PathBuf> {
     if local_bin.exists() {
         return Some(local_bin);
     }
-    let sibling_bin = manifest_dir
-        .parent()
-        .map(|p| p.join("gemm_sol_final").join("bench").join("cublaslt_bench"))?;
+    let sibling_bin = manifest_dir.parent().map(|p| {
+        p.join("gemm_sol_final")
+            .join("bench")
+            .join("cublaslt_bench")
+    })?;
     sibling_bin.exists().then_some(sibling_bin)
 }
 
@@ -137,7 +139,9 @@ fn print_cublas_comparison(tflops: f64, m: usize) {
             );
         }
         None => {
-            println!("  vs cuBLAS:   (no live cublasLt baseline; see examples/gemm_sol_final/bench/build.sh)");
+            println!(
+                "  vs cuBLAS:   (no live cublasLt baseline; see examples/gemm_sol_final/bench/build.sh)"
+            );
         }
     }
 }
@@ -289,7 +293,8 @@ fn validate_4096_walsh(
     let k_code = |kk: usize| -> u32 { ((kk as u32).wrapping_mul(251).wrapping_add(17)) & 0xFFF };
     let r_code = |r: usize| -> u32 { ((r as u32).wrapping_mul(197).wrapping_add(101)) & 0xFFF };
     let c_code = |c: usize| -> u32 { ((c as u32).wrapping_mul(109).wrapping_add(1021)) & 0xFFF };
-    let fp = |pos: u32, kk: usize| -> f32 { (13 - 2 * (pos ^ k_code(kk)).count_ones() as i32) as f32 };
+    let fp =
+        |pos: u32, kk: usize| -> f32 { (13 - 2 * (pos ^ k_code(kk)).count_ones() as i32) as f32 };
 
     let host_a: Vec<u16> = (0..M)
         .flat_map(|i| (0..M).map(move |kk| f16::from_f32(fp(r_code(i), kk)).to_bits()))
@@ -352,7 +357,9 @@ fn validate_4096_walsh(
             }
         }
     }
-    println!("PASSED: Lean-verified gemm_sol_clc_multicast_4_stage_pipeline 4096x4096x4096 (all 16,777,216 BF16 elements exact!)");
+    println!(
+        "PASSED: Lean-verified gemm_sol_clc_multicast_4_stage_pipeline 4096x4096x4096 (all 16,777,216 BF16 elements exact!)"
+    );
     Ok(())
 }
 
@@ -528,7 +535,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if matches!(mode, RunMode::Bench | RunMode::Both) {
         let _ = CUBLAS_BASELINE.get_or_init(load_cublas_baseline);
         println!("\n-- Benchmarks -----------------------------------------\n");
-        let sizes = [(4096, 4096, 4096), (8192, 8192, 8192), (16384, 16384, 16384)];
+        let sizes = [
+            (4096, 4096, 4096),
+            (8192, 8192, 8192),
+            (16384, 16384, 16384),
+        ];
         let mut measurements = Vec::with_capacity(sizes.len());
         for (m, n, k) in sizes {
             let tflops = run_benchmark_clc_multicast_4_stage_pipeline(&stream, &module, m, n, k)?;

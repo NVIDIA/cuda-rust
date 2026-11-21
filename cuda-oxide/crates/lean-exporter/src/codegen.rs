@@ -17,7 +17,10 @@
 use crate::{
     ExportError,
     spec::KernelVerificationSpec,
-    ssa::{CfgBranchCond, CfgOpItem, GuardExpr, IdxExpr, TranscribedCfgBlock, TranscribedControlFlowCfg},
+    ssa::{
+        CfgBranchCond, CfgOpItem, GuardExpr, IdxExpr, TranscribedCfgBlock,
+        TranscribedControlFlowCfg,
+    },
     translate::{
         TranslatedFunction,
         program::{MirParamKind, MirProgramData, MirRhs, MirStmt, MirTerminator},
@@ -43,9 +46,9 @@ pub fn render_lean_module(translated: &TranslatedFunction) -> Result<String, Exp
              end CudaOxide.Generated\n",
             let_lines.join("\n"),
         )),
-        TranslatedFunction::MirProgram {
-            spec, program, ..
-        } => render_mir_program_module(spec, program),
+        TranslatedFunction::MirProgram { spec, program, .. } => {
+            render_mir_program_module(spec, program)
+        }
     }
 }
 
@@ -374,7 +377,7 @@ fn render_mir_program_module(
          theorem mirEvents_eq :\n    \
          CudaOxide.Proofs.Program.collectSymMemEvents mirFunc symTable = symMemEvents :=\n  \
          rfl"
-            .to_string(),
+        .to_string(),
     ];
     if !program.candidate_asserts.is_empty() {
         theorems.push(
@@ -389,7 +392,7 @@ fn render_mir_program_module(
             "theorem mirTmem_eq :\n    \
              CudaOxide.Proofs.Program.collectSymTmemEvents mirFunc symTable = symTmemEvents :=\n  \
              rfl"
-                .to_string(),
+            .to_string(),
         );
     }
     if program.has_cluster_rank_checks {
@@ -397,7 +400,7 @@ fn render_mir_program_module(
             "theorem mirRanks_eq :\n    \
              CudaOxide.Proofs.Program.collectSymRankEvents mirFunc symTable = symRankEvents :=\n  \
              rfl"
-                .to_string(),
+            .to_string(),
         );
     }
     let mut axiom_prints = vec!["#print axioms mirFunc_valid".to_string()];

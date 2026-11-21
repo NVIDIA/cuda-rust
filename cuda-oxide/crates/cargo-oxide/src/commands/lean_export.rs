@@ -8,24 +8,51 @@ use std::{
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
-    process::{Command, Output},
+    process::{Command, Output, Stdio},
 };
 
 use crate::{backend, backend_source};
 
-use super::{Context, context::example_roots};
+use super::*;
 
 const DEMO_INPUT: &str = "crates/lean-exporter/fixtures/arithmetic.mir";
 const DEMO_FUNCTION: &str = "global_index";
 const DEMO_NOTICE: &str = "Demo: hand-authored scalar MIR, not extracted from a Rust kernel.\n\n";
 
-fn resolve_verified_example_functions(
-    ctx: &Context,
-    workspace: &Path,
-    example_name: &str,
-    explicit_fn: Option<&str>,
-) -> Result<(PathBuf, Vec<String>), String> {
-    let canonical_name = match example_name {
+const LEAN_EXPORT_FILE_ENV: &str = "CUDA_OXIDE_LEAN_EXPORT_FILE";
+const LEAN_EXPORT_FUNCTION_ENV: &str = "CUDA_OXIDE_LEAN_EXPORT_FUNCTION";
+const LEAN_EXPORT_DISCOVERED_ENV: &str = "CUDA_OXIDE_LEAN_EXPORT_DISCOVERED_FILE";
+const LEAN_EXPORT_ONLY_ENV: &str = "CUDA_OXIDE_LEAN_EXPORT_ONLY";
+
+/// Command-line options forwarded to `cargo oxide lean-export`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LeanExportOptions<'a> {
+    /// Example/crate name or raw `.mir` file path.
+    pub input: Option<&'a Path>,
+    /// Optional kernel function filter (required for raw `.mir` inputs).
+    pub function: Option<&'a str>,
+    /// Optional target GPU architecture override (`sm_90`, `sm_100a`, `sm_120`).
+    pub arch: Option<&'a str>,
+    /// Optional comma-separated Cargo feature list.
+    pub features: Option<&'a str>,
+    /// Whether to stream compiler progress to stderr.
+    pub verbose: bool,
+}
+
+enum LeanExportTarget {
+    /// Zero-argument scalar MIR demo inside a `cuda-oxide` source checkout.
+    WorkspaceDemo,
+    /// Explicit `.mir` file + `--function <name>` routed to `lean-exporter --inspect`.
+    RawMirFile { path: PathBuf, function: String },
+    /// Live Rust example, model, or standalone project compiled to `PostMem2Reg`.
+    RustCrate {
+        display_name: String,
+        crate_dir: PathBuf,
+    },
+}
+
+fn canonicalize_legacy_example_name(name: &str) -> &str {
+    match name {
         "verified_vecadd" => "safe_vecadd",
         "verified_gemm_views" => "safe_gemm_views",
         "verified_warp_reduce" => "safe_warp_reduce",
@@ -33,164 +60,379 @@ fn resolve_verified_example_functions(
         "verified_async_copy" => "safe_async_copy",
         "verified_tcgen05_matmul" => "safe_tcgen05_matmul",
         other => other,
-    };
-    let roots = example_roots(ctx);
-    let matches: Vec<_> = roots
-        .iter()
-        .map(|root| root.join(canonical_name))
-        .filter(|path| path.is_dir())
-        .collect();
-    let example_dir = match matches.as_slice() {
-        [dir] => dir.clone(),
-        [] => return Err("custom input and --function must be supplied together".into()),
-        _ => return Err(format!("example name is ambiguous: {example_name}")),
-    };
-
-    let main_rs = example_dir.join("src/main.rs");
-    let source = fs::read_to_string(&main_rs).unwrap_or_default();
-    if !source.contains("#[verify(") {
-        return Err(format!(
-            "example `{example_name}` does not use `#[verify(...)]`; only provably safe examples can be exported with `cargo oxide lean-export <example>`"
-        ));
     }
-
-    let (fixture_rel, default_fns): (&str, &[&str]) = match canonical_name {
-        "safe_vecadd" => ("crates/lean-exporter/fixtures/vecadd.mir", &["vecadd"]),
-        "safe_gemm_views" => (
-            "crates/lean-exporter/fixtures/sgemm_tiled.mir",
-            &["sgemm_tiled_views", "sgemm_tiled_raw"],
-        ),
-        "safe_warp_reduce" => (
-            "crates/lean-exporter/fixtures/warp_reduce.mir",
-            &["warp_reduce_sum", "block_reduce_sum"],
-        ),
-        "safe_subwarp_stage" => (
-            "crates/lean-exporter/fixtures/subwarp_multibuf.mir",
-            &["subwarp_bit_split_stage", "multibuf_subwarp_stage"],
-        ),
-        "safe_async_copy" => (
-            "crates/lean-exporter/fixtures/async_copy_stage.mir",
-            &["async_copy_stage"],
-        ),
-        "safe_tcgen05_matmul" => (
-            "crates/lean-exporter/fixtures/tcgen05_matmul.mir",
-            &["tcgen05_matmul_verified"],
-        ),
-        _ => {
-            return Err(format!(
-                "no PostMem2Reg MIR fixture registered for example `{example_name}`"
-            ));
-        }
-    };
-    let fns = match explicit_fn {
-        Some(f) => vec![f.to_string()],
-        None => default_fns.iter().map(|s| (*s).to_string()).collect(),
-    };
-    Ok((workspace.join(fixture_rel), fns))
 }
 
-/// Display input MIR and the generated scalar Lean model without building the
-/// device compiler, loading CUDA, or running Lean. The exporter remains a
-/// separate workspace tool instead of a dependency of the installed CLI.
-pub fn lean_export(ctx: &Context, input: Option<&Path>, function: Option<&str>) {
+fn is_raw_mir_path(path: &Path) -> bool {
+    path.extension().and_then(|ext| ext.to_str()) == Some("mir")
+        || path
+            .to_str()
+            .is_some_and(|text| text.contains('/') || text.contains('\\'))
+}
+
+fn classify_target(
+    ctx: &Context,
+    invocation_dir: &Path,
+    opts: &LeanExportOptions<'_>,
+) -> Result<LeanExportTarget, String> {
+    match (opts.input, opts.function) {
+        (None, Some(_)) if ctx.is_workspace => {
+            Err("custom input and --function must be supplied together".into())
+        }
+        (None, None) if ctx.is_workspace => {
+            if opts.arch.is_some() || opts.features.is_some() {
+                return Err("--arch and --features require an example or crate target".into());
+            }
+            Ok(LeanExportTarget::WorkspaceDemo)
+        }
+        (None, _) => {
+            let display_name = ctx
+                .workspace_root
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("project")
+                .to_string();
+            Ok(LeanExportTarget::RustCrate {
+                display_name,
+                crate_dir: ctx.workspace_root.clone(),
+            })
+        }
+        (Some(path), fn_opt) if is_raw_mir_path(path) => {
+            if opts.arch.is_some() || opts.features.is_some() {
+                return Err(
+                    "--arch and --features apply to Rust crates, not raw `.mir` files".into(),
+                );
+            }
+            let Some(function) = fn_opt else {
+                return Err("custom input and --function must be supplied together".into());
+            };
+            let absolute = if path.is_absolute() {
+                path.to_owned()
+            } else {
+                invocation_dir.join(path)
+            };
+            Ok(LeanExportTarget::RawMirFile {
+                path: absolute,
+                function: function.to_string(),
+            })
+        }
+        (Some(path), _) => {
+            let raw_name = path
+                .to_str()
+                .ok_or("target crate or example name must be valid UTF-8")?;
+            let canonical = canonicalize_legacy_example_name(raw_name);
+            if ctx.is_workspace {
+                let roots = example_roots(ctx);
+                let matches: Vec<_> = roots
+                    .iter()
+                    .map(|root| root.join(canonical))
+                    .filter(|dir| dir.is_dir())
+                    .collect();
+                match matches.as_slice() {
+                    [dir] => Ok(LeanExportTarget::RustCrate {
+                        display_name: canonical.to_string(),
+                        crate_dir: dir.clone(),
+                    }),
+                    [] => Err(format!(
+                        "unknown example or model `{raw_name}` (pass `<file.mir> --function <name>` to inspect a raw MIR file)"
+                    )),
+                    _ => Err(format!("example name is ambiguous: {raw_name}")),
+                }
+            } else {
+                let standalone_name = ctx
+                    .workspace_root
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("");
+                if raw_name == standalone_name || canonical == standalone_name {
+                    Ok(LeanExportTarget::RustCrate {
+                        display_name: standalone_name.to_string(),
+                        crate_dir: ctx.workspace_root.clone(),
+                    })
+                } else {
+                    Err(format!(
+                        "standalone project is `{standalone_name}`, not `{raw_name}` (run `cargo oxide lean-export` without a crate name, or pass `<file.mir> --function <name>`)"
+                    ))
+                }
+            }
+        }
+    }
+}
+
+/// Recursively scan all `.rs` files under `dir` for non-comment `#[verify` attributes.
+fn dir_contains_verify_attr(dir: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if dir_contains_verify_attr(&path) {
+                return true;
+            }
+        } else if path.extension().and_then(|e| e.to_str()) == Some("rs")
+            && let Ok(source) = fs::read_to_string(&path)
+            && source_has_verify_attr(&source)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn source_has_verify_attr(source: &str) -> bool {
+    source.lines().any(|line| {
+        let code = line.split("//").next().unwrap_or("");
+        code.contains("#[verify(") || code.contains("#[cuda_device::verify(")
+    })
+}
+
+fn crate_uses_verify(crate_dir: &Path) -> bool {
+    if dir_contains_verify_attr(&crate_dir.join("src")) {
+        return true;
+    }
+    if crate_dir.join("Cargo.toml").is_file()
+        && let Some(interop) = load_interop_config(crate_dir)
+    {
+        for dev in &interop.device_crates {
+            if let Some(dev_dir) = crate_dir.join(&dev.manifest_path).parent()
+                && dir_contains_verify_attr(&dev_dir.join("src"))
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Snapshot existing `.ptx` files before an export-only compile so they can be
+/// restored (or newly created ones removed) once capture completes.
+struct PtxSnapshot {
+    entries: Vec<(PathBuf, Option<Vec<u8>>)>,
+}
+
+impl PtxSnapshot {
+    fn capture(crate_dir: &Path, display_name: &str) -> Self {
+        let entries = ptx_artifact_paths(crate_dir, display_name)
+            .into_iter()
+            .map(|path| {
+                let prev = fs::read(&path).ok();
+                (path, prev)
+            })
+            .collect();
+        Self { entries }
+    }
+}
+
+impl Drop for PtxSnapshot {
+    fn drop(&mut self) {
+        for (path, prev) in &self.entries {
+            match prev {
+                Some(bytes) => {
+                    let _ = fs::write(path, bytes);
+                }
+                None => {
+                    let _ = fs::remove_file(path);
+                }
+            }
+        }
+    }
+}
+
+/// Export `PostMem2Reg` MIR and generated Lean 4 proof modules for a verified
+/// Rust crate/example, a raw `.mir` file, or the workspace scalar demo.
+pub fn lean_export(passive_ctx: &Context, opts: LeanExportOptions<'_>) {
     let result = std::env::current_dir()
         .map_err(|error| format!("cannot determine current directory: {error}"))
-        .and_then(|invocation_dir| {
-            let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-            let commands = exporter_commands(ctx, &invocation_dir, input, function, &cargo)?;
-            let mut combined = String::new();
-            for mut command in commands {
-                let output = command
-                    .output()
-                    .map_err(|error| format!("could not start the scalar MIR exporter: {error}"))?;
-                let rendered = inspection_output(output, input.is_none())?;
-                if !combined.is_empty() {
-                    combined.push('\n');
+        .and_then(
+            |invocation_dir| match classify_target(passive_ctx, &invocation_dir, &opts)? {
+                LeanExportTarget::WorkspaceDemo => {
+                    run_mir_exporter_cli(passive_ctx, &invocation_dir, None, None)
                 }
-                combined.push_str(&rendered);
-            }
-            io::stdout()
-                .lock()
-                .write_all(combined.as_bytes())
-                .map_err(|error| format!("cannot write inspection output: {error}"))
-        });
+                LeanExportTarget::RawMirFile { path, function } => {
+                    run_mir_exporter_cli(passive_ctx, &invocation_dir, Some(&path), Some(&function))
+                }
+                LeanExportTarget::RustCrate {
+                    display_name,
+                    crate_dir,
+                } => export_live_rust_crate(&display_name, &crate_dir, &opts),
+            },
+        );
     if let Err(error) = result {
         eprintln!("Error: {error}");
         std::process::exit(1);
     }
 }
 
-fn exporter_commands(
+fn export_live_rust_crate(
+    display_name: &str,
+    crate_dir: &Path,
+    opts: &LeanExportOptions<'_>,
+) -> Result<(), String> {
+    if !crate_uses_verify(crate_dir) {
+        return Err(format!(
+            "example `{display_name}` does not use `#[verify(...)]`; only provably safe crates can be exported with `cargo oxide lean-export`"
+        ));
+    }
+
+    let ctx = if opts.verbose {
+        resolve_context()
+    } else {
+        resolve_context_quiet_stdout()
+    };
+    let target_arch = configured_arch(&ctx, opts.arch);
+    let materialization = MaterializationMode::default();
+    let _ptx_guard = PtxSnapshot::capture(crate_dir, display_name);
+
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let pid = std::process::id();
+    let export_path =
+        std::env::temp_dir().join(format!("cuda_oxide_lean_export_{pid}_{unique}.txt"));
+    let discovered_path =
+        std::env::temp_dir().join(format!("cuda_oxide_lean_discovered_{pid}_{unique}.txt"));
+
+    touch_main_rs(crate_dir);
+    if let Some(interop) = load_interop_config(crate_dir) {
+        for dev in &interop.device_crates {
+            if let Some(dev_dir) = crate_dir.join(&dev.manifest_path).parent() {
+                touch_main_rs(dev_dir);
+            }
+        }
+    }
+
+    let build_dirs: Vec<PathBuf> =
+        match load_interop_config(crate_dir).filter(|cfg| !cfg.device_crates.is_empty()) {
+            Some(interop) => interop
+                .device_crates
+                .iter()
+                .filter_map(|dev| {
+                    crate_dir
+                        .join(&dev.manifest_path)
+                        .parent()
+                        .map(Path::to_path_buf)
+                })
+                .collect(),
+            None => vec![crate_dir.to_path_buf()],
+        };
+
+    let fingerprint =
+        lean_export_codegen_fingerprint(&ctx, opts.verbose, target_arch, &materialization);
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+
+    for build_dir in &build_dirs {
+        let mut cmd = Command::new(&cargo);
+        cmd.args(["build", "--release"]).current_dir(build_dir);
+        if let Some(features) = opts.features {
+            cmd.args(["--features", features]);
+        }
+        apply_common_codegen_env(&mut cmd, &ctx, opts.verbose, false, false, DeviceDebug::Off);
+        apply_codegen_configuration_or_exit(
+            &mut cmd,
+            &ctx,
+            CodegenProfilePolicy::ReleaseLike,
+            &[],
+            &fingerprint,
+        );
+        apply_output_mode(&mut cmd, false, target_arch, &materialization);
+        cmd.env(LEAN_EXPORT_ONLY_ENV, "1");
+        cmd.env(LEAN_EXPORT_FILE_ENV, &export_path);
+        cmd.env(LEAN_EXPORT_DISCOVERED_ENV, &discovered_path);
+        if let Some(fn_name) = opts.function {
+            cmd.env(LEAN_EXPORT_FUNCTION_ENV, fn_name);
+        }
+
+        if opts.verbose {
+            let status = cmd
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
+                .status()
+                .map_err(|e| format!("failed to run cargo build: {e}"))?;
+            if !status.success() {
+                let _ = fs::remove_file(&export_path);
+                let _ = fs::remove_file(&discovered_path);
+                return Err(format!(
+                    "device compilation failed for `{display_name}` (exit {})",
+                    status
+                ));
+            }
+        } else {
+            let output = cmd
+                .output()
+                .map_err(|e| format!("failed to run cargo build: {e}"))?;
+            if !output.status.success() {
+                let _ = fs::remove_file(&export_path);
+                let _ = fs::remove_file(&discovered_path);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let detail = stderr.trim();
+                return Err(if detail.is_empty() {
+                    format!(
+                        "device compilation failed for `{display_name}` ({})",
+                        output.status
+                    )
+                } else {
+                    format!("device compilation failed for `{display_name}`:\n{detail}")
+                });
+            }
+        }
+    }
+
+    let exported = fs::read_to_string(&export_path).unwrap_or_default();
+    let discovered = fs::read_to_string(&discovered_path).unwrap_or_default();
+    let _ = fs::remove_file(&export_path);
+    let _ = fs::remove_file(&discovered_path);
+
+    if exported.trim().is_empty() {
+        let mut names: Vec<&str> = discovered
+            .lines()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        names.dedup();
+        if let Some(wanted) = opts.function {
+            if names.is_empty() {
+                return Err(format!(
+                    "no `#[verify(...)]` kernels were compiled in `{display_name}`"
+                ));
+            }
+            return Err(format!(
+                "verified kernel `{wanted}` not found in `{display_name}`; available `#[verify]` kernels: {}",
+                names.join(", ")
+            ));
+        }
+        return Err(format!(
+            "no `#[verify(...)]` kernels were compiled in `{display_name}`"
+        ));
+    }
+
+    write_stdout(exported.as_bytes())
+}
+
+fn write_stdout(bytes: &[u8]) -> Result<(), String> {
+    match io::stdout().lock().write_all(bytes) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        Err(err) => Err(format!("cannot write inspection output: {err}")),
+    }
+}
+
+fn run_mir_exporter_cli(
     ctx: &Context,
     invocation_dir: &Path,
     input: Option<&Path>,
     function: Option<&str>,
-    cargo: &OsStr,
-) -> Result<Vec<Command>, String> {
-    let exporter = backend::simt_crate_path(&ctx.workspace_root, "lean-exporter");
-    if !ctx.is_workspace || !exporter.join("Cargo.toml").is_file() {
-        return Err("`cargo oxide lean-export` must be run inside a cuda-oxide source checkout containing crates/lean-exporter".into());
-    }
-    let workspace = exporter
-        .parent()
-        .and_then(Path::parent)
-        .ok_or("cannot locate the CUDA Oxide workspace for lean-exporter")?;
-    let (input_path, functions): (PathBuf, Vec<String>) = match (input, function) {
-        (None, None) => (workspace.join(DEMO_INPUT), vec![DEMO_FUNCTION.to_string()]),
-        (Some(path), Some(function)) => {
-            if path.extension().and_then(|e| e.to_str()) != Some("mir")
-                && let Some(name) = path.to_str()
-                && !name.contains('/')
-                && !name.contains('\\')
-                && let Ok(resolved) =
-                    resolve_verified_example_functions(ctx, workspace, name, Some(function))
-            {
-                resolved
-            } else {
-                let absolute = if path.is_absolute() {
-                    path.to_owned()
-                } else {
-                    invocation_dir.join(path)
-                };
-                (absolute, vec![function.to_string()])
-            }
-        }
-        (Some(path), None) => {
-            if let Some(name) = path.to_str()
-                && path.extension().and_then(|e| e.to_str()) != Some("mir")
-                && !name.contains('/')
-                && !name.contains('\\')
-            {
-                resolve_verified_example_functions(ctx, workspace, name, None)?
-            } else {
-                return Err("custom input and --function must be supplied together".into());
-            }
-        }
-        (None, Some(_)) => {
-            return Err("custom input and --function must be supplied together".into());
-        }
-    };
-    let mut commands = Vec::new();
-    for fn_name in functions {
-        let mut command = Command::new(cargo);
-        // A root-level Cargo invocation can pass the stable host toolchain through
-        // RUSTUP_TOOLCHAIN. This source tool belongs to the nested SIMT workspace.
-        if let Some(channel) = backend_source::pinned_channel(workspace) {
-            command.env("RUSTUP_TOOLCHAIN", channel);
-        }
-        command
-            .current_dir(workspace)
-            .args(["run", "--quiet", "--manifest-path"])
-            .arg(workspace.join("Cargo.toml"))
-            .args(["-p", "lean-exporter", "--", "--inspect"])
-            .arg(&input_path)
-            .arg(fn_name);
-        commands.push(command);
-    }
-    Ok(commands)
+) -> Result<(), String> {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let mut command = exporter_command(ctx, invocation_dir, input, function, &cargo)?;
+    let output = command
+        .output()
+        .map_err(|error| format!("could not start the MIR exporter: {error}"))?;
+    let rendered = inspection_output(output, input.is_none())?;
+    write_stdout(rendered.as_bytes())
 }
 
-#[cfg(test)]
 fn exporter_command(
     ctx: &Context,
     invocation_dir: &Path,
@@ -198,7 +440,42 @@ fn exporter_command(
     function: Option<&str>,
     cargo: &OsStr,
 ) -> Result<Command, String> {
-    exporter_commands(ctx, invocation_dir, input, function, cargo).map(|mut cmds| cmds.remove(0))
+    let exporter = backend::simt_crate_path(&ctx.workspace_root, "lean-exporter");
+    if !ctx.is_workspace || !exporter.join("Cargo.toml").is_file() {
+        return Err("`cargo oxide lean-export` on `.mir` files or the workspace demo must be run inside a cuda-oxide source checkout containing crates/lean-exporter".into());
+    }
+    let workspace = exporter
+        .parent()
+        .and_then(Path::parent)
+        .ok_or("cannot locate the CUDA Oxide workspace for lean-exporter")?;
+    let (input_path, fn_name): (PathBuf, String) = match (input, function) {
+        (None, None) => (workspace.join(DEMO_INPUT), DEMO_FUNCTION.to_string()),
+        (Some(path), Some(function)) => {
+            let absolute = if path.is_absolute() {
+                path.to_owned()
+            } else {
+                invocation_dir.join(path)
+            };
+            (absolute, function.to_string())
+        }
+        (Some(_), None) | (None, Some(_)) => {
+            return Err("custom input and --function must be supplied together".into());
+        }
+    };
+    let mut command = Command::new(cargo);
+    // A root-level Cargo invocation can pass the stable host toolchain through
+    // RUSTUP_TOOLCHAIN. This source tool belongs to the nested SIMT workspace.
+    if let Some(channel) = backend_source::pinned_channel(workspace) {
+        command.env("RUSTUP_TOOLCHAIN", channel);
+    }
+    command
+        .current_dir(workspace)
+        .args(["run", "--quiet", "--manifest-path"])
+        .arg(workspace.join("Cargo.toml"))
+        .args(["-p", "lean-exporter", "--", "--inspect"])
+        .arg(&input_path)
+        .arg(fn_name);
+    Ok(command)
 }
 
 fn inspection_output(output: Output, is_demo: bool) -> Result<String, String> {
@@ -206,9 +483,9 @@ fn inspection_output(output: Output, is_demo: bool) -> Result<String, String> {
         let detail = String::from_utf8_lossy(&output.stderr);
         let detail = detail.trim();
         return Err(if detail.is_empty() {
-            format!("scalar MIR export failed ({})", output.status)
+            format!("MIR export failed ({})", output.status)
         } else {
-            format!("scalar MIR export failed:\n{detail}")
+            format!("MIR export failed:\n{detail}")
         });
     }
     let output = String::from_utf8(output.stdout)
@@ -373,6 +650,103 @@ channel = "nightly-test"
                 .unwrap_err()
                 .contains("source checkout")
         );
+    }
+
+    #[test]
+    fn crate_uses_verify_scans_nested_submodules_and_ignores_comments() {
+        let workspace = Workspace::new();
+        let example_dir = workspace.0.join("examples/safe_gemm_like");
+        fs::create_dir_all(example_dir.join("src")).unwrap();
+        fs::write(
+            example_dir.join("src/main.rs"),
+            "mod kernels;\n// #[verify(no_oob_idx(a))]\nfn main() {}\n",
+        )
+        .unwrap();
+        assert!(
+            !crate_uses_verify(&example_dir),
+            "commented-out #[verify] must not count"
+        );
+        fs::write(
+            example_dir.join("src/kernels.rs"),
+            "#[verify(no_oob_idx(SMEM), uniform_barriers)]\npub fn gemm() {}\n",
+        )
+        .unwrap();
+        assert!(
+            crate_uses_verify(&example_dir),
+            "#[verify] inside src/kernels.rs must be discovered"
+        );
+    }
+
+    #[test]
+    fn classify_target_distinguishes_demo_mir_examples_and_standalone() {
+        let workspace = Workspace::new();
+        let mut ctx = workspace.context();
+        ctx.codegen_crate = workspace.0.join("crates/rustc-codegen-cuda");
+        let ex_root = workspace.0.join("examples/safe_gemm_sol_final/src");
+        fs::create_dir_all(&ex_root).unwrap();
+
+        assert!(matches!(
+            classify_target(&ctx, &workspace.0, &LeanExportOptions::default()).unwrap(),
+            LeanExportTarget::WorkspaceDemo
+        ));
+        assert!(
+            classify_target(
+                &ctx,
+                &workspace.0,
+                &LeanExportOptions {
+                    function: Some("k"),
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
+        assert!(matches!(
+            classify_target(
+                &ctx,
+                &workspace.0,
+                &LeanExportOptions {
+                    input: Some(Path::new("foo.mir")),
+                    function: Some("k"),
+                    ..Default::default()
+                }
+            )
+            .unwrap(),
+            LeanExportTarget::RawMirFile { .. }
+        ));
+        match classify_target(
+            &ctx,
+            &workspace.0,
+            &LeanExportOptions {
+                input: Some(Path::new("safe_gemm_sol_final")),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        {
+            LeanExportTarget::RustCrate {
+                display_name,
+                crate_dir,
+            } => {
+                assert_eq!(display_name, "safe_gemm_sol_final");
+                assert_eq!(crate_dir, workspace.0.join("examples/safe_gemm_sol_final"));
+            }
+            _ => panic!("expected RustCrate target"),
+        }
+
+        // Standalone mode defaults to the current project even with `--function`.
+        ctx.is_workspace = false;
+        assert!(matches!(
+            classify_target(
+                &ctx,
+                &workspace.0,
+                &LeanExportOptions {
+                    function: Some("my_kernel"),
+                    ..Default::default()
+                }
+            )
+            .unwrap(),
+            LeanExportTarget::RustCrate { .. }
+        ));
     }
 
     #[cfg(unix)]

@@ -298,8 +298,8 @@ pub(super) fn translate_mir_program(
                 tmem_ld_id_map.insert((old_idx, op_idx), next_id);
             } else if opid == "mir.shared_alloc" {
                 let op = op_ptr.deref(ctx);
-                let full =
-                    get_string_attr(&op.attributes, "source_name").unwrap_or_else(|| "SHARED".into());
+                let full = get_string_attr(&op.attributes, "source_name")
+                    .unwrap_or_else(|| "SHARED".into());
                 let short = full.rsplit("::").next().unwrap_or(&full).to_string();
                 if op.get_num_results() == 1 {
                     alloc_short_origin.insert(op.get_result(0), short.clone());
@@ -334,8 +334,7 @@ pub(super) fn translate_mir_program(
                         | "nvvm.mapa_shared_cluster"
                         | "nvvm.cvta_generic_to_shared_offset"
                         | "mir.bitand"
-                )
-                    && op.get_num_operands() >= 1
+                ) && op.get_num_operands() >= 1
                     && op.get_num_results() == 1
                     && let Some(orig) = alloc_short_origin.get(&op.get_operand(0)).cloned()
                 {
@@ -349,22 +348,19 @@ pub(super) fn translate_mir_program(
         for op_ptr in graph.blocks[old_idx].deref(ctx).iter(ctx) {
             let on = op_name(ctx, op_ptr);
             let op = op_ptr.deref(ctx);
-            let bar_val_opt = if on.starts_with("nvvm.mbarrier_")
-                || on.starts_with("nvvm.tcgen05_commit")
-            {
-                op.operands().next()
-            } else if on.starts_with("nvvm.cp_async_bulk_tensor_g2s")
-                || on.starts_with("nvvm.clc_try_cancel")
-            {
-                op.operands().nth(1)
-            } else {
-                None
-            };
+            let bar_val_opt =
+                if on.starts_with("nvvm.mbarrier_") || on.starts_with("nvvm.tcgen05_commit") {
+                    op.operands().next()
+                } else if on.starts_with("nvvm.cp_async_bulk_tensor_g2s")
+                    || on.starts_with("nvvm.clc_try_cancel")
+                {
+                    op.operands().nth(1)
+                } else {
+                    None
+                };
             if let Some(bv) = bar_val_opt
                 && let Some(short) = alloc_short_origin.get(&bv)
-                && shared_decls
-                    .iter()
-                    .any(|(n, _, eb)| n == short && *eb == 8)
+                && shared_decls.iter().any(|(n, _, eb)| n == short && *eb == 8)
             {
                 barrier_shared_names.insert(short.clone());
                 if !barrier_decls.contains(short) {
@@ -435,10 +431,16 @@ pub(super) fn translate_mir_program(
     let mut opaque_ids: HashMap<Value, usize> = HashMap::new();
     let mut next_opaque_id = 0usize;
     let is_enum_val = |v: Value| -> bool {
-        v.get_type(ctx).deref(ctx).downcast_ref::<MirEnumType>().is_some()
+        v.get_type(ctx)
+            .deref(ctx)
+            .downcast_ref::<MirEnumType>()
+            .is_some()
     };
     let is_struct_val = |v: Value| -> bool {
-        v.get_type(ctx).deref(ctx).downcast_ref::<MirStructType>().is_some()
+        v.get_type(ctx)
+            .deref(ctx)
+            .downcast_ref::<MirStructType>()
+            .is_some()
     };
 
     // Partition SSA values into cross-block values (assigned compact IDs `0..global_end` so
@@ -572,16 +574,19 @@ pub(super) fn translate_mir_program(
                                 any_div |= divergent_vals.contains(&po.get_operand(arg_pos));
                             } else if pn == "mir.cond_br" && po.get_num_successors() == 2 {
                                 let tl = po.get_successor(0).deref(ctx).get_num_arguments();
-                                if po.get_successor(0) == b_ptr && 1 + arg_pos < po.get_num_operands() {
-                                    any_div |= divergent_vals.contains(&po.get_operand(1 + arg_pos))
+                                if po.get_successor(0) == b_ptr
+                                    && 1 + arg_pos < po.get_num_operands()
+                                {
+                                    any_div |= divergent_vals
+                                        .contains(&po.get_operand(1 + arg_pos))
                                         || divergent_vals.contains(&po.get_operand(0));
                                 }
                                 if po.get_successor(1) == b_ptr
                                     && 1 + tl + arg_pos < po.get_num_operands()
                                 {
-                                    any_div |=
-                                        divergent_vals.contains(&po.get_operand(1 + tl + arg_pos))
-                                            || divergent_vals.contains(&po.get_operand(0));
+                                    any_div |= divergent_vals
+                                        .contains(&po.get_operand(1 + tl + arg_pos))
+                                        || divergent_vals.contains(&po.get_operand(0));
                                 }
                             }
                         }
@@ -616,7 +621,11 @@ pub(super) fn translate_mir_program(
                 let is_pure_comb = on.starts_with("mir.")
                     && !matches!(
                         on.as_str(),
-                        "mir.load" | "mir.call" | "mir.alloca" | "mir.shared_alloc" | "mir.ptr_offset"
+                        "mir.load"
+                            | "mir.call"
+                            | "mir.alloca"
+                            | "mir.shared_alloc"
+                            | "mir.ptr_offset"
                     );
                 let is_div = if is_pure_uni_source {
                     false
@@ -708,7 +717,8 @@ pub(super) fn translate_mir_program(
                                 },
                             );
                         }
-                    } else if let Some(sid) = shared_decls.iter().position(|(n, _, _)| n == &short) {
+                    } else if let Some(sid) = shared_decls.iter().position(|(n, _, _)| n == &short)
+                    {
                         let sz = shared_decls[sid].1;
                         tags.insert(res, LocalTag::SharedPtr(sid, sz));
                     }
@@ -779,8 +789,7 @@ pub(super) fn translate_mir_program(
                     && op.get_num_operands() == 2
                     && op.get_num_results() == 1
                 {
-                    let (bs, fv, res) =
-                        (op.get_operand(0), op.get_operand(1), op.get_result(0));
+                    let (bs, fv, res) = (op.get_operand(0), op.get_operand(1), op.get_result(0));
                     let mut fts = struct_field_tags.get(&bs).cloned().unwrap_or_default();
                     if let Some(fi) = attribute_field_index(&op.attributes, "index")
                         .or_else(|| attribute_field_index(&op.attributes, "field_index"))
@@ -818,9 +827,8 @@ pub(super) fn translate_mir_program(
                     {
                         tags.insert(res, t);
                     } else if fi == Some(0)
-                        && let Some(
-                            t @ (LocalTag::SmemDescSource(_) | LocalTag::TmemLoadedReg(_)),
-                        ) = tags.get(&src).copied()
+                        && let Some(t @ (LocalTag::SmemDescSource(_) | LocalTag::TmemLoadedReg(_))) =
+                            tags.get(&src).copied()
                     {
                         tags.insert(res, t);
                     }
@@ -850,7 +858,11 @@ pub(super) fn translate_mir_program(
                         if let Some(&c) = const_u128_vals.get(&op.get_operand(0)) {
                             let dw = mir_uint_width(ctx, op.get_result(0).get_type(ctx));
                             if dw > 1 {
-                                let masked = if dw >= 128 { c } else { c & ((1u128 << dw) - 1) };
+                                let masked = if dw >= 128 {
+                                    c
+                                } else {
+                                    c & ((1u128 << dw) - 1)
+                                };
                                 const_u128_vals.insert(op.get_result(0), masked);
                                 if let Ok(v64) = u64::try_from(masked) {
                                     const_u64_vals.insert(op.get_result(0), v64);
@@ -884,8 +896,7 @@ pub(super) fn translate_mir_program(
                     on.as_str(),
                     "nvvm.cvta_generic_to_shared_offset"
                         | "nvvm.cvta_generic_to_cluster_shared_offset"
-                )
-                    && op.get_num_operands() == 1
+                ) && op.get_num_operands() == 1
                     && op.get_num_results() == 1
                 {
                     if let Some(LocalTag::SharedPtr(sid, _)) = tags.get(&op.get_operand(0)).copied()
@@ -916,7 +927,9 @@ pub(super) fn translate_mir_program(
                             tags.insert(op.get_result(r_idx), LocalTag::TmemLoadedReg(ld_id));
                         }
                     }
-                } else if on == "mir.load" && op.get_num_operands() >= 1 && op.get_num_results() == 1
+                } else if on == "mir.load"
+                    && op.get_num_operands() >= 1
+                    && op.get_num_results() == 1
                 {
                     let (pv, res) = (op.get_operand(0), op.get_result(0));
                     if let Some(LocalTag::SharedPtr(sid, _)) = tags.get(&pv).copied()
@@ -924,8 +937,10 @@ pub(super) fn translate_mir_program(
                     {
                         tags.insert(res, LocalTag::TmemAddr(cols));
                     } else if let Some(&(alloca, fi)) = stack_field_ptrs.get(&pv)
-                        && let Some(Some(ft)) =
-                            alloca_field_tags.get(&alloca).and_then(|fs| fs.get(fi)).copied()
+                        && let Some(Some(ft)) = alloca_field_tags
+                            .get(&alloca)
+                            .and_then(|fs| fs.get(fi))
+                            .copied()
                     {
                         tags.insert(res, ft);
                     } else if matches!(tags.get(&pv), Some(LocalTag::StackSlot))
@@ -954,7 +969,9 @@ pub(super) fn translate_mir_program(
                         tags.insert(op.get_result(0), LocalTag::TmemAddr(cols));
                     } else if on == "mir.bitand"
                         && let Some(btag @ LocalTag::BarrierPtr { .. }) = t0.or(t1)
-                        && (const_u64_vals.get(&op.get_operand(0)).is_some_and(|&m| m == 0xFEFF_FFF8)
+                        && (const_u64_vals
+                            .get(&op.get_operand(0))
+                            .is_some_and(|&m| m == 0xFEFF_FFF8)
                             || const_u64_vals
                                 .get(&op.get_operand(1))
                                 .is_some_and(|&m| m == 0xFEFF_FFF8))
@@ -972,8 +989,10 @@ pub(super) fn translate_mir_program(
                                     .insert(res, vec![Some(LocalTag::SmemDescSource(sid))]);
                                 break;
                             }
-                            if let Some(Some(ft @ LocalTag::SmemDescSource(_))) =
-                                alloca_field_tags.get(&ov).and_then(|fs| fs.first()).copied()
+                            if let Some(Some(ft @ LocalTag::SmemDescSource(_))) = alloca_field_tags
+                                .get(&ov)
+                                .and_then(|fs| fs.first())
+                                .copied()
                             {
                                 tags.insert(res, ft);
                                 struct_field_tags.insert(res, vec![Some(ft)]);
@@ -1232,7 +1251,8 @@ pub(super) fn translate_mir_program(
     let mut mbar_ready_bar: HashMap<Value, (usize, bool)> = HashMap::new();
     let mut mbar_not_ready_bar: HashMap<Value, (usize, bool)> = HashMap::new();
     let mut mir_blocks: Vec<MirBlockData> = Vec::with_capacity(rpo_old.len());
-    let mut cfg_blocks: Vec<TranscribedCfgBlock> = vec![TranscribedCfgBlock::default(); rpo_old.len()];
+    let mut cfg_blocks: Vec<TranscribedCfgBlock> =
+        vec![TranscribedCfgBlock::default(); rpo_old.len()];
     let mut accessed_params: BTreeSet<usize> = BTreeSet::new();
     let mut written_params: BTreeSet<usize> = BTreeSet::new();
     let mut accessed_shared: BTreeSet<usize> = BTreeSet::new();
@@ -1251,17 +1271,19 @@ pub(super) fn translate_mir_program(
     let mut opt_cond_true_param: HashMap<Value, usize> = HashMap::new();
     let mut opt_cond_false_param: HashMap<Value, usize> = HashMap::new();
 
-    let expand_branch_args =
-        |vals: &[Value], val_ids: &HashMap<Value, usize>, ep: &HashMap<Value, usize>| -> Vec<usize> {
-            let mut out = Vec::with_capacity(vals.len() * 2);
-            for v in vals {
-                out.push(val_ids[v]);
-                if let Some(&pid) = ep.get(v) {
-                    out.push(pid);
-                }
+    let expand_branch_args = |vals: &[Value],
+                              val_ids: &HashMap<Value, usize>,
+                              ep: &HashMap<Value, usize>|
+     -> Vec<usize> {
+        let mut out = Vec::with_capacity(vals.len() * 2);
+        for v in vals {
+            out.push(val_ids[v]);
+            if let Some(&pid) = ep.get(v) {
+                out.push(pid);
             }
-            out
-        };
+        }
+        out
+    };
 
     let mut pending_asserts: Vec<PendingAssert> = Vec::new();
 
@@ -1386,48 +1408,47 @@ pub(super) fn translate_mir_program(
                             }
                             let is_cyc =
                                 loop_headers.contains(&new_b) || t_dst <= new_b || f_dst <= new_b;
-                            let br_cond = if let Some(&(bar_id, init_free)) =
-                                mbar_ready_bar.get(&cond_v)
-                            {
-                                (
-                                    CfgBranchCond::MbarReady(bar_id, init_free),
-                                    CfgBranchCond::MbarSpin(bar_id),
-                                )
-                            } else if let Some(&(bar_id, init_free)) =
-                                mbar_not_ready_bar.get(&cond_v)
-                            {
-                                (
-                                    CfgBranchCond::MbarSpin(bar_id),
-                                    CfgBranchCond::MbarReady(bar_id, init_free),
-                                )
-                            } else if loop_headers.contains(&new_b)
-                                && pos_counted_lt.contains(&cond_v)
-                                && !divergent_vals.contains(&cond_v)
-                            {
-                                (CfgBranchCond::Uniform, CfgBranchCond::PosLoopExit(t_dst))
-                            } else if loop_headers.contains(&new_b)
-                                && pos_counted_ge.contains(&cond_v)
-                                && !divergent_vals.contains(&cond_v)
-                            {
-                                (CfgBranchCond::PosLoopExit(f_dst), CfgBranchCond::Uniform)
-                            } else if is_cyc
-                                && matches!(
-                                    op_name_of_def(ctx, &graph, cond_v).as_deref(),
-                                    Some("mir.lt" | "mir.ge" | "mir.not")
-                                )
-                                && !divergent_vals.contains(&cond_v)
-                            {
-                                (CfgBranchCond::Uniform, CfgBranchCond::Uniform)
-                            } else if let Some(g) = coord_guards.get(&cond_v) {
-                                (
-                                    CfgBranchCond::Coord(g.clone()),
-                                    CfgBranchCond::Coord(g.negate()),
-                                )
-                            } else if !divergent_vals.contains(&cond_v) && is_cyc {
-                                (CfgBranchCond::Uniform, CfgBranchCond::Uniform)
-                            } else {
-                                (CfgBranchCond::Unknown, CfgBranchCond::Unknown)
-                            };
+                            let br_cond =
+                                if let Some(&(bar_id, init_free)) = mbar_ready_bar.get(&cond_v) {
+                                    (
+                                        CfgBranchCond::MbarReady(bar_id, init_free),
+                                        CfgBranchCond::MbarSpin(bar_id),
+                                    )
+                                } else if let Some(&(bar_id, init_free)) =
+                                    mbar_not_ready_bar.get(&cond_v)
+                                {
+                                    (
+                                        CfgBranchCond::MbarSpin(bar_id),
+                                        CfgBranchCond::MbarReady(bar_id, init_free),
+                                    )
+                                } else if loop_headers.contains(&new_b)
+                                    && pos_counted_lt.contains(&cond_v)
+                                    && !divergent_vals.contains(&cond_v)
+                                {
+                                    (CfgBranchCond::Uniform, CfgBranchCond::PosLoopExit(t_dst))
+                                } else if loop_headers.contains(&new_b)
+                                    && pos_counted_ge.contains(&cond_v)
+                                    && !divergent_vals.contains(&cond_v)
+                                {
+                                    (CfgBranchCond::PosLoopExit(f_dst), CfgBranchCond::Uniform)
+                                } else if is_cyc
+                                    && matches!(
+                                        op_name_of_def(ctx, &graph, cond_v).as_deref(),
+                                        Some("mir.lt" | "mir.ge" | "mir.not")
+                                    )
+                                    && !divergent_vals.contains(&cond_v)
+                                {
+                                    (CfgBranchCond::Uniform, CfgBranchCond::Uniform)
+                                } else if let Some(g) = coord_guards.get(&cond_v) {
+                                    (
+                                        CfgBranchCond::Coord(g.clone()),
+                                        CfgBranchCond::Coord(g.negate()),
+                                    )
+                                } else if !divergent_vals.contains(&cond_v) && is_cyc {
+                                    (CfgBranchCond::Uniform, CfgBranchCond::Uniform)
+                                } else {
+                                    (CfgBranchCond::Unknown, CfgBranchCond::Unknown)
+                                };
                             cfg_blocks[new_b].succs.push((br_cond.0, t_dst));
                             cfg_blocks[new_b].succs.push((br_cond.1, f_dst));
                             term = MirTerminator::CondBr(
@@ -1912,9 +1933,10 @@ pub(super) fn translate_mir_program(
                         .unwrap_or(16)
                         .max(16);
                     let span_elems = tx_bytes.div_ceil(elem_bytes).max(1);
-                    cfg_blocks[new_b]
-                        .ops
-                        .push(CfgOpItem::ClcTryCancel { shared_id: sid, bar_id });
+                    cfg_blocks[new_b].ops.push(CfgOpItem::ClcTryCancel {
+                        shared_id: sid,
+                        bar_id,
+                    });
                     stmts.push(MirStmt::TmaCopyG2S(
                         val_ids[&resp_v],
                         bar_id,
@@ -1929,7 +1951,10 @@ pub(super) fn translate_mir_program(
                     if op.get_num_results() == 1 =>
                 {
                     let res = op.get_result(0);
-                    stmts.push(MirStmt::Assign(val_ids[&res], fallback_rhs_for(res, &val_ids)));
+                    stmts.push(MirStmt::Assign(
+                        val_ids[&res],
+                        fallback_rhs_for(res, &val_ids),
+                    ));
                 }
                 "nvvm.cvta_generic_to_shared_offset"
                 | "nvvm.cvta_generic_to_cluster_shared_offset"
@@ -1938,7 +1963,9 @@ pub(super) fn translate_mir_program(
                     let (src, res) = (op.get_operand(0), op.get_result(0));
                     match tags.get(&src).copied() {
                         Some(LocalTag::SharedPtr(sid, _)) => {
-                            if !spec.no_oob_shared.contains(&sid) || !spec.no_data_race.contains(&sid) {
+                            if !spec.no_oob_shared.contains(&sid)
+                                || !spec.no_data_race.contains(&sid)
+                            {
                                 return Err(reject(
                                     &opid,
                                     "`cvta_generic_to_shared_offset` must target a `SharedArray` listed in `no_oob_idx` and `no_data_race`",
@@ -1969,10 +1996,7 @@ pub(super) fn translate_mir_program(
                             if let Some(&sv) = bar_slot_vars.get(&src) {
                                 bar_slot_vars.insert(res, sv);
                             }
-                            tags.insert(
-                                res,
-                                LocalTag::ClusterBarrierAddr { bar_id, shared_opt },
-                            );
+                            tags.insert(res, LocalTag::ClusterBarrierAddr { bar_id, shared_opt });
                             stmts.push(MirStmt::Assign(val_ids[&res], MirRhs::OpaqueVal));
                         }
                         _ => {
@@ -1985,16 +2009,11 @@ pub(super) fn translate_mir_program(
                 }
                 "nvvm.tcgen05_alloc" | "nvvm.tcgen05_alloc_cg2" => {
                     let is_cg2 = opid.ends_with("_cg2");
-                    let (
-                        Some(ptr_v),
-                        Some(LocalTag::SharedPtr(sid, _)),
-                        Some(&cols),
-                    ) = (
+                    let (Some(ptr_v), Some(LocalTag::SharedPtr(sid, _)), Some(&cols)) = (
                         op.operands().next(),
                         op.operands().next().and_then(|v| tags.get(&v).copied()),
                         op.operands().nth(1).and_then(|v| const_u64_vals.get(&v)),
-                    )
-                    else {
+                    ) else {
                         return Err(reject(
                             &opid,
                             "`tcgen05_alloc` requires a verified `SharedArray<u32, ...>` slot and constant column count",
@@ -2041,7 +2060,9 @@ pub(super) fn translate_mir_program(
                         .ops
                         .push(CfgOpItem::TmemRelinquishPermit { is_cg2 });
                 }
-                _ if opid.starts_with("nvvm.tcgen05_mma") || opid.starts_with("nvvm.tcgen05_cp") => {
+                _ if opid.starts_with("nvvm.tcgen05_mma")
+                    || opid.starts_with("nvvm.tcgen05_cp") =>
+                {
                     let Some(tmem_v) = op.operands().next() else {
                         return Err(reject(&opid, "missing TMEM operand"));
                     };
@@ -2079,7 +2100,9 @@ pub(super) fn translate_mir_program(
                         decode_tcgen05_idesc_shape(idesc_val, is_cg2).ok_or_else(|| {
                             reject(
                                 &opid,
-                                format!("`{opid}` instruction descriptor encodes zero M or N dimension"),
+                                format!(
+                                    "`{opid}` instruction descriptor encodes zero M or N dimension"
+                                ),
                             )
                         })?
                     };
@@ -2094,7 +2117,8 @@ pub(super) fn translate_mir_program(
                         {
                             continue;
                         }
-                        let Some(LocalTag::SmemDescSource(sid)) = tags.get(&operand).copied() else {
+                        let Some(LocalTag::SmemDescSource(sid)) = tags.get(&operand).copied()
+                        else {
                             return Err(reject(
                                 &opid,
                                 format!(
@@ -2134,9 +2158,10 @@ pub(super) fn translate_mir_program(
                     ));
                 }
                 _ if opid.starts_with("nvvm.tcgen05_ld_") && op.get_num_results() >= 1 => {
-                    let (height_lanes, width_cols) = parse_tcgen05_ld_shape(&opid).ok_or_else(|| {
-                        reject(&opid, format!("unrecognized `tcgen05_ld` shape `{opid}`"))
-                    })?;
+                    let (height_lanes, width_cols) =
+                        parse_tcgen05_ld_shape(&opid).ok_or_else(|| {
+                            reject(&opid, format!("unrecognized `tcgen05_ld` shape `{opid}`"))
+                        })?;
                     let Some(tmem_v) = op.operands().next() else {
                         return Err(reject(&opid, "missing TMEM address operand"));
                     };
@@ -2483,10 +2508,8 @@ pub(super) fn translate_mir_program(
                             stmts.push(MirStmt::Assign(val_ids[&res], MirRhs::ConstBool(val != 0)));
                         } else if w > 1 || (raw_int_w > 1 && val < 128) {
                             let eff_w = if w > 1 { w } else { 64 };
-                            stmts.push(MirStmt::Assign(
-                                val_ids[&res],
-                                MirRhs::ConstInt(eff_w, val),
-                            ));
+                            stmts
+                                .push(MirStmt::Assign(val_ids[&res], MirRhs::ConstInt(eff_w, val)));
                         } else {
                             stmts.push(MirStmt::Assign(
                                 val_ids[&res],
@@ -2630,13 +2653,17 @@ pub(super) fn translate_mir_program(
                             struct_fields
                                 .insert(res, vec![(res_vid, Some(LocalTag::SmemDescSource(sid)))]);
                         } else if let Some(&pid) = enum_payload_ids.get(&res) {
-                            stmts.push(MirStmt::Assign(res_vid, MirRhs::OpaqueUint(opaque_ids[&res], 64)));
+                            stmts.push(MirStmt::Assign(
+                                res_vid,
+                                MirRhs::OpaqueUint(opaque_ids[&res], 64),
+                            ));
                             stmts.push(MirStmt::Assign(pid, MirRhs::OpaqueVal));
                         } else {
                             if !matches!(tags.get(&res), Some(LocalTag::TmemLoadedReg(_))) {
                                 tags.insert(res, LocalTag::UnverifiedPtr);
                             }
-                            stmts.push(MirStmt::Assign(res_vid, fallback_rhs_for(res, &opaque_ids)));
+                            stmts
+                                .push(MirStmt::Assign(res_vid, fallback_rhs_for(res, &opaque_ids)));
                         }
                     }
                 }
@@ -3057,7 +3084,10 @@ pub(super) fn translate_mir_program(
                         if let Some(&sv) = bar_slot_vars.get(&bar_src) {
                             bar_slot_vars.insert(res, sv);
                         }
-                        stmts.push(MirStmt::Assign(val_ids[&res], MirRhs::Copy(val_ids[&bar_src])));
+                        stmts.push(MirStmt::Assign(
+                            val_ids[&res],
+                            MirRhs::Copy(val_ids[&bar_src]),
+                        ));
                     } else if w > 1 && mir_uint_width(ctx, l.get_type(ctx)) > 1 && r_uint_ok {
                         let lean_op = match opid.as_str() {
                             "mir.add" => "add",
@@ -3312,7 +3342,9 @@ pub(super) fn translate_mir_program(
         if !written_params.contains(&p) {
             return Err(reject(
                 "disjoint_writes",
-                format!("parameter {p} is listed in `disjoint_writes` but never written in the kernel"),
+                format!(
+                    "parameter {p} is listed in `disjoint_writes` but never written in the kernel"
+                ),
             ));
         }
     }
@@ -3320,7 +3352,9 @@ pub(super) fn translate_mir_program(
         if !accessed_shared.contains(&sid) {
             return Err(reject(
                 "no_oob_idx",
-                format!("shared array {sid} is listed in `no_oob_idx` but never accessed in the kernel"),
+                format!(
+                    "shared array {sid} is listed in `no_oob_idx` but never accessed in the kernel"
+                ),
             ));
         }
     }
@@ -3328,7 +3362,9 @@ pub(super) fn translate_mir_program(
         if !accessed_shared.contains(&sid) {
             return Err(reject(
                 "no_data_race",
-                format!("shared array {sid} is listed in `no_data_race` but never accessed in the kernel"),
+                format!(
+                    "shared array {sid} is listed in `no_data_race` but never accessed in the kernel"
+                ),
             ));
         }
     }

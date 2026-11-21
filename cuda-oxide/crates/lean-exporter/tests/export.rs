@@ -692,7 +692,10 @@ fn verifies_stage3_warp_and_block_reductions_and_rejects_missing_leader_guard() 
     assert!(block_lean.contains("theorem verify_no_oob_idx_shared0"));
     assert!(block_lean.contains("theorem verify_no_data_race_shared0"));
     assert!(block_lean.contains("theorem verify_uniform_barriers"));
-    assert_eq!(count_proven_asserts(WARP_REDUCE_FIXTURE, "block_reduce_sum"), 2);
+    assert_eq!(
+        count_proven_asserts(WARP_REDUCE_FIXTURE, "block_reduce_sum"),
+        2
+    );
     lean_exporter::runner::check_generated_lean(&block_lean, &lean_dir)
         .expect("valid block_reduce_sum MIR must pass Lean 4 verification");
 
@@ -835,7 +838,10 @@ fn verifies_stage5_async_copy_and_mbarrier_token_ordering() {
     assert!(async_lean.contains("(.mbarTryWait 0"));
     assert!(async_lean.contains("theorem verify_no_oob_idx_shared0"));
     assert!(async_lean.contains("theorem verify_no_data_race_shared0"));
-    assert_eq!(count_proven_asserts(ASYNC_COPY_FIXTURE, "async_copy_stage"), 1);
+    assert_eq!(
+        count_proven_asserts(ASYNC_COPY_FIXTURE, "async_copy_stage"),
+        1
+    );
     lean_exporter::runner::check_generated_lean(&async_lean, &lean_dir)
         .expect("valid async_copy_stage MIR must pass Lean 4 verification");
 
@@ -1218,10 +1224,8 @@ fn rejects_post_loop_loopvar_leak_conflicting_loop_counters_and_escaping_shared_
 
     // 2b. Out-of-bounds nested two-loop indexing (`g < 4, g2 < 16 -> 15 * 16 + 3 + 15 = 258 >= 256`):
     // rejected by Lean 4's `MirNoOobShared`!
-    let nested_oob = nested_valid.replace(
-        "in_g2 = mir.lt (g2, c4_g)",
-        "in_g2 = mir.lt (g2, c16_x)",
-    );
+    let nested_oob =
+        nested_valid.replace("in_g2 = mir.lt (g2, c4_g)", "in_g2 = mir.lt (g2, c16_x)");
     let nested_oob_lean = export_named_source(&nested_oob, "multibuf_subwarp_stage")
         .expect("transcribes OOB nested loop into mirFunc");
     let err = lean_exporter::runner::check_generated_lean(&nested_oob_lean, &lean_dir)
@@ -1556,8 +1560,9 @@ fn verifies_plain_mut_slice_and_rejects_unverified_wraparound_and_cross_thread_r
     );
     let wrap32_lean = export_named_source(&wrap32_mir, "inplace_add")
         .expect("transcribes 32-bit coordinate math 1-to-1");
-    lean_exporter::runner::check_generated_lean(&wrap32_lean, &lean_dir)
-        .expect_err("Lean 4 must reject 32-bit blockIdx_x * blockDim_x wraparound without u32_coordinates");
+    lean_exporter::runner::check_generated_lean(&wrap32_lean, &lean_dir).expect_err(
+        "Lean 4 must reject 32-bit blockIdx_x * blockDim_x wraparound without u32_coordinates",
+    );
 
     // 4. Positive: with `launch_contract_u32_coords: "true"`, 32-bit coordinates ARE sound and accepted:
     let u32_coords_ok = wrap32_mir.replacen(
@@ -1773,8 +1778,9 @@ fn verifies_stage9_cluster_dsmem_clc_and_cg2_tmem_lifecycle() {
     );
     let cg2_no_rel_lean = export_named_source(&cg2_no_relinquish, "tcgen05_matmul_verified")
         .expect("transcribes _cg2 missing relinquish_alloc_permit_cg2");
-    lean_exporter::runner::check_generated_lean(&cg2_no_rel_lean, &lean_dir)
-        .expect_err("Lean 4 must reject tcgen05_dealloc_cg2 without tcgen05_relinquish_alloc_permit_cg2");
+    lean_exporter::runner::check_generated_lean(&cg2_no_rel_lean, &lean_dir).expect_err(
+        "Lean 4 must reject tcgen05_dealloc_cg2 without tcgen05_relinquish_alloc_permit_cg2",
+    );
 
     // 8. Negative (`_cg2` without `#[cluster_launch(2, 1, 1)]` -> `clusterDimX == 1`):
     let cg2_non_cluster = cg2_valid.replacen(
@@ -1863,8 +1869,9 @@ fn verifies_stage10_dual_commit_cg2_multicast_and_dynamic_tile_kind_bounds() {
         );
     let unarmed_cg2_lean = export_named_source(&cg2_tma_never_armed, "tcgen05_matmul_verified")
         .expect("transcribes _cg2 multicast TMA without any mbarrier_arrive_expect_tx");
-    lean_exporter::runner::check_generated_lean(&unarmed_cg2_lean, &lean_dir)
-        .expect_err("Lean 4 must reject _cg2 multicast TMA when barrier has zero expect_tx arrivals");
+    lean_exporter::runner::check_generated_lean(&unarmed_cg2_lean, &lean_dir).expect_err(
+        "Lean 4 must reject _cg2 multicast TMA when barrier has zero expect_tx arrivals",
+    );
 
     // 4. Negative: Data-dependent `u32` load from `SharedArray` (`tile_kind`) selecting OOB `192` columns
     //    on `128`-column `TMEM` (`if tile_kind == 1 { 64 } else { 192 }`) fails `MirNoOobTmem` in Lean 4!

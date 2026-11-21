@@ -201,7 +201,11 @@ pub(super) fn shared_alloc_elem_bytes(ctx: &Context, op: &Operation) -> u64 {
 /// Matches `size == 1`, direct 64-bit integer element type (`ui64` / `i64`), and no `SharedArray` alignment attribute.
 pub(super) fn is_mbarrier_shared_alloc(ctx: &Context, op: &Operation) -> bool {
     int_attr_u64(&op.attributes, "size") == Some(1)
-        && !op.attributes.0.iter().any(|(k, _)| k.to_string() == "alignment")
+        && !op
+            .attributes
+            .0
+            .iter()
+            .any(|(k, _)| k.to_string() == "alignment")
         && op.attributes.0.iter().any(|(k, v)| {
             k.to_string() == "elem_type"
                 && v.downcast_ref::<TypeAttr>()

@@ -1057,7 +1057,8 @@ fn format_rank_const_expr(expr: &Expr, instances: &RankBindings) -> Result<Strin
                 .map(|segment| segment.ident.to_string())
                 .unwrap_or_default();
             if let Some(cga) = instances.inst_array.get(&name) {
-                let i = parse_signed_literal_as_i32(&index.index);
+                let i = parse_signed_literal_as_i32(&index.index)
+                    .map_err(|err| syn_err(index.index.span(), &err.to_string()))?;
                 if !(0 <= i && (i as u32) < cga.length) {
                     return Err(syn_err(
                         index.index.span(),
@@ -1244,7 +1245,8 @@ impl RankInstantiator {
                             .map(|segment| segment.ident.to_string())
                             .unwrap_or_default();
                         if let Some(cga) = self.bindings.inst_array.get(&name) {
-                            let i = parse_signed_literal_as_i32(&index.index);
+                            let i = parse_signed_literal_as_i32(&index.index)
+                                .map_err(|err| syn_err(index.index.span(), &err.to_string()))?;
                             if !(0 <= i && (i as u32) < cga.length) {
                                 return Err(syn_err(
                                     index.index.span(),
@@ -1327,7 +1329,13 @@ impl VisitMut for RankInstantiator {
                     .map(|s| s.ident.to_string())
                     .unwrap_or_default();
                 if let Some(cga) = self.bindings.inst_array.get(&name).cloned() {
-                    let i = parse_signed_literal_as_i32(&ei.index);
+                    let i = match parse_signed_literal_as_i32(&ei.index) {
+                        Ok(i) => i,
+                        Err(err) => {
+                            self.error = Some(syn_err(ei.index.span(), &err.to_string()));
+                            return;
+                        }
+                    };
                     if !(0 <= i && (i as u32) < cga.length) {
                         self.error = Some(syn_err(
                             ei.index.span(),
@@ -1493,4 +1501,53 @@ fn rewrite_static_constructor_path(expr: &mut Expr, concrete_type_ident: &Ident)
 pub fn instantiate_impl_for_rank(item: &ItemImpl) -> Result<ItemImpl, Error> {
     let bindings = RankBindings::from_generics(&item.generics)?;
     RankInstantiator::new(bindings).rewrite_impl(item)
+}
+
+#[cfg(test)]
+mod dimension_parse_tests {
+    use super::*;
+
+    fn bindings() -> RankBindings {
+        let generics = syn::parse_str::<Generics>("<const D: [i32; 2]>").unwrap();
+        RankBindings::from_generics(&generics).unwrap()
+    }
+
+    #[test]
+    fn rank_const_indices_report_parse_errors() {
+        for source in ["D[true]", "D[0 + 0]", "D[2147483648]"] {
+            let expr: Expr = syn::parse_str(source).unwrap();
+            assert!(
+                format_rank_const_expr(&expr, &bindings()).is_err(),
+                "{source}"
+            );
+        }
+        let expr: Expr = syn::parse_str("D[1]").unwrap();
+        assert_eq!(format_rank_const_expr(&expr, &bindings()).unwrap(), "D1");
+    }
+
+    #[test]
+    fn rank_expression_visitor_reports_parse_errors() {
+        for source in ["D[true]", "D[0 + 0]", "D[2147483648]"] {
+            let mut expr: Expr = syn::parse_str(source).unwrap();
+            let mut visitor = RankInstantiator::new(bindings());
+            visitor.visit_expr_mut(&mut expr);
+            assert!(visitor.into_result(expr).is_err(), "{source}");
+        }
+    }
+
+    #[test]
+    fn rank_shape_macro_reports_parse_errors() {
+        for index in ["true", "0 + 0", "2147483648"] {
+            let item: ItemFn = syn::parse_str(&format!(
+                "fn kernel() {{ let _ = const_shape![D[{index}]]; }}"
+            ))
+            .unwrap();
+            assert!(
+                RankInstantiator::new(bindings())
+                    .rewrite_function(&item)
+                    .is_err(),
+                "{index}"
+            );
+        }
+    }
 }

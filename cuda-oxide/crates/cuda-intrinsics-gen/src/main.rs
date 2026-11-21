@@ -11,6 +11,7 @@ mod libdevice_math;
 mod model;
 mod probe;
 mod ptx;
+mod record_runtime;
 mod render;
 mod resolve;
 mod util;
@@ -111,6 +112,15 @@ fn try_main() -> Result<()> {
             },
             ProbeInvocation::Candidate(options) => probe::run_candidate(&repo_root, options),
         },
+        "record-runtime" => {
+            let oracle = take_option(&mut arguments, "--oracle")?
+                .context("record-runtime requires --oracle NAME")?;
+            let llc = take_option(&mut arguments, "--llc")?
+                .map(PathBuf::from)
+                .context("record-runtime requires --llc FILE")?;
+            reject_extra(arguments)?;
+            record_runtime::run(&repo_root, &oracle, &llc)
+        }
         "check-abi-history" => {
             let base_ref = take_option(&mut arguments, "--base-ref")?
                 .context("check-abi-history requires --base-ref REF")?;
@@ -238,6 +248,7 @@ fn print_usage() {
          cuda-intrinsics-gen verify-libdevice --libdevice FILE --llvm-dis FILE [--repo-root DIR]\n  \
          cuda-intrinsics-gen coverage [--family NAME] [--repo-root DIR]\n  \
          cuda-intrinsics-gen check-abi-history --base-ref REF [--repo-root DIR]\n  \
+         cuda-intrinsics-gen record-runtime --oracle sparse_mma_fp8 --llc FILE [--repo-root DIR]\n  \
          cuda-intrinsics-gen probe [--all | --intrinsic ID] [--llc FILE] [--skip-terminal] [--per-target] [--repo-root DIR]\n  \
          cuda-intrinsics-gen probe --candidate --intrinsic ID --llc FILE --gpu-target TARGET --ptx-feature FEATURE (--ptxas FILE | --skip-terminal) [--repo-root DIR]"
     );

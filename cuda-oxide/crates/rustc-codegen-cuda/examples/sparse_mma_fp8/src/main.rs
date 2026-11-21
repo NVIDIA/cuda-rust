@@ -259,9 +259,11 @@ fn expect(r: usize, col: usize, nibble: u32, acc: bool) -> f32 {
     s as f32
 }
 
-fn run_oracle(ctx: &std::sync::Arc<CudaContext>) {
+fn run_oracle(
+    ctx: &std::sync::Arc<CudaContext>,
+    module: &kernels::LoadedModule,
+) -> Vec<(String, usize)> {
     let s = ctx.default_stream();
-    let module = kernels::load(ctx).expect("module");
     let mut out = DeviceBuffer::<f32>::zeroed(&s, VARIANTS * 128).unwrap();
     let cfg = LaunchConfig {
         block_dim: (32, 1, 1),
@@ -271,9 +273,17 @@ fn run_oracle(ctx: &std::sync::Arc<CudaContext>) {
     unsafe { module.oracle(&s, cfg, &mut out) }.unwrap();
     let buf = out.to_host_vec(&s).unwrap();
 
-    let names = ["e4m3 x e4m3", "e4m3 x e5m2", "e5m2 x e4m3", "e5m2 x e5m2"];
+    let forms = [
+        ("e4m3", "e4m3"),
+        ("e4m3", "e5m2"),
+        ("e5m2", "e4m3"),
+        ("e5m2", "e5m2"),
+    ];
+    let mut coverage = Vec::new();
     let mut bad = 0usize;
-    for (form, name) in names.iter().enumerate() {
+    for (form, (a, b)) in forms.into_iter().enumerate() {
+        let name = format!("{a} x {b}");
+        let mut comparisons = 0;
         for acc in 0..2 {
             let mut form_bad = 0usize;
             for ni in 0..METADATA_CODES as u32 {
@@ -285,6 +295,7 @@ fn run_oracle(ctx: &std::sync::Arc<CudaContext>) {
                         let col = (l % 4) * 2 + j % 2;
                         let want = expect(r, col, nibble, acc == 1);
                         let got = buf[variant * 128 + l * 4 + j];
+                        comparisons += 1;
                         if got.to_bits() != want.to_bits() {
                             eprintln!(
                                 "{name} C{} nibble {nibble:#x} lane {l} reg {j} \
@@ -303,12 +314,48 @@ fn run_oracle(ctx: &std::sync::Arc<CudaContext>) {
             );
             bad += form_bad;
         }
+        coverage.push((format!("mma_sp_m16n8k64_f32_{a}_{b}_f32"), comparisons));
     }
     assert_eq!(bad, 0, "sparse FP8 MMA accumulator mismatches");
     println!(
         "SUCCESS: all 4 sparse FP8 m16n8k64 forms x {METADATA_CODES} metadata codes x C=0/C!=0; \
          all 32 lanes and 4 logical accumulators/lane match host GEMM exactly"
     );
+    coverage
+}
+
+// The generator supplies PTX compiled from this oracle's optimized IR.
+fn record_runtime(
+    ctx: &std::sync::Arc<CudaContext>,
+    capability: (i32, i32),
+    path: &std::ffi::OsStr,
+) {
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(path).expect("read runtime PTX");
+    let ptx = std::str::from_utf8(&bytes).expect("UTF-8 PTX");
+    let directive = |key: &str| {
+        ptx.lines()
+            .find_map(|line| {
+                let mut words = line.split_ascii_whitespace();
+                (words.next() == Some(key)).then(|| words.next()).flatten()
+            })
+            .expect("PTX header directive")
+    };
+    let module = kernels::from_module(
+        ctx.load_module_from_image(&bytes)
+            .expect("load recorded PTX"),
+    )
+    .expect("bind recorded PTX");
+    let coverage = run_oracle(ctx, &module);
+    let report = serde_json::json!({
+        "device": ctx.device_name().expect("device name"),
+        "capability": capability,
+        "ptx_version": directive(".version"),
+        "ptx_target": directive(".target").trim_end_matches(','),
+        "ptx_sha256": format!("{:x}", Sha256::digest(&bytes)),
+        "coverage": coverage,
+    });
+    println!("cuda-oxide:sparse_mma_fp8:v1 {report}");
 }
 
 // ---------------------------------------------------------------------------
@@ -548,10 +595,21 @@ fn main() {
         println!("skipping: sparse FP8 MMA requires sm_89+, found sm_{major}{minor}");
         return;
     }
-    if std::env::args().any(|a| a == "--probe") {
+    let probe = std::env::args_os().any(|a| a == "--probe");
+    if std::env::args_os().any(|a| a == "--record-runtime") {
+        assert!(
+            !probe,
+            "--probe and --record-runtime are mutually exclusive"
+        );
+        let path = std::env::args_os()
+            .skip_while(|a| a != "--record-runtime")
+            .nth(1)
+            .expect("--record-runtime requires a PTX file");
+        record_runtime(&ctx, (major, minor), &path);
+    } else if probe {
         run_probe(&ctx);
     } else {
-        run_oracle(&ctx);
+        run_oracle(&ctx, &kernels::load(&ctx).expect("module"));
     }
 }
 

@@ -25,9 +25,9 @@ use std::process::Command;
 use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ToolIdentity {
-    version: String,
-    sha256: String,
+pub(crate) struct ToolIdentity {
+    pub(crate) version: String,
+    pub(crate) sha256: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1739,7 +1739,7 @@ fn resolve_evidence_tool_with_path(
         })
 }
 
-fn llc_identity(llc: &Path) -> Result<ToolIdentity> {
+pub(crate) fn llc_identity(llc: &Path) -> Result<ToolIdentity> {
     let version = Command::new(llc)
         .arg("--version")
         .output()

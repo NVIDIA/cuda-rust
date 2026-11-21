@@ -9,8 +9,8 @@ Notice what Safe Rust does *not* mean: it does not prove **functional correctnes
 
 On a GPU, thousands of threads run the same kernel function at once, and the Rust borrow checker cannot reason about thread coordinates or barriers:
 - **What Rust types already cover**: [Safe Kernels Using Rust's Type System](the-safety-model.md) proves one-thread-per-element writes with disjoint slices, and [Bounds Checks](bounds-checks.md) hoists row and column checks with matrix views.
-- **Where Rust types stop**: When 256 threads share an on-chip tile across barriers, the borrow checker cannot tell if two threads collide or if a barrier sits inside an `if` branch. Until now, those kernels needed `unsafe` blocks or unchecked indexing flags.
-- **How we make them provably safe**: The `#[verify(...)]` attribute pairs Rust's type system with compile-time **Lean 4** safety proofs, turning "safe(ish) SIMT" into **Provably Safe SIMT**.
+- **Where Rust types stop**: When 256 threads share an on-chip tile across barriers, the borrow checker cannot tell if two threads collide or if a barrier sits inside an `if` branch. Without compile-time verification, those kernels require `unsafe` blocks or unchecked indexing flags.
+- **How we make them provably safe**: The `#[verify(...)]` attribute pairs Rust's type system with compile-time **Lean 4** safety proofs, giving you **Provably Safe SIMT** across shared memory, barriers, and async hardware.
 
 ```{figure} images/three-gpu-hazards.svg
 :alt: Three GPU safety hazards proved at compile time by the verify attribute
@@ -41,26 +41,41 @@ We do not prove functional correctness or floating-point math formulas. Instead,
 
 ## 2. How It Works
 
-Verification splits the work between two places so GPU threads pay zero runtime cost:
-1. **At launch time on the CPU**: The host launcher checks buffer sizes and block dimensions once before launching the kernel.
-2. **At compile time in Lean 4**: The compiler pauses at `PostMem2Reg` (after promoting variables to SSA registers in `dialect-mir`), hands the kernel's indexing structure to Lean 4, and deletes the proven bounds checks before emitting PTX.
+Verification splits the work between compile time and launch time so GPU threads pay zero runtime cost:
+1. **Before launch on the CPU**: The host checks buffer sizes and launch dimensions once per kernel call.
+2. **At compile time in Lean 4**: Right after variables are promoted to SSA registers (and before loops are unrolled), the compiler translates the kernel line by line into Lean 4, proves every safety rule, and deletes the proven bounds checks before generating PTX.
 
 ```{figure} images/specify-and-verify-pipeline.svg
 :alt: Specify and Verify pipeline
 :align: center
 :width: 100%
 
-The compiler pauses in memory at `PostMem2Reg`, proves the kernel's obligations in Lean 4, erases the proven bounds checks, and resumes lowering to PTX.
+The compiler pauses in memory before loop unrolling, proves the kernel safe in Lean 4, erases the proven bounds checks, and resumes lowering to PTX.
 ```
 
 ### Compile Time vs. Runtime
 
-| Piece                 | Compile Time (Lean 4)                       | Runtime (Host CPU)                  | Runtime (GPU Threads)     |
-|:----------------------|:--------------------------------------------|:------------------------------------|:--------------------------|
-| Verification clauses  | Proves bounds, race freedom, and barriers   | Nothing                             | Bounds checks removed     |
-| Block dimensions      | Taken as a given fact; stamped into PTX     | Checked once when preparing launch  | Hardware enforces block   |
-| Length requirements   | Taken as a given assumption in the proof    | Checked once right before launch    | Nothing (already checked) |
-| Grid coverage         | Assumed in `writes_all_elems` proof         | Checks `out.len() <= grid * block`  | Nothing (already checked) |
+Almost all of the safety checking happens once when you build the kernel. Only the few numbers that do not exist until runtime (like dynamic slice lengths) are checked on the CPU right before launch, leaving the GPU threads completely free of extra checks:
+
+- **Proved once at compile time (Lean 4)**:
+  - Every global slice, shared-memory array, barrier array, and Tensor Memory index stays in bounds.
+  - Shared-memory and mutable-slice writes never collide across threads in the same phase.
+  - Block and cluster barriers are reached uniformly by all participating threads.
+  - Async DMA copies, producer-consumer ring buffers, 2-CTA cluster ranks, and Tensor Memory lifecycles happen in the right order.
+- **Checked once per launch (Host CPU)**:
+  - Block and cluster dimensions match what the kernel declared.
+  - Runtime buffer sizes satisfy the contract's length rules (for example, inputs are at least as long as the output).
+  - The launch grid is large enough when the kernel promises to write every output element.
+- **Paid per element on the GPU**:
+  - **Nothing.** Proven bounds checks are stripped out before PTX codegen, so inner loops compile down to the exact same machine instructions as hand-written unchecked code.
+
+| What Needs Checking        | Compile Time (Lean 4)                      | Launch Time (Host CPU)              | GPU Threads at Runtime |
+|:---------------------------|:-------------------------------------------|:------------------------------------|:-----------------------|
+| Slice & shared bounds      | Proved from guards, loops, and block shape | Checks slice length rules once      | Bounds checks removed  |
+| Race freedom & phases      | Proved across thread pairs and barriers    | Nothing                             | Zero extra sync cost   |
+| Async rings & clusters     | Proved by the control-flow state machine   | Checks block & cluster sizes once   | Native hardware ops    |
+| Tensor Memory lifecycle    | Proves warp slices, order, and column caps | Nothing                             | Native Tensor Core ops |
+| Full output coverage       | Proves active threads write their slot     | Checks grid covers output length    | Nothing                |
 
 ### What Rust Proves vs. What Lean 4 Proves
 
@@ -83,52 +98,72 @@ Unlike a C or CUDA C++ verifier, Lean 4 does not need to prove pointer validity,
 | **Shared-memory exclusivity**             | Lean 4 (`no_data_race` + barriers)     | Phase 0 writes one slot per thread or leader; Phase 1 reads    |
 | **In-bounds indexing**                    | Lean 4 (`no_oob_idx` + host check)     | Proved across all active threads before erasing bounds checks  |
 
-### Line-by-Line MIR Translation (Zero Shape Guessing)
+### How the Compiler Translates Your Kernel
 
-`lean-exporter` pauses right after `mem2reg` (before loop unrolling, so loops stay compact) and translates the kernel in two thin, fail-closed pieces:
-1. **`MirFunc` (1-to-1 basic blocks)**: Copies each integer, bitwise, branch, pointer-offset, `mir.assert`, shared/global load or store, and `TMEM` instruction 1-to-1 into Lean 4. Floating-point math becomes `.unk` because float values cannot change array indices.
-2. **`ControlFlowCfg` (barrier and hardware state machine)**: Transcribes basic-block edges and collective/async operations (`sync_threads`, `cluster_sync`, `mbarrier_*`, PTX proxy fences, TMA, DSMEM `map_shared_rank`, `CLC`, and `tcgen05` / `TMEM`).
-
-Lean 4 then proves 100% of the arithmetic, race-freedom, and hardware lifecycle obligations (`0 sorryAx`) without any pattern-matched indexing templates in the Rust compiler:
-- **Global and shared bounds (`no_oob_idx`)**: Symbolic execution (`inferSymTable`, validated by `rfl`) extracts plain integer **Verification Conditions (`VC`)** from every load, store, TMA transfer, and `Barrier` slot, and discharges them with `omega`.
-- **Shared-memory and `&mut [T]` race freedom (`no_data_race`, `disjoint_writes`)**: Prunes accesses separated by `sync_threads()` phases or `mbarrier` completion tokens, and proves that any remaining same-phase accesses hit distinct slots across threads.
-- **Barriers, rings, 2-CTA clusters, and `TMEM` (`uniform_barriers`, `tmem_lifecycle`)**: Proves block/cluster barrier uniformity, cyclic producer/consumer ring back-pressure, peer CTA rank bounds (`rank < clusterDimX`), and full-warp `tcgen05` / `TMEM` allocation and deallocation symmetry.
+cuda-oxide translates the kernel instruction by instruction before loop unrolling (while loops are still small and compact):
+- **Index math and branches** (adds, shifts, masks, loop counters, and `if` checks) are copied one-for-one into Lean 4.
+- **Floating-point math is ignored**, because float values cannot change which memory slot a thread touches.
+- **Barriers and async hardware ops** (block syncs, cluster syncs, hardware barriers, DMA copies, work-stealing, and Tensor Memory) are tracked in a small control-flow state machine.
+- **Lean 4 does all the proving**: it turns every memory access and thread pair into plain integer math, checks the hardware ordering rules, and only lets the compiler delete a bounds check once the proof succeeds.
 
 ### Trusted Computing Base
 
-Lean 4's kernel checks every proof obligation and rejects any proof that uses `sorryAx` or custom axioms. Everything outside that proof check is part of the **Trusted Computing Base (TCB)**:
-- **MIR import and SSA promotion**: Translating Rust into MIR and promoting stack locals to SSA registers.
-- **The Lean transcriber**: Copying `PostMem2Reg` basic blocks and control-flow operations 1-to-1 into Lean 4 (failing closed on unsupported ops or unknown attributes).
-- **Downstream lowering**: Erasing proven `mir.assert` bounds checks, unrolling loops, and lowering MIR to LLVM and PTX after verification succeeds.
-- **Host launch checks and CUDA runtime**: Enforcing launch-contract block dimensions and buffer length relations before the kernel runs.
+Lean 4 checks every proof from scratch and rejects anything that leaves a gap or adds custom assumptions. Everything outside that proof check is part of the **Trusted Computing Base (TCB)**:
+- **MIR import and SSA promotion**: Lowering Rust into compiler IR and turning stack variables into SSA registers.
+- **The Lean transcriber**: Copying basic blocks and control-flow ops into Lean 4, and stopping immediately if it sees an unsupported instruction or attribute.
+- **Downstream lowering**: Deleting proven bounds checks, unrolling loops, and generating LLVM IR and PTX after verification passes.
+- **Host launch checks and CUDA runtime**: Checking block sizes and buffer lengths on the CPU before launching the kernel.
 
 ---
 
 ## 3. Reading Verification Errors
 
-When a kernel has a bug, compilation stops before PTX is generated:
-- **Missing guards** (such as reading a slice outside an `if` check, or using `<=` instead of `<`) are caught immediately during the MIR walk.
-- **Index math or barrier bugs** (such as forgetting a host length check, indexing `a[idx + 1]`, or forgetting a barrier between a shared write and read) fail in Lean 4's arithmetic solver, which prints a counterexample:
+When a kernel has a safety bug, compilation stops before PTX is generated. You will see one of two kinds of Lean 4 errors depending on what went wrong:
+
+### Bounds and Data-Race Bugs (Arithmetic Counterexample)
+
+If an index can walk out of bounds or two threads can collide on the same shared-memory slot (for example, writing `a[idx + 1]` under `if idx < c.len()`, forgetting `if lane == 0`, or dropping a barrier between a write and a read), Lean's integer solver prints a counterexample:
 
 ```text
 error: omega could not prove the goal:
 a possible counterexample may satisfy the constraints
-  b - c ≥ 1
-  a - b ≥ 0
-  a - c ≤ 1
+  0 ≤ c ≤ 255
+  a - 256*b - c ≥ 1
+  256*b + c - e ≥ -1
+  a - e ≤ 0
+  ...
 where
-  a := ↑(lengths ⟨0, ...⟩)                 -- length of input a
-  b := ↑(lengths ⟨2, ...⟩)                 -- length of output c
-  c := ↑(Mir.globalIndex 256 block lane)   -- thread index
+  a := ↑(hvc_512.sliceLen 2)   -- length of parameter 2 (output c)
+  b := ↑hvc_511.bx             -- blockIdx.x
+  c := ↑hvc_511.tx             -- threadIdx.x (0..255)
+  e := ↑(hvc_512.sliceLen 0)   -- length of parameter 0 (input a)
 ```
 
-How to read that error in three quick steps:
-1. **Read the `where` legend at the bottom first**: Lean renames expressions to `a`, `b`, and `c`. Here `a` is the length of `a`, `b` is the length of `c`, and `c` is the thread index.
-2. **Plug those names into the inequalities**:
-   - `b - c >= 1` means the thread passed the `if` check (`idx < c.len()`).
-   - `a - b >= 0` means the host check passed (`a.len() >= c.len()`).
-   - `a - c <= 1` means `idx + 1 >= a.len()`, so `a[idx + 1]` walks off the end of `a`!
-3. **Test with simple numbers**: If both slices have length 10, thread 9 passes `9 < 10` and then reads `a[9 + 1] = a[10]`, which is out of bounds.
+How to read that output in three quick steps:
+1. **Start with the `where` legend at the bottom**:
+   - `sliceLen 0`, `sliceLen 1`, `sliceLen 2` are your slice parameters in function order (`a`, `b`, `c`).
+   - `bx` and `tx` are the block and thread coordinates (`256 * b + c` is the global thread index `idx`).
+   - Any `/ 18446744073709551616` terms are `2^64` from 64-bit `usize` wraparound checks; you can ignore them unless your index math itself overflows 64 bits.
+2. **Read the constraints with those names**:
+   - `a - (256*b + c) >= 1` means the thread passed `idx < c.len()`.
+   - `a - e <= 0` means the host launch check `a.len() >= c.len()` holds.
+   - `(256*b + c) - e >= -1` means `idx + 1 >= a.len()`, so `a[idx + 1]` walks off the end of `a`!
+3. **Plug in a tiny test case**: If both `a` and `c` have length 10, thread 9 passes `9 < 10` and reads `a[9 + 1] = a[10]`, which is out of bounds.
+
+### Barrier, Ring, and Tensor Memory Bugs (State-Machine Failure)
+
+If a barrier sits inside a divergent `if`, a ring producer forgets to wait on its empty barrier, or a Tensor Memory op runs out of order, Lean's control-flow state machine returns `false` instead of `true` and names the check that failed:
+
+```text
+error: Application type mismatch: The argument
+  rfl
+... is expected to have type
+  checkTmemLifecycleWith controlFlowCfg cfgStateMap = true
+```
+
+- `checkUniformBarriersWith ... = true` failing means a block sync, cluster sync, or cyclic ring barrier is not reached cleanly on all active paths.
+- `checkTmemLifecycleWith ... = true` failing means an async proxy fence, barrier wait, full-warp allocation/free, or Tensor Memory column bound was violated.
+- Run `cargo oxide lean-export <target>` at any time to inspect the generated Lean file alongside your MIR blocks.
 
 ---
 
@@ -204,9 +239,9 @@ In a 2D tiled matrix multiply (`safe_gemm_views`), a 16x16 block of 256 threads 
 Phase 0 writes one unique slot per thread. After the barrier wall, Phase 1 only reads. Keeping writes and cross-thread reads in separate phases prevents data races.
 ```
 
-Because Lean 4 proves `no_oob_idx`, `no_data_race`, and `uniform_barriers` at compile time:
-- **Both `unsafe` blocks in `sgemm_tiled_views` are gone**: In `gemm_views`, Phase 0 staging and Phase 1 scanning each needed an `unsafe { ... }` block around `TILE_A` and `TILE_B`. Adding `#[verify(no_oob_idx(TILE_A, TILE_B), no_data_race(TILE_A, TILE_B), uniform_barriers)]` removes both `unsafe` blocks and elides all 4 shared-memory bounds checks.
-- **Plain slice indexing is now safe too**: Even without matrix view types (`MatrixView32`), `sgemm_tiled_raw` is now 100% safe Rust and elides all 6 bounds checks (2 on global slices `a` and `b`, plus 4 on shared tiles `TILE_A` and `TILE_B`).
+Because Lean 4 proves bounds, race freedom, and uniform barriers at compile time:
+- **Zero `unsafe` blocks with matrix views**: Adding `#[verify(no_oob_idx(TILE_A, TILE_B), no_data_race(TILE_A, TILE_B), uniform_barriers)]` proves both phases of shared-memory access and removes all 4 shared-memory bounds checks.
+- **Plain slice indexing without wrapper views**: Even without matrix view types, `sgemm_tiled_raw` is 100% safe Rust and removes all 6 bounds checks (2 on global slices `a` and `b`, plus 4 on shared tiles `TILE_A` and `TILE_B`).
 
 ```rust
 #[kernel(launch_context = lc)]
@@ -268,7 +303,7 @@ $ cargo oxide run safe_gemm_views
 |:---------------------------------|:--------------|:---------------------------------|-------------------:|
 | Naive with views                 | Safe          | None (uses matrix views)         | ~7,225 GFLOPS      |
 | Tiled with views                 | Safe          | 4 shared-memory checks           | ~9,405 GFLOPS      |
-| Tiled without views (`tiled_raw`)| **Now Safe!** | 2 global + 4 shared-memory checks| ~9,390 GFLOPS      |
+| Tiled without views (`tiled_raw`)| Safe          | 2 global + 4 shared-memory checks| ~9,390 GFLOPS      |
 
 ---
 
@@ -351,10 +386,18 @@ $ cargo oxide run safe_warp_reduce
 
 ### Example 4: Sub-Warp Bitwise Splits & Multi-Buffer Staging
 
-High-throughput kernels often split a 256-thread 1D block into **16 sub-warps of 16 lanes** using bitwise shifts and masks (`m_local = tid >> 4`, `k_lane = tid & 15`) and stage data across **multiple shared-memory buffers** of different sizes (`S_X_DIRECT`, `S_XS_DIRECT`, and `S_ACT_DIRECT`) over three barrier phases:
-- **Phase 0 (Guarded & Packed Stage)**: Under `if tid < 64`, each active thread writes one scale into `S_XS_DIRECT[tid]` (`64` floats) and four packed activations into `S_X_DIRECT[tid * 4 + w]` (`256` floats).
-- **Phase 1 (Sub-Warp Scan & Leader Write)**: Every thread scans `S_X_DIRECT[k_lane * 16 + g]` and `S_XS_DIRECT[k_lane * 4 + g]` (`k_lane < 16`), reduces across its 16-lane sub-warp, and under `if k_lane == 0` writes `S_ACT_DIRECT[m_local]` (`16` floats).
-- **Phase 2 (Epilogue Read)**: After a second `sync_threads()`, threads under `if tid < 16` read `S_ACT_DIRECT[tid]`.
+High-throughput kernels often split a 256-thread block into **16 sub-warps of 16 lanes** using bit shifts and masks (`tid >> 4` and `tid & 15`) and stage data across **three shared-memory buffers** of different sizes over three barrier phases:
+- **Phase 0 (Guarded & packed stage)**: The first 64 threads each write one scale into the 64-float buffer and four packed activations into the 256-float buffer.
+- **Phase 1 (Sub-warp scan & leader write)**: Every thread scans across its sub-warp's slice, reduces across 16 lanes with warp shuffles, and lets lane 0 of each sub-warp write one output into the 16-float buffer.
+- **Phase 2 (Epilogue read)**: After a second barrier, the first 16 threads read the 16 sub-warp results.
+
+```{figure} images/subwarp-multibuffer-staging.svg
+:alt: Three-phase sub-warp bit-split and multi-buffer staging in shared memory
+:align: center
+:width: 100%
+
+Two barriers separate guarded packing in Phase 0, sub-warp scanning and leader writes in Phase 1, and the final epilogue read in Phase 2.
+```
 
 ```rust
 #[kernel(launch_context = lc)]
@@ -425,11 +468,11 @@ pub fn multibuf_subwarp_stage(data: &[f32], mut out: DisjointSlice<f32>) {
 ```
 
 How Lean 4 proves all three buffers and removes all 6 shared-memory bounds checks:
-- **Guarded and packed bounds (`Phase 0`)**: The exporter tracks `if tid < 64` as the active thread bound for Phase 0, proving `tid < 64` for `S_XS_DIRECT` and `tid * 4 + w < 64 * 4 = 256` for `S_X_DIRECT`. Because `w < 4`, distinct threads own disjoint 4-element segments (`tid₁ * 4 + w₁ = tid₂ * 4 + w₂` implies `tid₁ = tid₂`).
-- **Sub-warp bit-split bounds and leader exclusivity (`Phase 1`)**: Because `k_lane = tid & 15 < 16` for every thread, `k_lane * 16 + g < 256` and `k_lane * 4 + g < 64` hold across all 256 threads, while `if k_lane == 0` guarantees a single writer per sub-warp slot `m_local = tid >> 4 < 16`.
-- **Three-phase barrier separation (`Phase 0 -> 1 -> 2`)**: Two uniform `sync_threads()` barriers separate Phase 0 writes, Phase 1 reads/writes, and Phase 2 reads. Widening `if tid < 64` to `if tid < 128` or dropping the second barrier is rejected by Lean 4 at compile time.
+- **Phase 0 bounds and disjoint chunks**: Inside `if tid < 64`, each active thread stays below 64 on the scale buffer and owns its own 4-float chunk (`tid * 4 + w < 256`) on the activation buffer.
+- **Phase 1 sub-warp bounds and single writer**: Masking with `tid & 15` keeps every lane index below 16 across all 256 threads, while `if k_lane == 0` ensures only one leader thread writes each sub-warp slot (`tid >> 4 < 16`).
+- **Phase 2 barrier separation**: Two block-wide barriers separate Phase 0 writes, Phase 1 reads/writes, and Phase 2 reads. Widening the guard from 64 to 128 or dropping the second barrier is rejected at compile time.
 
-Inspect both Stage 4 kernels (`subwarp_bit_split_stage` and `multibuf_subwarp_stage`) or run them on the GPU with:
+Inspect both sub-warp kernels or run them on the GPU with:
 
 ```console
 $ cargo oxide lean-export safe_subwarp_stage
@@ -438,12 +481,20 @@ $ cargo oxide run safe_subwarp_stage
 
 ---
 
-### Example 5: Asynchronous TMA Bulk Copy & `mbarrier` Token Ordering
+### Example 5: Asynchronous TMA Bulk Copy & Barrier Ordering
 
-On Hopper and Blackwell GPUs, global-to-shared transfers run asynchronously on the **Tensor Memory Accelerator (TMA)** hardware engine while threads synchronize through a 64-bit shared-memory **`mbarrier`** (`BAR`) instead of `sync_threads()`:
-- **Producer (`if tid == 0`)**: Sets the expected arrival and byte counts via `mbarrier_arrive_expect_tx(&raw const BAR, 1, TILE_BYTES)` and launches `cp_async_bulk_tensor_2d_g2s_cta(&raw mut TILE as *mut u8, tensor_map, tile_x, tile_y, &raw mut BAR)`.
-- **Consumer Wait (all 256 threads)**: Spin-waits on `while !mbarrier_try_wait_parity(&raw const BAR, 0) {}` until both the arrival count and byte count hit zero.
-- **Consumer Read (all 256 threads)**: Reads `TILE[tid]` with **zero `unsafe` blocks** in the kernel body.
+On Hopper and Blackwell GPUs, global-to-shared copies run asynchronously on the **Tensor Memory Accelerator (TMA)** engine while threads coordinate through a shared-memory hardware barrier instead of a full block sync:
+- **Producer (thread 0)**: Sets the expected byte count on the barrier and kicks off the 2D TMA copy into shared memory.
+- **Consumer wait (all 256 threads)**: Spins on the barrier until both the thread arrival and the byte transfer finish.
+- **Consumer read (all 256 threads)**: Reads from the shared tile with zero `unsafe` blocks in the kernel body.
+
+```{figure} images/async-tma-mbarrier.svg
+:alt: Asynchronous 2D TMA bulk copy and hardware barrier handoff
+:align: center
+:width: 100%
+
+Thread 0 arms the byte count and launches the 2D TMA transfer; all 256 threads wait on the barrier before reading the staged tile.
+```
 
 ```rust
 #[kernel(launch_context = lc)]
@@ -476,7 +527,7 @@ pub fn async_copy_stage(
     }
     thread::sync_threads();
 
-    // Producer (`if tid == 0` mints token `StageProduced(TILE, BAR)`):
+    // Producer (thread 0 kicks off the 16 KiB TMA copy):
     if tid == 0 {
         let _ = mbarrier_arrive_expect_tx(&raw const BAR, 1, 16384);
         cp_async_bulk_tensor_2d_g2s_cta(
@@ -488,10 +539,10 @@ pub fn async_copy_stage(
         );
     }
 
-    // Token handoff (`StageProduced(TILE, BAR)` -> `StageReady(BAR)`):
+    // All 256 threads wait until the TMA transfer completes:
     while !mbarrier_try_wait_parity(&raw const BAR, 0) {}
 
-    // Consumer read dominated by `StageReady(BAR)` (0 `unsafe` blocks!):
+    // Safe read with bounds check removed:
     let val = TILE[tid];
     if let Some(out_elem) = out.get_mut(idx) {
         *out_elem = val;
@@ -499,10 +550,10 @@ pub fn async_copy_stage(
 }
 ```
 
-How Lean 4 verifies the asynchronous handoff:
-- **Single-leader producer (`MirNoSharedRace`)**: Because the TMA copy is guarded by `if tid == 0`, Lean 4 proves only thread 0 issues the write to `TILE`.
-- **Transfer byte bounds (`MirNoOobShared`)**: Lean 4 checks that the `16384`-byte TMA transfer (`4096` floats) fits inside `TILE`'s capacity.
-- **Completion ordering (`UniformBarriers` + `asyncOrdered`)**: Lean 4 verifies `mbarrier_init` + `fence_proxy_async_shared_cta()` before `sync_threads()`, expected-byte arming via `mbarrier_arrive_expect_tx`, and `mbarrier_try_wait_parity` before `TILE[tid]` is read. Omitting `mbarrier_arrive_expect_tx` or skipping the wait is rejected at compile time.
+How Lean 4 checks this handoff:
+- **Single producer**: Because the TMA launch sits inside `if tid == 0`, only thread 0 starts the shared-memory write.
+- **Transfer size fits**: Lean 4 checks that the 16,384-byte transfer (4,096 floats) fits inside the shared array.
+- **Wait before read**: Lean 4 checks that the barrier is initialized, fenced, armed with the expected byte count, and awaited on every path before any thread reads the tile. Skipping the wait or forgetting to arm the byte count stops compilation.
 
 Inspect the exported Lean proof or run the TMA copy on the GPU with:
 
@@ -513,12 +564,20 @@ $ cargo oxide run safe_async_copy
 
 ---
 
-### Example 6: Blackwell `tcgen05` Tensor Cores & `TMEM` Lifecycle
+### Example 6: Blackwell Tensor Cores & Tensor Memory
 
-On datacenter Blackwell GPUs (`sm_100a`, such as NVIDIA B200), 5th-generation Tensor Cores (`tcgen05.mma`) accumulate into dynamically allocated **Tensor Memory (`TMEM`)**:
-- **Warp 0 Allocation (`if warp_id == 0`)**: Collectively allocates `128` `TMEM` columns into `TMEM_ADDR[0]` via `tcgen05_alloc(&raw mut TMEM_ADDR[0], 128)`.
-- **2D TMA + Single-Thread MMA (`if tid == 0`)**: Stages `A` and `B` into `SMEM_A` and `SMEM_B`, builds shared-memory descriptors via `cvta_generic_to_shared_offset` and `Tcgen05SmemDescriptor::for_k_major`, issues `tcgen05_mma_f16`, and signals `MMA_BAR` via `tcgen05_commit_shared_cluster`.
-- **Warp-Partitioned `TMEM` Epilogue & Deallocation**: After `mbarrier_try_wait_parity(&raw const MMA_BAR, 0)`, each warp `0..4` reads its own 32-lane slice `(warp_id * 32) << 16` via `tcgen05_ld_32x32b_x1_raw` + `tcgen05_load_wait()`, syncs at `thread::sync_threads()`, and frees all `128` columns via `tcgen05_dealloc(tmem_addr, 128)` with **zero `unsafe` blocks** in the kernel.
+On datacenter Blackwell GPUs (such as NVIDIA B200), 5th-generation Tensor Cores accumulate into dynamically allocated **Tensor Memory (TMEM)** instead of regular registers:
+- **Allocation (warp 0)**: Warp 0 allocates 128 columns of Tensor Memory and stores the base address in shared memory.
+- **TMA + Tensor Core issue (thread 0)**: Thread 0 loads the input tiles via TMA, issues the matrix multiply into Tensor Memory, and commits completion to a barrier.
+- **Epilogue & free (all 4 warps)**: After waiting on the barrier, each warp reads its own 32-lane slice out of Tensor Memory, syncs across the block, and lets warp 0 free the 128 columns, all with zero `unsafe` blocks in the kernel.
+
+```{figure} images/blackwell-tcgen05-tmem.svg
+:alt: Blackwell Tensor Core and Tensor Memory lifecycle verification
+:align: center
+:width: 100%
+
+Warp 0 allocates 128 Tensor Memory columns, thread 0 issues and commits the Tensor Core multiply, each warp reads its own 32-lane slice, and warp 0 frees the columns after a block sync.
+```
 
 ```rust
 #[kernel(launch_context = lc)]
@@ -565,8 +624,7 @@ pub fn tcgen05_matmul_verified(
     }
     thread::sync_threads();
     let tmem_addr = TMEM_ADDR[0];
-    // ... TMA loads, tcgen05_mma_f16 + tcgen05_commit_shared_cluster,
-    //     mbarrier_try_wait_parity, tcgen05_ld_32x32b_x1_raw + tcgen05_load_wait ...
+    // ... TMA loads, Tensor Core MMA + commit, barrier wait, and TMEM load ...
     thread::sync_threads();
     if warp_id == 0 {
         tcgen05_dealloc(tmem_addr, 128);
@@ -574,7 +632,7 @@ pub fn tcgen05_matmul_verified(
 }
 ```
 
-Inspect the transcribed `MirFunc` and `ControlFlowCfg` or build and run on Blackwell (`sm_100a`):
+Inspect the generated Lean proof or build and run on Blackwell:
 
 ```console
 $ cargo oxide lean-export safe_tcgen05_matmul
@@ -583,22 +641,22 @@ $ cargo oxide run safe_tcgen05_matmul --arch sm_100a
 
 ---
 
-### Example 7: Warp-Specialized Rings & `SharedArray<Barrier, N>`
+### Example 7: Warp-Specialized Ring Buffers
 
-Persistent Hopper and Blackwell kernels dedicate one producer warp (`if warp_id == 4`) to streaming tiles into an `N`-stage ring buffer while consumer warps (`if warp_id < 4`) compute on earlier stages in parallel, synchronizing through indexed **`SharedArray<Barrier, N, 8>`** arrays (`FULL_BAR`, `EMPTY_BAR`, `META_BAR`):
+Fast persistent kernels rarely stop the whole block at a single barrier. Instead, they split warps by role: one **producer warp** streams tiles into a multi-stage ring buffer, while **consumer warps** compute on earlier stages at the same time, coordinating through arrays of barriers:
 
-```text
-  Producer Warp 4 (lane 0)                     Consumer Warps 0..3 (128 threads)
-  -----------------------------------------    -----------------------------------------
-  wait EMPTY_BAR[stage] (parity starts at 1)   wait FULL_BAR[stage] & META_BAR[stage]
-  TMA copy -> RING_BUF[stage * 1024]           read RING_BUF[stage * 1024 + tid]
-  write TILE_META[stage] -> arrive META_BAR    arrive EMPTY_BAR[stage] (lane 0)
+```{figure} images/warp-specialized-ring.svg
+:alt: Warp-specialized 4-stage producer and consumer ring buffer
+:align: center
+:width: 100%
+
+Warp 4 fills ring slots ahead of Warps 0..3; full-barrier and empty-barrier arrays keep each slot's writes and reads ordered across laps.
 ```
 
-In `safe_warp_ring`, Lean 4 proves all 4 ring stages and erases all 9 shared-memory and barrier-array bounds checks (`0` `unsafe` blocks):
-- **Inductive ring wrap bounds**: Proves `stage < 4` across cyclic `if stage + 1 == 4 { 0 } else { stage + 1 }`, `% 4`, and `& 3` updates. Changing `== 4` to `== 5` fails `MirNoOobShared` with an `omega` counterexample.
-- **Slot-exact barrier correspondence**: Proves that awaiting `FULL_BAR[c_stage]` unlocks `RING_BUF[c_stage * 1024]`, and rejects mismatched indices such as reading `(c_stage + 1) & 3` after awaiting `c_stage`.
-- **Cyclic back-pressure**: Rejects producer loops that omit the `EMPTY_BAR[stage]` wait before overwriting the ring slot on the next lap.
+What Lean 4 checks in the warp-ring example (erasing all 9 bounds checks with zero `unsafe` blocks):
+- **Ring wrap stays in bounds**: Whether you advance the stage counter with an `if` wraparound, `% 4`, or `& 3`, Lean 4 proves the stage index stays below 4 on every lap. An off-by-one wrap like `== 5` is caught at compile time.
+- **Matching barrier and data slots**: Waiting on slot `s` of the full-barrier array only unlocks slot `s` of the ring buffer. Waiting on slot `s` and accidentally reading `(s + 1) & 3` is rejected as a data race.
+- **No overwriting live data**: If the producer loop forgets to wait on the empty barrier before refilling a slot on the next lap, Lean 4 rejects the loop.
 
 ```console
 $ cargo oxide run safe_warp_ring
@@ -606,13 +664,21 @@ $ cargo oxide run safe_warp_ring
 
 ---
 
-### Example 8: 2-CTA Clusters, DSMEM & `CLC` Work-Stealing
+### Example 8: 2-CTA Clusters & Hardware Work-Stealing
 
-On Blackwell, two adjacent CTAs (`#[cluster_launch(2, 1, 1)]`) can exchange data over **Distributed Shared Memory (DSMEM)** (`cluster::map_shared_rank`), signal remote barriers (`mbarrier_arrive_cluster`), and dynamically steal output tiles via **Cluster Launch Control (`CLC`)** (`clc_try_cancel_multicast`):
+On Blackwell, two neighboring thread blocks can team up as a **2-CTA cluster** to share tiles across Distributed Shared Memory (DSMEM) and pull work dynamically from hardware **Cluster Launch Control (CLC)**:
 
-- **Peer CTA rank bounds (`MirNoOobClusterRank`)**: For `my_rank = cluster::cluster_ctaidX()`, Lean 4 proves `my_rank ^ 1 < 2` is always a valid peer rank in the 2-CTA cluster, and rejects out-of-bounds `my_rank + 1`.
-- **Cluster barrier ordering**: Lean 4 requires `cluster::cluster_sync()` (not CTA-local `thread::sync_threads()`) before cross-CTA DSMEM reads and before 2-CTA `tcgen05_dealloc_cg2`.
-- **16-byte `CLC` response protocol**: Proves `CLC_RESPONSE` holds at least 16 bytes (`SharedArray<u64, 2, 16>`) and is only queried after `CLC_BAR` completes.
+```{figure} images/two-cta-cluster-clc.svg
+:alt: Two-CTA cluster DSMEM exchange and hardware work-stealing
+:align: center
+:width: 100%
+
+Two partner blocks synchronize across the cluster before reading each other's shared memory, while hardware work-stealing delivers the next tile into a verified 16-byte buffer.
+```
+
+- **Safe peer rank**: In a 2-block cluster, your block rank is 0 or 1, so flipping the low bit (`my_rank ^ 1`) always points to your valid partner block. Lean 4 proves that peer rank is in bounds, and rejects bugs like `my_rank + 1` (which walks out of bounds on block 1).
+- **Cluster-wide syncs**: A local block sync only waits for your own block. Lean 4 checks that you run a full cluster sync before reading your partner block's shared memory or freeing shared 2-CTA Tensor Memory.
+- **Work-stealing mailbox**: Hardware work-stealing writes a 16-byte response asynchronously. Lean 4 checks that the response buffer is at least 16 bytes wide and that threads wait on its completion barrier before reading the stolen tile ID.
 
 ```console
 $ cargo oxide run safe_cluster_clc
@@ -620,30 +686,30 @@ $ cargo oxide run safe_cluster_clc
 
 ---
 
-### Example 9: Speed-of-Light Blackwell GEMM (`safe_gemm_sol_final`)
+### Example 9: Speed-of-Light Blackwell GEMM
 
-`safe_gemm_sol_final` combines every capability above on a full production Blackwell (`sm_100a`) FP16/BF16 GEMM (`338` MIR basic blocks, `192` threads = `6` warps per CTA in a `2 x 1 x 1` cluster):
-- **Warp 4 (TMA + `CLC`)**: Streams `A` and `B` tiles across a 7-stage, `224 KiB` multicast TMA ring (`SMEM_BUF`, `TMA_BAR[8]`, `MMA_BAR[8]`), steals work via `clc_try_cancel_multicast` (`CLC_RESPONSE`, `CLC_BAR`), and publishes coordinates through a 4-slot `TILE_INFO` mailbox (`TILE_READY[4]`).
-- **Warp 5 (2-CTA `tcgen05.mma`)**: Issues `tcgen05_mma_f16_cg2` across `M256xN256`, `M256xN224`, and `M256xN192` wave-tail descriptors into alternating 256-column halves of a `512`-column `TMEM` allocation (`ACCUM_FULL0/1`, `ACCUM_EMPTY0/1`).
-- **Warps 0..3 (Vectorized Epilogue)**: Unload `TMEM` via `tcgen05_ld_16x256b_x8_pure` + `tcgen05_load_wait()`, release `ACCUM_EMPTY0/1` locally or on CTA 0 via DSMEM `cluster::map_shared_rank`, transpose via `warp::shuffle_xor_sync`, and write 128-bit `U32x4` stores to global memory.
+The final example puts every piece together in a full production FP16/BF16 matrix multiply for NVIDIA B200 (6 warps per block across a 2-block cluster):
+- **Warp 4 (Producer + Work-Stealing)**: Streams A and B tiles into a 7-stage, 224 KiB shared-memory ring using 2-CTA multicast TMA, overlaps hardware work-stealing for the next tile, and posts tile coordinates to a 4-slot mailbox.
+- **Warp 5 (2-CTA Tensor Cores)**: Issues cooperative 2-CTA Tensor Core instructions into two alternating 256-column halves of a 512-column Tensor Memory buffer.
+- **Warps 0..3 (Epilogue)**: Unload Tensor Memory into registers, release the Tensor Memory stage early so the next tile can start, shuffle BF16 pairs across lanes, and write 128-bit stores to global memory.
 
 ```{figure} images/verified-blackwell-sol.svg
 :alt: Verified 2-CTA Blackwell GEMM pipeline in safe_gemm_sol_final
 :align: center
 :width: 100%
 
-Lean 4 proves all 7 shared-memory and barrier arrays, DSMEM peer ranks, CLC responses, and 512-column 2-stage TMEM lifecycles at compile time, erasing all 27 bounds checks with zero register spills.
+Lean 4 verifies all seven shared-memory and barrier arrays, partner CTA ranks, work-stealing responses, and 512-column Tensor Memory stages at compile time, erasing all 27 bounds checks with zero register spills.
 ```
 
-All `224 KiB` of shared memory, all 11 `mbarrier`s, DSMEM, `CLC`, and all `512` `TMEM` columns run without `unsafe` (leaving only one 4-line `unsafe` block for the final `U32x4` global output store on dynamically stolen `CLC` tile coordinates).
+All 224 KiB of shared memory, all 11 hardware barriers, cross-block DSMEM signaling, hardware work-stealing, and all 512 columns of Tensor Memory run without `unsafe` (leaving only one 4-line `unsafe` block at the very end for the 128-bit vectorized global output store on dynamically stolen tile coordinates).
 
-Measured back-to-back on an NVIDIA B200 (`sm_100a`, `2,000` warmup launches + median of `5 x 301` CUDA-event batches), the Lean-verified kernel matches **100%+** of the unsafe `--unchecked-indexing` reference across every problem size:
+Measured back-to-back on an NVIDIA B200 GPU, the Lean-verified kernel runs just as fast as the hand-tuned unsafe baseline:
 
-| Shape (`M = N = K`) | Unsafe (`gemm_sol_final`)  | Verified (`safe_gemm_sol_final`) | Verified vs. Unsafe |
-|:--------------------|:---------------------------|:---------------------------------|:--------------------|
-| `4,096^3`           | `1,855.5 TFLOPS` (`74.1 us`)| `1,858.4 TFLOPS` (`74.0 us`)     | `100.15%`           |
-| `8,192^3`           | `2,081.4 TFLOPS` (`528.3 us`)| `2,082.3 TFLOPS` (`528.0 us`)   | `100.04%`           |
-| `16,384^3`          | `2,118.1 TFLOPS` (`4.15 ms`)| `2,118.4 TFLOPS` (`4.15 ms`)     | `100.01%`           |
+| Problem Size | Unsafe Baseline            | Lean-Verified Safe         | Safe vs. Unsafe |
+|:-------------|:---------------------------|:---------------------------|:----------------|
+| 4096^3       | 1,855.5 TFLOPS (74.1 us)   | 1,858.4 TFLOPS (74.0 us)   | 100.15%         |
+| 8192^3       | 2,081.4 TFLOPS (528.3 us)  | 2,082.3 TFLOPS (528.0 us)  | 100.04%         |
+| 16384^3      | 2,118.1 TFLOPS (4.15 ms)   | 2,118.4 TFLOPS (4.15 ms)   | 100.01%         |
 
 Build and benchmark on B200 with:
 

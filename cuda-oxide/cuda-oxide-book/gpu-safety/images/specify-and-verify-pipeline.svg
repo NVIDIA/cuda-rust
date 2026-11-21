@@ -124,5 +124,5 @@
   </g>
 
   <!-- Bottom note -->
-  <text x="540" y="326" text-anchor="middle" font-size="12.5" style="fill: var(--sub)">If any proof obligation fails at Stage 3, compilation stops immediately before PTX is emitted.</text>
+  <text x="540" y="326" text-anchor="middle" font-size="12.5" style="fill: var(--sub)">If any proof obligation fails in Step 3, compilation stops immediately before PTX is emitted.</text>
 </svg>

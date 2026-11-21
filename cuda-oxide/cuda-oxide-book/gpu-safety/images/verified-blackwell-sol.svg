@@ -74,14 +74,14 @@
 
   <!-- Warp 5 MMA -->
   <g transform="translate(384, 88)">
-    <rect width="312" height="196" rx="10" style="fill: var(--purple-soft); stroke: var(--purple-border)" stroke-width="1.5"/>
-    <text x="156" y="28" text-anchor="middle" font-size="13.5" font-weight="700" style="fill: var(--purple-text)">Warp 5: 2-CTA tcgen05.mma</text>
+    <rect width="312" height="196" rx="10" style="fill: var(--panel); stroke: var(--panel-stroke)" stroke-width="1.5"/>
+    <text x="156" y="28" text-anchor="middle" font-size="13.5" font-weight="700" style="fill: var(--fg)">Warp 5: 2-CTA tcgen05.mma</text>
     <rect x="16" y="44" width="280" height="62" rx="6" style="fill: var(--box); stroke: var(--box-stroke)"/>
-    <text x="28" y="67" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--fg)">TMEM_0 (0..256) | TMEM_1 (256..512)</text>
-    <text x="28" y="88" font-family="'Roboto Mono', monospace" font-size="10.5" style="fill: var(--muted)">cta_group::2 ping-pong stages</text>
+    <text x="156" y="67" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--fg)">TMEM_0 (0..256) | TMEM_1 (256..512)</text>
+    <text x="156" y="88" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="10.5" style="fill: var(--muted)">cta_group::2 ping-pong stages</text>
     <rect x="16" y="116" width="280" height="62" rx="6" style="fill: var(--box); stroke: var(--box-stroke)"/>
-    <text x="28" y="139" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--fg)">ACCUM_FULL0/1 &lt;-&gt; ACCUM_EMPTY0/1</text>
-    <text x="28" y="160" font-family="'Roboto Mono', monospace" font-size="10.5" style="fill: var(--green)">Proved: tmem_lifecycle + 512 cols</text>
+    <text x="156" y="139" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--fg)">ACCUM_FULL0/1 &lt;-&gt; ACCUM_EMPTY0/1</text>
+    <text x="156" y="160" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="10.5" style="fill: var(--green)">Proved: tmem_lifecycle + 512 cols</text>
   </g>
 
   <line x1="696" y1="186" x2="728" y2="186" style="stroke: var(--green)" stroke-width="2" marker-end="url(#arrow-sol)"/>

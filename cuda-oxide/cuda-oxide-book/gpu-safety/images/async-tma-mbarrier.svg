@@ -1,0 +1,127 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 350" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <style>
+    :root, svg {
+      --bg: #ffffff;
+      --bg-stroke: #e2e8f0;
+      --panel: #f8fafc;
+      --panel-stroke: #cbd5e1;
+      --box: #ffffff;
+      --box-stroke: #cbd5e1;
+      --fg: #0f172a;
+      --text: #334155;
+      --sub: #475569;
+      --muted: #64748b;
+      --green: #15803d;
+      --green-text: #14532d;
+      --green-sub: #166534;
+      --green-soft: #f0fdf4;
+      --green-border: #86efac;
+      --blue: #2563eb;
+      --blue-text: #1e3a8a;
+      --blue-soft: #eff6ff;
+      --blue-border: #93c5fd;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root, svg {
+        --bg: #161b22;
+        --bg-stroke: #30363d;
+        --panel: #1e242c;
+        --panel-stroke: #3d444d;
+        --box: #13171d;
+        --box-stroke: #3d444d;
+        --fg: #f0f6fc;
+        --text: #c9d1d9;
+        --sub: #b1bac4;
+        --muted: #8b949e;
+        --green: #3fb950;
+        --green-text: #7ee787;
+        --green-sub: #56d364;
+        --green-soft: #12261e;
+        --green-border: #2ea043;
+        --blue: #58a6ff;
+        --blue-text: #a5d6ff;
+        --blue-soft: #132238;
+        --blue-border: #388bfd;
+      }
+    }
+  </style>
+  <defs>
+    <marker id="arrow-s5" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M 0 0.8 L 7.5 4 L 0 7.2 Z" style="fill: var(--sub)"/>
+    </marker>
+    <marker id="arrow-g5" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M 0 0.8 L 7.5 4 L 0 7.2 Z" style="fill: var(--green)"/>
+    </marker>
+  </defs>
+
+  <rect width="1080" height="350" rx="14" style="fill: var(--bg); stroke: var(--bg-stroke)" stroke-width="1.5"/>
+
+  <text x="40" y="40" font-size="18" font-weight="700" style="fill: var(--fg)">Asynchronous 2D TMA Copy &amp; Hardware Barrier Handoff</text>
+  <text x="40" y="62" font-size="13" style="fill: var(--muted)">Thread 0 launches the 16 KiB DMA copy; all 256 threads wait on the hardware barrier before reading.</text>
+
+  <!-- Step 1 -->
+  <g transform="translate(36, 88)">
+    <rect width="228" height="224" rx="10" style="fill: var(--panel); stroke: var(--panel-stroke)" stroke-width="1.5"/>
+    <text x="114" y="28" text-anchor="middle" font-size="14" font-weight="700" style="fill: var(--fg)">1. Init &amp; Proxy Fence</text>
+    <text x="114" y="47" text-anchor="middle" font-size="11.5" style="fill: var(--muted)">Thread 0, then block sync</text>
+
+    <rect x="16" y="62" width="196" height="38" rx="6" style="fill: var(--box); stroke: var(--box-stroke)"/>
+    <text x="114" y="85" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--text)">mbarrier_init(BAR, 1)</text>
+
+    <rect x="16" y="108" width="196" height="38" rx="6" style="fill: var(--box); stroke: var(--box-stroke)"/>
+    <text x="114" y="131" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--text)">fence_proxy_async()</text>
+
+    <rect x="16" y="154" width="196" height="38" rx="6" style="fill: var(--green-soft); stroke: var(--green-border)"/>
+    <text x="114" y="177" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--green-text)">sync_threads()</text>
+  </g>
+
+  <line x1="264" y1="200" x2="292" y2="200" style="stroke: var(--sub)" stroke-width="1.8" marker-end="url(#arrow-s5)"/>
+
+  <!-- Step 2 -->
+  <g transform="translate(296, 88)">
+    <rect width="228" height="224" rx="10" style="fill: var(--blue-soft); stroke: var(--blue-border)" stroke-width="1.5"/>
+    <text x="114" y="28" text-anchor="middle" font-size="14" font-weight="700" style="fill: var(--blue-text)">2. TMA DMA Issue</text>
+    <text x="114" y="47" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11.5" style="fill: var(--blue)">if tid == 0</text>
+
+    <rect x="16" y="66" width="196" height="48" rx="6" style="fill: var(--box); stroke: var(--blue-border)"/>
+    <text x="114" y="88" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--fg)">expect_tx(BAR, 16384)</text>
+    <text x="114" y="105" text-anchor="middle" font-size="10.5" style="fill: var(--muted)">16 KiB = 4,096 floats</text>
+
+    <rect x="16" y="124" width="196" height="48" rx="6" style="fill: var(--box); stroke: var(--blue-border)"/>
+    <text x="114" y="146" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--fg)">2D TMA -&gt; TILE[4096]</text>
+    <text x="114" y="163" text-anchor="middle" font-size="10.5" style="fill: var(--muted)">Single-leader DMA write</text>
+
+    <text x="114" y="200" text-anchor="middle" font-size="11.5" style="fill: var(--blue-text)">Transfer fits inside TILE</text>
+  </g>
+
+  <line x1="524" y1="200" x2="552" y2="200" style="stroke: var(--green)" stroke-width="2" marker-end="url(#arrow-g5)"/>
+
+  <!-- Step 3 -->
+  <g transform="translate(556, 88)">
+    <rect width="228" height="224" rx="10" style="fill: var(--green-soft); stroke: var(--green)" stroke-width="1.8" stroke-dasharray="6 4"/>
+    <text x="114" y="28" text-anchor="middle" font-size="14" font-weight="700" style="fill: var(--green-text)">3. Parity Wait</text>
+    <text x="114" y="47" text-anchor="middle" font-size="11.5" style="fill: var(--green-sub)">All 256 threads</text>
+
+    <rect x="16" y="76" width="196" height="72" rx="6" style="fill: var(--box); stroke: var(--green-border)"/>
+    <text x="114" y="106" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11" font-weight="600" style="fill: var(--green-text)">try_wait_parity(BAR, 0)</text>
+    <text x="114" y="129" text-anchor="middle" font-size="11" style="fill: var(--sub)">Spins until all 16,384 B</text>
+    <text x="114" y="143" text-anchor="middle" font-size="11" style="fill: var(--sub)">land in shared memory</text>
+
+    <text x="114" y="196" text-anchor="middle" font-size="11.5" style="fill: var(--green-text)">Orders DMA write before read</text>
+  </g>
+
+  <line x1="784" y1="200" x2="812" y2="200" style="stroke: var(--green)" stroke-width="2" marker-end="url(#arrow-g5)"/>
+
+  <!-- Step 4 -->
+  <g transform="translate(816, 88)">
+    <rect width="228" height="224" rx="10" style="fill: var(--panel); stroke: var(--panel-stroke)" stroke-width="1.5"/>
+    <text x="114" y="28" text-anchor="middle" font-size="14" font-weight="700" style="fill: var(--fg)">4. Safe Tile Read</text>
+    <text x="114" y="47" text-anchor="middle" font-size="11.5" style="fill: var(--muted)">All 256 threads</text>
+
+    <rect x="16" y="76" width="196" height="72" rx="6" style="fill: var(--box); stroke: var(--box-stroke)"/>
+    <text x="114" y="106" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="12" font-weight="600" style="fill: var(--fg)">let val = TILE[tid];</text>
+    <text x="114" y="131" text-anchor="middle" font-size="11.5" font-weight="600" style="fill: var(--green)">0 unsafe blocks</text>
+
+    <text x="114" y="196" text-anchor="middle" font-size="11.5" style="fill: var(--text)">Bounds check erased in PTX</text>
+  </g>
+</svg>

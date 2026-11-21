@@ -63,7 +63,7 @@
   <g transform="translate(36, 88)">
     <rect width="420" height="254" rx="10" style="fill: var(--panel); stroke: var(--panel-stroke)" stroke-width="1.5"/>
     <text x="24" y="30" font-size="15" font-weight="700" style="fill: var(--fg)">Phase 0: Warp Leader Stage</text>
-    <text x="24" y="50" font-family="'Roboto Mono', monospace" font-size="12" style="fill: var(--green)">pattern := .groupSlot 32, leaderOnly := true</text>
+    <text x="24" y="50" font-family="'Roboto Mono', monospace" font-size="12" style="fill: var(--green)">if lane == 0 { WARP_SUMS[tid / 32] = warp_sum }</text>
 
     <!-- Warp 0 group -->
     <rect x="44" y="68" width="152" height="46" rx="8" style="fill: var(--bg); stroke: var(--panel-stroke)" stroke-width="1"/>
@@ -106,7 +106,7 @@
   <g transform="translate(624, 88)">
     <rect width="420" height="254" rx="10" style="fill: var(--panel); stroke: var(--panel-stroke)" stroke-width="1.5"/>
     <text x="24" y="30" font-size="15" font-weight="700" style="fill: var(--fg)">Phase 1: Block Sum Scan</text>
-    <text x="24" y="50" font-family="'Roboto Mono', monospace" font-size="12" style="fill: var(--blue)">pattern := .linearScan, loopBound := 8</text>
+    <text x="24" y="50" font-family="'Roboto Mono', monospace" font-size="12" style="fill: var(--blue)">while w &lt; 8 { block_sum += WARP_SUMS[w] }</text>
 
     <!-- Thread scanning across WARP_SUMS[0..8] -->
     <circle cx="130" cy="92" r="15" style="fill: var(--blue-soft); stroke: var(--blue)" stroke-width="2"/>

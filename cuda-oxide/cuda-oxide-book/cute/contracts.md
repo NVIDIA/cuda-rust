@@ -18,7 +18,7 @@ Where cutlass-primitives sits: typed carriers select instruction families, one o
 | Rust types | layout, swizzle, operand role, element format, MMA shape, pipeline stage count, barrier ids; `TensorMut` over `DisjointSlice`; `TmemGuard` typestate; sealed traits |
 | cute-layout proofs | cooperative copy coverage and per-thread contiguity, `ldmatrix` source validity, TMA encodability and swizzle phase alignment |
 | dialect-cute verifier | tensor provenance, one pipeline init with complete producer and consumer state, cursor provenance, scheduler grids, MMA placement, epilogue phases, no compiler-only type reaches runtime storage |
-| Target gate | `sm_100a`, `sm_103a` or `sm_120a`; `tcgen05` only on `sm_100a` or `sm_103a`; MXF4 register MMA only on `sm_120a` |
+| Target gate | `sm_100a`, `sm_103a`, `sm_107a`, or `sm_120a`; `tcgen05` on `sm_100a`/`103a`/`107a`; SM107 `MXF8F6F4` on `sm_107a`; MXF4 `mma.sync` on `sm_120a` |
 | Launch ABI | cubin argument sizes and offsets match the exported MLIR; `#[grid_constant] &TensorMap` is a 128-byte by-value argument aligned to 64 |
 
 Any failure stops the build. The importer is closed-world: a `cute_rs::` call it does not
@@ -40,17 +40,24 @@ producer warp with identical arguments; the operation elects a lane internally. 
 outer elected-lane branch deadlocks once a stage is reused. TMA stores have one issuing
 thread, so this rule does not apply to them.
 
-**The A collector on SM100.** CUTLASS 4.7's MMA atom cannot choose when to fill or
-release the A collector, so the backend emits the `tcgen05` MMA instruction from the
-verified plan:
+**Collector buffers on SM100 and SM107.** Tensor Cores have a small internal scratchpad
+called a **collector** that can stash an input operand so the next MMA reuses it without
+reading shared memory again:
 
 ```text
-each K16:   first N partition   ──►  fill the A collector
-            second N partition  ──►  last use of the A collector
+SM100 paired FP16 (`Sm100TiledMma`, automatic per K16 step):
+  first N partition   ──►  fill the A collector
+  second N partition  ──►  last use of the A collector
+
+SM107 MXFP8 (`SM107BlockScaledMmaMXF8F6F4Op`, explicit `BCollector` type marker):
+  top M half    (`CollectorFill`)    ──►  reads B from SMEM and stashes B in the collector
+  bottom M half (`CollectorLastUse`) ──►  reuses B from the collector and frees the slot
 ```
 
-Translation owns the descriptor bits, instruction selection, barrier arrivals,
-completion multicast and TMEM fences.
+In `Sm100TiledMma`, the paired operation owns both halves so you cannot leave the A
+collector dangling. In `SM107BlockScaledMmaMXF8F6F4Op`, you choose `CollectorDiscard`,
+`CollectorFill`, or `CollectorLastUse` in the type parameters, and you own pairing each
+`CollectorFill` with a matching `CollectorLastUse` on the same `K = 64` sub-step.
 
 ## Grid-constant launch arguments
 

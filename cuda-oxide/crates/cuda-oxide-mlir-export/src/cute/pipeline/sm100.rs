@@ -48,6 +48,10 @@ pub(in crate::cute) fn emit_pipeline(
             let bar = e.barrier(a[0].clone(), Some(a[1].clone()))?;
             let bytes = e.constant(32, p.transaction_bytes as i128)?;
             let mut op = e.operation("nvvm.mbarrier.arrive.expect_tx", vec![bar, bytes])?;
+            op.properties.insert(
+                "operandSegmentSizes".into(),
+                MlirAttribute::DenseI32Array(vec![1, 1, 0, 0]),
+            );
             property(&mut op, "scope", "#nvvm.mem_scope<cluster>")?;
             op.properties
                 .insert("relaxed".into(), MlirAttribute::Bool(true));
@@ -73,6 +77,10 @@ pub(in crate::cute) fn emit_pipeline(
             let leader = e.constant(32, p.leader_rank as i128)?;
             let remote = e.value("nvvm.mapa", vec![bar, leader], llvm_ptr_type(7)?)?;
             let mut arrive = e.operation("nvvm.mbarrier.arrive", vec![remote])?;
+            arrive.properties.insert(
+                "operandSegmentSizes".into(),
+                MlirAttribute::DenseI32Array(vec![1, 0, 0]),
+            );
             property(&mut arrive, "scope", "#nvvm.mem_scope<cluster>")?;
             e.ops.push(arrive);
             e.emit("scf.yield", vec![])?;

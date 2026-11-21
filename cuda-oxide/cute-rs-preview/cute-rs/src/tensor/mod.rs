@@ -515,6 +515,13 @@ impl BitcastNumeric<crate::numeric::BFloat16, 8, 1> for u128 {
     }
 }
 
+impl BitcastNumeric<crate::numeric::BFloat16, 16, 8> for u32 {
+    #[inline(always)]
+    fn bitcast_tile(tile: RegisterTile<crate::numeric::BFloat16, 16>) -> RegisterTile<u32, 8> {
+        __compiler::register_tile_bitcast::<crate::numeric::BFloat16, u32, 16, 8>(&tile)
+    }
+}
+
 impl<const N: usize> ToNumeric<f32, N> for crate::numeric::BFloat16 {
     type Output = RegisterTile<crate::numeric::BFloat16, N>;
 

@@ -133,7 +133,7 @@ cuda-oxide is split into focused crates. Here is every one and its role:
 | `mir-transforms`     | Analyzes and optimizes `dialect-mir` before lowering; currently provides loop unrolling |
 | `nvvm-transforms`    | Converts lowered LLVM operations to the form accepted by the selected NVVM dialect     |
 | `llvm-export`        | Re-exports `pliron-llvm`'s LLVM dialect + cuda-oxide's textual `.ll` exporter          |
-| `cuda-oxide-mlir-export` | CUTLASS 4.7 mappings and profiles; upstream MLIR printing                                     |
+| `cuda-oxide-mlir-export` | CUTLASS 4.8.1 mappings and profiles; upstream MLIR printing                                   |
 | `dialect-nvvm`       | pliron dialect for NVIDIA GPU intrinsics (`tid`, `ntid`, barriers, TMA)                |
 | `mir-lower`          | Lowers `dialect-mir` to the LLVM dialect -- the main transformation pass               |
 | `cargo-oxide`        | CLI tool: `cargo oxide build`, `cargo oxide run`, `cargo oxide pipeline`               |

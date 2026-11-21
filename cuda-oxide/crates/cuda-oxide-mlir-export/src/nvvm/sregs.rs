@@ -10,11 +10,12 @@
 //! instead of being renamed by a catch-all rule.
 
 use crate::{
-    MlirOperation, OperationInput, OperationTranslation, TranslationError, TranslationRegistry,
-    TranslationSession,
+    MlirAttribute, MlirOperation, OperationInput, OperationTranslation, TranslationError,
+    TranslationRegistry, TranslationSession,
 };
 use dialect_nvvm::ops::{
-    ReadPtxSregCtaidXOp, ReadPtxSregCtaidYOp, ReadPtxSregCtaidZOp, ReadPtxSregNctaidXOp,
+    GridDependencyLaunchDependentsOp, GridDependencyWaitOp, ReadPtxSregCtaidXOp,
+    ReadPtxSregCtaidYOp, ReadPtxSregCtaidZOp, ReadPtxSregLaneIdOp, ReadPtxSregNctaidXOp,
     ReadPtxSregNctaidYOp, ReadPtxSregNctaidZOp, ReadPtxSregNtidXOp, ReadPtxSregNtidYOp,
     ReadPtxSregNtidZOp, ReadPtxSregTidXOp, ReadPtxSregTidYOp, ReadPtxSregTidZOp,
 };
@@ -73,7 +74,71 @@ pub fn register_nvvm_sreg_pack(registry: &mut TranslationRegistry) -> Result<(),
         target: "nvvm.read.ptx.sreg.nctaid.z",
         marker: "v1:i0012",
     })?;
+    registry.register_operation::<ReadPtxSregLaneIdOp>(SregTranslation {
+        target: "nvvm.read.ptx.sreg.laneid",
+        marker: "v1:i0016",
+    })?;
+    registry.register_operation::<GridDependencyLaunchDependentsOp>(GridDepControlTranslation {
+        action: "launch_dependents",
+        marker: "v1:i0913",
+    })?;
+    registry.register_operation::<GridDependencyWaitOp>(GridDepControlTranslation {
+        action: "wait",
+        marker: "v1:i0914",
+    })?;
     Ok(())
+}
+
+/// Translate one Programmatic Dependent Launch (`griddepcontrol`) action into `nvvm.griddepcontrol`.
+struct GridDepControlTranslation {
+    /// Action enum value inside `#nvvm.grid_dep_action<...>` (`wait` or `launch_dependents`).
+    action: &'static str,
+    /// Canonical catalog identity required before emitting this intrinsic.
+    marker: &'static str,
+}
+
+impl OperationTranslation for GridDepControlTranslation {
+    fn translate(
+        &self,
+        _ctx: &Context,
+        _source: Ptr<Operation>,
+        mut input: OperationInput,
+        _session: &mut TranslationSession<'_>,
+    ) -> Result<Vec<MlirOperation>, String> {
+        let marker = input
+            .attributes
+            .remove("cuda_oxide_intrinsic_marker")
+            .ok_or_else(|| {
+                format!(
+                    "nvvm.griddepcontrol has no cuda_oxide_intrinsic_marker; expected {}",
+                    self.marker
+                )
+            })?;
+        if marker != MlirAttribute::String(self.marker.into()) {
+            return Err(format!(
+                "nvvm.griddepcontrol expected intrinsic marker {}, got {marker:?}",
+                self.marker
+            ));
+        }
+        if !input.operands.is_empty()
+            || !input.results.is_empty()
+            || !input.successors.is_empty()
+            || !input.regions.is_empty()
+            || !input.attributes.is_empty()
+        {
+            return Err(
+                "nvvm.griddepcontrol expected no operands, no results, no successors, no regions, and no attributes"
+                    .into(),
+            );
+        }
+        let mut target = MlirOperation::new("nvvm.griddepcontrol")?;
+        target.properties.insert(
+            "kind".into(),
+            MlirAttribute::dialect(format!("#nvvm<grid_dep_action {}>", self.action))?,
+        );
+        target.location = input.location;
+        Ok(vec![target])
+    }
 }
 
 /// Translate one reviewed zero-operand coordinate read without widening the registered subset.

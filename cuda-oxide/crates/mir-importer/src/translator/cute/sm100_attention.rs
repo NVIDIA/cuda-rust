@@ -188,6 +188,14 @@ pub(crate) fn emit(
                 layout(&static_args, 0)?
             };
             let (b_layout, b_mn) = layout(&static_args, if ts { 0 } else { 1 })?;
+            let bf16 = if ts {
+                false
+            } else {
+                let Some(GenericArgKind::Type(elem_ty)) = static_args.0.get(6) else {
+                    return Err(invalid("MmaSs generic argument 6 must be an element type"));
+                };
+                super::static_config::decode_mma_half_is_bf16(elem_ty).map_err(invalid)?
+            };
             let plan = CuteSm100MmaAttr {
                 m,
                 n,
@@ -200,19 +208,28 @@ pub(crate) fn emit(
             };
             if ts {
                 CuteSm100MmaTsOp::new(ctx, operands, plan).get_operation()
+            } else if bf16 {
+                CuteSm100Bf16MmaSsOp::new(ctx, operands, plan).get_operation()
             } else {
                 CuteSm100MmaSsOp::new(ctx, operands, plan).get_operation()
             }
         }
         AttentionFn::TmaLoad | AttentionFn::TmaStore => {
+            let Some(GenericArgKind::Type(elem_ty)) = static_args.0.get(2) else {
+                return Err(invalid(
+                    "TmaCopy generic argument 2 must be an element type",
+                ));
+            };
+            let bf16 = super::static_config::decode_mma_half_is_bf16(elem_ty).map_err(invalid)?;
             let plan = CuteSm100TmaAttr {
                 layout: layout(&static_args, 0)?.0,
                 cta_group: constant(&static_args, 1, &loc)?,
             };
-            if matches!(kind, AttentionFn::TmaLoad) {
-                CuteSm100TmaLoadOp::new(ctx, operands, plan).get_operation()
-            } else {
-                CuteSm100TmaStoreOp::new(ctx, operands, plan).get_operation()
+            match (matches!(kind, AttentionFn::TmaLoad), bf16) {
+                (true, false) => CuteSm100TmaLoadOp::new(ctx, operands, plan).get_operation(),
+                (true, true) => CuteSm100Bf16TmaLoadOp::new(ctx, operands, plan).get_operation(),
+                (false, false) => CuteSm100TmaStoreOp::new(ctx, operands, plan).get_operation(),
+                (false, true) => CuteSm100Bf16TmaStoreOp::new(ctx, operands, plan).get_operation(),
             }
         }
     };

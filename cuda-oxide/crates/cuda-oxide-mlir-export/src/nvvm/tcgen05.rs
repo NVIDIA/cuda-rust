@@ -291,12 +291,12 @@ impl OperationTranslation for MmaTranslation {
 
         let form = mma.get_attr_nvvm_tcgen05_mma_form(ctx);
         let kind = mma.get_attr_nvvm_tcgen05_mma_kind(ctx);
-        if let Some((tensor_a, marker, mma_kind, scale_vec)) =
+        if let Some((tensor_a, marker, mma_kind, block_scale)) =
             match (form.as_deref(), kind.as_deref()) {
                 (
                     Some(Tcgen05MmaFormAttr::SharedMxf4BlockScale),
                     Some(Tcgen05MmaKindAttr::Mxf4BlockScale),
-                ) => Some((false, "v1:i1043", "mxf4", "x2")),
+                ) => Some((false, "v1:i1043", "mxf4", "default")),
                 (
                     Some(Tcgen05MmaFormAttr::SharedMxf4BlockScaleBlock32),
                     Some(Tcgen05MmaKindAttr::Mxf4BlockScaleBlock32),
@@ -304,7 +304,7 @@ impl OperationTranslation for MmaTranslation {
                 (
                     Some(Tcgen05MmaFormAttr::SharedMxf4nvf4BlockScaleBlock16),
                     Some(Tcgen05MmaKindAttr::Mxf4nvf4BlockScaleBlock16),
-                ) => Some((false, "v1:i1045", "mxf4nvf4", "block16")),
+                ) => Some((false, "v1:i1045", "mxf4nvf4", "default")),
                 (
                     Some(Tcgen05MmaFormAttr::SharedMxf4nvf4BlockScaleBlock32),
                     Some(Tcgen05MmaKindAttr::Mxf4nvf4BlockScaleBlock32),
@@ -312,7 +312,7 @@ impl OperationTranslation for MmaTranslation {
                 (
                     Some(Tcgen05MmaFormAttr::SharedMxf8f6f4BlockScale),
                     Some(Tcgen05MmaKindAttr::Mxf8f6f4BlockScale),
-                ) => Some((false, "v1:i1047", "mxf8f6f4", "x1")),
+                ) => Some((false, "v1:i1047", "mxf8f6f4", "default")),
                 (
                     Some(Tcgen05MmaFormAttr::SharedMxf8f6f4BlockScaleBlock32),
                     Some(Tcgen05MmaKindAttr::Mxf8f6f4BlockScaleBlock32),
@@ -320,7 +320,7 @@ impl OperationTranslation for MmaTranslation {
                 (
                     Some(Tcgen05MmaFormAttr::TensorMxf4BlockScale),
                     Some(Tcgen05MmaKindAttr::Mxf4BlockScale),
-                ) => Some((true, "v1:i1049", "mxf4", "x2")),
+                ) => Some((true, "v1:i1049", "mxf4", "default")),
                 (
                     Some(Tcgen05MmaFormAttr::TensorMxf4BlockScaleBlock32),
                     Some(Tcgen05MmaKindAttr::Mxf4BlockScaleBlock32),
@@ -328,7 +328,7 @@ impl OperationTranslation for MmaTranslation {
                 (
                     Some(Tcgen05MmaFormAttr::TensorMxf4nvf4BlockScaleBlock16),
                     Some(Tcgen05MmaKindAttr::Mxf4nvf4BlockScaleBlock16),
-                ) => Some((true, "v1:i1051", "mxf4nvf4", "block16")),
+                ) => Some((true, "v1:i1051", "mxf4nvf4", "default")),
                 (
                     Some(Tcgen05MmaFormAttr::TensorMxf4nvf4BlockScaleBlock32),
                     Some(Tcgen05MmaKindAttr::Mxf4nvf4BlockScaleBlock32),
@@ -336,7 +336,7 @@ impl OperationTranslation for MmaTranslation {
                 (
                     Some(Tcgen05MmaFormAttr::TensorMxf8f6f4BlockScale),
                     Some(Tcgen05MmaKindAttr::Mxf8f6f4BlockScale),
-                ) => Some((true, "v1:i1053", "mxf8f6f4", "x1")),
+                ) => Some((true, "v1:i1053", "mxf8f6f4", "default")),
                 (
                     Some(Tcgen05MmaFormAttr::TensorMxf8f6f4BlockScaleBlock32),
                     Some(Tcgen05MmaKindAttr::Mxf8f6f4BlockScaleBlock32),
@@ -371,7 +371,7 @@ impl OperationTranslation for MmaTranslation {
                 &input.location,
             )?;
             target.properties.insert(
-                "mmaKind".into(),
+                "kind".into(),
                 MlirAttribute::dialect(format!("#nvvm.tcgen05_mma_kind<{mma_kind}>"))?,
             );
             target
@@ -382,8 +382,8 @@ impl OperationTranslation for MmaTranslation {
                 MlirAttribute::dialect(format!("#nvvm.tcgen05_mma_collectorop<{collector}>"))?,
             );
             target.properties.insert(
-                "scaleVecSize".into(),
-                MlirAttribute::dialect(format!("#nvvm.tcgen05_mma_scale_vec<{scale_vec}>"))?,
+                "blockScale".into(),
+                MlirAttribute::dialect(format!("#nvvm.tcgen05_mma_block_scale<{block_scale}>"))?,
             );
             operations.push(target);
             return Ok(operations);
@@ -421,7 +421,7 @@ impl OperationTranslation for MmaTranslation {
         }
         let mut target = operation("nvvm.tcgen05.mma", input.operands, vec![], &input.location)?;
         target.properties.insert(
-            "mmaKind".into(),
+            "kind".into(),
             MlirAttribute::dialect("#nvvm.tcgen05_mma_kind<f16>")?,
         );
         target

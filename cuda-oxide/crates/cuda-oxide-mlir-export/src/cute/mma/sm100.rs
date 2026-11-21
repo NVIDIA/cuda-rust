@@ -45,7 +45,7 @@ pub(in crate::cute) fn emit_mma(
                 "nvvm.tcgen05.mma",
                 vec![dest, av.clone(), b, desc, accumulate.clone()],
             )?;
-            property(&mut op, "mmaKind", "#nvvm.tcgen05_mma_kind<f16>")?;
+            property(&mut op, "kind", "#nvvm.tcgen05_mma_kind<f16>")?;
             property(&mut op, "ctaGroup", "#nvvm.cta_group<cta_2>")?;
             property(
                 &mut op,

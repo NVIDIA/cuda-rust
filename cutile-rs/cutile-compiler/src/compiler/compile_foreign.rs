@@ -80,8 +80,9 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 ),
             );
         }
-        let mut generic_vars =
-            inference.get_generic_vars_instance(caller_generic_vars, self.modules.primitives());
+        let mut generic_vars = inference
+            .get_generic_vars_instance(caller_generic_vars, self.modules.primitives())
+            .map_err(|err| self.jit_error(&call.func.span(), &err.to_string()))?;
         generic_vars.ordered_param_vars = inference.params.clone();
         Ok(generic_vars)
     }

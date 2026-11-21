@@ -232,7 +232,8 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 generic_arg_inference.map_args_to_params(&call_arg_rust_tys, None, generic_vars)?;
                 // println!("inline_function_call {:#?}: generic_vars={generic_vars:#?} \nexpr_generic_args={expr_generic_args:#?} \ngeneric_arg_inference={generic_arg_inference:#?}", fn_item.sig.ident.to_string());
                 let inferred = generic_arg_inference
-                    .get_generic_vars_instance(generic_vars, self.modules.primitives());
+                    .get_generic_vars_instance(generic_vars, self.modules.primitives())
+                    .map_err(|err| self.jit_error(&call_expr.span(), &err.to_string()))?;
                 if turbofish_has_infer {
                     inferred.merge(generic_vars.from_expr_generic_args(
                         &fn_item.sig.generics,

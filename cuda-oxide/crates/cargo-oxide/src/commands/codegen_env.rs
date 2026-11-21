@@ -4,7 +4,7 @@
  */
 
 use crate::{backend, cutlass_toolchain, platform};
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -352,6 +352,7 @@ pub(super) fn apply_host_linker_rustflags_or_exit(cmd: &mut Command, ctx: &Conte
 /// every configured array element and `--device-cfg` value intact.
 fn build_encoded_rustflags(
     ctx: &Context,
+    configured_rustflags: &[String],
     profile: CodegenProfilePolicy,
     device_cfgs: &[String],
 ) -> Result<String, String> {
@@ -366,7 +367,7 @@ fn build_encoded_rustflags(
     Ok(build_encoded_rustflags_with_existing(
         &ctx.backend_so,
         profile,
-        &ctx.config.extra_rustflags,
+        configured_rustflags,
         &explicit_rustflags,
         existing_encoded.as_deref(),
         existing.as_deref(),
@@ -569,6 +570,146 @@ pub(super) fn append_full_debug_rustflags(
     }
 }
 
+/// Cargo's name for the host triple in `--target` and `CARGO_BUILD_TARGET`.
+const HOST_TUPLE: &str = "host-tuple";
+
+/// The target triple a Cargo command builds for, as far as `extra-rustflags`
+/// selection needs it: an explicit `--target` among the Cargo arguments,
+/// before any `--` that starts the program's or test binary's arguments, else
+/// `CARGO_BUILD_TARGET` (the command's own, then the inherited one). `None`
+/// means the command names none, so Cargo builds for the host. `host-tuple`
+/// resolves through `host_triple`, which is asked at most once.
+///
+/// `[build] target` in a Cargo config file is not read here; a project that
+/// sets it and has `[target.<triple>]` tables passes `--target` instead.
+pub(super) fn explicit_cargo_target(
+    cmd: &Command,
+    inherited_build_target: Option<&str>,
+    host_triple: &mut dyn FnMut() -> Option<String>,
+) -> Result<Option<String>, String> {
+    let mut host: Option<Option<String>> = None;
+    let mut resolve = |value: String| -> Result<String, String> {
+        if value != HOST_TUPLE {
+            return Ok(value);
+        }
+        host.get_or_insert_with(&mut *host_triple)
+            .clone()
+            .ok_or_else(|| {
+                "cuda-oxide config `[target.<triple>] extra-rustflags`: the build's target is \
+             `host-tuple`, and `rustc -vV` could not be run or printed no host line"
+                    .to_string()
+            })
+    };
+    let mut named: Vec<String> = Vec::new();
+    let mut args = cmd.get_args().map(|arg| arg.to_string_lossy().into_owned());
+    while let Some(arg) = args.next() {
+        if arg == "--" {
+            break;
+        }
+        if arg == "--target" {
+            if let Some(value) = args.next() {
+                named.push(resolve(value)?);
+            }
+        } else if let Some(value) = arg.strip_prefix("--target=") {
+            named.push(resolve(value.to_string())?);
+        }
+    }
+    named.sort();
+    named.dedup();
+    match named.as_slice() {
+        [] => {}
+        [one] => return Ok(Some(one.clone())),
+        several => {
+            return Err(format!(
+                "cuda-oxide config `[target.<triple>] extra-rustflags` selects one triple's \
+                 flags, and this command names several targets: {}",
+                several.join(", ")
+            ));
+        }
+    }
+    let own = cmd
+        .get_envs()
+        .find(|(name, _)| *name == OsStr::new("CARGO_BUILD_TARGET"))
+        .map(|(_, value)| value.map(|v| v.to_string_lossy().into_owned()));
+    match own {
+        Some(value) => value,
+        None => inherited_build_target.map(str::to_string),
+    }
+    .filter(|value| !value.is_empty())
+    .map(resolve)
+    .transpose()
+}
+
+/// `rustc -vV` as Cargo would run it for `cmd`: the compiler is `RUSTC`, else
+/// `CARGO_BUILD_RUSTC` (each the command's own value before the inherited
+/// one), else `rustc` from `PATH`; it runs in `cmd`'s directory with `cmd`'s
+/// environment changes, so a toolchain file or a `RUSTUP_TOOLCHAIN` the build
+/// sees applies to the probe too. `[build] rustc` in a Cargo config file is
+/// not read, and `RUSTC_WRAPPER` / `RUSTC_WORKSPACE_WRAPPER` are not applied:
+/// the probe asks the compiler itself.
+pub(super) fn host_probe_command(
+    cmd: &Command,
+    inherited: &dyn Fn(&str) -> Option<OsString>,
+) -> Command {
+    let pick = |name: &str| {
+        let own = cmd
+            .get_envs()
+            .find(|(key, _)| *key == OsStr::new(name))
+            .map(|(_, value)| value.map(OsStr::to_os_string));
+        match own {
+            Some(value) => value,
+            None => inherited(name),
+        }
+        .filter(|value| !value.is_empty())
+    };
+    let program = pick("RUSTC")
+        .or_else(|| pick("CARGO_BUILD_RUSTC"))
+        .unwrap_or_else(|| OsString::from("rustc"));
+    let mut probe = Command::new(program);
+    probe.arg("-vV");
+    if let Some(dir) = cmd.get_current_dir() {
+        probe.current_dir(dir);
+    }
+    for (key, value) in cmd.get_envs() {
+        match value {
+            Some(value) => probe.env(key, value),
+            None => probe.env_remove(key),
+        };
+    }
+    probe
+}
+
+/// The `host:` line of a `rustc -vV` run; `None` when it cannot run, fails,
+/// or prints none.
+pub(super) fn host_triple_of(mut probe: Command) -> Option<String> {
+    let output = probe.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.strip_prefix("host: ").map(str::to_owned))
+}
+
+/// The project rustflags for `cmd`'s build: `ctx`'s top-level list, then the
+/// table of the triple the command builds for. The host triple is asked of
+/// the build's own `rustc -vV` ([`host_probe_command`]) only when the config
+/// has `[target.<triple>]` tables and the command names no target or names
+/// `host-tuple`.
+fn configured_rustflags_for_command(ctx: &Context, cmd: &Command) -> Result<Vec<String>, String> {
+    if ctx.config.target_extra_rustflags.is_empty() {
+        return ctx.config.extra_rustflags_for(None);
+    }
+    let inherited = |name: &str| std::env::var_os(name);
+    let mut probe_host = || host_triple_of(host_probe_command(cmd, &inherited));
+    let inherited_target = std::env::var("CARGO_BUILD_TARGET").ok();
+    let triple = match explicit_cargo_target(cmd, inherited_target.as_deref(), &mut probe_host)? {
+        Some(triple) => Some(triple),
+        None => probe_host(),
+    };
+    ctx.config.extra_rustflags_for(triple.as_deref())
+}
+
 /// Set `CARGO_ENCODED_RUSTFLAGS`, `RUSTC_BOOTSTRAP`, and profile pins on `cmd`.
 fn apply_codegen_rustflags(
     cmd: &mut Command,
@@ -576,7 +717,8 @@ fn apply_codegen_rustflags(
     profile: CodegenProfilePolicy,
     device_cfgs: &[String],
 ) -> Result<(), String> {
-    let mut encoded = build_encoded_rustflags(ctx, profile, device_cfgs)?;
+    let configured = configured_rustflags_for_command(ctx, cmd)?;
+    let mut encoded = build_encoded_rustflags(ctx, &configured, profile, device_cfgs)?;
     let inherited_debug = std::env::var("CUDA_OXIDE_DEBUG").ok();
     append_full_debug_rustflags(&mut encoded, cmd, inherited_debug.as_deref());
 

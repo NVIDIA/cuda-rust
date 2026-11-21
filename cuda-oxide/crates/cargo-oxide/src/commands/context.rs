@@ -4,6 +4,7 @@
  */
 
 use crate::backend;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::*;
@@ -15,10 +16,47 @@ pub struct OxideConfig {
     pub backend: Option<PathBuf>,
     /// Default CUDA architecture for codegen commands.
     pub default_arch: Option<String>,
-    /// Additional rustflags appended after cuda-oxide's required flags.
+    /// Additional rustflags appended after cuda-oxide's required flags, for
+    /// every target triple (top-level `extra-rustflags`).
     pub extra_rustflags: Vec<String>,
+    /// `[target.<triple>] extra-rustflags`: appended after `extra_rustflags`
+    /// only when the build's target triple is `<triple>`. A triple with no
+    /// table gets `extra_rustflags` alone.
+    pub target_extra_rustflags: BTreeMap<String, Vec<String>>,
     /// Environment variables applied to child Cargo invocations.
     pub env: Vec<(String, String)>,
+}
+
+impl OxideConfig {
+    /// The project rustflags for a build of `triple`: the top-level list, then
+    /// the triple's own table. rustc keeps the last of a repeated `-C` option,
+    /// so a triple's `-C target-cpu` overrides a top-level one.
+    ///
+    /// `triple` is only consulted when a `[target.<triple>]` table exists; with
+    /// tables present and no triple known the result is an error, never the
+    /// flags of some other triple.
+    pub fn extra_rustflags_for(&self, triple: Option<&str>) -> Result<Vec<String>, String> {
+        let mut flags = self.extra_rustflags.clone();
+        if self.target_extra_rustflags.is_empty() {
+            return Ok(flags);
+        }
+        let Some(triple) = triple else {
+            return Err(format!(
+                "cuda-oxide config has `[target.<triple>] extra-rustflags` for {}, but the \
+                 build's target triple is unknown (no `--target`, no CARGO_BUILD_TARGET, and \
+                 the build's `rustc -vV` could not be run or printed no host line)",
+                self.target_extra_rustflags
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        };
+        if let Some(own) = self.target_extra_rustflags.get(triple) {
+            flags.extend(own.iter().cloned());
+        }
+        Ok(flags)
+    }
 }
 
 /// Pre-resolved context shared across all commands.
@@ -342,6 +380,16 @@ pub(super) fn inspect_oxide_config(workspace_root: &Path) -> OxideConfigInspecti
             Vec::new()
         }
     };
+    let target_extra_rustflags = match table.get("target") {
+        None => BTreeMap::new(),
+        Some(value) => match parse_config_targets(value, &config_path) {
+            Ok(targets) => targets,
+            Err(error) => {
+                errors.push(error);
+                BTreeMap::new()
+            }
+        },
+    };
     let env = match table.get("env") {
         None => Vec::new(),
         Some(value) => match parse_config_env(value, &config_path) {
@@ -373,6 +421,7 @@ pub(super) fn inspect_oxide_config(workspace_root: &Path) -> OxideConfigInspecti
             backend,
             default_arch,
             extra_rustflags,
+            target_extra_rustflags,
             env,
         },
         warnings,
@@ -487,6 +536,55 @@ fn optional_config_string_array(
                 .collect()
         }
     }
+}
+
+/// Parse `[target.<triple>]` tables. Each holds only `extra-rustflags`; a key
+/// is a plain target triple. Cargo's `cfg(...)` keys and any other field are
+/// refused by name rather than ignored, since an ignored table would build
+/// without the flags its author wrote.
+fn parse_config_targets(
+    value: &toml::Value,
+    config_path: &Path,
+) -> Result<BTreeMap<String, Vec<String>>, String> {
+    let table = value.as_table().ok_or_else(|| {
+        format!(
+            "cuda-oxide config {} field `target` must be a table of `[target.<triple>]` tables",
+            config_path.display()
+        )
+    })?;
+    let mut targets = BTreeMap::new();
+    for (triple, entry) in table {
+        if triple.starts_with("cfg(") {
+            return Err(format!(
+                "cuda-oxide config {} `[target.'{triple}']`: cfg expressions are not \
+                 supported; name the target triple",
+                config_path.display()
+            ));
+        }
+        let entry = entry.as_table().ok_or_else(|| {
+            format!(
+                "cuda-oxide config {} `target.{triple}` must be a table",
+                config_path.display()
+            )
+        })?;
+        if let Some(key) = entry.keys().find(|key| key.as_str() != "extra-rustflags") {
+            return Err(format!(
+                "cuda-oxide config {} `[target.{triple}]` has unknown field `{key}`; \
+                 the only field is `extra-rustflags`",
+                config_path.display()
+            ));
+        }
+        let flags =
+            optional_config_string_array(entry, "extra-rustflags", config_path).map_err(|_| {
+                format!(
+                    "cuda-oxide config {} `[target.{triple}]` field `extra-rustflags` must be \
+                     an array of strings",
+                    config_path.display()
+                )
+            })?;
+        targets.insert(triple.clone(), flags);
+    }
+    Ok(targets)
 }
 
 fn parse_config_env(

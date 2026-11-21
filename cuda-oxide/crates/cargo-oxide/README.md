@@ -561,6 +561,39 @@ Relative backend paths are resolved from the `.cargo` directory containing the
 config file. Each `extra-rustflags` array element remains one rustc argument,
 including values that contain spaces.
 
+Flags that belong to one host CPU, such as `-C target-cpu=...`, go in a
+`[target.<triple>]` table, so one config serves several host architectures:
+
+```toml
+extra-rustflags = ["--cfg", "my_device_cfg"]   # every triple
+
+[target.x86_64-unknown-linux-gnu]
+extra-rustflags = ["-C", "target-cpu=znver3"]
+
+[target.aarch64-unknown-linux-gnu]
+extra-rustflags = ["-C", "target-cpu=native"]
+```
+
+A build gets the top-level list, then the table of the triple it builds for.
+That triple is, in order:
+
+1. a `--target` among the Cargo arguments, which follow the first `--`
+   (`cargo oxide build -- --target aarch64-unknown-linux-gnu`); a later `--`
+   that starts test or program arguments ends the search;
+2. `CARGO_BUILD_TARGET`, which also serves the commands that take no Cargo
+   arguments, such as `cargo oxide run <example>`;
+3. the host triple of `rustc -vV`, run as the build would run it: `RUSTC`,
+   else `CARGO_BUILD_RUSTC`, else `rustc`, from the project directory.
+
+`host-tuple` in 1 or 2 means the host triple of 3. A triple with no table gets
+the top-level list alone. A config without `[target.*]` tables behaves as
+before and runs no extra `rustc -vV`. `[build] target` and `[build] rustc` in
+a Cargo config file are not consulted, and the probe in 3 does not go
+through `RUSTC_WRAPPER`; pass `--target` when you cross-compile.
+The only field of a table is `extra-rustflags`; `cfg(...)` keys and other
+fields are refused, and so are two different `--target` values in one command,
+since each triple's flags would apply to both.
+
 Configuration values are defaults. Precedence is:
 
 1. explicit `cargo oxide` flags and internal artifact paths;

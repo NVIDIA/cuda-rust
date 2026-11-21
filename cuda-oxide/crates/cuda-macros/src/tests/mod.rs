@@ -4,6 +4,7 @@
  */
 
 mod cuda_module;
+mod device;
 mod kernel;
 mod launch;
 mod printf;

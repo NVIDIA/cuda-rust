@@ -61,6 +61,6 @@
 <text class="ts tx-amber" x="520" y="633">cute + cute_nvgpu + nvvm MLIR</text>
 <line class="arr" x1="664" y1="622" x2="692" y2="622" marker-end="url(#arrow-stack)"/>
 <rect class="k-teal" x="696" y="592" width="288" height="60" rx="8" stroke-width="0.9"/>
-<text class="th tx-teal" x="840" y="612">CUTLASS 4.7 → Cubin</text>
+<text class="th tx-teal" x="840" y="612">CUTLASS 4.8.1 → Cubin</text>
 <text class="ts tx-teal" x="840" y="633">Validated &amp; embedded in host</text>
 </svg>

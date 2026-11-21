@@ -277,6 +277,8 @@ compiles a Rust kernel to PTX, launches it on the GPU, and prints
 | `nemotron3_moe`           | Nemotron-3 NVFP4 ReLU² MoE (`models/`): native SIMT + 5th-gen `tcgen05`  |
 | `nemotron3_moe_cute`      | Nemotron-3 NVFP4 ReLU² MoE (`cute-rs-preview/models/`): typed `cute-rs`  |
 | `sm100_qkv_epilogue_cute` | Fused QKV + RMSNorm + FP8 quant + paged KV scatter (`cute-rs-preview/`)  |
+| `sm107_bf16_gemm_cute`    | Rubin (`sm_107a`) & Blackwell two-CTA persistent BF16 GEMM + PDL         |
+| `sm107_mxfp8_gemm_cute`   | Rubin (`sm_107a`) persistent MXFP8 (`E4M3 + UE8M0`) GEMM + B-reuse + PDL |
 | `qwen3_8b_cute`           | End-to-end 36-layer `Qwen/Qwen3-8B` in BF16 and NVFP4 (`cute-rs-preview`)|
 | `qwen_decoder_cute`       | End-to-end `Qwen3-TTS 1.7B` neural audio codec & speech decoder          |
 | `host_closure`            | Generic kernels with closures passed from host                           |

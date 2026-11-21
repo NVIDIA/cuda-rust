@@ -546,7 +546,7 @@ enum ToolchainCommand {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum ManagedToolchain {
-    /// NVIDIA CUTLASS compiler 4.7.0 for Linux x86_64 and CUDA 13
+    /// NVIDIA CUTLASS compiler 4.8.1 for Linux (x86_64, aarch64) and CUDA 13
     Cutlass,
 }
 

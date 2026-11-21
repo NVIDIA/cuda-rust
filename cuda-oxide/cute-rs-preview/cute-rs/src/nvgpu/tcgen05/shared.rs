@@ -135,36 +135,53 @@ impl<Role> Sm100ScaleTile<Role> {
     }
 }
 
-/// Non-owning shared tile, typed by its physical layout and MMA operand role.
-pub struct SharedTile<L, Role> {
-    /// Original shared FP16 allocation base, before selecting an array tile.
+/// Sealed element marker for 16-bit (`f16` and `BFloat16`) `tcgen05` shared operand tiles.
+mod sealed_elem {
+    /// Implemented only for 2-byte floating-point types accepted by `tcgen05.MmaF16BF16Op`.
+    pub trait MmaHalfElement {}
+}
+
+/// Element type accepted by 16-bit `tcgen05` [`SharedTile`], [`SharedTileArray`], and [`MmaSs`](super::MmaSs).
+pub trait MmaHalfElement: sealed_elem::MmaHalfElement + Copy {}
+
+impl sealed_elem::MmaHalfElement for f16 {}
+impl MmaHalfElement for f16 {}
+impl sealed_elem::MmaHalfElement for crate::numeric::BFloat16 {}
+impl MmaHalfElement for crate::numeric::BFloat16 {}
+
+/// Non-owning shared tile, typed by its physical layout, MMA operand role, and 16-bit element type `T`.
+pub struct SharedTile<L, Role, T = f16> {
+    /// Original shared 16-bit allocation base, before selecting an array tile.
     pub(crate) base: *mut f16,
     /// Byte displacement of this tile from the original allocation base.
     pub(crate) byte_offset: u32,
-    /// Carries the physical layout and MMA operand role.
-    marker: PhantomData<(L, Role)>,
+    /// Carries the physical layout, MMA operand role, and element type `T`.
+    marker: PhantomData<(L, Role, T)>,
 }
-impl<L: SmemLayout, Role> SharedTile<L, Role> {
+impl<L: SmemLayout, Role, T: MmaHalfElement> SharedTile<L, Role, T> {
     /// # Safety
     /// Storage must cover the layout and remain live through asynchronous use.
     /// Its base must be aligned to the layout's complete swizzle period (1024
     /// bytes for B128, 512 bytes for B64).
     #[inline(always)]
-    pub const unsafe fn from_raw(base: *mut f16) -> Self {
+    pub const unsafe fn from_raw(base: *mut T) -> Self {
         let () = L::VALID;
+        const { assert!(size_of::<T>() == 2) };
         Self {
-            base,
+            base: base.cast::<f16>(),
             byte_offset: 0,
             marker: PhantomData,
         }
     }
     /// Borrow this tile's shared storage address.
     #[inline(always)]
-    pub const fn as_ptr(&self) -> *mut f16 {
-        self.base.wrapping_add((self.byte_offset / 2) as usize)
+    pub const fn as_ptr(&self) -> *mut T {
+        self.base
+            .wrapping_add((self.byte_offset / 2) as usize)
+            .cast::<T>()
     }
 
-    /// Store eight contiguous FP16 values (carried as four packed `u32` words) at `(row, col)`.
+    /// Store eight contiguous 16-bit values (carried as four packed `u32` words) at `(row, col)`.
     ///
     /// # Safety
     /// `(row, col)` must lie within `L`, `col` must be a multiple of 8, the
@@ -184,17 +201,18 @@ impl<L: SmemLayout, Role> SharedTile<L, Role> {
     }
 }
 
-/// Contiguous array of complete shared tiles with one layout and operand role.
-pub struct SharedTileArray<L, Role, const TILES: u32> {
-    /// Shared FP16 allocation containing every complete array tile.
+/// Contiguous array of complete shared tiles with one layout, operand role, and 16-bit element type `T`.
+pub struct SharedTileArray<L, Role, const TILES: u32, T = f16> {
+    /// Shared 16-bit allocation containing every complete array tile.
     base: *mut f16,
-    /// Carries the array's common layout and operand role.
-    marker: PhantomData<(L, Role)>,
+    /// Carries the array's common layout, operand role, and element type `T`.
+    marker: PhantomData<(L, Role, T)>,
 }
-impl<L: SmemLayout, Role, const TILES: u32> SharedTileArray<L, Role, TILES> {
+impl<L: SmemLayout, Role, const TILES: u32, T: MmaHalfElement> SharedTileArray<L, Role, TILES, T> {
     /// Bytes in one complete tile; require a whole swizzle period and a representable size.
     const TILE_BYTES: u32 = {
         let () = L::VALID;
+        assert!(size_of::<T>() == 2);
         let elements = (L::ROWS as u64) * (L::COLS as u64);
         assert!(elements <= u32::MAX as u64 / 2);
         let bytes = elements as u32 * 2;
@@ -211,10 +229,10 @@ impl<L: SmemLayout, Role, const TILES: u32> SharedTileArray<L, Role, TILES> {
     /// complete tiles. It must be aligned to the complete swizzle period (1024
     /// bytes for B128, 512 bytes for B64).
     #[inline(always)]
-    pub const unsafe fn from_raw(base: *mut f16) -> Self {
+    pub const unsafe fn from_raw(base: *mut T) -> Self {
         let () = Self::VALID;
         Self {
-            base,
+            base: base.cast::<f16>(),
             marker: PhantomData,
         }
     }
@@ -222,7 +240,7 @@ impl<L: SmemLayout, Role, const TILES: u32> SharedTileArray<L, Role, TILES> {
     /// # Safety
     /// `index` must be less than `TILES`.
     #[inline(always)]
-    pub const unsafe fn tile_unchecked(&self, index: u32) -> SharedTile<L, Role> {
+    pub const unsafe fn tile_unchecked(&self, index: u32) -> SharedTile<L, Role, T> {
         SharedTile {
             base: self.base,
             byte_offset: index * Self::TILE_BYTES,

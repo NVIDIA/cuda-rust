@@ -19,11 +19,13 @@ use pliron::{
     operation::Operation,
 };
 
-/// Emit independent SM100 attention MMA with shared or tensor-memory A operands.
-pub(in crate::cute) struct Mma(
-    #[doc = "True for tensor-memory A and shared B; false for two shared-memory operands."]
-    pub(in crate::cute) bool,
-);
+/// Emit independent SM100 F16/BF16 MMA with shared or tensor-memory A operands.
+pub(in crate::cute) struct Mma {
+    /// True for tensor-memory A and shared B; false for two shared-memory operands.
+    pub(in crate::cute) ts: bool,
+    /// True when shared operands carry `BFloat16` (`a_format = b_format = 1`); false for `f16`.
+    pub(in crate::cute) bf16: bool,
+}
 impl OperationTranslation for Mma {
     fn translate(
         &self,
@@ -32,8 +34,12 @@ impl OperationTranslation for Mma {
         input: OperationInput,
         session: &mut TranslationSession<'_>,
     ) -> Result<Vec<MlirOperation>, String> {
-        let p = if self.0 {
+        let p = if self.ts {
             let o = CuteSm100MmaTsOp::wrap(source);
+            o.verify(ctx).map_err(|e| e.to_string())?;
+            o.plan(ctx)
+        } else if self.bf16 {
+            let o = CuteSm100Bf16MmaSsOp::wrap(source);
             o.verify(ctx).map_err(|e| e.to_string())?;
             o.plan(ctx)
         } else {
@@ -49,7 +55,8 @@ impl OperationTranslation for Mma {
             ops: vec![],
         };
         let a = input.operands;
-        let ad = if self.0 {
+        let elem = if self.bf16 { "bf16" } else { "f16" };
+        let ad = if self.ts {
             None
         } else {
             Some(descriptor(
@@ -60,19 +67,24 @@ impl OperationTranslation for Mma {
                 p.m / p.cta_group,
                 p.k,
                 p.a_mn,
+                elem,
             )?)
         };
         let bd = descriptor(
             &mut e,
             a[2].clone(),
-            a[if self.0 { 4 } else { 5 }].clone(),
+            a[if self.ts { 4 } else { 5 }].clone(),
             &p.b_layout,
             p.n / p.cta_group,
             p.k,
             p.b_mn,
+            elem,
         )?;
         let dst = e.cast("llvm.inttoptr", a[0].clone(), llvm_ptr_type(6)?)?;
+        let ab_fmt = u32::from(self.bf16);
         let instruction = (1u32 << 4)
+            | (ab_fmt << 7)
+            | (ab_fmt << 10)
             | ((p.n >> 3) << 17)
             | ((p.m >> 4) << 24)
             | ((p.a_mn as u32) << 15)
@@ -101,7 +113,7 @@ impl OperationTranslation for Mma {
                     if k == 0 { a[3].clone() } else { yes.clone() },
                 ],
             )?;
-            property(&mut mma, "mmaKind", "#nvvm.tcgen05_mma_kind<f16>")?;
+            property(&mut mma, "kind", "#nvvm.tcgen05_mma_kind<f16>")?;
             property(
                 &mut mma,
                 "ctaGroup",
@@ -128,6 +140,7 @@ fn descriptor_offset(layout: &CuteComposedLayoutAttr, k: u32) -> u32 {
     (layout.0.outer().call(&coord) / 8) as u32
 }
 /// Build a shared-memory descriptor using the verified major mode and element-to-byte swizzle.
+#[allow(clippy::too_many_arguments)]
 fn descriptor(
     e: &mut Emit<'_, '_>,
     ptr: MlirValueUse,
@@ -136,11 +149,12 @@ fn descriptor(
     rows: u32,
     k: u32,
     mn: bool,
+    elem: &str,
 ) -> Result<MlirValueUse, String> {
     let sw = layout.0.inner();
     let ptr = e.cute_ptr(
         ptr,
-        "f16",
+        elem,
         "smem",
         128,
         Some(format!(

@@ -23,13 +23,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const CUTLASS_COMPILER_ENV: &str = "CUDA_OXIDE_CUTLASS_COMPILER";
 
-const CUTLASS_VERSION: &str = "4.7.0";
-const CUTLASS_PLATFORM: &str = "x86_64-cu13";
-const ARCHIVE_NAME: &str = "cutlass-install-x86_64-cu13-4.7.0.tar.gz";
-const ARCHIVE_URL: &str = "https://github.com/NVIDIA/cutlass/releases/download/v4.7.0/cutlass-install-x86_64-cu13-4.7.0.tar.gz";
-const ARCHIVE_SHA256: &str = "32f0786c26ede0a5647fa25fc1b4a1429938f181ff28fd57b5632c0b00f0e24f";
-const COMPILER_LIBRARY_SHA256: &str =
-    "57df017e3585a10443c74c8b4cd99bda854242fb2f4c9534cf56d58c2c741628";
+const CUTLASS_VERSION: &str = "4.8.1";
 const INSTALL_MANIFEST: &str = ".cuda-oxide-cutlass-toolchain";
 const INSTALL_MANIFEST_FORMAT: &str = "2";
 const LEGACY_INSTALL_MANIFEST_FORMAT: &str = "1";
@@ -46,14 +40,38 @@ struct InstallSpec {
     compiler_library_sha256: &'static str,
 }
 
-const OFFICIAL: InstallSpec = InstallSpec {
+const OFFICIAL_X86_64: InstallSpec = InstallSpec {
     version: CUTLASS_VERSION,
-    platform: CUTLASS_PLATFORM,
-    archive_name: ARCHIVE_NAME,
-    archive_url: ARCHIVE_URL,
-    archive_sha256: ARCHIVE_SHA256,
-    compiler_library_sha256: COMPILER_LIBRARY_SHA256,
+    platform: "x86_64-cu13",
+    archive_name: "cutlass-install-x86_64-cu13-4.8.1.tar.gz",
+    archive_url: "https://github.com/NVIDIA/cutlass/releases/download/v4.8.1/cutlass-install-x86_64-cu13-4.8.1.tar.gz",
+    archive_sha256: "29d63cc94c4888f773190a75f4dbcd12b8624fb87560437b989c1fe95dea485b",
+    compiler_library_sha256: "36a4314dddcc9082448720530d49bc112cf88a9f45f43a3f27d8df8d7791d8fa",
 };
+
+const OFFICIAL_AARCH64: InstallSpec = InstallSpec {
+    version: CUTLASS_VERSION,
+    platform: "aarch64-cu13",
+    archive_name: "cutlass-install-aarch64-cu13-4.8.1.tar.gz",
+    archive_url: "https://github.com/NVIDIA/cutlass/releases/download/v4.8.1/cutlass-install-aarch64-cu13-4.8.1.tar.gz",
+    archive_sha256: "f49a346f32deda4612f0c328f0e0cd14663060a335c2e34ec3bc3633d1f9cf",
+    compiler_library_sha256: "2b5585de761ee91d1b170d2b7f6b98da573e2165c46dfc7232ae339467120b1f",
+};
+
+fn official_spec_for(os: &str, arch: &str) -> Option<InstallSpec> {
+    if os != "linux" {
+        return None;
+    }
+    match arch {
+        "x86_64" => Some(OFFICIAL_X86_64),
+        "aarch64" => Some(OFFICIAL_AARCH64),
+        _ => None,
+    }
+}
+
+fn official_spec() -> Option<InstallSpec> {
+    official_spec_for(std::env::consts::OS, std::env::consts::ARCH)
+}
 
 /// Paths exported to compiler-backed builds after a verified installation.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -72,11 +90,11 @@ pub struct InstallOutcome {
 
 /// Install the one CUTLASS compiler release supported by this cargo-oxide.
 pub fn install_official() -> Result<InstallOutcome, String> {
-    ensure_supported_host()?;
+    let spec = ensure_supported_host()?;
     let managed_root = managed_root()?;
-    let install_dir = install_dir(&managed_root, OFFICIAL);
+    let install_dir = install_dir(&managed_root, spec);
 
-    match resolve_at(&install_dir, OFFICIAL) {
+    match resolve_at(&install_dir, spec) {
         Ok(Some(paths)) => {
             return Ok(InstallOutcome {
                 paths,
@@ -105,12 +123,11 @@ pub fn install_official() -> Result<InstallOutcome, String> {
         )
     })?;
 
-    let _lock =
-        InstallLock::acquire(version_dir.join(format!(".{}.install.lock", OFFICIAL.platform)))?;
+    let _lock = InstallLock::acquire(version_dir.join(format!(".{}.install.lock", spec.platform)))?;
 
     // A cooperating installer may have completed while this process waited
     // for directory creation and lock acquisition.
-    match resolve_at(&install_dir, OFFICIAL) {
+    match resolve_at(&install_dir, spec) {
         Ok(Some(paths)) => {
             return Ok(InstallOutcome {
                 paths,
@@ -126,20 +143,20 @@ pub fn install_official() -> Result<InstallOutcome, String> {
         }
     }
 
-    let download_dir = TemporaryDirectory::create(version_dir, "download")?;
-    let archive = download_dir.path.join(OFFICIAL.archive_name);
+    let download_dir = TemporaryDirectory::create(version_dir, spec.platform, "download")?;
+    let archive = download_dir.path.join(spec.archive_name);
     eprintln!(
         "NVIDIA's CUTLASS compiler bundle is proprietary software governed by the NVIDIA EULA:"
     );
     eprintln!("  https://docs.nvidia.com/cutlass/media/docs/pythonDSL/license.html");
     eprintln!(
         "Downloading NVIDIA CUTLASS compiler {} ({})...",
-        OFFICIAL.version, OFFICIAL.platform
+        spec.version, spec.platform
     );
-    download_archive(OFFICIAL.archive_url, &archive)?;
+    download_archive(spec.archive_url, &archive)?;
 
-    eprintln!("Verifying SHA-256 {}...", OFFICIAL.archive_sha256);
-    let paths = install_verified_archive(OFFICIAL, &archive, &install_dir)?;
+    eprintln!("Verifying SHA-256 {}...", spec.archive_sha256);
+    let paths = install_verified_archive(spec, &archive, &install_dir)?;
     Ok(InstallOutcome {
         paths,
         installed: true,
@@ -152,25 +169,28 @@ pub fn install_official() -> Result<InstallOutcome, String> {
 /// no managed installation.  An existing but malformed install is an error so
 /// a requested compiler backend can diagnose it instead of using partial files.
 pub fn resolve_official() -> Result<Option<ResolvedCutlass>, String> {
-    if !supported_host() {
+    let Some(spec) = official_spec() else {
         return Ok(None);
-    }
+    };
     let Some(managed_root) = managed_root_optional() else {
         return Ok(None);
     };
-    resolve_at(&install_dir(&managed_root, OFFICIAL), OFFICIAL)
+    resolve_at(&install_dir(&managed_root, spec), spec)
 }
 
 pub fn print_install_outcome(outcome: &InstallOutcome) {
+    let platform = official_spec()
+        .map(|spec| spec.platform)
+        .unwrap_or("unknown");
     if outcome.installed {
         println!(
-            "Installed NVIDIA CUTLASS compiler {} ({})",
-            CUTLASS_VERSION, CUTLASS_PLATFORM
+            "Installed NVIDIA CUTLASS compiler {} ({platform})",
+            CUTLASS_VERSION
         );
     } else {
         println!(
-            "NVIDIA CUTLASS compiler {} ({}) is already installed",
-            CUTLASS_VERSION, CUTLASS_PLATFORM
+            "NVIDIA CUTLASS compiler {} ({platform}) is already installed",
+            CUTLASS_VERSION
         );
     }
     println!("  root:     {}", outcome.paths.install_dir.display());
@@ -181,21 +201,15 @@ pub fn print_install_outcome(outcome: &InstallOutcome) {
     );
 }
 
-fn supported_host() -> bool {
-    std::env::consts::OS == "linux" && std::env::consts::ARCH == "x86_64"
-}
-
-fn ensure_supported_host() -> Result<(), String> {
-    if supported_host() {
-        Ok(())
-    } else {
-        Err(format!(
-            "CUTLASS compiler {} is pinned to Linux x86_64 ({CUTLASS_PLATFORM}); this host is {} {}",
+fn ensure_supported_host() -> Result<InstallSpec, String> {
+    official_spec().ok_or_else(|| {
+        format!(
+            "CUTLASS compiler {} is pinned to Linux x86_64 and aarch64; this host is {} {}",
             CUTLASS_VERSION,
             std::env::consts::OS,
             std::env::consts::ARCH
-        ))
-    }
+        )
+    })
 }
 
 fn managed_root() -> Result<PathBuf, String> {
@@ -311,7 +325,7 @@ fn install_verified_archive(
             final_dir.display()
         )
     })?;
-    let staging = TemporaryDirectory::create(parent, "extract")?;
+    let staging = TemporaryDirectory::create(parent, spec.platform, "extract")?;
     let extract_dir = staging.path.join("payload");
     fs::create_dir(&extract_dir).map_err(|error| {
         format!(
@@ -791,11 +805,11 @@ struct TemporaryDirectory {
 }
 
 impl TemporaryDirectory {
-    fn create(parent: &Path, purpose: &str) -> Result<Self, String> {
+    fn create(parent: &Path, platform: &str, purpose: &str) -> Result<Self, String> {
         for _ in 0..32 {
             let unique = unique_suffix();
             let path = parent.join(format!(
-                ".{CUTLASS_PLATFORM}.{purpose}.{}.{unique}",
+                ".{platform}.{purpose}.{}.{unique}",
                 std::process::id()
             ));
             match fs::create_dir(&path) {
@@ -878,7 +892,7 @@ mod tests {
     fn fixture_spec(archive_digest: &'static str, library_digest: &'static str) -> InstallSpec {
         InstallSpec {
             version: "test-version",
-            platform: CUTLASS_PLATFORM,
+            platform: "x86_64-cu13",
             archive_name: "fixture.tar.gz",
             archive_url: "https://example.invalid/fixture.tar.gz",
             archive_sha256: archive_digest,
@@ -1014,17 +1028,30 @@ mod tests {
             root.join(INSTALL_MANIFEST),
             format!(
                 "format=2\nversion={}\nplatform={}\narchive-url={}\narchive-sha256={}\ncompiler-library=../outside\ncompiler-library-sha256={}\n",
-                OFFICIAL.version,
-                OFFICIAL.platform,
-                OFFICIAL.archive_url,
-                OFFICIAL.archive_sha256,
-                OFFICIAL.compiler_library_sha256,
+                OFFICIAL_X86_64.version,
+                OFFICIAL_X86_64.platform,
+                OFFICIAL_X86_64.archive_url,
+                OFFICIAL_X86_64.archive_sha256,
+                OFFICIAL_X86_64.compiler_library_sha256,
             ),
         )
         .unwrap();
 
-        let error = resolve_at(&root, OFFICIAL).unwrap_err();
+        let error = resolve_at(&root, OFFICIAL_X86_64).unwrap_err();
         assert!(error.contains("unsafe relative path"), "{error}");
+    }
+
+    #[test]
+    fn official_specs_cover_linux_x86_64_and_aarch64_only() {
+        assert_eq!(
+            official_spec_for("linux", "x86_64").unwrap().platform,
+            "x86_64-cu13"
+        );
+        assert_eq!(
+            official_spec_for("linux", "aarch64").unwrap().platform,
+            "aarch64-cu13"
+        );
+        assert!(official_spec_for("macos", "aarch64").is_none());
     }
 
     #[test]

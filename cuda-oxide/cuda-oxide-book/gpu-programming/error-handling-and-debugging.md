@@ -482,6 +482,33 @@ dropping a module's kernels).
 Run `memcheck` first when investigating memory safety. The other tools are
 complementary and do not perform full memory-access checking.
 
+## Optimization barriers in device code
+
+Calling `core::hint::black_box` in a kernel or device function can fail during
+device code generation with the diagnostic
+``rustc intrinsic `std::intrinsics::black_box` is not yet supported on the device``.
+Choose the operation that expresses the constraint your kernel needs.
+
+For separate round-to-nearest-even steps in a single `f32` expression, use the
+explicitly rounded device intrinsics:
+
+```rust
+use cuda_device::float::{add_rn_f32, mul_rn_f32};
+
+let product = mul_rn_f32(b, w);
+residual = add_rn_f32(residual, product);
+```
+
+This requests `mul.rn.f32` followed by `add.rn.f32` and leaves the build's FMA
+policy in effect for other expressions. To disable contraction of ordinary
+multiply/add pairs throughout the build, use `cargo oxide build --no-fmad`.
+
+For compiler ordering of memory accesses within a thread, use
+`core::sync::atomic::compiler_fence` with the ordering your algorithm requires.
+On the device this lowers to an empty inline PTX block with a memory clobber.
+It emits no hardware fence, does not synchronize threads, and does not control
+floating-point contraction.
+
 ## `cargo oxide doctor` -- environment validation
 
 Before debugging kernel failures, verify your environment is correctly set up:

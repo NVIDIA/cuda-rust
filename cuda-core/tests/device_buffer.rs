@@ -402,3 +402,50 @@ fn uninitialized_async_cast_elem_implicit_drop_is_stream_ordered() {
     }
     stream.synchronize().expect("stream sync failed");
 }
+
+#[test]
+fn mutable_subviews_share_allocation_and_split_disjoint_ranges() {
+    let _gated_test_guard = lock_gated_test();
+    let ctx = CudaContext::new(0).unwrap();
+    let stream = ctx.new_stream().unwrap();
+    let mut buffer = DeviceBuffer::<u32>::zeroed(&stream, 8).unwrap();
+    let base = buffer.cu_deviceptr();
+    let allocation_id = buffer.storage().allocation_id();
+
+    let view = buffer.slice_mut(1..7).unwrap();
+    assert_eq!(view.cu_deviceptr(), base + 4);
+    assert_eq!(view.len(), 6);
+    assert_eq!(view.num_bytes(), 24);
+    assert!(!view.is_empty());
+    assert_eq!(view.storage().allocation_id(), allocation_id);
+    assert!(Arc::ptr_eq(view.context(), &ctx));
+
+    let (left, right) = view.split_at_mut(2).unwrap();
+    assert_eq!(left.cu_deviceptr(), base + 4);
+    assert_eq!(left.len(), 2);
+    assert_eq!(right.cu_deviceptr(), base + 12);
+    assert_eq!(right.len(), 4);
+    assert_eq!(
+        left.storage().allocation_id(),
+        right.storage().allocation_id()
+    );
+
+    let right = right.into_shared();
+    assert_eq!(right.cu_deviceptr(), base + 12);
+    assert_eq!(right.len(), 4);
+    drop((left, right));
+
+    let (empty_left, empty_right) = buffer.slice_mut(3..3).unwrap().split_at_mut(0).unwrap();
+    assert!(empty_left.is_empty());
+    assert!(empty_right.is_empty());
+    assert_eq!(empty_left.cu_deviceptr(), base + 12);
+    assert_eq!(empty_right.cu_deviceptr(), base + 12);
+    drop((empty_left, empty_right));
+
+    assert!(buffer.slice_mut(5..9).is_err());
+    let start = 3;
+    let end = 2;
+    assert!(buffer.slice_mut(start..end).is_err());
+    assert!(buffer.slice_mut(0..4).unwrap().split_at_mut(5).is_err());
+    assert_eq!(buffer.to_host_vec(&stream).unwrap(), [0; 8]);
+}

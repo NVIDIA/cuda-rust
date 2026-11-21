@@ -10,6 +10,8 @@
 //! no GPU; they only build against `cutile`. Regenerate the expectations with
 //! `TRYBUILD=overwrite cargo test -p cutile --test ui` after an intentional
 //! diagnostic change.
+//! AArch64 reinterpretation checks share the source but use a separate
+//! expectation for rustc's target-dependent list of `Pod` implementors.
 
 #[test]
 fn ui() {
@@ -32,7 +34,11 @@ fn ui() {
     t.compile_fail("tests/ui/foreign_*.rs");
     // `Tensor::reinterpret` requires `bytemuck::AnyBitPattern`: a byte tensor
     // cannot become a `Tensor<bool>`, whose only valid values are 0 and 1.
-    t.compile_fail("tests/ui/reinterpret_bool.rs");
+    if cfg!(target_arch = "aarch64") {
+        t.compile_fail("tests/ui/aarch64/reinterpret_bool.rs");
+    } else {
+        t.compile_fail("tests/ui/reinterpret_bool.rs");
+    }
 }
 
 #[test]

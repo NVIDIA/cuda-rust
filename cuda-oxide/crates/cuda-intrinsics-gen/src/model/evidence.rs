@@ -88,7 +88,7 @@ pub struct EvidenceRecordDefaults {
 }
 
 /// One shared fixture and the number of records it covers.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvidenceFixture {
     pub id: String,

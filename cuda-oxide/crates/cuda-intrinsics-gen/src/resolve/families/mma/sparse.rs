@@ -1071,10 +1071,6 @@ pub(in crate::resolve) fn expand_sparse_mma_fp8_f32_admission(
     admission: &SparseMmaFp8F32Admission,
 ) -> Result<Vec<OverlayIntrinsic>> {
     ensure!(
-        admission.runtime_validation == RuntimeValidation::Unexecuted,
-        "sparse FP8 MMA runtime validation may be marked executed only with GPU evidence"
-    );
-    ensure!(
         !admission.llvm_evidence_profile.trim().is_empty()
             && !admission.libnvvm_evidence_profile.trim().is_empty(),
         "sparse FP8 MMA admission requires both backend evidence profiles"

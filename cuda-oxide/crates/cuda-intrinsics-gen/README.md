@@ -124,3 +124,32 @@ cargo run -p cuda-intrinsics-gen --locked -- check
 cargo test --manifest-path crates/rustc-codegen-cuda/Cargo.toml --locked --lib
 just check
 ```
+
+### Recording sparse FP8 runtime evidence
+
+From `cuda-oxide/`, on an SM89 or newer CUDA device:
+
+```bash
+llc="$(rustc --print target-libdir)/../bin/llc"
+cargo run --locked -p cuda-intrinsics-gen -- record-runtime \
+  --oracle sparse_mma_fp8 --llc "$llc" > runtime-fixture.json
+```
+
+The command builds the native LLVM example at `--arch sm_89`, then compiles its
+fresh optimized IR with the selected `llc` at `+ptx84`. The example loads and
+hashes those exact PTX bytes, executes the four plain sparse FP8 forms, and compares
+their outputs against host GEMM. Each form must pass 1,536 exact comparisons
+(six metadata codes, two initial accumulator states, 32 lanes and four values
+per lane). The generator checks the oracle's completion report, measured
+compute capability, and PTX header against the LLVM fixture's PTX 8.4 target.
+A skipped or failed run produces no fixture. Build and oracle logs go to stderr.
+
+Stdout contains one schema-6 `fixtures[]` entry for the LLVM inline-PTX route.
+Its runtime targets identify the GPU that ran the kernel and the PTX ISA in
+the loaded image. It records the compiler identity and checks the SHA-256
+reported by the oracle against the compiled artifact. Its detail includes the
+device name, PTX SHA-256, and the four covered intrinsic IDs. Keep the output outside `intrinsics/evidence/`
+until the compact admission supports promotion: this JSON is a fixture, not
+a standalone evidence shard. A future promotion must reference it from the
+matching matrix and preserve the backend profile's tool provenance. This
+command does not edit overlays or promote either backend.

@@ -17,3 +17,4 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 toml = { workspace = true }
 ptx-parse = { workspace = true }
+tempfile = { workspace = true }

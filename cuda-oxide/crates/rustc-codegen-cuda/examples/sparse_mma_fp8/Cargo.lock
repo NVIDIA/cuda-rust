@@ -553,6 +553,8 @@ dependencies = [
  "cuda-core",
  "cuda-device",
  "cuda-host",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

@@ -9,7 +9,7 @@ The kernel uses `cute-rs` for typed layouts, structured MMA and TMA operations
 `TwoCtaRing` pipelines (including asynchronous page staging and TMEM metadata
 handoffs), `TmemAllocator<512, 2>`, `TmemFragment`, `StridedTensor` /
 `StridedTensorMut`, `RegisterTile`, and `cute_rs::arch` forwarders, while
-`ctm-rs` supplies kernel macros and shared-storage declarations.
+`cutlass-primitives` supplies kernel macros and shared-storage declarations.
 The manifest retains `cuda-device` because macro expansions still refer to
 that crate internally. CuTe operations retain their CuTe dialect lowering
 through `cutlass-mlir`; the primitives-only compiler profile does not cover

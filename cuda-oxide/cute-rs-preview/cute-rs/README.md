@@ -1,6 +1,6 @@
 # cute-rs
 
-CuTe-style tensor computation in Rust, organized 1-to-1 with Python **CuTeDSL 4.7** (`cutlass/cute`, `cutlass/pipeline`, `cutlass/utils`) and compiled through `dialect-cute` and the pinned CUTLASS 4.7 MLIR compiler (`0` `ctm-rs` dependencies).
+CuTe-style tensor computation in Rust, organized 1-to-1 with Python **CuTeDSL 4.8** (`cutlass/cute`, `cutlass/pipeline`, `cutlass/utils`) and compiled through `dialect-cute` and the pinned CUTLASS 4.8.1 MLIR compiler (`0` `cutlass-primitives` dependencies).
 
 ```text
 CuTeDSL (Python)                          cute-rs/src/ (1-to-1 Module Tree)
@@ -15,7 +15,7 @@ cutlass/cute/                             cute-rs/src/
     ├── common.py                             ├── common.rs   (OperandA, OperandB, Mkl, Nkl)
     ├── cpasync/    (G2S cp.async & TMA)      ├── cpasync/    (TensorMap, copy_tma_2d, TmaCopy)
     ├── warp/       (SM80/SM120 mma/ldm)      ├── warp/       (FragmentA/B/C, Bf16Mma16x8x16, Mxf4TiledMma)
-    └── tcgen05/    (SM100 UMMA & TMEM)       └── tcgen05/    (Sm100TiledMma, Sm100BlockScaledTiledMma, MmaSs, MmaTs, TmemFragment)
+    └── tcgen05/    (SM100/107 UMMA & TMEM)   └── tcgen05/    (Sm100TiledMma, Sm100BlockScaledTiledMma, SM107BlockScaledMmaMXF8F6F4Op, MmaSs, MmaTs, TmemFragment)
 
 cutlass/pipeline/                         ├── pipeline/       (PipelineTmaAsync, PipelineTmaUmma,
                                           │                    PipelineUmmaAsync, PipelineTmaStore, TwoCtaRing)

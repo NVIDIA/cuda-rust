@@ -6,7 +6,7 @@ license = "Apache-2.0"
 description = "SM120 MXFP4 GEMM using typed Rust instruction primitives"
 [workspace]
 [dependencies]
-ctm-rs = { path = "../../ctm-rs", features = ["host"] }
+cutlass-primitives = { path = "../../cutlass-primitives", features = ["host"] }
 cuda-device = { path = "../../../crates/cuda-device" }
 cuda-host = { path = "../../../crates/cuda-host" }
 cuda-core = { path = "../../../../cuda-core", features = ["f16"] }

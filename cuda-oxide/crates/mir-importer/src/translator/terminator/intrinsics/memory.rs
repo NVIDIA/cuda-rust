@@ -8,7 +8,7 @@
 use super::super::helpers::{self, emit_goto};
 use crate::error::{TranslationErr, TranslationResult};
 use crate::translator::facts;
-use crate::translator::values::ValueMap;
+use crate::translator::values::{ValueMap, store_through_address};
 use crate::translator::{rvalue, types};
 use dialect_mir::attributes::{MirCastKindAttr, MirPointerKindAuthorityAttr};
 use dialect_mir::ops::{MirCastOp, MirConstantOp, MirDivOp, MirSubOp};
@@ -282,22 +282,10 @@ pub fn emit_volatile_store(
         loc.clone(),
     )?;
 
-    let store_op = Operation::new(
-        ctx,
-        MirStoreOp::get_concrete_op_info(),
-        vec![],
-        vec![ptr_val, value],
-        vec![],
-        0,
-    );
-    store_op.deref_mut(ctx).set_loc(loc.clone());
+    // the destination is an address, so a shared pointer written into a
+    // generic `*mut T` slot needs the same widening as a projected store
+    let store_op = store_through_address(ctx, ptr_val, value, block_ptr, last_op, loc.clone());
     MirStoreOp::new(store_op).set_volatile(ctx, true);
-
-    if let Some(prev) = last_op {
-        store_op.insert_after(ctx, prev);
-    } else {
-        store_op.insert_at_front(block_ptr, ctx);
-    }
 
     if let Some(target_idx) = target {
         Ok(emit_goto(ctx, *target_idx, store_op, block_map, loc))

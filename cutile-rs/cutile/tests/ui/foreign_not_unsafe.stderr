@@ -1,0 +1,5 @@
+error: a foreign function must be declared `unsafe fn`: the compiler cannot check the library's implementation, so callers must uphold its contract (see `Safety` in the Tile Libraries guide)
+ --> tests/ui/foreign_not_unsafe.rs:8:9
+  |
+8 |     pub fn fft<const N: i32>(#[inout] x: Tile<f32, { [N] }>) -> Tile<f32, { [N] }>;
+  |         ^^

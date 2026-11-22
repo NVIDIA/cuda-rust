@@ -237,7 +237,12 @@ impl<F: Fn() -> crate::ast::Module> KernelCompiler<F> {
         let tileiras_opts = crate::cuda_tile_runtime_utils::TileirasOptions::from_compile_options(
             &resolved.compile_options,
         );
+        let tile_libraries = resolved.compile_options.tile_libraries.clone();
         let artifacts = resolved.compile_resolved()?;
+        let tileiras_opts = tileiras_opts.with_tilelibs(crate::tile_library::link_tile_libraries(
+            artifacts.module(),
+            &tile_libraries,
+        )?);
         if let Some(version) = artifacts.bytecode_version {
             let bytes = artifacts.bytecode()?;
             Ok(crate::cuda_tile_runtime_utils::current_l2_key_for_bytecode(
@@ -259,8 +264,13 @@ impl<F: Fn() -> crate::ast::Module> KernelCompiler<F> {
         self.with_jit_env_overrides()?.compile_resolved()
     }
 
+    /// The options the runtime would compile with: the `CUTILE_JIT_*`
+    /// overrides applied, and the default tile libraries added.
     fn with_jit_env_overrides(mut self) -> Result<Self, JITError> {
-        self.compile_options = self.compile_options.with_jit_env_overrides()?;
+        self.compile_options = self
+            .compile_options
+            .with_jit_env_overrides()?
+            .with_default_tile_libraries();
         Ok(self)
     }
 

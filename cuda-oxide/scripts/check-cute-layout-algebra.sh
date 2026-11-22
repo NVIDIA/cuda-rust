@@ -13,7 +13,7 @@
 #   2. Rust type encoding in `*_cute` kernels: TMA transfers, pipelines, MMA
 #      operations, TMEM operations, barriers, and partitions must go through
 #      `cute-rs` typed abstractions—never bypass them in `*_cute` kernels via
-#      direct `cuda_device::*` or raw `ctm_rs::{tma, mma, tcgen05, async_copy,
+#      direct `cuda_device::*` or raw `cutlass_primitives::{tma, mma, tcgen05, async_copy,
 #      barrier, cluster, fence, groups, convert, float}` / raw `mbarrier_*` or
 #      `cp_async_bulk_tensor_*` instruction calls.
 #   3. No hand-rolled layout algebra in `*_cute` kernels: never write manual
@@ -42,7 +42,7 @@ swizzle_xor_pattern='\^[[:space:]]*\(\('
 format_parse_pattern='format!\("(\(\(|\{shape\}:\{stride\}|\(\{rows\},\{columns\}\))'
 layout_def_outside_pattern='pub[[:space:]]+(struct[[:space:]]+(SharedLayout|RowMajor|ColMajor|ComposedLayout)|trait[[:space:]]+(SmemLayout|StaticLayout|ReifySmem2D))\b'
 kernel_hand_math_pattern='(fn[[:space:]]+swizzle_tile\b|\([[:space:]]*tid[[:space:]]*(&|>>)[[:space:]]*6[34]?\)|\([[:space:]]*warp[_a-z0-9]*[[:space:]]*\*[[:space:]]*32[[:space:]]*\)[[:space:]]*<<[[:space:]]*16|\b(q_out|k_cache|v_cache)\.add\()'
-kernel_untyped_op_pattern='(\bcuda_device::|\bctm_rs::(tma|mma|tcgen05|async_copy|barrier|cluster|fence|groups|convert|float)\b|\bcp_async_bulk_tensor_|\bmbarrier_(init|try_wait|arrive)\b|\btcgen05_(mma|ld|st|cp|alloc|dealloc|wait|fence|commit)\b)'
+kernel_untyped_op_pattern='(\bcuda_device::|\b(cutlass_primitives|prims|ctm_rs)::(tma|mma|tcgen05|async_copy|barrier|cluster|fence|groups|convert|float)\b|\bcp_async_bulk_tensor_|\bmbarrier_(init|try_wait|arrive)\b|\btcgen05_(mma|ld|st|cp|alloc|dealloc|wait|fence|commit)\b)'
 moe192_raw_cast_pattern='(\.(as_ptr|as_mut_ptr)\(\)\.(cast::<|add\()|\.cast::<|\.add\()'
 
 # Canary self-test: prove each regex matches a known violation before scanning.
@@ -56,7 +56,7 @@ fn bad_format(shape: &str, stride: &str) -> String { format!("{shape}:{stride}")
 fn bad_tid(tid: u32) -> (u32, u32) { ((tid & 63), (tid >> 6)) }
 fn bad_tmem(tmem: u32, warp_id: u32) -> u32 { tmem + ((warp_id * 32) << 16) }
 unsafe fn bad_ptr(q_out: *mut u8, idx: usize) -> *mut u8 { q_out.add(idx) }
-fn bad_bypass() { ctm_rs::tma::cp_async_bulk_tensor_shared_cta_global(); }
+fn bad_bypass() { cutlass_primitives::tma::cp_async_bulk_tensor_shared_cta_global(); }
 EOF
 
 for pat in \
@@ -120,7 +120,7 @@ fi
 #    (a) hand-rolled tile swizzling, thread coordinate unpacking, TMEM row shifts,
 #        or raw global output pointer indexing; and
 #    (b) bypassing `cute-rs` type-encoded TMA, pipeline, MMA, TMEM, or barrier
-#        abstractions via raw `cuda_device` / `ctm_rs` instruction calls.
+#        abstractions via raw `cuda_device` / `cutlass_primitives` instruction calls.
 mapfile -t cute_kernel_dirs < <(find \
     cuda-oxide/cute-rs-preview/examples \
     cuda-oxide/cute-rs-preview/models \
@@ -230,17 +230,18 @@ if unexpected_top:
         f"cuda-oxide/cute-rs-preview/cute-rs/src: non-CuTeDSL top-level entries {unexpected_top} (allowed: {sorted(allowed_top_entries)})"
     )
 
-# 4b. Enforce complete `ctm-rs` / `ctm_rs` ban inside `cute-rs`.
+# 4b. Enforce complete `cutlass-primitives` / `cutlass_primitives` ban inside `cute-rs`.
 cargo_toml_path = "cuda-oxide/cute-rs-preview/cute-rs/Cargo.toml"
 with open(cargo_toml_path, encoding="utf-8") as f:
-    if "ctm-rs" in f.read():
-        errors.append(f"{cargo_toml_path}: `ctm-rs` dependency is banned inside `cute-rs`")
+    cargo_toml_text = f.read()
+    if "cutlass-primitives" in cargo_toml_text or "ctm-rs" in cargo_toml_text:
+        errors.append(f"{cargo_toml_path}: `cutlass-primitives` dependency is banned inside `cute-rs`")
 
 for path in sorted(glob.glob("cuda-oxide/cute-rs-preview/cute-rs/src/**/*.rs", recursive=True)):
     with open(path, encoding="utf-8") as f:
         for lineno, line in enumerate(f, 1):
-            if "ctm_rs" in line or "ctm-rs" in line:
-                errors.append(f"{path}:{lineno}: `ctm_rs` is banned inside `cute-rs`: {line.strip()}")
+            if "cutlass_primitives" in line or "cutlass-primitives" in line or "ctm_rs" in line or "ctm-rs" in line:
+                errors.append(f"{path}:{lineno}: `cutlass_primitives` is banned inside `cute-rs`: {line.strip()}")
             if "fn f32_to_e4m3" in line or "fn f32_to_e2m1" in line or "fn e4m3_to_f32" in line or "fn e2m1_to_f32" in line or "fn ue8m0_to_f32" in line:
                 errors.append(f"{path}:{lineno}: software FP4/FP8 conversion helper is banned in `cute-rs` (lower through `__compiler` -> `dialect-cute`): {line.strip()}")
             if "/nvgpu/" in path and ("cuda_device" in line or "encode_no_swizzle_smem_desc" in line or "0x0000_0480" in line):

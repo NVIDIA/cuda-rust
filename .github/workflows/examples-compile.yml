@@ -69,13 +69,13 @@ jobs:
   examples-compile:
     needs: changes
     if: ${{ !cancelled() && (github.event_name != 'push' || needs.changes.outputs.relevant == 'true' || needs.changes.outputs.any_changed != 'true') }}
-    name: compile all examples (device pipeline, GPU-less)
+    name: compile all examples (device pipeline, GPU-less)${{ matrix.cuda.suffix }}
     runs-on: linux-amd64-cpu4
-    # CUDA 13.3.1 devel image: nvcc, cudart, libcurand, and libnvJitLink.
-    # The materialization gate below needs nvJitLink, which the devel image
-    # ships. rustup is installed in the container.
+    # CUDA devel image (see the matrix): nvcc, cudart, libcurand, and
+    # libnvJitLink. The materialization gate below needs nvJitLink, which the
+    # devel image ships. rustup is installed in the container.
     container:
-      image: nvidia/cuda:13.3.1-devel-ubuntu24.04
+      image: ${{ matrix.cuda.image }}
       env:
         DEBIAN_FRONTEND: noninteractive
     env:
@@ -86,6 +86,17 @@ jobs:
     # Leave job-level headroom around the 50-minute full compile and the
     # focused 10-minute materialization gate, plus toolkit/LLVM setup.
     timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      # The baseline lane keeps its existing job name (empty suffix); the newer
+      # image is a separate lane. The nvcr.io image has the same digest as Docker
+      # Hub's nvidia/cuda:13.5.0-devel-ubuntu24.04 and no anonymous pull limit.
+      matrix:
+        cuda:
+          - image: nvidia/cuda:13.3.1-devel-ubuntu24.04
+            suffix: ""
+          - image: nvcr.io/nvidia/cuda:13.5.0-devel-ubuntu24.04
+            suffix: " (CUDA 13.5.0)"
     steps:
       # $/ installs git before checkout. The CUDA image has no git; without
       # it checkout stores a tarball. The same step installs python3 for
@@ -171,6 +182,24 @@ jobs:
           export LD_LIBRARY_PATH="${sysroot}/lib:${LD_LIBRARY_PATH:-}"
 
           cuda-oxide/scripts/smoketest.sh --compile-only --no-color
+
+      # Builds shared_static_names, then copies with added kernels, in
+      # release and full-debug, and requires the original kernels' PTX to be
+      # unchanged (#1477). Reuses the shared target dir, so it adds only the
+      # example's own device codegen.
+      - name: Adding a kernel keeps other kernels' PTX unchanged
+        timeout-minutes: 10
+        working-directory: cuda-oxide
+        env:
+          CUDA_OXIDE_LLC: /usr/bin/llc-23
+          CARGO_TARGET_DIR: ${{ runner.temp }}/examples-shared-target
+          CARGO_INCREMENTAL: "0"
+        run: |
+          set -euo pipefail
+          sysroot="$(rustc --print sysroot)"
+          export LIBRARY_PATH="${sysroot}/lib:${LIBRARY_PATH:-}"
+          export LD_LIBRARY_PATH="${sysroot}/lib:${LD_LIBRARY_PATH:-}"
+          bash scripts/check-shared-static-names.sh
 
       - name: Artifact modes keep shared Cargo dependencies fresh
         timeout-minutes: 10
@@ -295,11 +324,26 @@ jobs:
             "${RUNNER_TEMP}/cross-crate-sm90-build.log" \
             '^(kernel-lib|cross_crate_kernel)$' kernel-lib cross_crate_kernel
 
+          # Scalar math has a Turing floor. Build every form at sm_75 through
+          # both LLVM (PTX) and libNVVM + nvJitLink (cubin), so a raised floor
+          # fails here instead of in a downstream sm_75 build.
+          cargo oxide build scalar_math_sm75 --arch sm_75 2>&1 \
+            | tee "${RUNNER_TEMP}/scalar-math-sm75-ptx-build.log"
+          assert_embedded_artifact \
+            "${CARGO_TARGET_DIR}/release/scalar_math_sm75" 1 256 sm_75
+
+          cargo oxide build scalar_math_sm75 --materialize-cubin --arch sm_75 2>&1 \
+            | tee "${RUNNER_TEMP}/scalar-math-sm75-cubin-build.log"
+          assert_embedded_artifact \
+            "${CARGO_TARGET_DIR}/release/scalar_math_sm75" 1 512 sm_75
+
       - name: Upload failure logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: smoketest-compile-logs
+          # Artifact names are unique per run; the baseline lane keeps its name
+          # (empty suffix) and the newer lane adds its suffix.
+          name: smoketest-compile-logs${{ matrix.cuda.suffix }}
           # One glob per log the artifact-modes step writes. `iket-trace-*`
           # matched neither of the other two, so the one assertion that
           # exercises the full libNVVM + nvJitLink path -- and the only one
@@ -311,5 +355,6 @@ jobs:
             ${{ runner.temp }}/vecadd-*-build.log
             ${{ runner.temp }}/iket-trace-*-build.log
             ${{ runner.temp }}/cross-crate-*-build.log
+            ${{ runner.temp }}/scalar-math-sm75-*-build.log
           if-no-files-found: ignore
           retention-days: 7

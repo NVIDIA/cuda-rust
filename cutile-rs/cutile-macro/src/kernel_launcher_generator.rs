@@ -977,7 +977,7 @@ pub fn generate_kernel_launcher(
                 spec_args.iter().map(|(_, s)| s.clone()).collect();
             let __hints_snapshot = __hint_vals.to_vec();
             let __options_snapshot = __compile_options.clone();
-            let (function, validator) = self.jit_compile(
+            let (function, validator, __tile_libraries) = self.jit_compile(
                 ctx, __module_ast_self,
                 module_name, function_name, function_entry,
                 function_generics, stride_args, spec_args, scalar_hints,
@@ -994,6 +994,7 @@ pub fn generate_kernel_launcher(
                 __options_snapshot,
                 function.clone(),
                 validator.clone(),
+                __tile_libraries,
             ));
             (function, validator)
         }};",

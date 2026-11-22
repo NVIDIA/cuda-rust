@@ -60,6 +60,8 @@ pub struct DISubprogram {
     pub linkage_name: String,
     pub compile_unit: DICompileUnit,
     pub scope_line: u32,
+    /// Whether this compilation unit only declares the subprogram (Tile IR 13.5).
+    pub is_declaration: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

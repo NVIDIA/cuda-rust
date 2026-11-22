@@ -128,9 +128,11 @@ enum PlaceReadStrategy {
 
 /// Choose how to lower MIR place reads.
 ///
-/// This deliberately does not emit IR. The address walker may create several
-/// operations before discovering an unsupported projection, so read lowering
-/// must not call it speculatively and then fall back to value projections.
+/// This deliberately does not emit IR. A walk that gives up erases what it
+/// emitted, but it still does that work first, so classifying up front keeps
+/// reads from building and discarding address chains on the value path. A
+/// classifier that says `Address` while the walk returns `None` is an importer
+/// bug and is reported as an error, not a fallback.
 ///
 /// Conservative fallback is part of the design. Enum payload addressing,
 /// unsupported slice forms, ZST results, and computed/no-slot values remain on

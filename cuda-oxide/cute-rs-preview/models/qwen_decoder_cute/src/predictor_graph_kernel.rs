@@ -5,10 +5,11 @@
 //! Scheduling helpers and guard checks for private decoder execution regions.
 use crate::attention_kernel::STATE_SIZE;
 use crate::operator::{GUARD, GUARD_LEN};
-use ctm_rs::memory::DisjointSlice;
-use ctm_rs::{cuda_module, kernel, thread};
 use cute_rs::BFloat16;
 use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
+use cutlass_primitives as prims;
+use prims::memory::DisjointSlice;
+use prims::{cuda_module, kernel, thread};
 
 /// Shared decoder guard/copy steps and fixed fifteen-step predictor helpers.
 ///

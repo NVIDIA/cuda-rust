@@ -151,8 +151,10 @@ Extra comparisons, selects, or branches between loads and `mma` operations
 inside a loop can disrupt pipelining. A hoisted check before the loop does
 not have that cost.
 
-If the IR matches but performance differs, compare register counts. They
-should match when all checks have left the kernel.
+If the IR matches but performance differs, compare generated instructions,
+register counts and spills under the same target and compiler settings. Moving
+checks out of the kernel removes their device cost; it does not by itself
+guarantee identical backend schedules.
 
 Two ablation knobs let you measure placement with the same binary, no
 rebuild: `CUTILE_DISABLE_CHECK_HOISTING=1` pins every residual check at its

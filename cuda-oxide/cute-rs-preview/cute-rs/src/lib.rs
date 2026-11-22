@@ -67,9 +67,10 @@ pub use nvgpu::cpasync::{
     Sm100ClusterTmaCopy, TensorMap, TmaCopy, copy_tma_2d, copy_tma_s2g_2d, size_in_bytes,
 };
 pub use nvgpu::tcgen05::{
-    MmaSs, MmaTs, SharedLayout, SharedTile, SharedTileArray, Sm100BlockScaledTiledMma,
-    Sm100ScaleTile, Sm100SharedTile, Sm100TiledMma, Sm100TmemEpilogue, SmemLayout, TmemFragment,
-    tmem_row_address,
+    CollectorDiscard, CollectorFill, CollectorLastUse, CollectorOp, CollectorOpMarker,
+    CollectorUse, MmaHalfElement, MmaSs, MmaTs, SM107BlockScaledMmaMXF8F6F4Op, SharedLayout,
+    SharedTile, SharedTileArray, Sm100BlockScaledTiledMma, Sm100ScaleTile, Sm100SharedTile,
+    Sm100TiledMma, Sm100TmemEpilogue, SmemLayout, TmemFragment, tmem_row_address,
 };
 pub use nvgpu::warp::block_scaled::{
     Mxf4AccumulatorTile2x8, Mxf4BTileK64, Mxf4Nvf4TiledMma, Mxf4ScalePairs, Mxf4ScalePairs128,

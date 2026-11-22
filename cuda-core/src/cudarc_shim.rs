@@ -239,7 +239,10 @@ pub(crate) mod stream {
     /// # Safety
     /// `stream` must be a valid stream handle.
     pub unsafe fn synchronize(stream: cuda_bindings::CUstream) -> Result<(), DriverError> {
-        cuda_bindings::cuStreamSynchronize(stream).result()
+        cuda_bindings::cuStreamSynchronize(stream).result()?;
+        #[cfg(test)]
+        super::fence_trace::record(super::fence_trace::Call::Synchronize(stream as usize));
+        Ok(())
     }
 
     /// Queries stream completion without blocking: `Ok(true)` when all prior
@@ -276,7 +279,13 @@ pub(crate) mod stream {
         event: cuda_bindings::CUevent,
         flags: cuda_bindings::CUevent_wait_flags,
     ) -> Result<(), DriverError> {
-        cuda_bindings::cuStreamWaitEvent(stream, event, flags as _).result()
+        cuda_bindings::cuStreamWaitEvent(stream, event, flags as _).result()?;
+        #[cfg(test)]
+        super::fence_trace::record(super::fence_trace::Call::Wait {
+            stream: stream as usize,
+            event: event as usize,
+        });
+        Ok(())
     }
 
     /// Attaches memory to a stream for managed memory visibility.
@@ -447,7 +456,15 @@ pub(crate) mod event {
         event: cuda_bindings::CUevent,
         stream: cuda_bindings::CUstream,
     ) -> Result<(), DriverError> {
-        unsafe { cuda_bindings::cuEventRecord(event, stream).result() }
+        unsafe {
+            cuda_bindings::cuEventRecord(event, stream).result()?;
+        }
+        #[cfg(test)]
+        super::fence_trace::record(super::fence_trace::Call::Record {
+            stream: stream as usize,
+            event: event as usize,
+        });
+        Ok(())
     }
 
     /// Returns elapsed time in milliseconds between two recorded events.
@@ -807,5 +824,38 @@ pub(crate) mod memory {
         let mut total = 0;
         unsafe { sys::cuMemGetInfo_v2(&mut free as *mut _, &mut total as *mut _) }.result()?;
         Ok((free, total))
+    }
+}
+
+/// Test-only records of successful driver fences, local to the calling thread.
+/// These let lifetime tests prove a fence was issued without guessing that a
+/// silent worker is blocked. Production builds contain no observer or branch.
+#[cfg(test)]
+pub(crate) mod fence_trace {
+    use std::cell::RefCell;
+
+    #[derive(Debug, PartialEq, Eq)]
+    pub enum Call {
+        Synchronize(usize),
+        Record { event: usize, stream: usize },
+        Wait { stream: usize, event: usize },
+    }
+
+    thread_local! {
+        static CALLS: RefCell<Option<Vec<Call>>> = const { RefCell::new(None) };
+    }
+
+    pub fn start() {
+        CALLS.with(|calls| *calls.borrow_mut() = Some(Vec::new()));
+    }
+    pub fn record(call: Call) {
+        CALLS.with(|calls| {
+            if let Some(calls) = calls.borrow_mut().as_mut() {
+                calls.push(call);
+            }
+        });
+    }
+    pub fn finish() -> Vec<Call> {
+        CALLS.with(|calls| calls.borrow_mut().take().unwrap())
     }
 }

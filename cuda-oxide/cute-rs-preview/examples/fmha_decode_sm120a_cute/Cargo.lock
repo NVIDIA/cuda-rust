@@ -133,18 +133,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "ctm-rs"
-version = "0.3.0"
+name = "cutlass-primitives"
+version = "0.4.0"
 dependencies = [
  "cuda-device",
 ]
 
 [[package]]
 name = "cuda-artifact-finalizer"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "libnvvm-sys",
  "nvjitlink-sys",
+ "ptx-parse",
  "serde",
  "sha2",
  "thiserror",
@@ -186,7 +187,7 @@ dependencies = [
 
 [[package]]
 name = "cuda-device"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bytemuck",
  "cuda-macros",
@@ -195,7 +196,7 @@ dependencies = [
 
 [[package]]
 name = "cuda-host"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cuda-artifact-finalizer",
  "cuda-core",
@@ -211,7 +212,7 @@ dependencies = [
 
 [[package]]
 name = "cuda-macros"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "oxide-tile-export",
  "proc-macro2",
@@ -226,15 +227,19 @@ version = "0.5.0"
 
 [[package]]
 name = "cuda-target-spec"
-version = "0.3.0"
+version = "0.4.0"
+
+[[package]]
+name = "cuda-toolkit-discovery"
+version = "0.1.0"
 
 [[package]]
 name = "cute-layout"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "cute-rs"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cuda-device",
  "cute-layout",
@@ -266,7 +271,7 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 name = "fmha_decode_sm120a_cute"
 version = "0.1.0"
 dependencies = [
- "ctm-rs",
+ "cutlass-primitives",
  "cuda-core",
  "cuda-device",
  "cuda-host",
@@ -366,9 +371,10 @@ dependencies = [
 
 [[package]]
 name = "libnvvm-sys"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cuda-target-spec",
+ "cuda-toolkit-discovery",
  "libloading",
  "thiserror",
 ]
@@ -403,8 +409,9 @@ dependencies = [
 
 [[package]]
 name = "nvjitlink-sys"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
+ "cuda-toolkit-discovery",
  "libloading",
  "thiserror",
 ]
@@ -432,7 +439,7 @@ dependencies = [
 
 [[package]]
 name = "oxide-tile-export"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -460,7 +467,7 @@ dependencies = [
 
 [[package]]
 name = "ptx-parse"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "quote"
@@ -502,7 +509,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "reserved-oxide-symbols"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "rustc-hash"

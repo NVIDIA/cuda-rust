@@ -30,6 +30,7 @@ mod setup_update;
 #[cfg(test)]
 mod tests;
 mod tilelib;
+mod tilelib_provider;
 mod toolkit;
 
 use artifacts::*;
@@ -51,4 +52,5 @@ pub use pipeline_debug::*;
 pub use scaffold::*;
 pub use setup_update::*;
 pub use tilelib::*;
+use tilelib_provider::*;
 use toolkit::*;

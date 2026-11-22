@@ -40,10 +40,8 @@ use crate::error::{TranslationErr, TranslationResult};
 use crate::translator::location::span_to_location;
 use crate::translator::payload_store;
 use crate::translator::rvalue;
-use crate::translator::values::ValueMap;
-use dialect_mir::ops::{
-    MirMemcpyOp, MirSetDiscriminantOp, MirStorageDeadOp, MirStorageLiveOp, MirStoreOp,
-};
+use crate::translator::values::{ValueMap, store_through_address};
+use dialect_mir::ops::{MirMemcpyOp, MirSetDiscriminantOp, MirStorageDeadOp, MirStorageLiveOp};
 use dialect_mir::types::MirEnumType;
 use pliron::basic_block::BasicBlock;
 use pliron::builtin::types::{IntegerType, Signedness};
@@ -213,25 +211,16 @@ pub fn translate_statement(
                             loc.clone(),
                         )?;
 
-                        // Create Store Op
-                        let store_op = Operation::new(
+                        // with no previous op, the rvalue and place inserted
+                        // nothing, so the store goes at the block front
+                        let store_op = store_through_address(
                             ctx,
-                            MirStoreOp::get_concrete_op_info(),
-                            vec![],                      // No results
-                            vec![ptr_val, result_value], // ptr, value
-                            vec![],
-                            0,
+                            ptr_val,
+                            result_value,
+                            block_ptr,
+                            prev_op_after_ptr,
+                            loc,
                         );
-                        store_op.deref_mut(ctx).set_loc(loc);
-
-                        if let Some(prev) = prev_op_after_ptr {
-                            store_op.insert_after(ctx, prev);
-                        } else {
-                            // This implies block was empty and both rvalue and place didn't insert ops?
-                            // Or they inserted at front.
-                            store_op.insert_at_front(block_ptr, ctx);
-                        }
-
                         Ok(Some(store_op))
                     }
                     mir::ProjectionElem::Field(field_idx, field_ty) => {
@@ -292,16 +281,14 @@ pub fn translate_statement(
                         }
                         let field_ptr = field_addr_op.deref(ctx).get_result(0);
 
-                        let store_op = Operation::new(
+                        let store_op = store_through_address(
                             ctx,
-                            MirStoreOp::get_concrete_op_info(),
-                            vec![],
-                            vec![field_ptr, result_value],
-                            vec![],
-                            0,
+                            field_ptr,
+                            result_value,
+                            block_ptr,
+                            Some(field_addr_op),
+                            loc,
                         );
-                        store_op.deref_mut(ctx).set_loc(loc);
-                        store_op.insert_after(ctx, field_addr_op);
                         Ok(Some(store_op))
                     }
                     mir::ProjectionElem::ConstantIndex {
@@ -547,17 +534,14 @@ pub fn translate_statement(
                         }
                         let field_ptr = addr_op.deref(ctx).get_result(0);
 
-                        let store_op = Operation::new(
+                        let store_op = store_through_address(
                             ctx,
-                            MirStoreOp::get_concrete_op_info(),
-                            vec![],
-                            vec![field_ptr, result_value],
-                            vec![],
-                            0,
+                            field_ptr,
+                            result_value,
+                            block_ptr,
+                            Some(addr_op),
+                            loc,
                         );
-                        store_op.deref_mut(ctx).set_loc(loc);
-                        store_op.insert_after(ctx, addr_op);
-
                         Ok(Some(store_op))
                     }
                     (
@@ -653,17 +637,14 @@ pub fn translate_statement(
                         }
                         let inner_ptr = inner_addr_op.deref(ctx).get_result(0);
 
-                        let store_op = Operation::new(
+                        let store_op = store_through_address(
                             ctx,
-                            MirStoreOp::get_concrete_op_info(),
-                            vec![],
-                            vec![inner_ptr, result_value],
-                            vec![],
-                            0,
+                            inner_ptr,
+                            result_value,
+                            block_ptr,
+                            Some(inner_addr_op),
+                            loc,
                         );
-                        store_op.deref_mut(ctx).set_loc(loc);
-                        store_op.insert_after(ctx, inner_addr_op);
-
                         Ok(Some(store_op))
                     }
                     (
@@ -1132,20 +1113,14 @@ fn store_through_place_address(
     };
     let current_prev = addr_prev.or(current_prev);
 
-    let store_op = Operation::new(
+    Ok(Some(store_through_address(
         ctx,
-        MirStoreOp::get_concrete_op_info(),
-        vec![],
-        vec![dest_addr, result_value],
-        vec![],
-        0,
-    );
-    store_op.deref_mut(ctx).set_loc(loc);
-    match current_prev {
-        Some(prev) => store_op.insert_after(ctx, prev),
-        None => store_op.insert_at_front(block_ptr, ctx),
-    }
-    Ok(Some(store_op))
+        dest_addr,
+        result_value,
+        block_ptr,
+        current_prev,
+        loc,
+    )))
 }
 
 /// Extract the element type and address space from a pointer that points
@@ -1233,17 +1208,7 @@ pub(crate) fn emit_array_element_store(
     }
     let elem_ptr = addr_op.deref(ctx).get_result(0);
 
-    let store_op = Operation::new(
-        ctx,
-        MirStoreOp::get_concrete_op_info(),
-        vec![],
-        vec![elem_ptr, value],
-        vec![],
-        0,
-    );
-    store_op.deref_mut(ctx).set_loc(loc);
-    store_op.insert_after(ctx, addr_op);
-    store_op
+    store_through_address(ctx, elem_ptr, value, block_ptr, Some(addr_op), loc)
 }
 
 /// Return `true` if the pointer value's type is a mutable [`MirPtrType`](dialect_mir::types::MirPtrType).

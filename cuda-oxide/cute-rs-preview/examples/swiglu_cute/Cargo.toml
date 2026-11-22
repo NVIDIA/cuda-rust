@@ -10,7 +10,7 @@ description = "Fused FP32 and FP16 SwiGLU through typed CuTe register tiles"
 [workspace]
 
 [dependencies]
-ctm-rs = { path = "../../ctm-rs" }
+cutlass-primitives = { path = "../../cutlass-primitives" }
 cute-rs = { path = "../../cute-rs" }
 cuda-device = { path = "../../../crates/cuda-device" }
 cuda-host = { path = "../../../crates/cuda-host" }

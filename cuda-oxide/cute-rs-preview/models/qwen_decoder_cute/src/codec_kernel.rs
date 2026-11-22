@@ -3,9 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 //! Waveform kernels use time-major [time, channel] storage throughout.
-use ctm_rs::memory::DisjointSlice;
-use ctm_rs::{cuda_module, kernel, launch_contract, thread};
 use cute_rs::BFloat16;
+use cutlass_primitives as prims;
+use prims::memory::DisjointSlice;
+use prims::{cuda_module, kernel, launch_contract, thread};
 
 /// Device convolution, normalization and activation operations for time-major batches.
 #[cuda_module]

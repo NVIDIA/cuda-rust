@@ -44,9 +44,6 @@
 
 #![allow(unsafe_op_in_unsafe_fn)]
 
-use ctm_rs::mbarrier::Barrier;
-use ctm_rs::memory::DynamicSharedArray;
-use ctm_rs::{cluster_launch, cuda_module, kernel, launch_bounds, launch_contract};
 use cute_rs::arch::{
     NamedBarrier, block_idx_in_cluster, cluster_arrive_relaxed, cluster_wait, cvt_e4m3x2_f32,
     elect_one_sync, make_warp_uniform, mbarrier_init_fence, rsqrt_f32, setmaxregister_decrease,
@@ -64,6 +61,10 @@ use cute_rs::{
     RowMajor, Swizzle, TensorMap, crd2idx_col_major_2d, crd2idx_row_major_2d, crd2idx_row_major_3d,
     size_in_bytes, store_global_no_allocate,
 };
+use cutlass_primitives as prims;
+use prims::mbarrier::Barrier;
+use prims::memory::DynamicSharedArray;
+use prims::{cluster_launch, cuda_module, kernel, launch_bounds, launch_contract};
 
 /// Per-CTA `64 × 64` FP16 K-major `X` activation tile with 128-byte swizzle (`8,192` bytes per stage).
 /// Across the two-CTA cluster, the pair covers `M = 128` tokens (`64` rows per CTA) × `K = 64`.

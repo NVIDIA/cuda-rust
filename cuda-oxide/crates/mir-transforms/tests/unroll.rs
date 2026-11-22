@@ -14,13 +14,14 @@
 mod common;
 
 use common::{
-    OffsetBound, RangeBound, RangeForLoop, RangeForShape, StepForm, counted_loop,
-    counted_loop_from_step, early_exit_counted_loop, early_exit_with_direct_liveout, i32t, mir_ctx,
-    multi_latch_counted_loop, multiple_exit_counted_loop, nested_counted_loop, offset_counted_loop,
-    range_for_loop, shared_bound_nested_loop, u32t,
+    DeadArm, LoopBound, LoopStep, OffsetBound, RangeBound, RangeForLoop, RangeForShape, StepForm,
+    counted_loop, counted_loop_from_step, early_exit_counted_loop, early_exit_with_direct_liveout,
+    i32t, mir_ctx, multi_latch_counted_loop, multiple_exit_counted_loop, nested_counted_loop,
+    offset_counted_loop, range_for_loop, runtime_step_loop, shared_bound_nested_loop, u32t,
+    unreachable_arm_counted_loop,
 };
 use dialect_mir::ops::{
-    MirAddOp, MirBitAndOp, MirCallOp, MirCheckedAddOp, MirCheckedSubOp, MirCondBranchOp,
+    MirAddOp, MirBitAndOp, MirCallOp, MirCastOp, MirCheckedAddOp, MirCheckedSubOp, MirCondBranchOp,
     MirConstantOp, MirGeOp, MirGetDiscriminantOp, MirGtOp, MirLeOp, MirLtOp, MirNotOp, MirReturnOp,
     MirSubOp, MirUnrollHintOp,
 };
@@ -484,6 +485,70 @@ fn partial_unroll_with_extra_exits_is_skipped() {
     assert_eq!(hint_count(&ctx, lp.region), 0, "the request was consumed");
 }
 
+/// A branch to a block that only reaches `mir.unreachable`, like the
+/// `otherwise` arm of rustc's `match` on an `Option`, is not a loop exit, on
+/// either side of the branch and with storage markers in the block. A block
+/// that calls a panic handler first is, and still declines partial unrolling.
+#[test]
+fn partial_unroll_ignores_a_branch_to_unreachable() {
+    for arm in [
+        DeadArm::Unreachable,
+        DeadArm::StorageMarkers,
+        DeadArm::Panics,
+    ] {
+        for dead_first in [false, true] {
+            let case = format!("{arm:?}, dead_first={dead_first}");
+            let mut ctx = mir_ctx();
+            let lp = unreachable_arm_counted_loop(&mut ctx, 10, arm, dead_first);
+
+            MirUnrollHintOp::new(&mut ctx, 4)
+                .get_operation()
+                .insert_at_front(lp.body, &ctx);
+            let mut analyses = AnalysisManager::default();
+            unroll_annotated_loops(lp.module, &mut ctx, &mut analyses).expect("unroll pass");
+
+            pliron::operation::verify_operation(lp.module, &ctx).expect("valid IR after the pass");
+            assert_eq!(hint_count(&ctx, lp.region), 0, "{case}: request consumed");
+            let blocks: Vec<_> = lp.region.deref(&ctx).iter(&ctx).collect();
+            if matches!(arm, DeadArm::Panics) {
+                assert_eq!(
+                    loop_count(&ctx, lp.region),
+                    1,
+                    "{case}: source loop remains"
+                );
+                assert!(
+                    blocks.contains(&lp.dead),
+                    "{case}: panic path still reachable"
+                );
+                continue;
+            }
+            assert_eq!(
+                loop_count(&ctx, lp.region),
+                2,
+                "{case}: a main loop and the remainder loop"
+            );
+            assert!(
+                !blocks.contains(&lp.dead),
+                "{case}: the branch to `unreachable` was folded away"
+            );
+            let after = loop_info(&ctx, lp.region);
+            for id in 0..after.loops().len() {
+                assert_eq!(
+                    after.exit_blocks(&ctx, lp.region, id).len(),
+                    1,
+                    "{case}: each loop leaves only through its exit test"
+                );
+            }
+            let id = after.innermost_loop(lp.header).expect("remainder loop");
+            assert_eq!(
+                after.exiting_blocks(&ctx, lp.region, id),
+                vec![lp.header],
+                "{case}"
+            );
+        }
+    }
+}
+
 #[test]
 fn full_unroll_routes_a_direct_header_liveout_through_exit_arguments() {
     let mut ctx = mir_ctx();
@@ -788,6 +853,9 @@ fn evaluate_integer(ctx: &Context, value: Value, inputs: &HashMap<Value, i128>) 
         let lhs = evaluate_integer(ctx, op.deref(ctx).get_operand(0), inputs);
         if Operation::get_op::<MirNotOp>(op, ctx).is_some() {
             !lhs
+        } else if Operation::get_op::<MirCastOp>(op, ctx).is_some() {
+            // an integer cast keeps the value; the result type wraps it below
+            lhs
         } else {
             let rhs = evaluate_integer(ctx, op.deref(ctx).get_operand(1), inputs);
             if Operation::get_op::<MirAddOp>(op, ctx).is_some() {
@@ -945,6 +1013,158 @@ fn run_function(ctx: &Context, region: Ptr<Region>, args: &[i128]) -> i128 {
         block = term.deref(ctx).get_successor(taken);
     }
     panic!("the function did not return within 10,000 blocks");
+}
+
+/// The block-stride loop `i = start; while i < n { acc += i; i += step }`,
+/// with the start and the step only known at runtime, partially unrolls and
+/// returns what the source loop returns. Every 8-bit start, bound, and step
+/// below runs, including steps that wrap the counter or are negative, as a
+/// signed counter's `i += step` can be. The bound is either an argument or,
+/// as in `while i < n as usize`, a cast the loop recomputes every iteration,
+/// and the test may compare `i + off` instead of `i`.
+#[test]
+fn partial_unroll_of_a_runtime_step_loop_matches_the_source_loop() {
+    for (signedness, _, max, bounds) in eight_bit_cases() {
+        // a cast argument has the other signedness and the loop uses its bits
+        let as_other = |value: i128| {
+            let bits = value.rem_euclid(256);
+            if signedness == Signedness::Unsigned && bits >= 128 {
+                bits - 256
+            } else {
+                bits
+            }
+        };
+        for step_source in [LoopStep::Param, LoopStep::CastInLoop, LoopStep::Const(3)] {
+            for (bound_source, off) in [
+                (LoopBound::Param, 0),
+                (LoopBound::CastInLoop, 0),
+                (LoopBound::Param, 1),
+                (LoopBound::Param, -2),
+            ] {
+                for pred in [CmpPred::Lt, CmpPred::Le] {
+                    for factor in [2, 4] {
+                        let mut ctx = mir_ctx();
+                        let ty = IntegerType::get(&ctx, 8, signedness);
+                        // an unsigned constant holds the offset's bits
+                        let off = if signedness == Signedness::Unsigned {
+                            i128::rem_euclid(off, 256)
+                        } else {
+                            off
+                        };
+                        let lp =
+                            runtime_step_loop(&mut ctx, ty, pred, step_source, bound_source, off);
+                        MirUnrollHintOp::new(&mut ctx, factor)
+                            .get_operation()
+                            .insert_at_front(lp.latch, &ctx);
+                        let mut analyses = AnalysisManager::default();
+                        unroll_annotated_loops(lp.module, &mut ctx, &mut analyses)
+                            .expect("unroll pass succeeds");
+                        pliron::operation::verify_operation(lp.module, &ctx)
+                            .expect("valid IR after the pass");
+                        let case = format!(
+                            "{signedness:?}, {step_source:?}, {bound_source:?}, off={off}, {pred:?}, factor={factor}"
+                        );
+                        assert_eq!(loop_count(&ctx, lp.region), 2, "{case}");
+
+                        let wrap = |value: i128| {
+                            let bits = value.rem_euclid(256);
+                            if signedness == Signedness::Signed && bits > max {
+                                bits - 256
+                            } else {
+                                bits
+                            }
+                        };
+                        let steps: Vec<i128> = match step_source {
+                            LoopStep::Const(step) => vec![step],
+                            // the cast argument has the other signedness; the
+                            // loop adds its bits, so any value covers the same
+                            // steps
+                            _ => vec![0, 1, 2, 3, 64, 127, -1, -2]
+                                .into_iter()
+                                .map(wrap)
+                                .collect(),
+                        };
+                        for &start in &bounds {
+                            for &n in &bounds {
+                                for &step in &steps {
+                                    // the counter decides control flow alone,
+                                    // so a loop that has not left after 256
+                                    // trips has revisited a counter and never
+                                    // leaves
+                                    let (mut acc, mut i) = (0, start);
+                                    let mut want = None;
+                                    for _ in 0..=256 {
+                                        let tested = wrap(i + off);
+                                        let keep_going = match pred {
+                                            CmpPred::Lt => tested < n,
+                                            _ => tested <= n,
+                                        };
+                                        if !keep_going {
+                                            want = Some(acc);
+                                            break;
+                                        }
+                                        acc = wrap(acc + i);
+                                        i = wrap(i + step);
+                                    }
+                                    let Some(want) = want else {
+                                        continue;
+                                    };
+                                    let step_arg = match step_source {
+                                        LoopStep::CastInLoop => as_other(step),
+                                        _ => step,
+                                    };
+                                    let n_arg = match bound_source {
+                                        LoopBound::CastInLoop => as_other(n),
+                                        _ => n,
+                                    };
+                                    assert_eq!(
+                                        run_function(&ctx, lp.region, &[start, n_arg, step_arg]),
+                                        want,
+                                        "{case}: start={start}, n={n}, step={step}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A step or a bound computed in the loop from a loop-carried value can
+/// change between iterations, so partial unrolling must leave the loop
+/// rolled and say why.
+#[test]
+fn partial_unroll_declines_a_runtime_step_or_bound_that_changes() {
+    for (step_source, bound_source, reason) in [
+        (
+            LoopStep::CastOfCarried,
+            LoopBound::Param,
+            "no recognized induction variable",
+        ),
+        (
+            LoopStep::Param,
+            LoopBound::CastOfCarried,
+            "needs a loop-invariant bound",
+        ),
+    ] {
+        let mut ctx = mir_ctx();
+        let ty = u32t(&mut ctx);
+        let lp = runtime_step_loop(&mut ctx, ty, CmpPred::Lt, step_source, bound_source, 0);
+        MirUnrollHintOp::new(&mut ctx, 4)
+            .get_operation()
+            .insert_at_front(lp.latch, &ctx);
+        let mut analyses = AnalysisManager::default();
+        let warnings = unroll_annotated_loops(lp.module, &mut ctx, &mut analyses)
+            .expect("unroll pass succeeds");
+        let case = format!("{step_source:?}, {bound_source:?}");
+        assert_eq!(loop_count(&ctx, lp.region), 1, "{case}");
+        assert!(
+            warnings.iter().any(|w| w.message.contains(reason)),
+            "{case}: {warnings:?}"
+        );
+    }
 }
 
 /// Plant an unroll hint (`factor` 0 = full) in a range `for` body and run the

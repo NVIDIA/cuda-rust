@@ -297,11 +297,16 @@ fn get_example_dir() -> std::path::PathBuf {
 /// # Returns
 /// `Ok(())` on success, `Err(message)` on failure
 fn run_command(cmd: &str, args: &[&str], cwd: &Path) -> Result<(), String> {
-    let status = Command::new(cmd)
-        .args(args)
-        .current_dir(cwd)
-        .status()
-        .map_err(|e| format!("Failed to run {}: {}", cmd, e))?;
+    let status = if cfg!(windows) && cmd.ends_with(".sh") {
+        Command::new("bash")
+            .arg(cmd)
+            .args(args)
+            .current_dir(cwd)
+            .status()
+    } else {
+        Command::new(cmd).args(args).current_dir(cwd).status()
+    }
+    .map_err(|e| format!("Failed to run {}: {}", cmd, e))?;
 
     if status.success() {
         Ok(())
@@ -334,6 +339,9 @@ fn file_needs_rebuild(target: &Path, sources: &[&Path]) -> bool {
 ///
 /// These C tools wrap libNVVM and nvJitLink respectively.
 fn build_tools(example_dir: &Path) -> Result<(), String> {
+    if cfg!(windows) {
+        return Ok(());
+    }
     let tools_dir = example_dir.join("tools");
     let compile_ltoir = tools_dir.join("compile_ltoir");
     let link_ltoir = tools_dir.join("link_ltoir");
@@ -435,15 +443,20 @@ fn compile_cuda_oxide_ltoir(example_dir: &Path) -> Result<(), String> {
     }
 
     println!("=== Compiling cuda-oxide LLVM IR to LTOIR ===");
-    run_command(
-        "./compile_ltoir",
-        &[
-            ll_file.to_str().unwrap(),
-            get_arch(),
-            ltoir_file.to_str().unwrap(),
-        ],
-        &tools_dir,
-    )?;
+    if cfg!(windows) {
+        cuda_host::ltoir::compile_ll_file_to_ltoir(&ll_file, get_arch(), &ltoir_file)
+            .map_err(|e| e.to_string())?;
+    } else {
+        run_command(
+            "./compile_ltoir",
+            &[
+                ll_file.to_str().unwrap(),
+                get_arch(),
+                ltoir_file.to_str().unwrap(),
+            ],
+            &tools_dir,
+        )?;
+    }
     println!("  ✓ cuda-oxide LTOIR compiled\n");
     Ok(())
 }
@@ -472,18 +485,23 @@ fn link_ltoir(example_dir: &Path) -> Result<std::path::PathBuf, String> {
     }
 
     println!("=== Linking LTOIR files ===");
-    run_command(
-        "./link_ltoir",
-        &[
-            &format!("-arch={}", get_arch()),
-            "-o",
-            cubin_file.to_str().unwrap(),
-            cuda_oxide_ltoir.to_str().unwrap(),
-            external_ltoir.to_str().unwrap(),
-            cccl_ltoir.to_str().unwrap(),
-        ],
-        &tools_dir,
-    )?;
+    if cfg!(windows) {
+        cuda_host::ltoir::link_ltoir_files_to_cubin(&source_refs, get_arch(), &cubin_file)
+            .map_err(|e| e.to_string())?;
+    } else {
+        run_command(
+            "./link_ltoir",
+            &[
+                &format!("-arch={}", get_arch()),
+                "-o",
+                cubin_file.to_str().unwrap(),
+                cuda_oxide_ltoir.to_str().unwrap(),
+                external_ltoir.to_str().unwrap(),
+                cccl_ltoir.to_str().unwrap(),
+            ],
+            &tools_dir,
+        )?;
+    }
     println!("  ✓ LTOIR linked to cubin\n");
     Ok(cubin_file)
 }

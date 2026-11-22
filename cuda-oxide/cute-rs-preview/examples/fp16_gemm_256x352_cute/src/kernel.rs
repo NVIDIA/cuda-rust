@@ -20,9 +20,6 @@
 //! Global C   ◄── TMA Store (Thread 0) ◄── `Sm100TmemEpilogue` (Warps 0..3)
 //! ```
 
-use ctm_rs::mbarrier::Barrier;
-use ctm_rs::memory::DynamicSharedArray;
-use ctm_rs::{cluster_launch, cuda_module, kernel, launch_bounds, launch_contract, thread};
 use cute_rs::arch::{
     NamedBarrier, block_idx_in_cluster, cluster_arrive_relaxed, cluster_wait, elect_one_sync,
     fence_view_async_shared, mbarrier_init_fence,
@@ -35,6 +32,10 @@ use cute_rs::{
     Sm100TmemEpilogue, Swizzle, TensorMap, crd2idx_col_major_2d, crd2idx_col_major_3d,
     idx2crd_col_major_2d, size_in_bytes,
 };
+use cutlass_primitives as prims;
+use prims::mbarrier::Barrier;
+use prims::memory::DynamicSharedArray;
+use prims::{cluster_launch, cuda_module, kernel, launch_bounds, launch_contract, thread};
 
 // These element layouts also encode the host TMA descriptors. FP16 shifts
 // the swizzle's low-bit position by one when lowering to byte addresses.

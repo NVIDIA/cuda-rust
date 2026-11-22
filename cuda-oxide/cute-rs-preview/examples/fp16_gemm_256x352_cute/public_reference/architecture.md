@@ -1,7 +1,7 @@
 # FP16 GEMM architecture
 
 The [Rust kernel](../src/kernel.rs) combines `cute-rs` layouts, tensor
-operations and pipelines with `ctm-rs` thread/warp coordinates, descriptor
+operations and pipelines with `cutlass-primitives` thread/warp coordinates, descriptor
 prefetch, barriers, fences, cluster addressing and TMEM allocation/release.
 `cuda-device` supplies kernel annotations and dynamic shared storage. CuTe
 owns its composite pipeline and tensor operations, including their internal

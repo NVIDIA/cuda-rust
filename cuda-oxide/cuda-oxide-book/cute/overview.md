@@ -1,17 +1,17 @@
-# Overview: cute-rs and ctm-rs (preview)
+# Overview: cute-rs and cutlass-primitives (preview)
 
 :::{admonition} Preview
 :class: warning
-cute-rs compiles for three targets, `sm_100a`, `sm_103a` and `sm_120a`, through the pinned CUTLASS 4.7 compiler, and covers a validated subset of CuTeDSL 4.7 on them. The [support matrix](support-matrix.md) lists what is supported, what is partial and what is missing. Expect API changes between releases.
+cute-rs compiles for four targets (`sm_100a`, `sm_103a`, `sm_107a`, and `sm_120a`) through the pinned CUTLASS 4.8.1 compiler, and covers a validated subset of CuTeDSL 4.8 on them. The [support matrix](support-matrix.md) lists what is supported, what is partial, and what is missing. Expect API changes between releases.
 :::
 
-**cute-rs** brings CUTLASS CuTe's layout algebra, partitions, TMA transfers, pipelines, and tensor-core MMA operations into Rust's type system for three Blackwell targets, without a Python interpreter or runtime JIT tracer.
+**cute-rs** brings CUTLASS CuTe's layout algebra, partitions, TMA transfers, pipelines, and tensor-core MMA operations into Rust's type system across Blackwell and Vera Rubin GPUs, without a Python interpreter or runtime JIT tracer.
 
 ```{figure} images/cute-rs-preview-stack-and-flow.svg
 :align: center
 :width: 100%
 
-The cute-rs-preview stack: kernels author tensor computation in cute-rs over ctm-rs instruction primitives, import into one Pliron module (dialect-cute, dialect-mir, and dialect-nvvm), pass whole-module verification, and compile through CUTLASS 4.7 MLIR into an embedded cubin.
+The cute-rs-preview stack: kernels author tensor computation in cute-rs over cutlass-primitives instruction primitives, import into one Pliron module (dialect-cute, dialect-mir, and dialect-nvvm), pass whole-module verification, and compile through CUTLASS 4.8.1 MLIR into an embedded cubin.
 ```
 
 ---
@@ -20,17 +20,17 @@ The cute-rs-preview stack: kernels author tensor computation in cute-rs over ctm
 
 Every CuTe kernel in cuda-oxide is built on two complementary device crates plus a shared layout algebra crate:
 
-| Crate | Layer | What it owns |
-| :---- | :---- | :----------- |
-| **cute-rs** | 1-to-1 CuTeDSL layer | `layout`, `tensor` (`Tensor`, `RegisterTile`), `atom` (`TiledCopy`), `numeric`, `arch`, `nvgpu::{cpasync, warp, tcgen05}`, `pipeline`, and `utils::{tmem_allocator, scheduler, blockscaled}` — lowered directly through `dialect-cute` and `cuda-device` (`0` `ctm-rs` dependencies). |
-| **ctm-rs** | Entry ABI & PTX layer | `#[cuda_module]`, `#[kernel]`, `#[launch_bounds]`, `#[launch_contract]`, `DisjointSlice`, `DynamicSharedArray`, and standalone PTX instruction wrappers for `*_ctm` kernels. |
-| **cute-layout** | Shared layout algebra | `IntTuple`, `Layout`, `ComposedLayout`, `Swizzle`, and static compile-time proofs for cooperative copies, `ldmatrix`, and TMA swizzle phase alignment. |
+| Crate                | Layer                 | What it owns                                                                                                                               |
+|:---------------------|:----------------------|:-------------------------------------------------------------------------------------------------------------------------------------------|
+| **cute-rs**          | 1-to-1 CuTeDSL layer  | `layout`, `tensor`, `atom`, `numeric`, `arch`, `nvgpu::{cpasync, warp, tcgen05}`, `pipeline`, and `utils` (zero `cutlass-primitives` deps). |
+| **cutlass-primitives**| Entry ABI & PTX layer | `#[cuda_module]`, `#[kernel]`, `#[launch_bounds]`, `#[launch_contract]`, `DisjointSlice`, `DynamicSharedArray`, and `*_ctm` PTX wrappers.   |
+| **cute-layout**      | Shared layout algebra | `IntTuple`, `Layout`, `ComposedLayout`, `Swizzle`, and compile-time proofs for cooperative copies, `ldmatrix`, and TMA phase alignment.     |
 
 ```{figure} images/three-tiers-comparison.svg
 :align: center
 :width: 100%
 
-When to use cute-rs, ctm-rs, and cuda-device.
+When to use cute-rs, cutlass-primitives, and cuda-device.
 ```
 
 ---
@@ -40,8 +40,9 @@ When to use cute-rs, ctm-rs, and cuda-device.
 In cute-rs, a `Tensor` pairs storage with a logical coordinate layout. Splitting a vector into 4-element (16-byte) tiles and slicing the tile owned by `tid` takes three lines:
 
 ```rust
-use ctm_rs::memory::DisjointSlice;
-use ctm_rs::{cuda_module, kernel, thread};
+use cutlass_primitives as prims;
+use prims::memory::DisjointSlice;
+use prims::{cuda_module, kernel, thread};
 
 #[cuda_module]
 mod kernels {
@@ -73,10 +74,10 @@ mod kernels {
 
 ## Run and Inspect the Emitted CuTe MLIR
 
-Install the pinned CUTLASS 4.7 compiler once, then run any `*_cute` example from `cuda-oxide/`:
+Install the pinned CUTLASS 4.8.1 compiler once, then run any `*_cute` example from `cuda-oxide/`:
 
 ```bash
-# Install the managed CUTLASS 4.7 compiler
+# Install the managed CUTLASS 4.8.1 compiler (x86_64 or aarch64 Linux)
 cargo oxide toolchain install cutlass
 
 # Run the f32 + f16 elementwise example through the CUTLASS MLIR backend

@@ -8,7 +8,7 @@ description = "Source-matched Blackwell SM100 FP16 FMHA prefill in CuTe Rust"
 [workspace]
 
 [dependencies]
-ctm-rs = { path = "../../ctm-rs" }
+cutlass-primitives = { path = "../../cutlass-primitives" }
 cute-rs = { path = "../../cute-rs", features = ["host"] }
 cuda-device = { path = "../../../crates/cuda-device" }
 cuda-host = { path = "../../../crates/cuda-host" }

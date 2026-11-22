@@ -4,7 +4,8 @@
 #![allow(dead_code)]
 #![feature(f16)]
 
-use ctm_rs::{memory::F16Tile128, tma::TensorMap};
+use cutlass_primitives as prims;
+use prims::{memory::F16Tile128, tma::TensorMap};
 use cuda_device::{cuda_module, kernel};
 
 #[derive(Clone, Copy)]

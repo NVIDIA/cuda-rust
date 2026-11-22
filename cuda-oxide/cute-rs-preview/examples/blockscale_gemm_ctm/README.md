@@ -1,4 +1,4 @@
-# MXFP4 GEMM with Rust CTM (ctm-rs)
+# MXFP4 GEMM with Rust CTM (cutlass-primitives)
 
 This cuda-oxide example multiplies packed E2M1 matrices with UE8M0 scales per
 32 K values, FP32 accumulation and FP16 output. The fixed problem is
@@ -53,7 +53,7 @@ three round medians, with 100 warmups and 31 single-launch samples per round.
 
 | Implementation | CUDA events (µs) | Nsight kernel duration (µs) |
 | --- | ---: | ---: |
-| Rust CTM (`ctm-rs`) | 13.536 | 11.616 |
+| Rust CTM (`cutlass-primitives`) | 13.536 | 11.616 |
 | Python CTM (CUTLASS Primitives) | 19.520 | 10.880 |
 
 Events include submission gaps; Nsight reports GEMM execution duration,

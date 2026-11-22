@@ -19,13 +19,14 @@
 
 #![feature(f16)]
 
-use ctm_rs::memory::DisjointSlice;
-use ctm_rs::{cuda_module, kernel, thread};
 use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cute_rs::{
     BlockScaledTensor, Float4E2M1FN, Float8E8M0FNU, KMajor, Mkl, Nkl, Sm1xxBlockScaleKMajor,
 };
+use cutlass_primitives as prims;
+use prims::memory::DisjointSlice;
+use prims::{cuda_module, kernel, thread};
 
 /// Rows computed per CTA, with one output row per thread.
 const CTA_M: usize = 128;

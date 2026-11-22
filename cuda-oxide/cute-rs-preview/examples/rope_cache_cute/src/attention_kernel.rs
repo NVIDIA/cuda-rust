@@ -3,16 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 //! BF16 grouped-query attention using parallel, stable 64-key reductions.
-use ctm_rs::{
-    cuda_module, kernel, launch_bounds, launch_contract,
-    memory::{DisjointSlice, DynamicSharedArray},
-    thread,
-};
 use cute_rs::arch::NamedBarrier;
 use cute_rs::layout::{C, ComposedLayout, CopyG2S, Layout, LeadingDim, RowMajor, Swizzle};
 use cute_rs::static_layout::StaticLayout;
 use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
 use cute_rs::{BFloat16, GmemMatrix, RegisterTile, SmemTile, TiledCopy};
+use cutlass_primitives as prims;
+use prims::{
+    cuda_module, kernel, launch_bounds, launch_contract,
+    memory::{DisjointSlice, DynamicSharedArray},
+    thread,
+};
 
 /// Shared bytes for two 64-by-128 BF16 tiles and FP32 reduction state.
 pub const PARTIAL_SHARED_BYTES: u32 = 35_104;

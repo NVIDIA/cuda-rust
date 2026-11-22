@@ -536,6 +536,18 @@ pub fn collect_mutated_variables_from_block(
     for statement in block.stmts.iter() {
         match statement {
             Stmt::Local(local) => {
+                // The initializer runs before the new bindings exist.
+                if let Some(init) = &local.init {
+                    for expr in
+                        std::iter::once(&*init.expr).chain(init.diverge.as_ref().map(|(_, e)| &**e))
+                    {
+                        for name in collect_mutated_variables_from_expr(expr)? {
+                            if !local_vars.contains(&name) {
+                                result.insert(name);
+                            }
+                        }
+                    }
+                }
                 let mut var_names: Vec<String> = vec![];
                 collect_pattern_bindings(&local.pat, &mut var_names)?;
                 local_vars.extend(var_names);
@@ -609,6 +621,7 @@ pub fn collect_mutated_variables_from_expr(expr: &Expr) -> Result<BTreeSet<Strin
             Ok(BTreeSet::from([var_name]))
         }
         Expr::Block(block_expr) => collect_mutated_variables_from_block(&block_expr.block),
+        Expr::Unsafe(unsafe_expr) => collect_mutated_variables_from_block(&unsafe_expr.block),
         Expr::ForLoop(for_expr) => collect_mutated_variables(for_expr),
         Expr::While(while_expr) => collect_mutated_variables_from_block(&while_expr.body),
         Expr::Loop(loop_expr) => collect_mutated_variables_from_block(&loop_expr.body),

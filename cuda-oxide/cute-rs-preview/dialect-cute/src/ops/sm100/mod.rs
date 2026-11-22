@@ -65,12 +65,12 @@ pub use operations::{
     CuteSm100PipelineExpectOp, CuteSm100PipelineInitOp, CuteSm100PipelineReleaseOp,
     CuteSm100PipelineWaitOp, CuteSm100StoreAcquireOp, CuteSm100StoreCommitOp, CuteSm100StoreTailOp,
     CuteSm100TiledMmaOp, CuteSm100TmaStoreOp, CuteSm100TmemAllocOp, CuteSm100TmemDeallocOp,
-    CuteSm100TmemEpilogueOp, register, semantic_ids, verify_local,
+    CuteSm100TmemEpilogueOp, CuteSm107BlockScaledGemmOp, register, semantic_ids, verify_local,
 };
 pub use plans::{
     CuteSm100BlockScaledMmaPlanAttr, CuteSm100ClusterCopyPlanAttr, CuteSm100CollectorAttr,
     CuteSm100EpiloguePlanAttr, CuteSm100MmaPlanAttr, CuteSm100PipelinePlanAttr,
-    CuteSm100ScaleCopyPlanAttr, CuteSm100TmemPlanAttr,
+    CuteSm100ScaleCopyPlanAttr, CuteSm100TmemPlanAttr, CuteSm107BlockScaledMmaPlanAttr,
 };
 pub use verify::verify_story;
 

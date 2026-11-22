@@ -3,10 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 //! Table-driven BF16 split-half rotation and contiguous cache append.
-use ctm_rs::memory::DisjointSlice;
-use ctm_rs::{cuda_module, kernel, thread};
 use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
 use cute_rs::{BFloat16, RegisterTile};
+use cutlass_primitives as prims;
+use prims::memory::DisjointSlice;
+use prims::{cuda_module, kernel, thread};
 
 /// Independent-thread rotary and append operations over checked dense BF16 storage.
 #[cuda_module]

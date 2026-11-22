@@ -121,8 +121,8 @@ negotiate with the selected executable; they also handle older assemblers
 without `--list-versions`. See the [compatibility matrix](../cutile-book/reference/compatibility.md).
 
 cuTile's JIT resolves `tileiras` from `CUTILE_TILEIRAS_PATH` when set, then
-`$CUDA_TOOLKIT_PATH/bin/tileiras`, then the default CUDA 13.2+ install
-directories (`/usr/local/cuda-13.4` through `/usr/local/cuda`), and only then
+the toolkit selected by `CUDA_TOOLKIT_PATH` (or `CUDA_HOME`), then the default
+CUDA 13.2+ install directories (including `/usr/local/cuda-13.5`), and only then
 from `PATH`. Set `CUTILE_TILEIRAS_PATH` to force a specific binary, for
 example:
 

@@ -1019,11 +1019,17 @@ fn write_device_artifact_object(
     materialization_request: Option<materialize::MaterializationRequest>,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let bundle_name = std::env::var("CARGO_PKG_NAME").unwrap_or_else(|_| output_name.to_string());
+    let expected_kernels = functions
+        .iter()
+        .filter(|function| function.is_kernel)
+        .map(|function| function.export_name.as_str())
+        .collect::<Vec<_>>();
     let materialized_artifact = materialize_artifact_for_embedding(
         materialization_request,
         &bundle_name,
         result,
         artifact,
+        &expected_kernels,
     )?;
     if let Some(materialized) = materialized_artifact.as_ref() {
         emit_launch_bounds_spill_warnings(tcx, result, functions, &materialized.resource_usage);
@@ -1092,6 +1098,7 @@ fn write_device_artifact_object(
     let package_version = std::env::var("CARGO_PKG_VERSION").unwrap_or_default();
     let legacy_anchor =
         reserved_oxide_symbols::artifact_anchor_symbol(&bundle_name, &package_version);
+    let fallback_symbols = local_foreign_fn_link_symbols(tcx);
     let object = if use_target_specific_anchor {
         let binary_name = std::env::var("CARGO_BIN_NAME").ok();
         let target_anchor = reserved_oxide_symbols::artifact_anchor_symbol_v2(
@@ -1100,16 +1107,46 @@ fn write_device_artifact_object(
             output_name,
             binary_name.as_deref(),
         );
-        oxide_artifacts::build_host_object_for_target_with_legacy_anchor(
+        oxide_artifacts::build_host_object_for_target_with_fallbacks(
             &blob,
             host_target,
             &target_anchor,
-            &legacy_anchor,
+            Some(&legacy_anchor),
+            &fallback_symbols,
         )?
     } else {
-        oxide_artifacts::build_host_object_for_target(&blob, host_target, Some(&legacy_anchor))?
+        oxide_artifacts::build_host_object_for_target_with_fallbacks(
+            &blob,
+            host_target,
+            &legacy_anchor,
+            None,
+            &fallback_symbols,
+        )?
     };
     write_artifact_object(output_dir, output_name, host_target, &object, "embed")
+}
+
+/// Collects the link symbol names of `extern "C"` functions declared in this
+/// crate so Windows COFF artifact objects can emit `/alternatename` fallbacks
+/// for device-only extern declarations (both `#[device] extern "C"` and bare
+/// `extern "C"` libdevice/LTOIR functions).
+fn local_foreign_fn_link_symbols(tcx: TyCtxt<'_>) -> Vec<String> {
+    let mut symbols = std::collections::BTreeSet::new();
+    for id in tcx.hir_crate_items(()).foreign_items() {
+        let def_id = id.owner_id.to_def_id();
+        if matches!(tcx.def_kind(def_id), rustc_hir::def::DefKind::Fn) {
+            let instance = rustc_middle::ty::Instance::mono(tcx, def_id);
+            let name = tcx.symbol_name(instance).name;
+            if !name.is_empty()
+                && name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'$' | b'.' | b'@'))
+            {
+                symbols.insert(name.to_string());
+            }
+        }
+    }
+    symbols.into_iter().collect()
 }
 
 fn embedded_compile_options(
@@ -1156,6 +1193,7 @@ fn materialize_artifact_for_embedding(
     bundle_name: &str,
     result: &device_codegen::DeviceCodegenResult,
     artifact: &device_codegen::DeviceCodegenArtifact,
+    expected_kernels: &[&str],
 ) -> Result<Option<MaterializedDeviceArtifact>, Box<dyn std::error::Error>> {
     let Some(request) = request else {
         return Ok(None);
@@ -1175,6 +1213,7 @@ fn materialize_artifact_for_embedding(
             &result.target,
             result.allow_fma_contraction,
             debug_policy,
+            expected_kernels,
         )?,
         device_codegen::DeviceCodegenArtifactKind::Ltoir => materialize::ltoir_to_cubin(
             request,
@@ -1183,6 +1222,7 @@ fn materialize_artifact_for_embedding(
             &result.target,
             result.allow_fma_contraction,
             debug_policy,
+            expected_kernels,
         )?,
         device_codegen::DeviceCodegenArtifactKind::Ptx => {
             return Err(Box::new(materialize::MaterializeError::PtxInput));
@@ -1345,8 +1385,9 @@ fn write_artifact_object(
         .join(&safe_output_name)
         .join(sanitize_path_component(host_target));
     std::fs::create_dir_all(&object_dir)?;
+    let object_extension = embedded_object_extension(host_target);
     let object_path = object_dir.join(format!(
-        "{safe_output_name}.{}.{artifact_id}.{kind}.o",
+        "{safe_output_name}.{}.{artifact_id}.{kind}.{object_extension}",
         std::process::id(),
     ));
     // `SHF_GNU_RETAIN` sits in the ELF `SHF_MASKOS` range (`0x0ff00000`), which
@@ -1360,6 +1401,16 @@ fn write_artifact_object(
     }
     std::fs::write(&object_path, &patched)?;
     Ok(object_path)
+}
+
+/// Returns the relocatable object file extension (`"obj"` on Windows, `"o"` elsewhere)
+/// expected by the host linker for embedded device-artifact objects.
+fn embedded_object_extension(host_target: &str) -> &'static str {
+    if host_target.to_ascii_lowercase().contains("windows") {
+        "obj"
+    } else {
+        "o"
+    }
 }
 
 fn sanitize_path_component(name: &str) -> String {

@@ -13,10 +13,10 @@ computation through cute-rs tensor views, layouts, partitions, register tiles,
 copies, reductions and MMA operations. This is a hard requirement, alongside
 numerical correctness and competitive measured performance.
 
-- A `*_cute` kernel imports `cute_rs` (and `ctm_rs` only for kernel entry
+- A `*_cute` kernel imports `cute_rs` (and `use cutlass_primitives as prims;` only for kernel entry
   attributes `#[cuda_module]`, `#[kernel]`, `#[launch_bounds]`,
   `#[launch_contract]`, `DisjointSlice`, `DynamicSharedArray`, and `thread`).
-  **Inside `cute-rs` itself (`cute-rs/src/`), `ctm-rs` is completely banned**
+  **Inside `cute-rs` itself (`cute-rs/src/`), `cutlass-primitives` is completely banned**
   (not even in `Cargo.toml`).
 - **`cute-rs/src/` module structure must match CuTeDSL 1-to-1:**
   `layout`, `tensor`, `atom`, `numeric`, `arch`, `nvgpu/{common, cpasync, warp, tcgen05}`,
@@ -28,7 +28,7 @@ numerical correctness and competitive measured performance.
   are completely banned:** All `nvgpu` copy/MMA operations must lower through
   `__compiler::*` $\rightarrow$ `mir-importer` $\rightarrow$ `dialect-cute`
   $\rightarrow$ `cuda-oxide-mlir-export` (or `cute_rs::arch` for 1-instruction
-  arch primitives). Both the 1-to-1 module tree and the `ctm-rs` / `nvgpu`
+  arch primitives). Both the 1-to-1 module tree and the `cutlass-primitives` / `nvgpu`
   `cuda_device` bans are enforced by `scripts/check-cute-layout-algebra.sh` and
   `cute-rs/tests/sm100_attention.rs`.
 - The deliverable is the exported MLIR, not a kernel that happens to run. The
@@ -132,12 +132,14 @@ MANDATORY TYPE-ENCODED `cute-rs` ARCHITECTURE
   `Swizzle<3, 3, 3>`, `zipped_divide::<8>()`), because the compiler reads it
   from the generic arguments; that is the one place the `make_*` vocabulary
   does not carry over.
-- ctm-rs uses PTX instruction names (`mbarrier_arrive_expect_tx`,
-  `barrier_cluster_arrive`, `cp_async_bulk_tensor_shared_cta_global`). The
-  cute.arch concept names (`thread_idx`, `warp_idx`, `elect_one_sync`,
-  `cluster_arrive`, `mbarrier_init_fence`) live in `cute_rs::arch` as
-  forwarders, mirroring cute.arch over primitives in CuTeDSL.
-- One name per concept across cute-rs, ctm-rs and the compiler crates. No
+- cutlass-primitives (`use cutlass_primitives as prims;`, matching CuTeDSL's
+  `from cutlass.experimental import primitives as prims`) uses PTX instruction
+  names (`mbarrier_arrive_expect_tx`, `barrier_cluster_arrive`,
+  `cp_async_bulk_tensor_shared_cta_global`). The cute.arch concept names
+  (`thread_idx`, `warp_idx`, `elect_one_sync`, `cluster_arrive`,
+  `mbarrier_init_fence`) live in `cute_rs::arch` as forwarders, mirroring
+  cute.arch over primitives in CuTeDSL.
+- One name per concept across cute-rs, cutlass-primitives and the compiler crates. No
   abbreviations the DSL does not use (`Fragment`, not `Frag`; `Mxf4`, the
   form of the PTX kind and the DSL op), no second name for something that
   already has one, and no CUDA C++ or PTX name where cute.arch has a concept

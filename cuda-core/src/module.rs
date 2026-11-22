@@ -331,14 +331,29 @@ impl Function {
         }
     }
 
-    /// Opts this function into a larger dynamic shared-memory allocation.
+    /// Opts this function into a dynamic shared-memory allocation of up to
+    /// `bytes` per block.
     ///
-    /// Typed launch preparation calls this at most once, and only after
-    /// checking static plus dynamic memory against the device opt-in limit.
-    pub(crate) fn set_max_dynamic_shared_memory_bytes(
-        &self,
-        bytes: u32,
-    ) -> Result<(), DriverError> {
+    /// A launch whose static plus dynamic shared memory exceeds the portable
+    /// per-block limit needs this first, up to
+    /// [`Context::max_opt_in_shared_memory_per_block`](crate::Context::max_opt_in_shared_memory_per_block)
+    /// in total. Typed launch preparation calls it on its own, after checking
+    /// the contract against that limit. A function launched without a typed
+    /// contract, for example one loaded from PTX or a cubin, has to call it
+    /// before its first launch that needs the memory.
+    ///
+    /// The value is an attribute of the loaded function
+    /// (`CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES`): it applies to every
+    /// later launch of this function in this context, whichever handle
+    /// launches it. Read it back with
+    /// [`max_dynamic_shared_memory_bytes`](Self::max_dynamic_shared_memory_bytes).
+    ///
+    /// # Errors
+    ///
+    /// `CUDA_ERROR_INVALID_VALUE` if `bytes` does not fit in an `i32`, or if
+    /// the driver rejects it, for example when the function's static shared
+    /// memory plus `bytes` exceeds the device's opt-in limit.
+    pub fn set_max_dynamic_shared_memory_bytes(&self, bytes: u32) -> Result<(), DriverError> {
         self.context().bind_to_thread()?;
         let bytes = i32::try_from(bytes)
             .map_err(|_| DriverError(cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_VALUE))?;

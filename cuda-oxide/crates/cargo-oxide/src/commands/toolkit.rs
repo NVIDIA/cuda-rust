@@ -3,8 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use crate::{backend, platform};
 
 use super::*;
 
@@ -192,21 +195,54 @@ pub(super) fn run_compute_sanitizer(
     );
 }
 
-/// Locate an executable by name, first via `which` (PATH lookup), then by
-/// checking a list of common fallback absolute paths.
+/// Locate an executable by native PATH scanning, then fallback absolute paths.
 pub(super) fn find_executable(name: &str, fallback_paths: &[&str]) -> Option<PathBuf> {
-    if let Ok(output) = Command::new("which").arg(name).output()
-        && output.status.success()
+    let host_target = backend::active_host_target();
+    find_executable_for_target(name, fallback_paths, &host_target)
+}
+
+/// Locate an executable for `target` by scanning `PATH` (with `PATHEXT` on Windows)
+/// and then probing `fallback_paths`.
+fn find_executable_for_target(
+    name: &str,
+    fallback_paths: &[&str],
+    target: &str,
+) -> Option<PathBuf> {
+    let pathext = std::env::var_os("PATHEXT");
+    if let Some(path) = std::env::var_os("PATH")
+        .and_then(|paths| find_executable_in_path(name, &paths, pathext.as_deref(), target))
     {
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !path.is_empty() {
-            return Some(PathBuf::from(path));
+        return Some(path);
+    }
+
+    for path in fallback_paths {
+        let p = Path::new(path);
+        if let Some(found) = find_executable_path(p, pathext.as_deref(), target) {
+            return Some(found);
         }
     }
-    for path in fallback_paths {
-        let p = PathBuf::from(path);
-        if p.exists() {
-            return Some(p);
+    None
+}
+
+/// Search `paths` for `name`, honoring `pathext` on Windows targets.
+fn find_executable_in_path(
+    name: &str,
+    paths: &OsStr,
+    pathext: Option<&OsStr>,
+    target: &str,
+) -> Option<PathBuf> {
+    let requested = Path::new(name);
+    if requested.is_absolute() || requested.components().count() > 1 {
+        return find_executable_path(requested, pathext, target);
+    }
+
+    let candidate_names = executable_candidate_names(name, pathext, target);
+    for dir in platform::split_env_paths(paths) {
+        for candidate in &candidate_names {
+            let path = dir.join(candidate);
+            if path.is_file() {
+                return Some(path);
+            }
         }
     }
     None
@@ -244,16 +280,63 @@ pub(super) fn find_cuda_toolkit_executable_with_env(
             .filter(|value| !value.trim().is_empty())
             .or_else(|| project_config_env(ctx, key).map(str::to_owned))
     });
+    let host_target = backend::active_host_target();
+    let pathext = std::env::var_os("PATHEXT");
     let configured = toolkit.join("bin").join(name);
-    if configured.exists() {
-        return Some(configured);
+    if let Some(found) = find_executable_path(&configured, pathext.as_deref(), &host_target) {
+        return Some(found);
     }
 
     for path in fallback_paths {
         let path = PathBuf::from(path);
-        if path.exists() {
-            return Some(path);
+        if let Some(found) = find_executable_path(&path, pathext.as_deref(), &host_target) {
+            return Some(found);
         }
     }
     None
+}
+
+/// Probe `path` directly or with Windows executable extensions (`PATHEXT`).
+fn find_executable_path(path: &Path, pathext: Option<&OsStr>, target: &str) -> Option<PathBuf> {
+    if path.is_file() {
+        return Some(path.to_path_buf());
+    }
+    if !platform::is_windows_target(target) || path.extension().is_some() {
+        return None;
+    }
+    let parent = path.parent().unwrap_or_else(|| Path::new(""));
+    let stem = path.file_name()?.to_string_lossy();
+    executable_candidate_names(&stem, pathext, target)
+        .into_iter()
+        .map(|candidate| parent.join(candidate))
+        .find(|candidate| candidate.is_file())
+}
+
+/// Candidate executable filenames for `name` on `target`.
+fn executable_candidate_names(name: &str, pathext: Option<&OsStr>, target: &str) -> Vec<OsString> {
+    let mut names = vec![OsString::from(name)];
+    if !platform::is_windows_target(target) || Path::new(name).extension().is_some() {
+        return names;
+    }
+
+    let native_name = platform::executable_filename(name, target);
+    if native_name != name {
+        names.push(OsString::from(native_name));
+    }
+
+    let pathext = pathext
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".to_string());
+    for ext in pathext.split(';').filter(|ext| !ext.is_empty()) {
+        let ext = if ext.starts_with('.') {
+            ext.to_string()
+        } else {
+            format!(".{ext}")
+        };
+        let candidate = OsString::from(format!("{name}{ext}"));
+        if !names.contains(&candidate) {
+            names.push(candidate);
+        }
+    }
+    names
 }

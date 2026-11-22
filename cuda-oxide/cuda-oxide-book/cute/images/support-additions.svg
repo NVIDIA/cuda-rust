@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 680" width="1240" height="680" role="img"
-  aria-label="Feature additions in CuTeDSL 4.4 to 4.7 against the cute-rs preview, one row per feature with a status glyph and a short note">
+  aria-label="Feature additions in CuTeDSL 4.4 to 4.8 against the cute-rs preview, one row per feature with a status glyph and a short note">
 <style>
   :root, svg {
   --bg: #f4f6f8; --fg: #1a232e; --muted: #5d6b7a; --line: #9aa7b4; --panel: #ffffff;
@@ -13,10 +13,10 @@
  } }
 </style>
 <rect x="0" y="0" width="1240" height="680" style="fill: var(--bg)"/>
-<text x="40" y="34" text-anchor="start" style="font: 600 17px var(--sans); fill: var(--fg)">Feature additions in CuTeDSL 4.4 to 4.7</text>
+<text x="40" y="34" text-anchor="start" style="font: 600 17px var(--sans); fill: var(--fg)">Feature additions in CuTeDSL 4.4 to 4.8</text>
 <text x="40" y="56" text-anchor="start" style="font: 400 12.5px var(--sans); fill: var(--muted)">What a CuTeDSL user relies on beyond the per-architecture atoms, and what the preview has instead.</text>
 <text x="40" y="92" text-anchor="start" style="font: 600 11px var(--sans); fill: var(--muted)">FEATURE</text>
-<text x="392" y="92" text-anchor="middle" style="font: 600 11px var(--sans); fill: var(--muted)">CuTeDSL 4.7</text>
+<text x="392" y="92" text-anchor="middle" style="font: 600 11px var(--sans); fill: var(--muted)">CuTeDSL 4.8</text>
 <text x="472" y="92" text-anchor="middle" style="font: 600 11px var(--sans); fill: var(--muted)">cute-rs</text>
 <text x="540" y="92" text-anchor="start" style="font: 600 11px var(--sans); fill: var(--muted)">WHAT THE PREVIEW HAS</text>
 <rect x="32" y="102" width="1176" height="24" rx="3" style="fill: var(--panel)"/>
@@ -54,7 +54,7 @@
 <text x="40" y="286" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Inline PTX and cute.ffi</text>
 <circle cx="392" cy="282" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
 <circle cx="472" cy="282" r="7" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
-<text x="540" y="286" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">none on the CuTe path; hardware through ctm-rs and cuda-device</text>
+<text x="540" y="286" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">none on the CuTe path; hardware through cutlass-primitives and cuda-device</text>
 <rect x="32" y="294" width="1176" height="24" rx="3" style="fill: var(--panel)"/>
 <text x="40" y="310" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">printf, print_tensor, IR dumps</text>
 <circle cx="392" cy="306" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
@@ -68,7 +68,7 @@
 <text x="40" y="358" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">CUDA graphs, PDL, cooperative launch</text>
 <circle cx="392" cy="354" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
 <circle cx="472" cy="354" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 472 347 A 7 7 0 0 1 472 361 Z" style="fill: var(--code)"/>
-<text x="540" y="358" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">graphs, the PDL attribute and cooperative launch from the host</text>
+<text x="540" y="358" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">graphs, host PDL/coop launch, and device griddepcontrol_wait/launch_dependents</text>
 <text x="40" y="382" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Typed shared memory</text>
 <circle cx="392" cy="378" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
 <circle cx="472" cy="378" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 472 371 A 7 7 0 0 1 472 385 Z" style="fill: var(--code)"/>
@@ -117,7 +117,7 @@
 <text x="40" y="622" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Primitives API (4.7, experimental)</text>
 <circle cx="392" cy="618" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
 <circle cx="472" cy="618" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 472 611 A 7 7 0 0 1 472 625 Z" style="fill: var(--code)"/>
-<text x="540" y="622" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">ctm-rs covers the shipped kernels; no atomics, wgmma, libdevice</text>
+<text x="540" y="622" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">cutlass-primitives covers the shipped kernels; no atomics, wgmma, libdevice</text>
 <circle cx="47" cy="652" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
 <text x="62" y="656" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">available</text>
 <circle cx="160" cy="652" r="7" style="fill: var(--panel); stroke: var(--code); stroke-width: 1.4"/><path d="M 160 645 A 7 7 0 0 1 160 659 Z" style="fill: var(--code)"/>

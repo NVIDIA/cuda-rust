@@ -26,7 +26,7 @@ use pliron::{
 };
 use std::collections::HashSet;
 
-/// CUTLASS 4.7 / MLIR 22 primitives for SM100a and SM120a.
+/// CUTLASS 4.8.1 / MLIR 22 primitives for SM100a, SM103a, SM107a, and SM120a.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CutlassPrimitivesMlir22 {
     /// Validated CUDA target architecture, including its architecture-specific suffix.
@@ -37,10 +37,13 @@ impl CutlassPrimitivesMlir22 {
     /// Stable profile identity included in manifests and build cache keys.
     pub const NAME: &'static str = "cutlass-primitives-mlir22";
 
-    /// Accept only the reviewed sm_100a, sm_103a and sm_120a primitive targets.
+    /// Accept only the reviewed sm_100a, sm_103a, sm_107a and sm_120a primitive targets.
     pub fn new(gpu_arch: impl Into<String>) -> Result<Self, ProfileError> {
         let gpu_arch = gpu_arch.into();
-        if !matches!(gpu_arch.as_str(), "sm_100a" | "sm_103a" | "sm_120a") {
+        if !matches!(
+            gpu_arch.as_str(),
+            "sm_100a" | "sm_103a" | "sm_107a" | "sm_120a"
+        ) {
             return Err(ProfileError::UnsupportedArchitecture(gpu_arch));
         }
         Ok(Self { gpu_arch })

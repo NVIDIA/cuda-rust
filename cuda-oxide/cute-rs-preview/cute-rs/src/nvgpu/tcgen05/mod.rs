@@ -12,9 +12,14 @@ pub mod mma;
 pub mod shared;
 
 pub use copy::{Sm100TmemEpilogue, TmemFragment, tmem_row_address};
-pub use mma::{MmaSs, MmaTs, Sm100BlockScaledTiledMma, Sm100TiledMma};
+pub use mma::{
+    CollectorDiscard, CollectorFill, CollectorLastUse, CollectorOp, CollectorOpMarker,
+    CollectorUse, MmaSs, MmaTs, SM107BlockScaledMmaMXF8F6F4Op, Sm100BlockScaledTiledMma,
+    Sm100TiledMma,
+};
 pub use shared::{
-    SharedLayout, SharedTile, SharedTileArray, Sm100ScaleTile, Sm100SharedTile, SmemLayout,
+    MmaHalfElement, SharedLayout, SharedTile, SharedTileArray, Sm100ScaleTile, Sm100SharedTile,
+    SmemLayout,
 };
 
 /// Calls recognized by the compiler; never execute these on the host.

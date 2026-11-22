@@ -10,7 +10,7 @@ description = "Typed BF16 Qwen CustomVoice inference and reference validation on
 
 [dependencies]
 cute-rs = { path = "../../cute-rs", features = ["host"] }
-ctm-rs = { path = "../../ctm-rs" }
+cutlass-primitives = { path = "../../cutlass-primitives" }
 cuda-device = { path = "../../../crates/cuda-device" }
 cuda-host = { path = "../../../crates/cuda-host" }
 cuda-core = { path = "../../../../cuda-core" }

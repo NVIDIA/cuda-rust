@@ -8,11 +8,6 @@
 //! CuTe copies stage 64 keys and values per CTA. Four lanes cooperate on each
 //! dot product; no query padding or matrix-multiply query rows are allocated.
 //! Scores, probabilities, split numerators and reduction states remain FP32.
-use ctm_rs::{
-    cuda_module, kernel, launch_bounds, launch_contract,
-    memory::{DisjointSlice, DynamicSharedArray},
-    thread,
-};
 use cute_rs::arch::{
     NamedBarrier, exp2_f32, quad_sum_f32, reciprocal_ftz_f32, warp_reduction_max_f32,
     warp_reduction_sum_f32,
@@ -21,6 +16,12 @@ use cute_rs::atom::cooperative::finish_async_copies;
 use cute_rs::layout::{C, ComposedLayout, CopyG2S, Layout, LeadingDim, RowMajor, Swizzle};
 use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
 use cute_rs::{GmemMatrix, SmemTile, TiledCopy};
+use cutlass_primitives as prims;
+use prims::{
+    cuda_module, kernel, launch_bounds, launch_contract,
+    memory::{DisjointSlice, DynamicSharedArray},
+    thread,
+};
 
 /// Swizzled 64-by-64 FP16 layout used for both K and V in shared memory.
 type KvLayout = ComposedLayout<Swizzle<3, 3, 3>, 0, RowMajor<64, 64>>;

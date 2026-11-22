@@ -356,12 +356,17 @@ impl OperationTranslation for Recipe {
             }
             Kind::BarrierArrive => {
                 signature(&input, &[Pointer(&[0, 3])], &[Int(64)])?;
-                operation(
+                let mut op = operation(
                     "nvvm.mbarrier.arrive",
                     input.results,
                     input.operands,
                     location,
-                )?
+                )?;
+                op.properties.insert(
+                    "operandSegmentSizes".into(),
+                    MlirAttribute::DenseI32Array(vec![1, 0, 0]),
+                );
+                op
             }
             Kind::ExpectTx { cluster } => {
                 // The native semantic op has already discarded the compatibility
@@ -373,6 +378,10 @@ impl OperationTranslation for Recipe {
                     input.operands,
                     location,
                 )?;
+                op.properties.insert(
+                    "operandSegmentSizes".into(),
+                    MlirAttribute::DenseI32Array(vec![1, 1, 0, 0]),
+                );
                 if cluster {
                     dialect_property(&mut op, "scope", "#nvvm.mem_scope<cluster>")?;
                     op.properties
@@ -414,6 +423,10 @@ impl OperationTranslation for Recipe {
                     location,
                 )?;
                 let mut op = operation("nvvm.mbarrier.arrive", vec![], vec![pointer], location)?;
+                op.properties.insert(
+                    "operandSegmentSizes".into(),
+                    MlirAttribute::DenseI32Array(vec![1, 0, 0]),
+                );
                 dialect_property(&mut op, "scope", "#nvvm.mem_scope<cluster>")?;
                 if relaxed {
                     op.properties
@@ -575,11 +588,6 @@ impl OperationTranslation for Recipe {
                     MlirAttribute::DenseI32Array(vec![1, 1, 2, 1, 0, 1, 0, 0]),
                 );
                 dialect_property(&mut op, "group", "#nvvm.cta_group<cta_2>")?;
-                // In pinned CUTLASS 4.7, false selects LLVM's g2s.tile intrinsic
-                // (addrspace 7). True selects the older CUDA gmem.to.smem
-                // intrinsic, whose destination contract is addrspace 3.
-                op.properties
-                    .insert("useIntrinsic".into(), MlirAttribute::Bool(false));
                 op
             }
             Kind::TmaStore => {
@@ -1242,7 +1250,6 @@ mod tests {
         );
         let text = fixture.render().unwrap();
         assert!(text.contains("group = #nvvm.cta_group<cta_2>"), "{text}");
-        assert!(text.contains("useIntrinsic = false"), "{text}");
         assert!(
             text.contains("operandSegmentSizes = array<i32: 1, 1, 2, 1, 0, 1, 0, 0>"),
             "{text}"

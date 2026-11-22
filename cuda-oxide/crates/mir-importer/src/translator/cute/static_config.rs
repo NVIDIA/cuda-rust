@@ -49,6 +49,16 @@ const SWIZZLE: &str = "cute_layout::markers::Swizzle";
 const COMPOSED: &str = "cute_layout::markers::ComposedLayout";
 /// Exact defining path of `cute_rs::numeric::BFloat16`; public reexports do not change it.
 const BFLOAT16: &str = "cute_rs::numeric::BFloat16";
+/// Exact defining path of `cute_rs::numeric::Float8E4M3FN`; public reexports do not change it.
+const FLOAT8_E4M3FN: &str = "cute_rs::numeric::Float8E4M3FN";
+/// Exact defining path of `cute_rs::nvgpu::tcgen05::mma::CollectorDiscard`.
+const COLLECTOR_DISCARD: &str = "cute_rs::nvgpu::tcgen05::mma::CollectorDiscard";
+/// Exact defining path of `cute_rs::nvgpu::tcgen05::mma::CollectorLastUse`.
+const COLLECTOR_LASTUSE: &str = "cute_rs::nvgpu::tcgen05::mma::CollectorLastUse";
+/// Exact defining path of `cute_rs::nvgpu::tcgen05::mma::CollectorFill`.
+const COLLECTOR_FILL: &str = "cute_rs::nvgpu::tcgen05::mma::CollectorFill";
+/// Exact defining path of `cute_rs::nvgpu::tcgen05::mma::CollectorUse`.
+const COLLECTOR_USE: &str = "cute_rs::nvgpu::tcgen05::mma::CollectorUse";
 
 /// Validated cooperative-copy instruction width.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,6 +127,10 @@ fn cooperative_element(ty: &Ty) -> Result<(i64, &'static str), String> {
         TyKind::RigidTy(RigidTy::Adt(def, args)) if canonical_adt_path(&def) == BFLOAT16 => {
             expect_schema(&args, &[], BFLOAT16)?;
             (2, "BFloat16")
+        }
+        TyKind::RigidTy(RigidTy::Adt(def, args)) if canonical_adt_path(&def) == FLOAT8_E4M3FN => {
+            expect_schema(&args, &[], FLOAT8_E4M3FN)?;
+            (1, "Float8E4M3FN")
         }
         _ => {
             return Err(format!(
@@ -411,6 +425,36 @@ pub(crate) fn decode_attention_layout(ty: &Ty) -> Result<(ComposedLayout, bool),
         dialect_cute::sm100_attention_ops::shared_layout(rows, cols, mn)?.0,
         mn,
     ))
+}
+
+/// Decode a 16-bit `tcgen05` element marker (`f16` -> `false`, `BFloat16` -> `true`).
+pub(crate) fn decode_mma_half_is_bf16(ty: &Ty) -> Result<bool, String> {
+    match ty.kind() {
+        TyKind::RigidTy(RigidTy::Float(FloatTy::F16)) => Ok(false),
+        TyKind::RigidTy(RigidTy::Adt(def, args)) if canonical_adt_path(&def) == BFLOAT16 => {
+            expect_schema(&args, &[], BFLOAT16)?;
+            Ok(true)
+        }
+        _ => Err(format!(
+            "expected `f16` or `BFloat16` for 16-bit tcgen05 operation, found {ty:?}"
+        )),
+    }
+}
+
+/// Decode a type-level SM107 collector marker into `0..=3` (`Discard`, `LastUse`, `Fill`, `Use`).
+pub(crate) fn decode_collector_marker(ty: &Ty) -> Result<u32, String> {
+    let TyKind::RigidTy(RigidTy::Adt(def, args)) = ty.kind() else {
+        return Err(format!("collector marker must be an ADT, found {ty:?}"));
+    };
+    let path = canonical_adt_path(&def);
+    expect_schema(&args, &[], &path)?;
+    match path.as_str() {
+        COLLECTOR_DISCARD => Ok(0),
+        COLLECTOR_LASTUSE => Ok(1),
+        COLLECTOR_FILL => Ok(2),
+        COLLECTOR_USE => Ok(3),
+        _ => Err(format!("unsupported SM107 collector marker `{path}`")),
+    }
 }
 
 /// Decode the supported plain or composed shared-memory layout markers.

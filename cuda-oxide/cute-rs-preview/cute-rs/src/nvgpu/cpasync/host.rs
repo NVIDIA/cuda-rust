@@ -55,6 +55,12 @@ impl TmaElement for crate::numeric::BFloat16 {
     const BYTES: u32 = 2;
 }
 
+impl TmaElement for crate::numeric::Float8E4M3FN {
+    const DATA_TYPE: driver::CUtensorMapDataType =
+        driver::CUtensorMapDataType_enum_CU_TENSOR_MAP_DATA_TYPE_UINT8;
+    const BYTES: u32 = 1;
+}
+
 /// Build a descriptor that loads or stores one `SmemL` tile.
 ///
 /// This is the CuTeDSL host name `create_tensor_map_tiled`; the element type,

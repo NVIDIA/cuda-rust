@@ -416,13 +416,21 @@ The `CUTILE_DUMP` and `CUTILE_DUMP_FILTER` environment variables print the compi
 
 ## Bytecode Version
 
-The compiler can write Tile IR bytecode at versions 13.2 and 13.3, and picks one per toolchain so that a newer default is never handed to an older `tileiras`:
+The compiler can write Tile IR bytecode versions 13.2 through 13.5. It selects
+the newest format supported by both its writer and the selected `tileiras`,
+using `tileiras --list-versions`. Older assemblers without that option are
+probed with a small representative kernel, newest format first. CUDA headers
+and the driver's version do not determine the emitted format.
 
-1. `CUTILE_BYTECODE_VERSION`, when set (e.g. `13.2`), overrides everything else.
-2. Otherwise the resolved toolkit's `cuda.h` decides: CUDA 13.2 emits 13.2, CUDA 13.3 and newer emit 13.3.
-3. Otherwise — `CUTILE_TILEIRAS_PATH` pointing at a bare binary, or `tileiras` found on `PATH` — the compiler probes the binary with a small representative kernel at each version, newest first.
+`CUTILE_BYTECODE_VERSION`, when set (for example, `13.3`), requests that exact
+format. Both the writer and assembler must support it; the compiler reports an
+error instead of silently downgrading. Failure to run a probe, or rejection of
+every supported format, is also an error.
 
-The result is clamped to the emittable range. A toolkit older than CUDA 13.2, or a probe that cannot run (the temporary directory is not writable, the binary cannot be launched or crashes, or it rejects every version), is a compile error naming the cause rather than a silent fallback. The selected version is part of the persistent cache key, and `CompileArtifacts::bytecode()` writes the same negotiated version a launch would use.
+The selected version is part of the persistent cache key, and
+`CompileArtifacts::bytecode()` writes the same negotiated version a launch
+would use. See [CUDA and Tile IR compatibility](../reference/compatibility.md)
+for per-operation and GPU requirements.
 
 ## Compilation Failures
 

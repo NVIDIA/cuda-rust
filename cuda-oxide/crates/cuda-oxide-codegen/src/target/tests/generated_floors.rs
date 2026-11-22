@@ -863,3 +863,127 @@ fn generated_m16n8k8_mma_floors_admit_turing_only_for_fp16() {
         }
     }
 }
+
+#[test]
+fn generated_scalar_math_floors_admit_turing() {
+    use crate::generated_intrinsic_targets::{
+        GeneratedIntrinsicBackend, generated_intrinsic_target_by_marker,
+        generated_intrinsic_targets_by_op_name,
+    };
+
+    let targets = generated_intrinsic_targets_by_op_name("nvvm.scalar_math").collect::<Vec<_>>();
+    // 40 F32/F64 forms plus ex2_approx_f16, which already admitted sm_75
+    assert_eq!(targets.len(), 41);
+    for backend in [
+        GeneratedIntrinsicBackend::LlvmNvptx,
+        GeneratedIntrinsicBackend::LibNvvm,
+    ] {
+        for target in &targets {
+            let generated =
+                GeneratedModuleRequirements::from_targets(vec![*target]).for_backend(backend);
+            assert_eq!(
+                generated_ptx_isa_requirement(&generated).unwrap(),
+                PtxIsaRequirement::new(70),
+                "{} {backend:?}",
+                target.id
+            );
+            assert!(
+                !generated_target_satisfied(&"sm_72".parse().unwrap(), &generated),
+                "{} {backend:?}",
+                target.id
+            );
+            for arch in ["sm_75", "sm_80"] {
+                assert!(
+                    generated_target_satisfied(&arch.parse().unwrap(), &generated),
+                    "{} {backend:?} {arch}",
+                    target.id
+                );
+            }
+        }
+
+        // a kernel that calls every scalar math form still builds for sm_75
+        let generated =
+            GeneratedModuleRequirements::from_targets(targets.clone()).for_backend(backend);
+        validate_generated_target(&"sm_75".parse().unwrap(), &generated).unwrap();
+    }
+
+    // the #1462 repro: ex2_approx_f32 with CUDA_OXIDE_TARGET=sm_75
+    let ex2 = generated_intrinsic_target_by_marker("v1:i0819").unwrap();
+    assert_eq!(ex2.id, "ex2_approx_f32");
+    let llvm = GeneratedModuleRequirements::from_targets(vec![ex2])
+        .for_backend(GeneratedIntrinsicBackend::LlvmNvptx);
+    assert_eq!(
+        resolve_ptx_target_with_generated(
+            Some("sm_75"),
+            "CUDA_OXIDE_TARGET",
+            None,
+            DetectedFeatures::Basic,
+            &llvm,
+        )
+        .unwrap(),
+        ("sm_75".parse().unwrap(), "CUDA_OXIDE_TARGET")
+    );
+    let libnvvm = GeneratedModuleRequirements::from_targets(vec![ex2])
+        .for_backend(GeneratedIntrinsicBackend::LibNvvm);
+    assert_eq!(
+        crate::export::resolve_nvvm_target_with_generated(Some("sm_75"), None, None, &libnvvm)
+            .unwrap()
+            .sm(),
+        "sm_75"
+    );
+}
+
+/// Regression guard for NVBug 7101256: `mma_m16n8k32_mxf8f6f4_f32_e4m3_e4m3`
+/// (`v1:i0876`) honors the detected GPU hint on both `sm_120a` and `sm_121a`
+/// (GB10), and falls back to `sm_120a` when no compatible GPU hint is present.
+#[test]
+fn generated_mxf8f6f4_mma_honors_sm121a_hint_and_falls_back_to_sm120a() {
+    use crate::generated_intrinsic_targets::{
+        GeneratedIntrinsicBackend, generated_intrinsic_target_by_marker,
+    };
+
+    let mma = generated_intrinsic_target_by_marker("v1:i0876").unwrap();
+    assert_eq!(mma.id, "mma_m16n8k32_mxf8f6f4_f32_e4m3_e4m3");
+    let llvm = GeneratedModuleRequirements::from_targets(vec![mma])
+        .for_backend(GeneratedIntrinsicBackend::LlvmNvptx);
+
+    for supported_hint in ["sm_120a", "sm_121a"] {
+        let hint = supported_hint
+            .parse::<cuda_target_spec::DeviceArch>()
+            .unwrap();
+        assert_eq!(
+            resolve_ptx_target_with_generated(
+                None,
+                "CUDA_OXIDE_TARGET",
+                Some(&hint),
+                DetectedFeatures::Basic,
+                &llvm,
+            )
+            .unwrap(),
+            (supported_hint.parse().unwrap(), "detected GPU"),
+            "{supported_hint}"
+        );
+    }
+
+    for fallback_hint in [
+        None,
+        Some("sm_80"),
+        Some("sm_90a"),
+        Some("sm_100a"),
+        Some("sm_107a"),
+    ] {
+        let hint = fallback_hint.map(|h| h.parse::<cuda_target_spec::DeviceArch>().unwrap());
+        assert_eq!(
+            resolve_ptx_target_with_generated(
+                None,
+                "CUDA_OXIDE_TARGET",
+                hint.as_ref(),
+                DetectedFeatures::Basic,
+                &llvm,
+            )
+            .unwrap(),
+            ("sm_120a".parse().unwrap(), "feature requirement"),
+            "{fallback_hint:?}"
+        );
+    }
+}

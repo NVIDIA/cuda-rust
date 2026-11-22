@@ -7,7 +7,7 @@ validation commands; the comparison uses the checked-in
 
 ## Instruction schedule
 
-The [kernel](../src/kernel.rs) expresses the schedule through typed `ctm_rs`
+The [kernel](../src/kernel.rs) expresses the schedule through typed `cutlass_primitives`
 instructions and physical formats without CuTe operations or layout algebra.
 Types distinguish operand roles, CTA groups and TMEM views; the kernel
 coordinates election, phase changes, fences and lifetimes explicitly.

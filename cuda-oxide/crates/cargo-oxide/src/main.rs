@@ -41,6 +41,7 @@ mod backend;
 mod backend_source;
 mod commands;
 mod cutlass_toolchain;
+mod platform;
 
 /// Top-level CLI structure parsed by clap.
 ///
@@ -348,9 +349,6 @@ enum Commands {
         #[arg(long)]
         unchecked_indexing: bool,
     },
-    // Hidden until the CUDA 13.5 toolkit is announced: the feature needs that
-    // assembler and gets documented when it ships.
-    #[command(hide = true)]
     /// Package a crate's `#[tile_export]` functions as a cuTile tile library.
     ///
     /// Runs `emit-ltoir`, checks that the LTOIR defines every implementation
@@ -361,6 +359,8 @@ enum Commands {
     /// for `<crate>.tilelib` when the installed assembler lists bytecode 13.5
     /// (CUDA 13.5 or newer). An older assembler stops the command after the
     /// descriptions with exit code 2 unless `--library-optional` is passed.
+    /// With `--provider` the library is a linkage provider shared object,
+    /// which also serves exports that name no `tile_shape`.
     Tilelib {
         /// Crate name (required in workspace, optional for standalone projects)
         example: Option<String>,
@@ -374,6 +374,12 @@ enum Commands {
         /// Output path for the `.tilelib` file (default: `<crate-dir>/<crate>.tilelib`)
         #[arg(long, short)]
         output: Option<PathBuf>,
+        /// Build the library as a linkage provider: a shared object the
+        /// assembler loads while it compiles a kernel, which serves exports
+        /// without `tile_shape` at any extent. Needs the provider header
+        /// (TILEIR_LINKAGE_PROVIDER_INCLUDE_DIR) and the cuda-oxide workspace.
+        #[arg(long)]
+        provider: bool,
         /// Succeed when the installed tileiras cannot build the .tilelib;
         /// the descriptions and LTOIR are still written (without this flag
         /// that case exits 2)
@@ -560,7 +566,7 @@ enum ToolchainCommand {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum ManagedToolchain {
-    /// NVIDIA CUTLASS compiler 4.7.0 for Linux x86_64 and CUDA 13
+    /// NVIDIA CUTLASS compiler 4.8.1 for Linux (x86_64, aarch64) and CUDA 13
     Cutlass,
 }
 
@@ -1102,6 +1108,7 @@ fn main() {
             arch,
             features,
             output,
+            provider,
             library_optional,
             print,
             verbose,
@@ -1118,6 +1125,7 @@ fn main() {
                 &arch,
                 features.as_deref(),
                 output.as_deref(),
+                provider,
                 library_optional,
                 print,
                 verbose,
@@ -1246,7 +1254,9 @@ fn main() {
             commands::doctor(&ctx);
         }
         Commands::Setup => {
-            let ctx = commands::resolve_context();
+            // setup builds the backend itself; eager resolution would build
+            // it first, twice on a standalone project's cold cache (#1688)
+            let ctx = commands::resolve_setup_context();
             commands::setup(&ctx);
         }
         Commands::Update { force } => {

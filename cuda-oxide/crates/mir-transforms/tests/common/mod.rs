@@ -17,15 +17,16 @@ use core::num::NonZero;
 
 use dialect_mir::attributes::{FieldIndexAttr, MirCastKindAttr, VariantIndexAttr};
 use dialect_mir::ops::{
-    MirAddOp, MirAllocaOp, MirCastOp, MirCheckedAddOp, MirCheckedSubOp, MirCondBranchOp,
+    MirAddOp, MirAllocaOp, MirCallOp, MirCastOp, MirCheckedAddOp, MirCheckedSubOp, MirCondBranchOp,
     MirConstantOp, MirConstructEnumOp, MirConstructTupleOp, MirDivOp, MirEnumPayloadOp, MirEqOp,
     MirFieldAddrOp, MirFuncOp, MirGeOp, MirGetDiscriminantOp, MirGotoOp, MirGtOp, MirLeOp,
-    MirLoadOp, MirLtOp, MirNotOp, MirReturnOp, MirStoreOp, MirSubOp, MirUnreachableOp,
+    MirLoadOp, MirLtOp, MirNotOp, MirReturnOp, MirStorageDeadOp, MirStorageLiveOp, MirStoreOp,
+    MirSubOp, MirUnreachableOp,
 };
 use dialect_mir::types::{EnumVariant, MirEnumType, MirPtrType, MirTupleType};
 use mir_transforms::analyses::induction::CmpPred;
 use pliron::basic_block::BasicBlock;
-use pliron::builtin::attributes::{IntegerAttr, TypeAttr};
+use pliron::builtin::attributes::{IntegerAttr, StringAttr, TypeAttr};
 use pliron::builtin::op_interfaces::{
     OperandSegmentInterface, SingleBlockRegionInterface, SymbolOpInterface,
 };
@@ -507,6 +508,186 @@ fn offset_loop(
         latch,
         exit,
     }
+}
+
+/// Where a [`runtime_step_loop`] gets the amount it adds to its counter.
+#[derive(Debug, Clone, Copy)]
+pub enum LoopStep {
+    /// The `step` argument, defined before the loop.
+    Param,
+    /// An integer cast of the `step` argument, computed again on every
+    /// iteration, as `i += blockDim_x() as usize` reads its register again.
+    /// The argument has the counter's width and the other signedness.
+    CastInLoop,
+    /// A constant, so only the starting value is unknown.
+    Const(i128),
+    /// An integer cast of the loop-carried accumulator, so the step changes
+    /// between iterations and the loop must stay rolled.
+    CastOfCarried,
+}
+
+/// Where a [`runtime_step_loop`] gets the limit its exit test compares with.
+#[derive(Debug, Clone, Copy)]
+pub enum LoopBound {
+    /// The `n` argument, defined before the loop.
+    Param,
+    /// An integer cast of the `n` argument, computed again in the header on
+    /// every iteration, as `while i < n as usize` does. The argument has the
+    /// counter's width and the other signedness.
+    CastInLoop,
+    /// An integer cast of the loop-carried accumulator, so the limit changes
+    /// between iterations and the loop must stay rolled.
+    CastOfCarried,
+}
+
+/// Build `fn(start, n, step) { acc = 0; i = start; while i + off <pred> n {
+/// acc += i; i += step } acc }`, a counter whose start and step are only known
+/// at runtime, in the shape mem2reg leaves it. With `off == 0` the test
+/// compares `i` itself:
+///
+/// ```text
+///   preheader(start, n, step): acc0=0;               goto header(acc0, start)
+///   header(acc, i):            t = not(i+off <pred> n); cond_br t [exit(acc), latch]
+///   latch:                     acc1=acc+i; i1=i+s;    goto header(acc1, i1)
+///   exit(result):              return result
+/// ```
+///
+/// `s` comes from `step_source` and `n` from `bound_source`. All values have
+/// type `ty`, except a `step` or `n` argument that the loop casts.
+pub fn runtime_step_loop(
+    ctx: &mut Context,
+    ty: TypedHandle<IntegerType>,
+    pred: CmpPred,
+    step_source: LoopStep,
+    bound_source: LoopBound,
+    off: i128,
+) -> CountedLoop {
+    let i1 = i1(ctx);
+    let width = ty.deref(ctx).width();
+    let other_signedness = if ty.deref(ctx).signedness() == Signedness::Signed {
+        Signedness::Unsigned
+    } else {
+        Signedness::Signed
+    };
+    let cast_ty = IntegerType::get(ctx, width, other_signedness);
+    let step_ty = match step_source {
+        LoopStep::CastInLoop => cast_ty,
+        LoopStep::Param | LoopStep::Const(_) | LoopStep::CastOfCarried => ty,
+    };
+    let bound_ty = match bound_source {
+        LoopBound::CastInLoop => cast_ty,
+        LoopBound::Param | LoopBound::CastOfCarried => ty,
+    };
+    let inputs: Vec<TypeHandle> = vec![ty.into(), bound_ty.into(), step_ty.into()];
+    let (module, region) = func(ctx, inputs.clone(), vec![ty.into()]);
+
+    let preheader = block(ctx, region, inputs);
+    let header = block(ctx, region, vec![ty.into(), ty.into()]); // (acc, i)
+    let latch = block(ctx, region, vec![]);
+    let exit = block(ctx, region, vec![ty.into()]);
+
+    let start = preheader.deref(ctx).get_argument(0);
+    let n_arg = preheader.deref(ctx).get_argument(1);
+    let step_arg = preheader.deref(ctx).get_argument(2);
+    let acc0 = iconst_i128(ctx, preheader, ty, 0);
+    goto(ctx, preheader, header, vec![acc0, start]);
+
+    let acc = header.deref(ctx).get_argument(0);
+    let i = header.deref(ctx).get_argument(1);
+    let n = match bound_source {
+        LoopBound::Param => n_arg,
+        LoopBound::CastInLoop => int_cast(ctx, header, ty, n_arg),
+        LoopBound::CastOfCarried => int_cast(ctx, header, ty, acc),
+    };
+    let info = match pred {
+        CmpPred::Lt => MirLtOp::get_concrete_op_info(),
+        CmpPred::Le => MirLeOp::get_concrete_op_info(),
+        CmpPred::Gt => MirGtOp::get_concrete_op_info(),
+        CmpPred::Ge => MirGeOp::get_concrete_op_info(),
+    };
+    let tested = if off == 0 {
+        i
+    } else {
+        let off_value = iconst_i128(ctx, header, ty, off);
+        op2!(
+            ctx,
+            header,
+            MirAddOp::get_concrete_op_info(),
+            ty.into(),
+            i,
+            off_value
+        )
+    };
+    let keep_going = op2!(ctx, header, info, i1.into(), tested, n);
+    let done = {
+        let op = Operation::new(
+            ctx,
+            MirNotOp::get_concrete_op_info(),
+            vec![i1.into()],
+            vec![keep_going],
+            vec![],
+            0,
+        );
+        op.insert_at_back(header, ctx);
+        op.deref(ctx).get_result(0)
+    };
+    cond_br_args(ctx, header, done, exit, vec![acc], latch, vec![]);
+
+    let acc1 = op2!(
+        ctx,
+        latch,
+        MirAddOp::get_concrete_op_info(),
+        ty.into(),
+        acc,
+        i
+    );
+    let step = match step_source {
+        LoopStep::Param => step_arg,
+        LoopStep::CastInLoop => int_cast(ctx, latch, ty, step_arg),
+        LoopStep::Const(step) => iconst_i128(ctx, latch, ty, step),
+        LoopStep::CastOfCarried => int_cast(ctx, latch, ty, acc),
+    };
+    let inext = op2!(
+        ctx,
+        latch,
+        MirAddOp::get_concrete_op_info(),
+        ty.into(),
+        i,
+        step
+    );
+    goto(ctx, latch, header, vec![acc1, inext]);
+
+    let result = exit.deref(ctx).get_argument(0);
+    ret_values(ctx, exit, vec![result]);
+
+    CountedLoop {
+        module,
+        region,
+        preheader,
+        header,
+        latch,
+        exit,
+    }
+}
+
+/// Append an integer cast of `value` to `ty` at the end of `block`.
+fn int_cast(
+    ctx: &mut Context,
+    block: Ptr<BasicBlock>,
+    ty: TypedHandle<IntegerType>,
+    value: Value,
+) -> Value {
+    let op = Operation::new(
+        ctx,
+        MirCastOp::get_concrete_op_info(),
+        vec![ty.into()],
+        vec![value],
+        vec![],
+        0,
+    );
+    MirCastOp::new(op).set_attr_cast_kind(ctx, MirCastKindAttr::IntToInt);
+    op.insert_at_back(block, ctx);
+    op.deref(ctx).get_result(0)
 }
 
 /// A built nested counted loop (outer `while i < n` containing inner
@@ -1254,6 +1435,162 @@ pub fn multiple_exit_counted_loop(ctx: &mut Context, n: i64) -> MultipleExitLoop
         normal_exit,
         exit_a,
         exit_b,
+    }
+}
+
+/// A built [`unreachable_arm_counted_loop`] and the blocks worth asserting on.
+pub struct UnreachableArmLoop {
+    pub module: Ptr<Operation>,
+    pub region: Ptr<Region>,
+    pub header: Ptr<BasicBlock>,
+    pub body: Ptr<BasicBlock>,
+    pub dead: Ptr<BasicBlock>,
+}
+
+/// What the `dead` block of an [`unreachable_arm_counted_loop`] does before
+/// its `mir.unreachable`.
+#[derive(Clone, Copy, Debug)]
+pub enum DeadArm {
+    /// Nothing: the `otherwise` arm rustc gives a `match` on an enum.
+    Unreachable,
+    /// Only storage markers, which emit no instruction.
+    StorageMarkers,
+    /// A call to a panic handler, so the block is a real exit.
+    Panics,
+}
+
+/// Build a counted loop whose body branches on a function argument to a block
+/// that ends in `mir.unreachable`, the shape rustc leaves for the `otherwise`
+/// arm of a `match` on an enum. `dead_first` makes `dead` the true successor.
+/// The live edge carries `acc1` as a block argument, so folding the branch
+/// must keep that edge's operands:
+///
+/// ```text
+///   preheader(flag): acc0=0; i0=0;              goto header(acc0, i0)
+///   header(acc, i):  done -> exit(acc),         otherwise -> body
+///   body:            acc1=acc+i;                cond_br flag [latch(acc1), dead]
+///   dead:            (see `DeadArm`)            unreachable
+///   latch(next):     i1=i+1;                    goto header(next, i1)
+///   exit(result):    return result
+/// ```
+pub fn unreachable_arm_counted_loop(
+    ctx: &mut Context,
+    n: i64,
+    arm: DeadArm,
+    dead_first: bool,
+) -> UnreachableArmLoop {
+    let u32 = u32t(ctx);
+    let i1 = i1(ctx);
+    let (module, region) = func(ctx, vec![i1.into()], vec![u32.into()]);
+
+    let preheader = block(ctx, region, vec![i1.into()]);
+    let header = block(ctx, region, vec![u32.into(), u32.into()]); // (acc, i)
+    let body = block(ctx, region, vec![]);
+    let dead = block(ctx, region, vec![]);
+    let latch = block(ctx, region, vec![u32.into()]);
+    let exit = block(ctx, region, vec![u32.into()]);
+
+    let flag = preheader.deref(ctx).get_argument(0);
+    let acc0 = iconst(ctx, preheader, u32, 0);
+    let i0 = iconst(ctx, preheader, u32, 0);
+    goto(ctx, preheader, header, vec![acc0, i0]);
+
+    let acc = header.deref(ctx).get_argument(0);
+    let i = header.deref(ctx).get_argument(1);
+    let nconst = iconst(ctx, header, u32, n);
+    let lt_n = op2!(
+        ctx,
+        header,
+        MirLtOp::get_concrete_op_info(),
+        i1.into(),
+        i,
+        nconst
+    );
+    let done = {
+        let op = Operation::new(
+            ctx,
+            MirNotOp::get_concrete_op_info(),
+            vec![i1.into()],
+            vec![lt_n],
+            vec![],
+            0,
+        );
+        op.insert_at_back(header, ctx);
+        op.deref(ctx).get_result(0)
+    };
+    cond_br_args(ctx, header, done, exit, vec![acc], body, vec![]);
+
+    let acc1 = op2!(
+        ctx,
+        body,
+        MirAddOp::get_concrete_op_info(),
+        u32.into(),
+        acc,
+        i
+    );
+    if dead_first {
+        cond_br_args(ctx, body, flag, dead, vec![], latch, vec![acc1]);
+    } else {
+        cond_br_args(ctx, body, flag, latch, vec![acc1], dead, vec![]);
+    }
+
+    match arm {
+        DeadArm::Unreachable => {}
+        DeadArm::StorageMarkers => {
+            for info in [
+                MirStorageLiveOp::get_concrete_op_info(),
+                MirStorageDeadOp::get_concrete_op_info(),
+            ] {
+                Operation::new(ctx, info, vec![], vec![], vec![], 0).insert_at_back(dead, ctx);
+            }
+        }
+        DeadArm::Panics => {
+            let call = Operation::new(
+                ctx,
+                MirCallOp::get_concrete_op_info(),
+                vec![],
+                vec![],
+                vec![],
+                0,
+            );
+            let call = MirCallOp::new(call);
+            call.set_attr_callee(ctx, StringAttr::new("panic".into()));
+            let signature = FunctionType::get(ctx, vec![], vec![]);
+            call.set_external_callee_signature(ctx, signature.into());
+            call.get_operation().insert_at_back(dead, ctx);
+        }
+    }
+    Operation::new(
+        ctx,
+        MirUnreachableOp::get_concrete_op_info(),
+        vec![],
+        vec![],
+        vec![],
+        0,
+    )
+    .insert_at_back(dead, ctx);
+
+    let next = latch.deref(ctx).get_argument(0);
+    let one = iconst(ctx, latch, u32, 1);
+    let inext = op2!(
+        ctx,
+        latch,
+        MirAddOp::get_concrete_op_info(),
+        u32.into(),
+        i,
+        one
+    );
+    goto(ctx, latch, header, vec![next, inext]);
+
+    let result = exit.deref(ctx).get_argument(0);
+    ret_values(ctx, exit, vec![result]);
+
+    UnreachableArmLoop {
+        module,
+        region,
+        header,
+        body,
+        dead,
     }
 }
 

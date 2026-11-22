@@ -38,6 +38,7 @@ pub(super) fn run_host_cargo(
 
     apply_config_env(&mut cmd, ctx);
     apply_ld_library_path(&mut cmd, ctx);
+    apply_host_linker_rustflags_or_exit(&mut cmd, ctx);
 
     if cargo_subcommand == "run" {
         if let Some(bin) = bin {
@@ -152,6 +153,7 @@ pub(super) fn build_host_cargo(
 
     apply_config_env(&mut cmd, ctx);
     apply_ld_library_path(&mut cmd, ctx);
+    apply_host_linker_rustflags_or_exit(&mut cmd, ctx);
 
     if let Some(bin) = bin {
         println!("Building host crate {} (bin: {})...", example, bin);
@@ -365,7 +367,7 @@ fn cargo_package_manifest_matches(package: &serde_json::Value, manifest_path: &P
         .is_some_and(|path| path == manifest_path)
 }
 
-fn cargo_metadata(manifest_dir: &Path) -> Result<serde_json::Value, String> {
+pub(super) fn cargo_metadata(manifest_dir: &Path) -> Result<serde_json::Value, String> {
     let output = Command::new("cargo")
         .env("RUSTC_BOOTSTRAP", "1")
         .args(["metadata", "--format-version=1", "--no-deps"])

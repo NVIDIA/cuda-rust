@@ -25,8 +25,6 @@
 use crate::ffn::{ProjectionRole, ProjectionWeights};
 use crate::model::Batch;
 use crate::operator::Result;
-use ctm_rs::memory::{DisjointSlice, DynamicSharedArray};
-use ctm_rs::{cuda_module, kernel, launch_bounds, thread};
 use cuda_core::LaunchConfig;
 use cuda_core::{CudaStream, DeviceBuffer};
 use cute_rs::arch::NamedBarrier;
@@ -40,6 +38,9 @@ use cute_rs::{
     BFloat16, BlockScaledTensor, Float4E2M1FN, Float8E4M3FN, FragmentC, GmemMatrix, KMajor, Mkl,
     Nkl, Nvfp4TiledMma, ReductionOp, Sm1xxBlockScaleKMajor, SmemTile, Tensor, TiledCopy,
 };
+use cutlass_primitives as prims;
+use prims::memory::{DisjointSlice, DynamicSharedArray};
+use prims::{cuda_module, kernel, launch_bounds, thread};
 use std::marker::PhantomData;
 use std::sync::Arc;
 

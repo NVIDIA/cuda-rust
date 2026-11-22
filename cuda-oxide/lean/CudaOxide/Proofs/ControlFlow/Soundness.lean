@@ -303,6 +303,9 @@ def checkUniformBarriersWith (cfg : ControlFlowCfg) (inv : StateMap) : Bool :=
     ((returnBlocks cfg).all fun ret => certifyUnreachable cfg [hdr] body ret)) &&
   ((signaledMbarReadyBlocks cfg).all fun rBlk =>
     (returnBlocks cfg).all fun ret => certifyUnreachable cfg [rBlk] 0 ret) &&
+  ((unsyncedDsmemBlocks cfg).all fun dBlk =>
+    let postSyncs := (clusterSyncBlocks cfg).filter (· != dBlk)
+    (returnBlocks cfg).all fun ret => certifyUnreachable cfg postSyncs dBlk ret) &&
   (!(decide (0 < cfg.numBarriers) && decide (tmemAllocSites cfg = [])) ||
     (validStateMap false cfg inv && checkLoopBackpressure cfg))
 
@@ -311,12 +314,13 @@ theorem uniform_barriers_of_stateMap {cfg : ControlFlowCfg} {inv : StateMap}
     (hcheck : checkUniformBarriersWith cfg inv = true) :
     UniformBarriers cfg := by
   unfold checkUniformBarriersWith at hcheck
-  rcases Bool.and_eq_true_iff.mp hcheck with ⟨h0123, hasync⟩
+  rcases Bool.and_eq_true_iff.mp hcheck with ⟨h01234, hasync⟩
+  rcases Bool.and_eq_true_iff.mp h01234 with ⟨h0123, hdsmem⟩
   rcases Bool.and_eq_true_iff.mp h0123 with ⟨h012, hmbar⟩
   rcases Bool.and_eq_true_iff.mp h012 with ⟨h01, hcyc⟩
   rcases Bool.and_eq_true_iff.mp h01 with ⟨hcnt, hsync⟩
   rcases Bool.and_eq_true_iff.mp hcyc with ⟨hhasHdr, hloops⟩
-  refine ⟨of_decide_eq_true hcnt, ?_, ⟨?_, ?_⟩, ?_, ?_⟩
+  refine ⟨of_decide_eq_true hcnt, ?_, ⟨?_, ?_⟩, ?_, ?_, ?_⟩
   · intro b hb
     have hb_ok := List.all_eq_true.mp hsync b hb
     rcases Bool.and_eq_true_iff.mp hb_ok with ⟨htr, hacyc⟩
@@ -340,6 +344,9 @@ theorem uniform_barriers_of_stateMap {cfg : ControlFlowCfg} {inv : StateMap}
   · intro rBlk hrBlk ret hret
     have hr := List.all_eq_true.mp hmbar rBlk hrBlk
     exact not_pathAvoiding_of_certify (List.all_eq_true.mp hr ret hret)
+  · intro dBlk hdBlk ret hret
+    have hd := List.all_eq_true.mp hdsmem dBlk hdBlk
+    exact not_pathAvoiding_of_certify (List.all_eq_true.mp hd ret hret)
   · intro ⟨hbars, hnotmem⟩
     have hcond : (decide (0 < cfg.numBarriers) && decide (tmemAllocSites cfg = [])) = true := by
       simp [hbars, hnotmem]

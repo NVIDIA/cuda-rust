@@ -20,6 +20,7 @@ use cuda_device::{
     barrier::{
         Barrier, fence_proxy_async_shared_cta, mbarrier_arrive, mbarrier_arrive_cluster,
         mbarrier_arrive_expect_tx, mbarrier_init, mbarrier_try_wait_parity,
+        mbarrier_try_wait_parity_cluster,
     },
     clc::{clc_query_get_first_ctaid_x, clc_query_is_canceled, clc_try_cancel_multicast},
     cluster, cluster_launch,

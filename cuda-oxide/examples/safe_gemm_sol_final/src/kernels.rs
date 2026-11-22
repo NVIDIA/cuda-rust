@@ -246,6 +246,7 @@ mod kernels {
             mbarrier_init(&raw mut CLC_BAR, 1);
             fence_proxy_async_shared_cta();
         }
+        cluster::cluster_sync();
         if warp_id == 0 {
             tcgen05_alloc_cg2(&raw mut TMEM_ADDR[0], 512);
         }
@@ -501,7 +502,8 @@ mod kernels {
                 loop {
                     let t_slot = (tile_iter & 3) as usize;
                     let t_parity = (tile_iter >> 2) & 1;
-                    while !mbarrier_try_wait_parity(&raw const TILE_READY[t_slot], t_parity) {}
+                    while !mbarrier_try_wait_parity_cluster(&raw const TILE_READY[t_slot], t_parity)
+                    {}
 
                     let has_work = TILE_INFO[t_slot * 4 + 2];
                     if has_work == 0 {
@@ -597,7 +599,7 @@ mod kernels {
             loop {
                 let t_slot = (epi_tile_iter & 3) as usize;
                 let t_parity = (epi_tile_iter >> 2) & 1;
-                while !mbarrier_try_wait_parity(&raw const TILE_READY[t_slot], t_parity) {}
+                while !mbarrier_try_wait_parity_cluster(&raw const TILE_READY[t_slot], t_parity) {}
 
                 let has_work = TILE_INFO[t_slot * 4 + 2];
                 if has_work == 0 {
@@ -718,5 +720,6 @@ mod kernels {
         if warp_id == 0 {
             tcgen05_dealloc_cg2(tmem_addr, 512);
         }
+        cluster::cluster_sync();
     }
 }

@@ -1707,6 +1707,18 @@ fn verifies_stage9_cluster_dsmem_clc_and_cg2_tmem_lifecycle() {
         "Lean 4 must reject cross-CTA DSMEM read after CTA-local sync_threads() without cluster_sync()",
     );
 
+    // 3b. Negative (Exiting CTA before peer DSMEM reads complete): omitting the trailing
+    //     `cluster_sync()` before `mir.return` after DSMEM access fails `UniformBarriers`!
+    let missing_exit_cluster_sync = CLUSTER_CLC_FIXTURE.replace(
+        "        nvvm.cluster_sync () [] []: <() -> ()>;\n        mir.return () [] []: <() -> ()>",
+        "        mir.return () [] []: <() -> ()>",
+    );
+    let missing_exit_lean = export_named_source(&missing_exit_cluster_sync, "cluster_clc_stage")
+        .expect("transcribes missing exit cluster_sync after DSMEM read");
+    lean_exporter::runner::check_generated_lean(&missing_exit_lean, &lean_dir).expect_err(
+        "Lean 4 must reject returning after DSMEM access without a trailing cluster_sync()",
+    );
+
     // 4. Negative (`CLC_RESPONSE` undersized in Lean 4): 8-byte `SharedArray<u64, 1>` for 16-byte CLC response!
     let undersized_clc = CLUSTER_CLC_FIXTURE.replace(
         "size: builtin.integer <2: i64>, alloc_key: builtin.string \"CLC_RESPONSE\"",

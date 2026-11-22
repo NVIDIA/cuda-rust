@@ -138,6 +138,7 @@ mod kernels {
         if let Some(slot) = out.get_mut(idx) {
             *slot = local_val + peer_val + clc_tag;
         }
+        cluster::cluster_sync();
     }
 }
 

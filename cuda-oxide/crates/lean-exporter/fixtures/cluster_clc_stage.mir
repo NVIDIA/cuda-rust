@@ -117,6 +117,7 @@ builtin.module @safe_cluster_clc {
         hi = mir.load (p1) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:false,addrspace:3,kind:SharedRef>) -> (builtin.integer ui64)>;
         _is_canc = nvvm.clc_query_is_canceled (lo, hi) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui32)>;
         _stolen = nvvm.clc_query_get_first_ctaid_x (lo, hi) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui32)>;
+        nvvm.cluster_sync () [] []: <() -> ()>;
         mir.return () [] []: <() -> ()>
     }
 }

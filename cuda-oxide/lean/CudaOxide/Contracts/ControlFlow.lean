@@ -118,7 +118,10 @@ def UniformBarriers (cfg : ControlFlowCfg) : Prop :=
   (∀ rBlk : Nat, rBlk ∈ signaledMbarReadyBlocks cfg →       --   (4) every signaled `mbarrier` ready-block intercepts
     ∀ ret : Nat, ret ∈ returnBlocks cfg →                   --       all paths from entry `0` to `return`, AND
       ¬ PathAvoiding cfg [rBlk] 0 ret) ∧
-  (0 < cfg.numBarriers ∧ tmemAllocSites cfg = [] →          --   (5) when `Barrier`s are used (outside `tmem_lifecycle`),
+  (∀ dBlk : Nat, dBlk ∈ unsyncedDsmemBlocks cfg →           --   (5) every cross-CTA DSMEM access executes `cluster_sync()`
+    ∀ ret : Nat, ret ∈ returnBlocks cfg →                   --       on all paths before any CTA exits (`mir.return`), AND
+      ¬ PathAvoiding cfg ((clusterSyncBlocks cfg).filter (· != dBlk)) dBlk ret) ∧
+  (0 < cfg.numBarriers ∧ tmemAllocSites cfg = [] →          --   (6) when `Barrier`s are used (outside `tmem_lifecycle`),
     SafeCtaExecution false cfg ∧ NoUnbackpressuredLoop cfg) --       `mbarrier` init/proxy/back-pressure hold on all paths.
 
 /-- **`tmem_lifecycle`**: Blackwell Tensor Memory (`TMEM`) is allocated once by a

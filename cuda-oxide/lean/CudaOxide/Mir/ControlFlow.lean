@@ -945,6 +945,20 @@ def syncBarrierBlocks (cfg : ControlFlowCfg) : List Nat :=
   (List.range cfg.blocks.length).filter fun b =>
     (cfg.blockAt b).ops.any fun op => op == .syncThreads || op == .clusterSync
 
+/-- Indices of all basic blocks in `cfg` containing `.clusterSync`. -/
+def clusterSyncBlocks (cfg : ControlFlowCfg) : List Nat :=
+  (List.range cfg.blocks.length).filter fun b =>
+    (cfg.blockAt b).ops.any (· == .clusterSync)
+
+/-- Indices of all basic blocks in `cfg` whose `.dsmemAccess` is not followed by `.clusterSync` in the same block. -/
+def unsyncedDsmemBlocks (cfg : ControlFlowCfg) : List Nat :=
+  (List.range cfg.blocks.length).filter fun b =>
+    (cfg.blockAt b).ops.foldl (fun dirty op =>
+      match op with
+      | .dsmemAccess _ => true
+      | .clusterSync => false
+      | _ => dirty) false
+
 /-- Cyclic basic blocks in `cfg` containing `.syncThreads` or `.clusterSync`. -/
 def cyclicBarrierBlocks (cfg : ControlFlowCfg) : List Nat :=
   (syncBarrierBlocks cfg).filter (isCyclicBlockBool cfg)

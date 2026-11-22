@@ -1070,4 +1070,32 @@ def tmemDeallocSites (cfg : ControlFlowCfg) : List Nat :=
       | .tmemDealloc cols _ => some cols
       | _ => none
 
+/-- Pairs `(initBlk, allocBlk)` where `initBlk` performs `mbarInit` or `sharedWrite` without a
+    same-block `clusterSync` and reaches a 2-CTA `tcgen05_alloc_cg2` (`isCg2 = true`) at `allocBlk`. -/
+def cg2PreAllocInitPairs (cfg : ControlFlowCfg) : List (Nat × Nat) :=
+  let indices := List.range cfg.blocks.length
+  let allocBlks := indices.filter fun b =>
+    (cfg.blockAt b).ops.any fun
+      | .tmemAlloc _ _ true => true
+      | _ => false
+  let initBlks := indices.filter fun b =>
+    (cfg.blockAt b).ops.foldl (fun dirty op =>
+      match op with
+      | .mbarInit _ _ | .sharedWrite _ => true
+      | .clusterSync => false
+      | _ => dirty) false
+  initBlks.flatMap fun iBlk =>
+    allocBlks.filterMap fun aBlk =>
+      if iBlk != aBlk && canReachAvoiding cfg iBlk aBlk [] then some (iBlk, aBlk) else none
+
+/-- Basic blocks containing a 2-CTA `tcgen05_dealloc_cg2` (`isCg2 = true`) not followed by
+    `clusterSync` in the same block (requiring `cluster_sync()` on all paths to `mir.return`). -/
+def unsyncedCg2DeallocBlocks (cfg : ControlFlowCfg) : List Nat :=
+  (List.range cfg.blocks.length).filter fun b =>
+    (cfg.blockAt b).ops.foldl (fun dirty op =>
+      match op with
+      | .tmemDealloc _ true => true
+      | .clusterSync => false
+      | _ => dirty) false
+
 end CudaOxide.Mir.ControlFlow

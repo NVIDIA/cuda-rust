@@ -64,6 +64,8 @@ pub enum MirRhs {
     Sreg(&'static str),
     /// 64-bit 1D global thread index (`thread::index_1d`).
     Index1D,
+    /// Packed 2D `u32` coordinates `((row as u64) << 32) + (col as u64)` (`thread::coords_2d_u32`).
+    Coord2DU32,
     /// Base pointer of slice parameter `param`.
     SlicePtr(usize),
     /// Element length of slice parameter `param`.
@@ -2615,54 +2617,8 @@ pub(super) fn translate_mir_program(
                             tags.insert(res, LocalTag::Index1DWrapper(res_vid));
                             idx1d_vals.insert(res);
                             stmts.push(MirStmt::Assign(res_vid, MirRhs::Index1D));
-                        } else if callee.contains("coord_2d") {
-                            let w = if spec.u32_coordinates { 32 } else { 64 };
-                            let bx_v = next_var_id;
-                            let by_v = next_var_id + 1;
-                            let tx_v = next_var_id + 2;
-                            let ty_v = next_var_id + 3;
-                            let bdx_v = next_var_id + 4;
-                            let bdy_v = next_var_id + 5;
-                            let x_mul = next_var_id + 6;
-                            let y_mul = next_var_id + 7;
-                            let col_w = next_var_id + 8;
-                            let row_w = next_var_id + 9;
-                            let col_64 = next_var_id + 10;
-                            let row_64 = next_var_id + 11;
-                            let c32_v = next_var_id + 12;
-                            let row_shl = next_var_id + 13;
-                            next_var_id += 14;
-                            stmts.push(MirStmt::Assign(bx_v, MirRhs::Sreg("ctaidX")));
-                            stmts.push(MirStmt::Assign(by_v, MirRhs::Sreg("ctaidY")));
-                            stmts.push(MirStmt::Assign(tx_v, MirRhs::Sreg("tidX")));
-                            stmts.push(MirStmt::Assign(ty_v, MirRhs::Sreg("tidY")));
-                            stmts.push(MirStmt::Assign(
-                                bdx_v,
-                                MirRhs::ConstInt(w, u128::from(spec.block_size)),
-                            ));
-                            stmts.push(MirStmt::Assign(
-                                bdy_v,
-                                MirRhs::ConstInt(w, u128::from(spec.block_y)),
-                            ));
-                            stmts
-                                .push(MirStmt::Assign(x_mul, MirRhs::BinOp("mul", w, bx_v, bdx_v)));
-                            stmts
-                                .push(MirStmt::Assign(y_mul, MirRhs::BinOp("mul", w, by_v, bdy_v)));
-                            stmts
-                                .push(MirStmt::Assign(col_w, MirRhs::BinOp("add", w, x_mul, tx_v)));
-                            stmts
-                                .push(MirStmt::Assign(row_w, MirRhs::BinOp("add", w, y_mul, ty_v)));
-                            stmts.push(MirStmt::Assign(col_64, MirRhs::IntCast(64, col_w)));
-                            stmts.push(MirStmt::Assign(row_64, MirRhs::IntCast(64, row_w)));
-                            stmts.push(MirStmt::Assign(c32_v, MirRhs::ConstInt(64, 32)));
-                            stmts.push(MirStmt::Assign(
-                                row_shl,
-                                MirRhs::BinOp("shl", 64, row_64, c32_v),
-                            ));
-                            stmts.push(MirStmt::Assign(
-                                res_vid,
-                                MirRhs::BinOp("add", 64, row_shl, col_64),
-                            ));
+                        } else if callee.contains("coord_2d_u32") {
+                            stmts.push(MirStmt::Assign(res_vid, MirRhs::Coord2DU32));
                             struct_fields.insert(res, vec![(res_vid, None)]);
                         } else if callee.contains("lane_id") {
                             coord_exprs.insert(res, IdxExpr::Mod(Box::new(IdxExpr::Tx), 32));

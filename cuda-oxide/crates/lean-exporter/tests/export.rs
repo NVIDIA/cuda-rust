@@ -32,6 +32,23 @@ fn export(source: &str) -> String {
     export_named_source(source, "global_index").expect("valid scalar MIR")
 }
 
+/// Resolve the `cuda-oxide/lean` package directory when `lake` is installed on `PATH`,
+/// panicking if `CUDA_OXIDE_REQUIRE_LEAN=1` is set and `lake` is missing.
+fn lean_package_dir_if_available() -> Option<std::path::PathBuf> {
+    let has_lake = std::process::Command::new("lake")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !has_lake {
+        assert!(
+            std::env::var("CUDA_OXIDE_REQUIRE_LEAN").as_deref() != Ok("1"),
+            "`CUDA_OXIDE_REQUIRE_LEAN=1` set, but `lake` was not found on PATH"
+        );
+        return None;
+    }
+    Some(lean_exporter::runner::default_lean_package_dir())
+}
+
 fn reject(source: &str, expected: &str) {
     let error = export_named_source(source, "global_index").expect_err("must reject input");
     assert!(
@@ -350,7 +367,9 @@ fn cli_inspect_shows_the_exact_input_and_export_only_after_success() {
 
 #[test]
 fn exports_safe_vecadd_kernel_and_rejects_unguarded_accesses() {
-    let lean_dir = lean_exporter::runner::default_lean_package_dir();
+    let Some(lean_dir) = lean_package_dir_if_available() else {
+        return;
+    };
     let lean = export_named_source(VECADD_FIXTURE, "vecadd").expect("valid verified vecadd MIR");
     assert!(lean.contains("def mirFunc : CudaOxide.Mir.Program.MirFunc"));
     assert!(lean.contains("theorem verify_no_oob_idx_param0"));
@@ -448,7 +467,9 @@ fn exports_safe_vecadd_kernel_and_rejects_unguarded_accesses() {
     assert!(
         skip_lean.contains("CudaOxide.Contracts.ControlFlow.WritesOnAllActivePaths controlFlowCfg")
     );
-    let lean_dir = lean_exporter::runner::default_lean_package_dir();
+    let Some(lean_dir) = lean_package_dir_if_available() else {
+        return;
+    };
     if let Err(err) = lean_exporter::runner::check_generated_lean(&skip_lean, &lean_dir) {
         if !err.to_string().contains("could not locate `lake`") {
             assert!(
@@ -463,7 +484,9 @@ fn exports_safe_vecadd_kernel_and_rejects_unguarded_accesses() {
 
 #[test]
 fn lean_typechecker_accepts_valid_vecadd_and_rejects_false_kernel_claims() {
-    let lean_dir = lean_exporter::runner::default_lean_package_dir();
+    let Some(lean_dir) = lean_package_dir_if_available() else {
+        return;
+    };
     let baseline = export_named_source(VECADD_FIXTURE, "vecadd").expect("valid vecadd MIR");
 
     // If `lake` is not installed in a minimal container environment, skip the live
@@ -516,7 +539,9 @@ fn lean_typechecker_accepts_valid_vecadd_and_rejects_false_kernel_claims() {
 
 #[test]
 fn verifies_2d_sgemm_tiled_views_and_rejects_shared_races_oob_and_divergent_barriers() {
-    let lean_dir = lean_exporter::runner::default_lean_package_dir();
+    let Some(lean_dir) = lean_package_dir_if_available() else {
+        return;
+    };
     let baseline = export_named_source(SGEMM_TILED_FIXTURE, "sgemm_tiled_views")
         .expect("valid sgemm_tiled_views MIR");
     assert!(baseline.contains("def mirFunc : CudaOxide.Mir.Program.MirFunc"));
@@ -673,7 +698,9 @@ fn verifies_2d_sgemm_tiled_views_and_rejects_shared_races_oob_and_divergent_barr
 
 #[test]
 fn verifies_stage3_warp_and_block_reductions_and_rejects_missing_leader_guard() {
-    let lean_dir = lean_exporter::runner::default_lean_package_dir();
+    let Some(lean_dir) = lean_package_dir_if_available() else {
+        return;
+    };
 
     // 1. 1D warp butterfly reduction (`warp_reduce_sum`)
     let warp_lean = export_named_source(WARP_REDUCE_FIXTURE, "warp_reduce_sum")
@@ -718,7 +745,9 @@ fn verifies_stage3_warp_and_block_reductions_and_rejects_missing_leader_guard() 
 
 #[test]
 fn verifies_stage4_subwarp_bit_splits_and_multibuffer_shared_staging() {
-    let lean_dir = lean_exporter::runner::default_lean_package_dir();
+    let Some(lean_dir) = lean_package_dir_if_available() else {
+        return;
+    };
 
     // 1. Sub-warp 16x16 bit-split staging `(tid >> 4) * 16 + (tid & 15)` + lane scan `(tid & 15) * 16 + j` on `MirFunc`
     let split_lean = export_named_source(SUBWARP_MULTIBUF_FIXTURE, "subwarp_bit_split_stage")
@@ -828,7 +857,9 @@ fn verifies_stage4_subwarp_bit_splits_and_multibuffer_shared_staging() {
 
 #[test]
 fn verifies_stage5_async_copy_and_mbarrier_token_ordering() {
-    let lean_dir = lean_exporter::runner::default_lean_package_dir();
+    let Some(lean_dir) = lean_package_dir_if_available() else {
+        return;
+    };
 
     // 1. Valid Stage 5 async TMA copy + `mbarrier_arrive_expect_tx` + `mbarrier_try_wait_parity` on `MirFunc`
     let async_lean = export_named_source(ASYNC_COPY_FIXTURE, "async_copy_stage")
@@ -1043,7 +1074,9 @@ fn elides_only_proven_shared_array_bounds_checks() {
 
 #[test]
 fn verifies_disjoint_bitor_and_rejects_overlapping_bitor_and_narrowing_cast_collisions() {
-    let lean_dir = lean_exporter::runner::default_lean_package_dir();
+    let Some(lean_dir) = lean_package_dir_if_available() else {
+        return;
+    };
 
     // 1. Positive disjoint `mir.bitor`: `(m_local * 16) | (tid & 15)` has disjoint bit
     // ranges (`row_off % 16 == 0`, `k_lane < 16`), so `or_eq_add_of_mod_two_pow` proves it
@@ -1114,7 +1147,9 @@ fn verifies_disjoint_bitor_and_rejects_overlapping_bitor_and_narrowing_cast_coll
 
 #[test]
 fn verifies_cyclic_loop_phases_with_init_barrier_and_reordered_blocks() {
-    let lean_dir = lean_exporter::runner::default_lean_package_dir();
+    let Some(lean_dir) = lean_package_dir_if_available() else {
+        return;
+    };
 
     // 1. Adding an acyclic init `nvvm.barrier0` BEFORE `^tile_header` while keeping BOTH
     // in-loop barriers (`^phase0_stage` + `^phase1_end`) advances in-loop phases to `1 mod 2`
@@ -1184,7 +1219,9 @@ fn verifies_cyclic_loop_phases_with_init_barrier_and_reordered_blocks() {
 
 #[test]
 fn rejects_post_loop_loopvar_leak_conflicting_loop_counters_and_escaping_shared_ptrs() {
-    let lean_dir = lean_exporter::runner::default_lean_package_dir();
+    let Some(lean_dir) = lean_package_dir_if_available() else {
+        return;
+    };
 
     // 1. Post-loop `w` leak (Hole #6): Indexing `WARP_SUMS[w]` in `^exit` AFTER
     // `while w < 8` has terminated (`!(w < 8)`) transcribes 1-to-1 into `mirFunc`
@@ -1260,7 +1297,9 @@ fn rejects_post_loop_loopvar_leak_conflicting_loop_counters_and_escaping_shared_
 
 #[test]
 fn verifies_stage6_tcgen05_tmem_proxy_and_mbarrier_lifecycle() {
-    let lean_dir = lean_exporter::runner::default_lean_package_dir();
+    let Some(lean_dir) = lean_package_dir_if_available() else {
+        return;
+    };
 
     // 1. Valid Stage 6 Blackwell `tcgen05` + `TMEM` + TMA + proxy + `mbarrier` kernel passes
     //    `lean-exporter` and Lean 4 (`0 sorryAx`) on `MirFunc`, eliding both `TMEM_ADDR[0]` and `SMEM_OUT` bounds checks!
@@ -1484,7 +1523,9 @@ fn verifies_stage6_tcgen05_tmem_proxy_and_mbarrier_lifecycle() {
 
 #[test]
 fn verifies_plain_mut_slice_and_rejects_unverified_wraparound_and_cross_thread_races() {
-    let lean_dir = lean_exporter::runner::default_lean_package_dir();
+    let Some(lean_dir) = lean_package_dir_if_available() else {
+        return;
+    };
 
     // 1. Positive: plain `c: &mut [f32]` (`MirSliceType` with `mutable: true`) + 64-bit hardware
     //    `(blockIdx_x as usize) * (blockDim_x as usize) + (threadIdx_x as usize)` + in-place `c[idx] += a[idx]`
@@ -1591,7 +1632,9 @@ fn verifies_plain_mut_slice_and_rejects_unverified_wraparound_and_cross_thread_r
 
 #[test]
 fn verifies_stage8_warp_ring_and_rejects_slot_mismatch_wrap_oob_and_missing_backpressure() {
-    let lean_dir = lean_exporter::runner::default_lean_package_dir();
+    let Some(lean_dir) = lean_package_dir_if_available() else {
+        return;
+    };
 
     // 1. Positive: 4-stage warp-specialized TMA + metadata + `SharedArray<Barrier, 4, 8>` ring
     //    proves `MirNoOobShared`, `MirNoSharedRace`, `UniformBarriers`, and `MirAssertRedundant`!
@@ -1665,7 +1708,9 @@ fn verifies_stage8_warp_ring_and_rejects_slot_mismatch_wrap_oob_and_missing_back
 
 #[test]
 fn verifies_stage9_cluster_dsmem_clc_and_cg2_tmem_lifecycle() {
-    let lean_dir = lean_exporter::runner::default_lean_package_dir();
+    let Some(lean_dir) = lean_package_dir_if_available() else {
+        return;
+    };
 
     // 1. Positive (`cluster_clc_stage`): 2-CTA cluster + DSMEM `map_shared_rank` + remote
     //    `mbarrier_arrive_cluster` + Blackwell `clc_try_cancel_multicast` verifies in Lean 4!
@@ -1748,14 +1793,20 @@ fn verifies_stage9_cluster_dsmem_clc_and_cg2_tmem_lifecycle() {
         "unexpected Lean error for unawaited CLC_BAR: {err}"
     );
 
-    // 6. Positive + 3 Negative 2-CTA `_cg2` `tcgen05` / `TMEM` lifecycle checks:
+    // 6. Positive + 5 Negative 2-CTA `_cg2` `tcgen05` / `TMEM` lifecycle checks:
     //    Upgrade `tcgen05_matmul` to 2-CTA `cluster_dim_x = 2` (`M256_N128` -> `idesc` with `M=256`,
-    //    `tcgen05_alloc_cg2`, `cluster_sync`, `tcgen05_mma_f16_cg2`, `tcgen05_commit_shared_cluster_cg2`,
-    //    `tcgen05_relinquish_alloc_permit_cg2`, `cluster_sync`, `tcgen05_dealloc_cg2`):
+    //    `cluster_sync` before `tcgen05_alloc_cg2`, `cluster_sync`, `tcgen05_mma_f16_cg2`,
+    //    `tcgen05_commit_shared_cluster_cg2`, `tcgen05_relinquish_alloc_permit_cg2`,
+    //    `cluster_sync`, `tcgen05_dealloc_cg2`, trailing `cluster_sync` before return):
     let cg2_valid = TCGEN05_MATMUL_FIXTURE
         .replacen(
             "[gpu_kernel: builtin.string \"true\", ",
             "[cluster_dim_x: builtin.integer <2: ui32>, cluster_dim_y: builtin.integer <1: ui32>, cluster_dim_z: builtin.integer <1: ui32>, gpu_kernel: builtin.string \"true\", ",
+            1,
+        )
+        .replacen(
+            "      ^sync_after_init():\n        nvvm.barrier0 () [] []: <() -> ()>;",
+            "      ^sync_after_init():\n        nvvm.cluster_sync () [] []: <() -> ()>;",
             1,
         )
         .replacen("nvvm.tcgen05_alloc (", "nvvm.tcgen05_alloc_cg2 (", 1)
@@ -1775,7 +1826,12 @@ fn verifies_stage9_cluster_dsmem_clc_and_cg2_tmem_lifecycle() {
             "      ^sync_before_dealloc():\n        mir.cond_br (is_warp0) [^relinquish_cg2, ^cluster_sync_dealloc] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>\n\n      ^relinquish_cg2():\n        nvvm.tcgen05_relinquish_alloc_permit_cg2 () [] []: <() -> ()>;\n        mir.goto () [^cluster_sync_dealloc] []: <() -> ()>\n\n      ^cluster_sync_dealloc():\n        nvvm.cluster_sync () [] []: <() -> ()>;\n        mir.cond_br (is_warp0) [^dealloc_tmem, ^exit]",
             1,
         )
-        .replacen("nvvm.tcgen05_dealloc (", "nvvm.tcgen05_dealloc_cg2 (", 1);
+        .replacen("nvvm.tcgen05_dealloc (", "nvvm.tcgen05_dealloc_cg2 (", 1)
+        .replacen(
+            "      ^exit():\n        mir.return () [] []: <() -> ()>",
+            "      ^exit():\n        nvvm.cluster_sync () [] []: <() -> ()>;\n        mir.return () [] []: <() -> ()>",
+            1,
+        );
     let cg2_lean = export_named_source(&cg2_valid, "tcgen05_matmul_verified")
         .expect("exports valid 2-CTA _cg2 tcgen05 kernel");
     assert!(cg2_lean.contains("(.tmemRelinquishPermit true)"));
@@ -1817,11 +1873,37 @@ fn verifies_stage9_cluster_dsmem_clc_and_cg2_tmem_lifecycle() {
     lean_exporter::runner::check_generated_lean(&cg2_local_dealloc_lean, &lean_dir).expect_err(
         "Lean 4 must reject tcgen05_dealloc_cg2 preceded only by CTA-local sync_threads()",
     );
+
+    // 10. Negative (`_cg2` `mbarrier_init` before `tcgen05_alloc_cg2` with only CTA-local `barrier0`):
+    let cg2_local_sync_init = cg2_valid.replacen(
+        "      ^sync_after_init():\n        nvvm.cluster_sync () [] []: <() -> ()>;",
+        "      ^sync_after_init():\n        nvvm.barrier0 () [] []: <() -> ()>;",
+        1,
+    );
+    let cg2_local_init_lean = export_named_source(&cg2_local_sync_init, "tcgen05_matmul_verified")
+        .expect("transcribes _cg2 alloc preceded only by CTA-local barrier0 after mbarrier_init");
+    lean_exporter::runner::check_generated_lean(&cg2_local_init_lean, &lean_dir).expect_err(
+        "Lean 4 must reject tcgen05_alloc_cg2 after mbarrier_init without cluster_sync()",
+    );
+
+    // 11. Negative (`_cg2` omitting trailing `cluster_sync()` after `tcgen05_dealloc_cg2` before return):
+    let cg2_no_exit_sync = cg2_valid.replacen(
+        "      ^exit():\n        nvvm.cluster_sync () [] []: <() -> ()>;\n        mir.return () [] []: <() -> ()>",
+        "      ^exit():\n        mir.return () [] []: <() -> ()>",
+        1,
+    );
+    let cg2_no_exit_lean = export_named_source(&cg2_no_exit_sync, "tcgen05_matmul_verified")
+        .expect("transcribes _cg2 dealloc returning without trailing cluster_sync()");
+    lean_exporter::runner::check_generated_lean(&cg2_no_exit_lean, &lean_dir).expect_err(
+        "Lean 4 must reject returning after tcgen05_dealloc_cg2 without trailing cluster_sync()",
+    );
 }
 
 #[test]
 fn verifies_stage10_dual_commit_cg2_multicast_and_dynamic_tile_kind_bounds() {
-    let lean_dir = lean_exporter::runner::default_lean_package_dir();
+    let Some(lean_dir) = lean_package_dir_if_available() else {
+        return;
+    };
 
     // Build a 2-CTA `_cg2` GEMM stage exercising Stage 10's dual-commit (`MMA_BAR` + `ACCUM_FULL`)
     // and leader-only `mbarrier_arrive_expect_tx` + `_cg2` multicast TMA:
@@ -1829,6 +1911,11 @@ fn verifies_stage10_dual_commit_cg2_multicast_and_dynamic_tile_kind_bounds() {
         .replacen(
             "[gpu_kernel: builtin.string \"true\", ",
             "[cluster_dim_x: builtin.integer <2: ui32>, cluster_dim_y: builtin.integer <1: ui32>, cluster_dim_z: builtin.integer <1: ui32>, gpu_kernel: builtin.string \"true\", ",
+            1,
+        )
+        .replacen(
+            "      ^sync_after_init():\n        nvvm.barrier0 () [] []: <() -> ()>;",
+            "      ^sync_after_init():\n        nvvm.cluster_sync () [] []: <() -> ()>;",
             1,
         )
         .replacen("nvvm.tcgen05_alloc (", "nvvm.tcgen05_alloc_cg2 (", 1)
@@ -1848,7 +1935,12 @@ fn verifies_stage10_dual_commit_cg2_multicast_and_dynamic_tile_kind_bounds() {
             "      ^sync_before_dealloc():\n        mir.cond_br (is_warp0) [^relinquish_cg2, ^cluster_sync_dealloc] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>\n\n      ^relinquish_cg2():\n        nvvm.tcgen05_relinquish_alloc_permit_cg2 () [] []: <() -> ()>;\n        mir.goto () [^cluster_sync_dealloc] []: <() -> ()>\n\n      ^cluster_sync_dealloc():\n        nvvm.cluster_sync () [] []: <() -> ()>;\n        mir.cond_br (is_warp0) [^dealloc_tmem, ^exit]",
             1,
         )
-        .replacen("nvvm.tcgen05_dealloc (", "nvvm.tcgen05_dealloc_cg2 (", 1);
+        .replacen("nvvm.tcgen05_dealloc (", "nvvm.tcgen05_dealloc_cg2 (", 1)
+        .replacen(
+            "      ^exit():\n        mir.return () [] []: <() -> ()>",
+            "      ^exit():\n        nvvm.cluster_sync () [] []: <() -> ()>;\n        mir.return () [] []: <() -> ()>",
+            1,
+        );
 
     // 1. Positive: Dual `tcgen05_commit_shared_cluster_cg2` (`MMA_BAR` then post-loop `ACCUM_FULL`) passes Lean 4!
     let dual_commit_lean = export_named_source(&base_cg2, "tcgen05_matmul_verified")

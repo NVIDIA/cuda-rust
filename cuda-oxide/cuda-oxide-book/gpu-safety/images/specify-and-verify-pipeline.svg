@@ -113,7 +113,7 @@
   <!-- Box 4: Elided PTX -->
   <g transform="translate(840, 94)">
     <rect width="204" height="190" rx="10" style="fill: var(--panel); stroke: var(--panel-stroke)" stroke-width="1.5"/>
-    <text x="102" y="28" text-anchor="middle" font-size="13.5" font-weight="700" style="fill: var(--fg)">4. Verified PTX</text>
+    <text x="102" y="28" text-anchor="middle" font-size="13.5" font-weight="700" style="fill: var(--fg)">4. Emitted PTX</text>
     <text x="102" y="48" text-anchor="middle" font-size="11.5" font-weight="600" style="fill: var(--green)">mir.assert checks erased!</text>
 
     <rect x="16" y="60" width="172" height="112" rx="6" style="fill: var(--box); stroke: var(--box-stroke)"/>

@@ -377,28 +377,40 @@ def checkTmemLifecycleWith (cfg : ControlFlowCfg) (inv : StateMap) : Bool :=
         decide (tmemDeallocSites cfg ≠ []) &&
         (tmemDeallocSites cfg).all (· == cols)
     | _ => false
-  allocOk && validStateMap true cfg inv && checkLoopBackpressure cfg
+  let cg2EntryOk := (cg2PreAllocInitPairs cfg).all fun (iBlk, aBlk) =>
+    certifyUnreachable cfg ((clusterSyncBlocks cfg).filter (· != iBlk)) iBlk aBlk
+  let cg2ExitOk := (unsyncedCg2DeallocBlocks cfg).all fun dBlk =>
+    let postSyncs := (clusterSyncBlocks cfg).filter (· != dBlk)
+    (returnBlocks cfg).all fun ret => certifyUnreachable cfg postSyncs dBlk ret
+  allocOk && cg2EntryOk && cg2ExitOk && validStateMap true cfg inv && checkLoopBackpressure cfg
 
 /-- Reusable soundness theorem for `tmem_lifecycle` using a precomputed `inv : StateMap`. -/
 theorem tmem_lifecycle_of_stateMap {cfg : ControlFlowCfg} {inv : StateMap}
     (hcheck : checkTmemLifecycleWith cfg inv = true) :
     TmemLifecycle cfg := by
   unfold checkTmemLifecycleWith at hcheck
-  rcases Bool.and_eq_true_iff.mp hcheck with ⟨ha1, hloop⟩
-  rcases Bool.and_eq_true_iff.mp ha1 with ⟨halloc, hvalid⟩
-  refine ⟨?_, safeCtaExecution_of_stateMap hvalid, noUnbackpressuredLoop_of_check hloop⟩
-  cases hs : tmemAllocSites cfg with
-  | nil => rw [hs] at halloc; contradiction
-  | cons cols rest =>
-      cases rest with
-      | cons _ _ => rw [hs] at halloc; contradiction
-      | nil =>
-          rw [hs] at halloc
-          rcases Bool.and_eq_true_iff.mp halloc with ⟨hv1, hallDealloc⟩
-          rcases Bool.and_eq_true_iff.mp hv1 with ⟨hcols, hnonempty⟩
-          refine ⟨cols, tmemValidCols_of_bool hcols, rfl, of_decide_eq_true hnonempty, ?_⟩
-          intro d hd
-          exact beq_iff_eq.mp (List.all_eq_true.mp hallDealloc d hd)
+  rcases Bool.and_eq_true_iff.mp hcheck with ⟨ha123, hloop⟩
+  rcases Bool.and_eq_true_iff.mp ha123 with ⟨ha12, hvalid⟩
+  rcases Bool.and_eq_true_iff.mp ha12 with ⟨ha1, hexit⟩
+  rcases Bool.and_eq_true_iff.mp ha1 with ⟨halloc, hentry⟩
+  refine ⟨?_, ?_, ?_, safeCtaExecution_of_stateMap hvalid, noUnbackpressuredLoop_of_check hloop⟩
+  · cases hs : tmemAllocSites cfg with
+    | nil => rw [hs] at halloc; contradiction
+    | cons cols rest =>
+        cases rest with
+        | cons _ _ => rw [hs] at halloc; contradiction
+        | nil =>
+            rw [hs] at halloc
+            rcases Bool.and_eq_true_iff.mp halloc with ⟨hv1, hallDealloc⟩
+            rcases Bool.and_eq_true_iff.mp hv1 with ⟨hcols, hnonempty⟩
+            refine ⟨cols, tmemValidCols_of_bool hcols, rfl, of_decide_eq_true hnonempty, ?_⟩
+            intro d hd
+            exact beq_iff_eq.mp (List.all_eq_true.mp hallDealloc d hd)
+  · intro iBlk aBlk hpair
+    exact not_pathAvoiding_of_certify (List.all_eq_true.mp hentry (iBlk, aBlk) hpair)
+  · intro dBlk hdBlk ret hret
+    have hd := List.all_eq_true.mp hexit dBlk hdBlk
+    exact not_pathAvoiding_of_certify (List.all_eq_true.mp hd ret hret)
 
 open Lean Elab Command Meta in
 /-- Precomputes `cfgStateMap : StateMap` in compiled `MetaM` bytecode (`addDecl` certificate

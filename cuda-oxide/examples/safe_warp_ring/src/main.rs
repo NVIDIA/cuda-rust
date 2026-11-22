@@ -129,6 +129,10 @@ mod kernels {
         thread::sync_threads();
 
         // Producer role (`Warp 4`, `lane 0`): streams tiles into the 4-stage ring.
+        #[expect(
+            clippy::collapsible_if,
+            reason = "keep warp-uniform guard separate from lane-0 elect per GPU codegen rules"
+        )]
         if warp_id == PRODUCER_WARP {
             if lane_id == 0 {
                 let mut stage: usize = 0;

@@ -135,6 +135,10 @@ def symEvalRhsRaw (f : MirFunc) (sregs : SymRegList) : Rhs → SymVal
   | .sreg .laneId => .int (.binOp .rem 32 .tidX (.const 32))
   | .sreg .clusterCtaidX => .int (.binOp .rem 0 .ctaidX (.const (max 1 f.clusterDimX)))
   | .index1D => .int (.index1D f.blockDimX)
+  | .coord2DU32 =>
+      let col := .intCast 64 (.binOp .add 32 (.binOp .mul 32 .ctaidX (.const f.blockDimX)) .tidX)
+      let row := .intCast 64 (.binOp .add 32 (.binOp .mul 32 .ctaidY (.const f.blockDimY)) .tidY)
+      .int (.binOp .add 64 (.binOp .shl 64 row (.const 32)) col)
   | .paramScalar p => .int (.paramScalar p)
   | .slicePtr p => .ptr .global p (.const 0)
   | .sliceLen p => .int (.sliceLen p)
@@ -204,7 +208,7 @@ theorem symEvalRhs_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
   apply widenDeepVal_matches
   cases rhs with
   | copy src => exact hmatch src
-  | constInt _ _ | constBool _ | index1D | paramScalar _ | slicePtr _
+  | constInt _ _ | constBool _ | index1D | coord2DU32 | paramScalar _ | slicePtr _
   | sliceLen _ | sharedBase _ | load _ | loadTmemBase _ _
   | opaqueUint _ _ | opaqueVal =>
       simp [symEvalRhsRaw, evalRhs, SymVal.matchesVal, SymInt.eval, SymBool.eval]

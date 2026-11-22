@@ -244,6 +244,7 @@ fn format_mir_rhs(rhs: &MirRhs) -> String {
         MirRhs::ConstBool(b) => format!("(.constBool {b})"),
         MirRhs::Sreg(r) => format!("(.sreg .{r})"),
         MirRhs::Index1D => ".index1D".to_string(),
+        MirRhs::Coord2DU32 => ".coord2DU32".to_string(),
         MirRhs::SlicePtr(p) => format!("(.slicePtr {p})"),
         MirRhs::SliceLen(p) => format!("(.sliceLen {p})"),
         MirRhs::SharedBase(s) => format!("(.sharedBase {s})"),

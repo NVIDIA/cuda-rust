@@ -133,6 +133,16 @@ jobs:
           llc-23 --version | head -2
           opt-23 --version | head -2
 
+      - name: Install Elan and build Lean 4 proof library
+        working-directory: cuda-oxide/lean
+        run: |
+          set -euo pipefail
+          curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+            | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+          "$HOME/.elan/bin/lake" --version
+          "$HOME/.elan/bin/lake" build
+
       - name: Compile every example (smoketest --compile-only)
         # Step-level timeout, below the job's 75: a job-level timeout
         # CANCELS the job and `if: failure()` never fires, losing the

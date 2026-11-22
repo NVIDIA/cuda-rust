@@ -145,6 +145,8 @@ inductive Rhs where
   | sreg (reg : Sreg)
   /-- 64-bit 1D global thread index `blockIdx.x * blockDim.x + threadIdx.x` (`thread::index_1d`). -/
   | index1D
+  /-- Packed 2D `u32` coordinates `((row as u64) << 32) + (col as u64)` (`thread::coords_2d_u32`). -/
+  | coord2DU32
   /-- Scalar entry parameter `param` (`0 .. params.length - 1`). -/
   | paramScalar (param : Nat)
   /-- Base pointer of slice parameter `param` (`mir.extract_field` index `0`). -/
@@ -394,6 +396,10 @@ def evalRhs (f : MirFunc) (env : InputEnv) (t : ThreadCtx) (regs : RegFile) : Rh
   | .sreg .laneId => .int (t.tx % 32)
   | .sreg .clusterCtaidX => .int (t.bx % max 1 f.clusterDimX)
   | .index1D => .int (wordMod 64 (t.bx * f.blockDimX + t.tx))
+  | .coord2DU32 =>
+      let col := wordMod 64 (evalBinOp .add 32 (evalBinOp .mul 32 t.bx f.blockDimX) t.tx)
+      let row := wordMod 64 (evalBinOp .add 32 (evalBinOp .mul 32 t.by_ f.blockDimY) t.ty)
+      .int (evalBinOp .add 64 (evalBinOp .shl 64 row 32) col)
   | .paramScalar p => .int (env.scalar p)
   | .slicePtr p => .ptr .global p 0
   | .sliceLen p => .int (env.sliceLen p)

@@ -761,7 +761,7 @@ theorem symRankEventsOfStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadC
               obtain ⟨rev, hmem, hp, hrEq⟩ := symRankEventsOfStmts_correct f env t havoc pCond term
                 rest tl sfx (regs.set dst (.tmemPtr cols 0)) (sregs.setVar dst (.tmemPtr cols (.const 0))) phase rv r hnext htl (by simpa [execStmts] using hr)
               exact ⟨rev, hmem, hp, hrEq⟩
-          | copy _ | constInt _ _ | constBool _ | sreg _ | index1D | paramScalar _ | slicePtr _
+          | copy _ | constInt _ _ | constBool _ | sreg _ | index1D | coord2DU32 | paramScalar _ | slicePtr _
           | sliceLen _ | sharedBase _ | binOp _ _ _ _ | cmpOp _ _ _ | notBool _ | intCast _ _
           | ptrOffset _ _ | mbarTryWait _ _ | cvtaShared _ | opaqueUint _ _ | opaqueVal =>
               obtain ⟨rev, hmem, hp, hrEq⟩ := symRankEventsOfStmts_correct f env t havoc pCond term

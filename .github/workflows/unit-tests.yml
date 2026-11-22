@@ -304,6 +304,8 @@ jobs:
 
       - name: Run Lean 4 model, negative counterexamples, and exporter proof checks
         working-directory: cuda-oxide
+        env:
+          CUDA_OXIDE_REQUIRE_LEAN: "1"
         run: |
           export PATH="$HOME/.elan/bin:$PATH"
           python3 lean/check.py

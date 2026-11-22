@@ -709,6 +709,11 @@ def main():
                 '[cluster_dim_x: builtin.integer <2: ui32>, cluster_dim_y: builtin.integer <1: ui32>, cluster_dim_z: builtin.integer <1: ui32>, gpu_kernel: builtin.string "true", ',
                 1,
             )
+            .replace(
+                "      ^sync_after_init():\n        nvvm.barrier0 () [] []: <() -> ()>;",
+                "      ^sync_after_init():\n        nvvm.cluster_sync () [] []: <() -> ()>;",
+                1,
+            )
             .replace("nvvm.tcgen05_alloc (", "nvvm.tcgen05_alloc_cg2 (", 1)
             .replace(
                 "      ^sync_after_alloc():\n        nvvm.barrier0 () [] []: <() -> ()>;",
@@ -727,6 +732,11 @@ def main():
                 1,
             )
             .replace("nvvm.tcgen05_dealloc (", "nvvm.tcgen05_dealloc_cg2 (", 1)
+            .replace(
+                "      ^exit():\n        mir.return () [] []: <() -> ()>",
+                "      ^exit():\n        nvvm.cluster_sync () [] []: <() -> ()>;\n        mir.return () [] []: <() -> ()>",
+                1,
+            )
         )
         stage10_valid_mir = temporary / "stage10_dual_commit_cg2.mir"
         stage10_valid_mir.write_text(stage10_cg2_source)

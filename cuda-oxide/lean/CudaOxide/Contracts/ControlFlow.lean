@@ -135,6 +135,12 @@ def TmemLifecycle (cfg : ControlFlowCfg) : Prop :=
     tmemAllocSites cfg = [cols] ∧                           --   (2) a single `tcgen05_alloc` of `cols` columns,
     tmemDeallocSites cfg ≠ [] ∧                             --   (3) at least one `tcgen05_dealloc` site, AND
     (∀ d : Nat, d ∈ tmemDeallocSites cfg → d = cols)) ∧     --   (4) every `tcgen05_dealloc` frees `cols`, AND
+  (∀ iBlk aBlk : Nat,                                       --   (5) in 2-CTA `_cg2` mode, any prior SMEM/`mbarrier_init`
+    (iBlk, aBlk) ∈ cg2PreAllocInitPairs cfg →               --       synchronizes via `cluster_sync()` before `alloc_cg2`,
+    ¬ PathAvoiding cfg ((clusterSyncBlocks cfg).filter (· != iBlk)) iBlk aBlk) ∧
+  (∀ dBlk : Nat, dBlk ∈ unsyncedCg2DeallocBlocks cfg →      --   (6) in 2-CTA `_cg2` mode, every `dealloc_cg2` executes
+    ∀ ret : Nat, ret ∈ returnBlocks cfg →                   --       `cluster_sync()` on all paths before `mir.return`,
+      ¬ PathAvoiding cfg ((clusterSyncBlocks cfg).filter (· != dBlk)) dBlk ret) ∧
   SafeCtaExecution true cfg ∧                               -- Full `tcgen05` / `TMEM` / proxy / `mbarrier` state machine holds,
   NoUnbackpressuredLoop cfg                                 -- AND cyclic `TMEM` / TMA loops enforce back-pressure.
 

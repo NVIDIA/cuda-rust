@@ -112,6 +112,10 @@ mod kernels {
         }
 
         // Phase 2: Blackwell Cluster Launch Control (`CLC`) multicast query into `CLC_RESPONSE`.
+        #[expect(
+            clippy::collapsible_if,
+            reason = "keep warp-uniform guard separate from lane-0 elect per GPU codegen rules"
+        )]
         if warp_id == 0 {
             if lane_id == 0 {
                 let _ = mbarrier_arrive_expect_tx(&raw const CLC_BAR, 1, 16);
@@ -129,11 +133,7 @@ mod kernels {
         let resp_hi = CLC_RESPONSE[1];
         let is_canceled = clc_query_is_canceled(resp_lo, resp_hi);
         let stolen_first = clc_query_get_first_ctaid_x(resp_lo, resp_hi);
-        let clc_tag = if is_canceled != 0 && stolen_first < 65536 {
-            0u32
-        } else {
-            0u32
-        };
+        let clc_tag = u32::from(is_canceled != 0 && stolen_first == u32::MAX);
 
         if let Some(slot) = out.get_mut(idx) {
             *slot = local_val + peer_val + clc_tag;

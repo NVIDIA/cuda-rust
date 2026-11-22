@@ -32,21 +32,19 @@ fn export(source: &str) -> String {
     export_named_source(source, "global_index").expect("valid scalar MIR")
 }
 
-/// Resolve the `cuda-oxide/lean` package directory when `lake` is installed on `PATH`,
-/// panicking if `CUDA_OXIDE_REQUIRE_LEAN=1` is set and `lake` is missing.
+/// Resolve the `cuda-oxide/lean` package directory when `lake` is installed,
+/// panicking if `CUDA_OXIDE_REQUIRE_LEAN=1` is set and Lean is unavailable.
 fn lean_package_dir_if_available() -> Option<std::path::PathBuf> {
-    let has_lake = std::process::Command::new("lake")
-        .arg("--version")
-        .output()
-        .is_ok_and(|o| o.status.success());
-    if !has_lake {
+    let lean_dir = lean_exporter::runner::default_lean_package_dir();
+    if !lean_exporter::runner::is_lean_available(&lean_dir) {
         assert!(
             std::env::var("CUDA_OXIDE_REQUIRE_LEAN").as_deref() != Ok("1"),
-            "`CUDA_OXIDE_REQUIRE_LEAN=1` set, but `lake` was not found on PATH"
+            "`CUDA_OXIDE_REQUIRE_LEAN=1` set, but `lake` failed in {}",
+            lean_dir.display()
         );
         return None;
     }
-    Some(lean_exporter::runner::default_lean_package_dir())
+    Some(lean_dir)
 }
 
 fn reject(source: &str, expected: &str) {

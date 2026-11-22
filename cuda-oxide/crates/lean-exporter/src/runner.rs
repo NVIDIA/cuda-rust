@@ -102,6 +102,18 @@ fn find_lake_executable() -> Result<PathBuf, ExportError> {
     }
 }
 
+/// Return `true` when `lake` is installed and the pinned toolchain in `lean_package_dir` resolves.
+pub fn is_lean_available(lean_package_dir: &Path) -> bool {
+    let Ok(lake) = find_lake_executable() else {
+        return false;
+    };
+    Command::new(lake)
+        .arg("--version")
+        .current_dir(lean_package_dir)
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
 /// Run Lean 4 on `lean_source` (using direct `lean` + `LEAN_PATH` when `.olean` artifacts
 /// are already built, falling back to `lake env lean`) and audit proof axioms.
 pub fn check_generated_lean(lean_source: &str, lean_package_dir: &Path) -> Result<(), ExportError> {

@@ -1626,6 +1626,108 @@ fn verifies_plain_mut_slice_and_rejects_unverified_wraparound_and_cross_thread_r
 }
 
 #[test]
+fn checked_arithmetic_overflow_arm_is_reachable() {
+    let Some(lean_dir) = lean_package_dir_if_available() else {
+        return;
+    };
+
+    // `match xs[idx].checked_OP(K) { Some(_) => out[idx] = out[idx], None => out[x as usize] = out[x as usize] }`.
+    // The flag depends on a loaded value. Lean has to reason about it symbolically.
+    let mir = r#"mir.func @ovf_probe: builtin.function <(mir.slice <builtin.integer ui32,mutable:false,kind:SharedRef>, mir.slice <builtin.fp32 ,mutable:true,kind:UniqueRef>) -> ()>
+  [contract_requires_len_ge: builtin.string "0>=1", gpu_kernel: builtin.string "true", launch_contract_domain: builtin.integer <1: ui32>, reqntid_x: builtin.integer <256: ui32>, reqntid_y: builtin.integer <1: ui32>, reqntid_z: builtin.integer <1: ui32>, verify_disjoint_writes: builtin.string "1", verify_no_oob_idx: builtin.string "0,1"]
+{
+  ^entry(xs: mir.slice <builtin.integer ui32,mutable:false,kind:SharedRef>, out: mir.slice <builtin.fp32 ,mutable:true,kind:UniqueRef>):
+    bx32 = nvvm.read_ptx_sreg_ctaid_x () [] []: <() -> (builtin.integer ui32)>;
+    bd32 = nvvm.read_ptx_sreg_ntid_x () [] []: <() -> (builtin.integer ui32)>;
+    tx32 = nvvm.read_ptx_sreg_tid_x () [] []: <() -> (builtin.integer ui32)>;
+    bx = mir.cast (bx32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+    bd = mir.cast (bd32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+    tx = mir.cast (tx32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+    base = mir.mul (bx, bd) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+    idx = mir.add (base, tx) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+    out_len = mir.extract_field (out) [] [index: mir.field_index 1]: <(mir.slice <builtin.fp32 ,mutable:true,kind:UniqueRef>) -> (builtin.integer ui64)>;
+    in_bounds = mir.lt (idx, out_len) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+    mir.cond_br (in_bounds) [^active, ^exit] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+  ^active():
+    xs_len = mir.extract_field (xs) [] [index: mir.field_index 1]: <(mir.slice <builtin.integer ui32,mutable:false,kind:SharedRef>) -> (builtin.integer ui64)>;
+    xs_chk = mir.lt (idx, xs_len) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+    mir.assert (xs_chk) [] []: <(builtin.integer i1) -> ()>;
+    xs_ptr = mir.extract_field (xs) [] [index: mir.field_index 0]: <(mir.slice <builtin.integer ui32,mutable:false,kind:SharedRef>) -> (mir.ptr <builtin.integer ui32,mutable:false,addrspace:0,kind:Erased>)>;
+    xs_elem = mir.ptr_offset (xs_ptr, idx) [] []: <(mir.ptr <builtin.integer ui32,mutable:false,addrspace:0,kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.integer ui32,mutable:false,addrspace:0,kind:Erased>)>;
+    x = mir.load (xs_elem) [] []: <(mir.ptr <builtin.integer ui32,mutable:false,addrspace:0,kind:Erased>) -> (builtin.integer ui32)>;
+    k = mir.constant () [] [value: builtin.integer <K: ui32>]: <() -> (builtin.integer ui32)>;
+    pair = CHECKED_OP (x, k) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (mir.tuple <[builtin.integer ui32, builtin.integer i1],[0, 1],[0, 4],8,4>)>;
+    ovf = mir.extract_field (pair) [] [index: mir.field_index 1]: <(mir.tuple <[builtin.integer ui32, builtin.integer i1],[0, 1],[0, 4],8,4>) -> (builtin.integer i1)>;
+    mir.cond_br (ovf) [^overflow, ^ok] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+  ^overflow():
+    x64 = mir.cast (x) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+    x_chk = mir.lt (x64, out_len) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+    mir.assert (x_chk) [] []: <(builtin.integer i1) -> ()>;
+    out_ptr_o = mir.extract_field (out) [] [index: mir.field_index 0]: <(mir.slice <builtin.fp32 ,mutable:true,kind:UniqueRef>) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>)>;
+    out_elem_o = mir.ptr_offset (out_ptr_o, x64) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>)>;
+    v_o = mir.load (out_elem_o) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>) -> (builtin.fp32)>;
+    mir.store (out_elem_o, v_o) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>, builtin.fp32) -> ()>;
+    mir.goto () [^exit] []: <() -> ()>
+
+  ^ok():
+    idx_chk = mir.lt (idx, out_len) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+    mir.assert (idx_chk) [] []: <(builtin.integer i1) -> ()>;
+    out_ptr = mir.extract_field (out) [] [index: mir.field_index 0]: <(mir.slice <builtin.fp32 ,mutable:true,kind:UniqueRef>) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>)>;
+    out_elem = mir.ptr_offset (out_ptr, idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>)>;
+    v = mir.load (out_elem) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>) -> (builtin.fp32)>;
+    mir.store (out_elem, v) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>, builtin.fp32) -> ()>;
+    mir.goto () [^exit] []: <() -> ()>
+
+  ^exit():
+    mir.return () [] []: <() -> ()>
+}"#;
+    let module = |src: &str| format!("builtin.module @test {{\n  ^entry_mod():\n{src}\n}}");
+
+    let probe = |op: &str, k: &str| {
+        mir.replacen("CHECKED_OP", op, 1)
+            .replacen("<K:", &format!("<{k}:"), 1)
+    };
+
+    // Overflow points: `x + 1` at `u32::MAX`, `x - 1` at `0`, `x * 2` at `2^31`.
+    // Lean must reject `out[x]` in the reachable overflow arm.
+    for (op, k) in [
+        ("mir.checked_add", "1"),
+        ("mir.checked_sub", "1"),
+        ("mir.checked_mul", "2"),
+    ] {
+        let lean =
+            export_named_source(&probe(op, k), "ovf_probe").expect("exports checked arithmetic");
+        lean_exporter::runner::check_generated_lean(&lean, &lean_dir)
+            .expect_err("Lean 4 must reject out[x] in the reachable overflow arm");
+    }
+
+    // `x * 1` never overflows. The overflow arm is dead and the kernel verifies.
+    let no_ovf =
+        export_named_source(&probe("mir.checked_mul", "1"), "ovf_probe").expect("exports x * 1");
+    lean_exporter::runner::check_generated_lean(&no_ovf, &lean_dir)
+        .expect("Lean 4 proves the overflow arm of x * 1 unreachable");
+
+    // Positive: when both arms index `out[idx]`, the kernel verifies and all 3 checks go.
+    let safe = probe("mir.checked_add", "1")
+        .replacen(
+            "x_chk = mir.lt (x64, out_len)",
+            "x_chk = mir.lt (idx, out_len)",
+            1,
+        )
+        .replacen(
+            "mir.ptr_offset (out_ptr_o, x64)",
+            "mir.ptr_offset (out_ptr_o, idx)",
+            1,
+        );
+    let safe_lean = export_named_source(&safe, "ovf_probe").expect("exports safe probe");
+    lean_exporter::runner::check_generated_lean(&safe_lean, &lean_dir)
+        .expect("Lean 4 proves both arms of a checked_add branch");
+    assert_eq!(count_proven_asserts(&module(&safe), "ovf_probe"), 3);
+}
+
+#[test]
 fn verifies_stage8_warp_ring_and_rejects_slot_mismatch_wrap_oob_and_missing_backpressure() {
     let Some(lean_dir) = lean_package_dir_if_available() else {
         return;

@@ -692,6 +692,23 @@ fn verifies_2d_sgemm_tiled_views_and_rejects_shared_races_oob_and_divergent_barr
 }
 
 #[test]
+fn rejects_no_data_race_without_uniform_barriers() {
+    // `MirNoSharedRace` orders shared accesses by per-thread `syncThreads` counts. Without
+    // `UniformBarriers`, `if tx < 32 { sync_threads() }` puts threads in different phases
+    // and a cross-phase race passes.
+    let no_uniform =
+        SGEMM_TILED_FIXTURE.replacen(", verify_uniform_barriers: builtin.string \"true\"", "", 1);
+    assert_ne!(no_uniform, SGEMM_TILED_FIXTURE);
+    let err = export_named_source(&no_uniform, "sgemm_tiled_views")
+        .expect_err("no_data_race without uniform_barriers must be rejected");
+    assert!(
+        err.to_string()
+            .contains("`no_data_race` on shared memory requires `uniform_barriers`"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn verifies_stage3_warp_and_block_reductions_and_rejects_missing_leader_guard() {
     let Some(lean_dir) = lean_package_dir_if_available() else {
         return;

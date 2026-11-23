@@ -132,6 +132,8 @@ pub enum CfgBranchCond {
     PosLoopExit(usize),
     /// CTA-uniform loop bound condition (`tile < k`, `col < 128`).
     Uniform,
+    /// Warp-convergent runtime condition (all 32 lanes of each active warp take the same branch).
+    WarpUniform,
     /// Data-dependent or unmodeled runtime condition (`if flag`, `if data[tid] > 0.0`).
     Unknown,
 }
@@ -165,6 +167,11 @@ pub enum CfgOpItem {
         bar_id: usize,
         /// Expected thread arrival count.
         count: u64,
+    },
+    /// `mbarrier_inval(&BAR)` resetting `bar_id` back to `.uninit`.
+    MbarInval {
+        /// Index of the `Barrier` static (`0..num_barriers`).
+        bar_id: usize,
     },
     /// `fence_proxy_async_shared_cta()` flushing generic writes to the async proxy.
     ProxyFenceAsyncShared,
@@ -243,6 +250,12 @@ pub enum CfgOpItem {
         /// Identifier of the consumed `TmemLoad` result.
         ld_id: usize,
     },
+    /// Warp-convergent `tcgen05_store_wait()` retiring async `tcgen05.st` operations.
+    TmemStoreWait,
+    /// `tcgen05_fence_before_thread_sync()` ordering `tcgen05` prior to thread synchronization.
+    TmemFenceBeforeSync,
+    /// `tcgen05_fence_after_thread_sync()` ordering `tcgen05` after thread synchronization.
+    TmemFenceAfterSync,
 }
 
 /// One basic block transcribed into `CudaOxide.Mir.ControlFlow.CfgBlock`.

@@ -313,6 +313,23 @@ pub fn check_generated_lean_in_cache(
     Ok(())
 }
 
+/// Return `true` when `module` contains at least one `mir.func` carrying
+/// `#[verify(...)]` obligations.
+pub fn has_verified_kernels(ctx: &Context, module: Ptr<Operation>) -> bool {
+    let module_ref = module.deref(ctx);
+    if module_ref.num_regions() != 1 {
+        return false;
+    }
+    let region = module_ref.get_region(0).deref(ctx);
+    let Some(block) = region.get_head() else {
+        return false;
+    };
+    block
+        .deref(ctx)
+        .iter(ctx)
+        .any(|op| MirFuncOp::wrap(ctx, op).is_some() && has_verification_attributes(ctx, op))
+}
+
 /// Verify every `mir.func` in `module` that carries `#[verify(...)]` attributes,
 /// and elide `mir.assert` bounds checks proven redundant by Lean 4.
 ///

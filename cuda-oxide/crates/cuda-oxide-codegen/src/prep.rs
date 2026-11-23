@@ -98,6 +98,12 @@ pub fn prepare_mir_module(
                     .to_string(),
             ));
         }
+        if lean_exporter::has_verified_kernels(ctx, module) {
+            return Err(PipelineError::Lowering(
+                "#[verify] kernels require MIR variable promotion (mem2reg); full variable debug information (--device-debug) is not supported, use --lineinfo instead"
+                    .to_string(),
+            ));
+        }
         if has_wgmma_mma_operations(ctx, module) {
             let mut analyses = pliron::pass::AnalysisManager::default();
             pliron::opts::mem2reg::mem2reg(module, ctx, &mut analyses).map_err(|error| {
@@ -604,6 +610,44 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(error, PipelineError::InvalidMirPassPipeline(_)));
+    }
+
+    #[test]
+    fn debug_mode_rejects_verified_kernels_instead_of_bypassing_lean() {
+        let mut ctx = Context::new();
+        dialect_mir::register(&mut ctx);
+        let module = ModuleOp::new(&mut ctx, "test".try_into().unwrap());
+        let function_type = FunctionType::get(&ctx, vec![], vec![]);
+        let function = Operation::new(
+            &mut ctx,
+            MirFuncOp::get_concrete_op_info(),
+            vec![],
+            vec![],
+            vec![],
+            1,
+        );
+        let function_op = MirFuncOp::new(&mut ctx, function, TypeAttr::new(function_type.into()));
+        function_op.set_symbol_name(&mut ctx, "verified_k".try_into().unwrap());
+        function.deref_mut(&ctx).attributes.set(
+            pliron::identifier::Identifier::try_from("verify_uniform_barriers").unwrap(),
+            pliron::builtin::attributes::UnitAttr::new(),
+        );
+        module.append_operation(&mut ctx, function, 0);
+
+        let error = prepare_mir_module(
+            &mut ctx,
+            module.get_operation(),
+            MirPreparation {
+                promote_and_unroll: false,
+                verbose: false,
+                mir_pass_pipeline: None,
+            },
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&error, PipelineError::Lowering(msg) if msg.contains("--lineinfo")),
+            "expected --device-debug to fail closed on #[verify] kernels, got: {error}"
+        );
     }
 
     #[test]

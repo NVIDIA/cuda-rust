@@ -11,7 +11,7 @@
 //!     └── MirProgram ──► emits `CudaOxide.Mir.Program.MirFunc` + `ControlFlowCfg`
 //!                        + `MirNoOobGlobal`, `MirNoOobShared`, `MirDisjointWrites`,
 //!                          `MirNoSharedRace`, `MirAssertRedundant`, `MirNoOobTmem`,
-//!                          `UniformBarriers`, `TmemLifecycle`, `WritesOnAllActivePaths`
+//!                          `UniformBarriers`, `TmemLifecycle`, `MirWritesAllElems`
 //! ```
 
 use crate::{
@@ -75,7 +75,7 @@ pub fn proved_obligation_descriptions(spec: &KernelVerificationSpec) -> Vec<Stri
     }
     if !spec.writes_all_elems.is_empty() {
         items.push(format!(
-            "writes_all_elems({}) -> CudaOxide.Contracts.ControlFlow.WritesOnAllActivePaths",
+            "writes_all_elems({}) -> CudaOxide.Contracts.Program.MirWritesAllElems",
             fmt_ids("param", &spec.writes_all_elems)
         ));
     }
@@ -142,6 +142,7 @@ fn format_cfg_branch_cond(cond: &CfgBranchCond) -> String {
         CfgBranchCond::MbarSpin(b) => format!("(.mbarSpin {b})"),
         CfgBranchCond::PosLoopExit(body) => format!("(.posLoopExit {body})"),
         CfgBranchCond::Uniform => ".uniform".to_string(),
+        CfgBranchCond::WarpUniform => ".warpUniform".to_string(),
         CfgBranchCond::Unknown => ".unknown".to_string(),
     }
 }
@@ -155,6 +156,7 @@ fn format_cfg_op(op: &CfgOpItem) -> String {
         CfgOpItem::SharedWrite { shared_id } => format!("(.sharedWrite {shared_id})"),
         CfgOpItem::DsmemAccess { shared_id } => format!("(.dsmemAccess {shared_id})"),
         CfgOpItem::MbarInit { bar_id, count } => format!("(.mbarInit {bar_id} {count})"),
+        CfgOpItem::MbarInval { bar_id } => format!("(.mbarInval {bar_id})"),
         CfgOpItem::ProxyFenceAsyncShared => ".proxyFenceAsyncShared".to_string(),
         CfgOpItem::MbarArrive { bar_id } => format!("(.mbarArrive {bar_id})"),
         CfgOpItem::MbarArriveExpectTx { bar_id, tx_bytes } => {
@@ -191,6 +193,9 @@ fn format_cfg_op(op: &CfgOpItem) -> String {
         CfgOpItem::TmemLoad { ld_id } => format!("(.tmemLoad {ld_id})"),
         CfgOpItem::TmemLoadWait => ".tmemLoadWait".to_string(),
         CfgOpItem::TmemLoadUse { ld_id } => format!("(.tmemLoadUse {ld_id})"),
+        CfgOpItem::TmemStoreWait => ".tmemStoreWait".to_string(),
+        CfgOpItem::TmemFenceBeforeSync => ".tmemFenceBeforeSync".to_string(),
+        CfgOpItem::TmemFenceAfterSync => ".tmemFenceAfterSync".to_string(),
     }
 }
 
@@ -249,6 +254,7 @@ fn format_mir_rhs(rhs: &MirRhs) -> String {
         MirRhs::SliceLen(p) => format!("(.sliceLen {p})"),
         MirRhs::SharedBase(s) => format!("(.sharedBase {s})"),
         MirRhs::BinOp(op, w, l, r) => format!("(.binOp .{op} {w} {l} {r})"),
+        MirRhs::CheckedOvf(op, w, l, r) => format!("(.checkedOvf .{op} {w} {l} {r})"),
         MirRhs::CmpOp(op, l, r) => format!("(.cmpOp .{op} {l} {r})"),
         MirRhs::NotBool(s) => format!("(.notBool {s})"),
         MirRhs::IntCast(dw, s) => format!("(.intCast {dw} {s})"),
@@ -265,7 +271,7 @@ fn format_mir_rhs(rhs: &MirRhs) -> String {
 /// Render a line-by-line [`MirProgramData`] (`CudaOxide.Mir.Program.MirFunc`) and its
 /// declarative safety obligations (`MirNoOobGlobal`, `MirNoOobShared`, `MirDisjointWrites`,
 /// `MirNoSharedRace`, `MirAssertRedundant`, `MirNoOobTmem`, `UniformBarriers`, `TmemLifecycle`,
-/// and `WritesOnAllActivePaths`).
+/// and `MirWritesAllElems`).
 fn render_mir_program_module(
     spec: &KernelVerificationSpec,
     program: &MirProgramData,
@@ -359,8 +365,7 @@ fn render_mir_program_module(
 
     let need_uniform_barriers = spec.uniform_barriers
         || (program.control_flow_cfg.num_barriers > 0 && !spec.tmem_lifecycle);
-    let need_cfg =
-        need_uniform_barriers || spec.tmem_lifecycle || !spec.writes_all_elems.is_empty();
+    let need_cfg = need_uniform_barriers || spec.tmem_lifecycle;
     let cfg_section = if need_cfg {
         format!(
             "{}\n\ncfg_def_state_map controlFlowCfg\n\n",
@@ -426,22 +431,13 @@ fn render_mir_program_module(
         ));
         axiom_prints.push(format!("#print axioms {thm}"));
     }
-    for &(p, ref ge, ref wb) in &program.write_path_obligations {
+    for &p in &spec.writes_all_elems {
         let thm = format!("verify_writes_all_elems_param{p}");
-        let ge_s = ge
-            .iter()
-            .map(usize::to_string)
-            .collect::<Vec<_>>()
-            .join(", ");
-        let wb_s = wb
-            .iter()
-            .map(usize::to_string)
-            .collect::<Vec<_>>()
-            .join(", ");
         theorems.push(format!(
             "theorem {thm} :\n    \
-             CudaOxide.Contracts.ControlFlow.WritesOnAllActivePaths controlFlowCfg [{ge_s}] [{wb_s}] := by\n  \
-             exact CudaOxide.Proofs.ControlFlow.writes_on_active_paths_sound (by decide)"
+             CudaOxide.Contracts.Program.MirWritesAllElems mirFunc {p} := by\n  \
+             apply vcWritesAllElems rfl (by mir_bind_writes)\n  \
+             mir_vc mirFunc"
         ));
         axiom_prints.push(format!("#print axioms {thm}"));
     }

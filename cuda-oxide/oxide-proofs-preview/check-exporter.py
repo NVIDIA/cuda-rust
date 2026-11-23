@@ -160,8 +160,30 @@ def main():
         )
         res_skip = run_lake("env", "lean", str(skip_write_file))
         if res_skip.returncode == 0:
-            raise RuntimeError(f"Expected conditional skip under writes_all_elems to fail WritesOnAllActivePaths in Lean:\n{res_skip.stdout}")
-        print("REJECTED as expected: conditional branch skipping output write fails `WritesOnAllActivePaths` in Lean 4.", flush=True)
+            raise RuntimeError(f"Expected conditional skip under writes_all_elems to fail MirWritesAllElems in Lean:\n{res_skip.stdout}")
+        print("REJECTED as expected: conditional branch skipping output write fails `MirWritesAllElems` in Lean 4.", flush=True)
+
+        # Mutate vecadd MIR by returning early on thread 0 BEFORE the `< c.len()` guard:
+        early_ret_source = vecadd_source.replace(
+            "    in_bounds = mir.lt (idx, c_len)",
+            "    zero_idx = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;\n"
+            "    is_t0 = mir.eq (idx, zero_idx) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;\n"
+            "    mir.cond_br (is_t0) [^exit, ^chk_bounds] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>\n\n"
+            "  ^chk_bounds():\n"
+            "    in_bounds = mir.lt (idx, c_len)",
+            1,
+        )
+        early_ret_mir = temporary / "vecadd_early_ret.mir"
+        early_ret_mir.write_text(early_ret_source)
+        early_ret_lean = require_export(early_ret_mir, "vecadd")
+        early_ret_file = temporary / "VecaddEarlyRet.lean"
+        early_ret_file.write_text(
+            "\n".join(line for line in early_ret_lean.splitlines() if not line.startswith("#print axioms"))
+        )
+        res_early = run_lake("env", "lean", str(early_ret_file))
+        if res_early.returncode == 0:
+            raise RuntimeError(f"Expected pre-guard early return on idx == 0 to fail MirWritesAllElems:\n{res_early.stdout}")
+        print("REJECTED as expected: pre-guard `if idx == 0 { return; }` fails `MirWritesAllElems` in Lean 4.", flush=True)
 
         # Verified 2D phased shared-memory SGEMM checks
         sgemm_source = SGEMM_TILED_FIXTURE.read_text()

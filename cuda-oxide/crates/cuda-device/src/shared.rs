@@ -598,3 +598,37 @@ pub unsafe fn cvta_generic_to_shared_u32(ptr: *const u8) -> u32 {
 }
 
 include!("generated/shared_sreg.rs");
+
+/// Marker trait for element types of [`SharedArray`] statics proved safe by
+/// `#[verify(...)]`.
+///
+/// # Safety
+///
+/// Every possible bit pattern of `Self` (including arbitrary SRAM power-on
+/// bytes) must be a valid inhabited value of `Self` with no padding/niche
+/// validity invariants (`bool`, `char`, references, and `NonZero*` are
+/// excluded).
+pub unsafe trait VerifiedSharedElement {}
+
+macro_rules! impl_verified_shared_element {
+    ($($ty:ty),* $(,)?) => {
+        $(
+            // SAFETY: primitive integer/floating-point bit patterns are all valid.
+            unsafe impl VerifiedSharedElement for $ty {}
+        )*
+    };
+}
+
+impl_verified_shared_element!(
+    u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize, f16, f32, f64,
+);
+
+// SAFETY: `Barrier` wraps an `UnsafeCell<u64>` whose raw storage accepts any 64-bit pattern
+// while its state-machine lifecycle (`mbarrier_init` before use) is enforced by `ControlFlowCfg`.
+unsafe impl VerifiedSharedElement for crate::barrier::Barrier {}
+
+// SAFETY: `MaybeUninit<T>` imposes no bit-validity requirement on `T`.
+unsafe impl<T> VerifiedSharedElement for core::mem::MaybeUninit<T> {}
+
+// SAFETY: Fixed-size arrays `[T; N]` have identical layout to `N` contiguous `T` values.
+unsafe impl<T: VerifiedSharedElement, const N: usize> VerifiedSharedElement for [T; N] {}

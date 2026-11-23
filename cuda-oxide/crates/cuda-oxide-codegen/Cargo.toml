@@ -16,6 +16,7 @@ pliron = { workspace = true }
 ptx-parse = { workspace = true }
 thiserror = { workspace = true }
 dialect-mir = { workspace = true }
+lean-exporter = { workspace = true }
 dialect-iket = { workspace = true }
 dialect-nvvm = { workspace = true }
 dialect-cute = { workspace = true }

@@ -133,13 +133,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cutlass-primitives"
-version = "0.4.0"
-dependencies = [
- "cuda-device",
-]
-
-[[package]]
 name = "cuda-artifact-finalizer"
 version = "0.4.0"
 dependencies = [
@@ -244,6 +237,13 @@ dependencies = [
  "cuda-core",
  "cuda-device",
  "cute-layout",
+]
+
+[[package]]
+name = "cutlass-primitives"
+version = "0.4.0"
+dependencies = [
+ "cuda-device",
 ]
 
 [[package]]
@@ -390,12 +390,12 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 name = "nemotron3_moe_cute"
 version = "0.1.0"
 dependencies = [
- "cutlass-primitives",
  "cuda-core",
  "cuda-device",
  "cuda-host",
  "cuda-macros",
  "cute-rs",
+ "cutlass-primitives",
 ]
 
 [[package]]

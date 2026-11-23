@@ -34,6 +34,7 @@ cargo oxide test                    # cargo test with cuda-oxide defaults
 cargo oxide test -- -p my_app       # arbitrary cargo test through cuda-oxide
 cargo oxide pipeline vecadd         # verbose pipeline dump
                                     # (MIR -> dialect-mir -> LLVM dialect -> LLVM IR -> PTX)
+cargo oxide lean-export             # inspect scalar MIR and its Lean translation
 cargo oxide inspect vecadd          # build + print generated PTX
 cargo oxide sanitize vecadd         # build + run under NVIDIA Compute Sanitizer
 cargo oxide debug vecadd --tui      # build + launch cuda-gdb
@@ -430,6 +431,23 @@ Shows verbose progress plus the selected IR artifacts: MIR collection,
 cargo oxide pipeline vecadd
 cargo oxide pipeline device_ffi_test --emit-nvvm-ir --arch sm_120
 ```
+
+### `cargo oxide lean-export [input.mir --function name]`
+
+Shows the input MIR and generated Lean together. With no arguments, it uses the
+bundled, hand-authored scalar indexing demo:
+
+```bash
+cargo oxide lean-export
+cargo oxide lean-export path/to/helper.mir --function helper
+```
+
+Run from the `cuda-oxide/` workspace directory in a source checkout. The command builds and runs the Rust
+`lean-exporter`; it does not build the CUDA backend, require a GPU, or run Lean.
+The current subset supports unsigned scalar constants and wrapping arithmetic.
+Unsupported input fails with an error. This is translation inspection, not a
+kernel verification result. See the [exporter README](../lean-exporter/README.md)
+and [Lean workflow](../../lean/README.md).
 
 ### `cargo oxide inspect [example]`
 

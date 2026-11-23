@@ -133,13 +133,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cutlass-primitives"
-version = "0.4.0"
-dependencies = [
- "cuda-device",
-]
-
-[[package]]
 name = "cuda-artifact-finalizer"
 version = "0.4.0"
 dependencies = [
@@ -244,6 +237,13 @@ dependencies = [
  "cuda-core",
  "cuda-device",
  "cute-layout",
+]
+
+[[package]]
+name = "cutlass-primitives"
+version = "0.4.0"
+dependencies = [
+ "cuda-device",
 ]
 
 [[package]]
@@ -570,11 +570,11 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 name = "sm100_qkv_epilogue_cute"
 version = "0.3.0"
 dependencies = [
- "cutlass-primitives",
  "cuda-core",
  "cuda-device",
  "cuda-host",
  "cute-rs",
+ "cutlass-primitives",
  "serde_json",
 ]
 

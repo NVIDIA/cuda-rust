@@ -364,6 +364,7 @@ The full set, as `cargo oxide --help` reports it:
 | `test` | Run Cargo tests through the cuda-oxide backend |
 | `emit-ltoir` | Compile a crate's device code to a binary LTOIR artifact in one step |
 | `pipeline` | Show the full compilation pipeline (MIR -> PTX/NVVM IR) with verbose output |
+| `lean-export` | Export a kernel's MIR and generated Lean 4 safety proofs |
 | `debug` | Build with debug info and launch `cuda-gdb` |
 | `list` | List the examples bundled with the cuda-oxide workspace |
 | `inspect` | Build an example or project and print the generated PTX |

@@ -397,6 +397,78 @@ shuffle moves bits and does not interpret them.
 | `ballot(pred)` | `u32`    | Bitmask of lanes where predicate is true     |
 | `popc(pred)`   | `u32`    | Count of lanes where predicate is true       |
 
+### Warp Reductions
+
+| Function                                      | Description                                |
+|:----------------------------------------------|:-------------------------------------------|
+| `reduce_{sum,max,min}_{f32,f64}(val)`         | Full-warp butterfly reduction (32 lanes)   |
+| `reduce_{sum,max,min}_{f32,f64}_partial(v,n)` | Reduction across the first `n` live lanes  |
+| `live_lanes_1d()`                             | Active lane count for this warp (1D block) |
+
+---
+
+## Vectorized Views, Conversions, and Fast Math
+
+### Vectorized Slice Views (`cuda_device::vector`)
+
+Over-aligned element types (`F32x2`, `F32x4`, `F64x2`, `U32x2`, `U32x4`,
+`U16x4`, `U16x8`) emit single 64-bit or 128-bit global memory transactions
+(`LDG.E.64` / `LDG.E.128`, `STG.E.64` / `STG.E.128`) without inline PTX:
+
+```rust
+use cuda_device::{
+    convert, kernel, thread,
+    vector::{U16x8, as_vectors},
+};
+
+#[kernel]
+pub fn sum8_bf16(x: &[u16], mut out: DisjointSlice<f32>) {
+    let idx = thread::index_1d();
+    let Some(xv) = as_vectors::<U16x8>(x) else { return };
+    if let (Some(v), Some(o)) = (xv.get(idx.get()), out.get_mut(idx)) {
+        let mut acc = 0.0f32;
+        let mut k = 0;
+        #[unroll]
+        while k < 8 {
+            acc += convert::bf16_to_f32(v.0[k]);
+            k += 1;
+        }
+        *o = acc;
+    }
+}
+```
+
+| Function                          | Returns          | Description                              |
+|:----------------------------------|:-----------------|:-----------------------------------------|
+| `as_vectors::<V>(slice)`          | `Option<&[V]>`   | Checked view when aligned and divisible  |
+| `as_vectors_mut::<V>(slice)`      | `Option<&mut[V]>`| Mutable checked vector view              |
+
+### Packed FP16 / BF16 Conversions (`cuda_device::convert`)
+
+| Function                         | Signature               | Description                        |
+|:---------------------------------|:------------------------|:-----------------------------------|
+| `bf16_to_f32(bits)`              | `(u16) -> f32`          | Widen raw BF16 bits to FP32        |
+| `f32_to_bf16_rne(val)`           | `(f32) -> u16`          | Round FP32 to BF16 (nearest-even)  |
+| `cvt_f32x2_bf16x2(packed)`       | `(u32) -> (f32, f32)`   | Unpack two BF16 values (`lo, hi`)  |
+| `cvt_f32x2_f16x2(packed)`        | `(u32) -> (f32, f32)`   | Unpack two FP16 values (`lo, hi`)  |
+| `cvt_bf16x2_f32(lo, hi)`         | `(f32, f32) -> u32`     | Pack two FP32 values into BF16x2   |
+| `cvt_f16x2_f32(lo, hi)`          | `(f32, f32) -> u32`     | Pack two FP32 values into FP16x2   |
+
+For packed 2-way SIMD ALU operations on `u32` pairs (`fma`, `add`, `mul`), see
+`cuda_device::bf16x2` and `cuda_device::f16x2`.
+
+### Hardware Fast Math (`cuda_device::float`)
+
+| Function                 | Computes       | PTX Target              |
+|:-------------------------|:---------------|:------------------------|
+| `ex2_approx_f32(x)`      | $2^x$          | `ex2.approx.f32`        |
+| `lg2_approx_f32(x)`      | $\log_2(x)$    | `lg2.approx.f32`        |
+| `rsqrt_approx_f32(x)`    | $1 / \sqrt{x}$ | `rsqrt.approx.f32`      |
+| `rcp_approx_f32(x)`      | $1 / x$        | `rcp.approx.f32`        |
+| `sin_approx_f32(x)`      | $\sin(x)$      | `sin.approx.f32`        |
+| `cos_approx_f32(x)`      | $\cos(x)$      | `cos.approx.f32`        |
+| `tanh_approx_f32(x)`     | $\tanh(x)$     | `tanh.approx.f32`       |
+
 ---
 
 ## Atomics
@@ -543,6 +615,10 @@ unsafe {
 .unwrap();
 ```
 
+`DeviceBuffer::zeroed` and `DeviceBuffer::from_host` synchronize `stream`
+before returning. In repeated launches, allocate scratch buffers once during
+setup and clear them asynchronously with `buffer.zero_async(&stream)`.
+
 ### Typed Async
 
 ```rust
@@ -653,7 +729,11 @@ debug::prof_trigger::<7>();     // Nsight profiler trigger
 | `config`             | Compile-time policies, shapes, tiles, atoms, layouts, memory spaces, and scopes | All |
 | `disjoint`           | `DisjointSlice<T>` — typed writes completed by a launch proof    | All      |
 | `shared`             | `SharedArray<T, N>`, `DynamicSharedArray<T>`                     | All      |
-| `warp`               | Shuffle, vote, match, lane/warp ID                               | All      |
+| `vector`             | Over-aligned 64/128-bit vector types (`F32x4`, `U16x8`, views)   | All      |
+| `convert`            | Hardware FP16/BF16/FP8 scalar and packed conversions             | All      |
+| `bf16x2` / `f16x2`   | Packed 2-way FP16 and BF16 SIMD arithmetic (`fma`, `add`, `mul`) | sm_80+   |
+| `float`              | Scalar math and single-instruction `*_approx_f32` intrinsics     | All      |
+| `warp`               | Shuffle, vote, reductions, match, lane/warp ID                   | All      |
 | `atomic`             | Scoped atomics (device/block/system)                             | sm_70+   |
 | `debug`              | `clock64`, `trap`, `breakpoint`, `gpu_printf!`                   | All      |
 | `fence`              | `threadfence_block` / `threadfence` / `threadfence_system`       | All      |

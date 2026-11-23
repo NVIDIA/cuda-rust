@@ -8,7 +8,7 @@
 
 use std::collections::BTreeSet;
 
-use dialect_mir::types::MirStructType;
+use dialect_mir::types::{MirPtrType, MirStructType};
 use pliron::{
     attribute::AttributeDict,
     basic_block::BasicBlock,
@@ -172,6 +172,35 @@ fn peel_single_field_structs(ctx: &Context, mut ty: TypeHandle) -> TypeHandle {
     ty
 }
 
+/// Compute the byte width of a `dialect-mir` element `TypeHandle` (`0` if unknown).
+/// Resolves integer bit widths (`u8..u128`), floats, and 1-field wrapper structs.
+pub(super) fn mir_type_elem_bytes(ctx: &Context, ty: TypeHandle) -> u64 {
+    let ty_handle = peel_single_field_structs(ctx, ty);
+    let ty_ref = ty_handle.deref(ctx);
+    if let Some(int_ty) = ty_ref.downcast_ref::<IntegerType>() {
+        u64::from(int_ty.width()).div_ceil(8)
+    } else if let Some(st) = ty_ref.downcast_ref::<MirStructType>()
+        && st.total_size > 0
+    {
+        st.total_size
+    } else {
+        match ty_handle.disp(ctx).to_string().trim() {
+            "builtin.fp16" | "builtin.bf16" | "mir.fp16" => 2,
+            "builtin.fp32" => 4,
+            "builtin.fp64" => 8,
+            _ => 0,
+        }
+    }
+}
+
+/// Extract the pointee byte width of a `MirPtrType` (`0` if not a `MirPtrType` or unknown).
+pub(super) fn ptr_pointee_elem_bytes(ctx: &Context, ptr_ty: TypeHandle) -> u64 {
+    ptr_ty
+        .deref(ctx)
+        .downcast_ref::<MirPtrType>()
+        .map_or(0, |pt| mir_type_elem_bytes(ctx, pt.pointee))
+}
+
 /// Compute the byte width of one element in a `mir.shared_alloc` operation (`0` if unknown).
 /// Resolves integer bit widths (`u8`, `u16`, `u32`, `u64`), floats, and 1-field wrapper structs.
 pub(super) fn shared_alloc_elem_bytes(ctx: &Context, op: &Operation) -> u64 {
@@ -180,21 +209,7 @@ pub(super) fn shared_alloc_elem_bytes(ctx: &Context, op: &Operation) -> u64 {
         .iter()
         .find(|(k, _)| k.to_string() == "elem_type")
         .and_then(|(_, v)| v.downcast_ref::<TypeAttr>())
-        .map(|ta| {
-            let ty_handle = peel_single_field_structs(ctx, ta.get_type(ctx));
-            let ty_ref = ty_handle.deref(ctx);
-            if let Some(int_ty) = ty_ref.downcast_ref::<IntegerType>() {
-                u64::from(int_ty.width()).div_ceil(8)
-            } else {
-                match ty_handle.disp(ctx).to_string().trim() {
-                    "builtin.fp16" | "builtin.bf16" => 2,
-                    "builtin.fp32" => 4,
-                    "builtin.fp64" => 8,
-                    _ => 0,
-                }
-            }
-        })
-        .unwrap_or(0)
+        .map_or(0, |ta| mir_type_elem_bytes(ctx, ta.get_type(ctx)))
 }
 
 /// Return true if `op` is a `mir.shared_alloc` for a scalar `static mut BAR: Barrier`.

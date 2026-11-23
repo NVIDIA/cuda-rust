@@ -78,8 +78,12 @@ inductive GuardExpr where
   | ne (a b : IdxExpr)
   /-- Conjunction of two dominating branch guards (`p ∧ q`). -/
   | and (p q : GuardExpr)
-  /-- Unmodeled or data-dependent branch condition (`if flag`, `if data[tid] > 0.0`).
-      Poisons warp-collective and block-uniformity checks until reconvergence. -/
+  /-- Warp-convergent runtime branch (`!lane_divergent`, e.g. `if tile_kind == 0` inside `warp_id < 4`).
+      Blocks CTA-wide `sync_threads()`, `isSingleLeader`, and unconditional `sharedWriterBlocks`,
+      while preserving 32-lane intra-warp convergence for `tcgen05.ld` / `tcgen05.st`. -/
+  | warpDiv
+  /-- Per-lane data-dependent or unmodeled branch condition (`if data[tid] > 0.0`).
+      Poisons both warp-collective and block-uniformity checks until reconvergence. -/
   | unknown
   deriving Repr, DecidableEq
 
@@ -92,6 +96,7 @@ def GuardExpr.negate (g : GuardExpr) : GuardExpr :=
   | .eq a b => .ne a b
   | .ne a b => .eq a b
   | .and _ _ => .unknown
+  | .warpDiv => .warpDiv
   | .unknown => .unknown
 
 /-- Conjoin two `GuardExpr`s, simplifying `.tr` identities. -/
@@ -101,10 +106,10 @@ def GuardExpr.conj (p q : GuardExpr) : GuardExpr :=
   | _, .tr => p
   | _, _ => if p == q then p else .and p q
 
-/-- True when `g` contains any unmodeled / data-dependent `.unknown` branch guard. -/
+/-- True when `g` contains any runtime data-dependent (`.warpDiv` or `.unknown`) branch guard. -/
 def GuardExpr.hasUnknown (g : GuardExpr) : Bool :=
   match g with
-  | .unknown => true
+  | .warpDiv | .unknown => true
   | .and p q => p.hasUnknown || q.hasUnknown
   | _ => false
 
@@ -113,6 +118,13 @@ def GuardExpr.hasExactTxEq (g : GuardExpr) : Bool :=
   match g with
   | .eq .tx (.const _) | .eq (.const _) .tx => true
   | .and p q => p.hasExactTxEq || q.hasExactTxEq
+  | _ => false
+
+/-- True when `g` includes an exact `ty = C` thread check. -/
+def GuardExpr.hasExactTyEq (g : GuardExpr) : Bool :=
+  match g with
+  | .eq .ty (.const _) | .eq (.const _) .ty => true
+  | .and p q => p.hasExactTyEq || q.hasExactTyEq
   | _ => false
 
 /-- True when `g` includes an exact `tx / 32 = W` warp-selection check. -/
@@ -137,18 +149,37 @@ def GuardExpr.hasLaneEq (g : GuardExpr) : Bool :=
   | .and p q => p.hasLaneEq || q.hasLaneEq
   | _ => false
 
-/-- True when `g` narrows execution to at most one thread in a 1D CTA (`tx = C` or
-    `tx / 32 = W ∧ tx % 32 = L`), even when nested inside data-dependent branches. -/
-def GuardExpr.selectsAtMostOneThread (g : GuardExpr) : Bool :=
-  g.hasExactTxEq || (g.hasWarpEq && g.hasLaneEq)
+/-- True when `g` narrows execution to at most one thread in a CTA (`(blockDimX, blockDimY)`).
+    In multi-warp CTAs (`blockDimX > 32`), bare `lane == 0` selects multiple warps' lane-0 threads
+    and is NOT accepted without `warp == W`! -/
+def GuardExpr.selectsAtMostOneThread (g : GuardExpr) (blockDimX : Nat := 32) (blockDimY : Nat := 1) : Bool :=
+  if blockDimY == 1 then
+    g.hasExactTxEq || (g.hasWarpEq && g.hasLaneEq) || (decide (blockDimX ≤ 32) && g.hasLaneEq)
+  else
+    g.hasExactTxEq && g.hasExactTyEq
 
-/-- True when `g` includes a single-leader lane check (`tx = 0` or `tx % G = 0`). -/
-def GuardExpr.hasZeroLeaderCheck (g : GuardExpr) : Bool :=
+/-- True when `g` narrows execution to at most one single thread in the CTA (`{t | g(t)}` has size `≤ 1`,
+    preserved under conjoining any inner runtime branch condition). -/
+def GuardExpr.isSingleLeader (g : GuardExpr) (blockDimX blockDimY : Nat) : Bool :=
+  g.selectsAtMostOneThread blockDimX blockDimY
+
+/-- True when `g` splits lanes within a 32-lane hardware warp or depends on lane-divergent `.unknown`. -/
+def GuardExpr.hasSubwarpDivergence (g : GuardExpr) : Bool :=
   match g with
-  | .eq (.tx) (.const 0) | .eq (.const 0) (.tx) => true
-  | .eq (.mod .tx _) (.const 0) | .eq (.const 0) (.mod .tx _) => true
-  | .and p q => p.hasZeroLeaderCheck || q.hasZeroLeaderCheck
-  | _ => false
+  | .tr | .warpDiv => false
+  | .lt .tx (.const k) | .ge .tx (.const k) => k % 32 != 0
+  | .eq (.div .tx 32) (.const _) | .eq (.const _) (.div .tx 32) => false
+  | .lt (.div .tx 32) (.const _) | .ge (.div .tx 32) (.const _) => false
+  | .eq .clusterCtaidX (.const _) | .eq (.const _) .clusterCtaidX => false
+  | .and p q => p.hasSubwarpDivergence || q.hasSubwarpDivergence
+  | _ => true
+
+/-- True when every active warp under `g` executes with all 32 lanes converged. -/
+def GuardExpr.isWarpConvergent (g : GuardExpr) (blockDimX blockDimY : Nat) : Bool :=
+  if blockDimY == 1 then
+    blockDimX % 32 == 0 && !g.hasSubwarpDivergence
+  else
+    (blockDimX * blockDimY) % 32 == 0 && (g == .tr || g == .warpDiv)
 
 /-- True when `g` filters lanes within a 32-lane hardware warp or depends on `.unknown`. -/
 def GuardExpr.hasSubwarpLaneFilter (g : GuardExpr) : Bool :=
@@ -193,7 +224,7 @@ def GuardExpr.evalBool (g : GuardExpr) (tx ty i : Nat) (cr : Nat := 0) : Option 
       match p.evalBool tx ty i cr, q.evalBool tx ty i cr with
       | some bp, some bq => some (bp && bq)
       | _, _ => none
-  | .unknown => none
+  | .warpDiv | .unknown => none
 
 /-- Branch label on an outgoing basic-block terminator edge in `PostMem2Reg` MIR. -/
 inductive BranchCond where
@@ -209,6 +240,8 @@ inductive BranchCond where
   | posLoopExit (bodyBlk : Nat)
   /-- CTA-uniform loop bound branch (`tile < num_tiles`, `col < 128`). -/
   | uniform
+  /-- Warp-convergent runtime branch (`!lane_divergent`, all 32 lanes of each warp take same arm). -/
+  | warpUniform
   /-- Per-thread data-dependent or unmodeled runtime branch (`data[tid] > 0.0`). -/
   | unknown
   deriving Repr, DecidableEq
@@ -228,6 +261,8 @@ inductive CfgOp where
   | dsmemAccess (sharedId : Nat)
   /-- `mbarrier_init(&BAR, count)` via generic proxy. -/
   | mbarInit (barId count : Nat)
+  /-- `mbarrier_inval(&BAR)` resetting `BAR` back to `.uninit`. -/
+  | mbarInval (barId : Nat)
   /-- `fence_proxy_async_shared_cta()` bridging generic writes to the async proxy. -/
   | proxyFenceAsyncShared
   /-- Plain thread arrival `mbarrier_arrive(&BAR)`. -/
@@ -254,6 +289,12 @@ inductive CfgOp where
   | tmemLoadWait
   /-- Consumer read of the register result produced by `tmemLoad ldId`. -/
   | tmemLoadUse (ldId : Nat)
+  /-- Warp-convergent `tcgen05_store_wait()` retiring async `tcgen05.st` operations. -/
+  | tmemStoreWait
+  /-- `tcgen05_fence_before_thread_sync()` ordering `tcgen05` prior to thread synchronization. -/
+  | tmemFenceBeforeSync
+  /-- `tcgen05_fence_after_thread_sync()` ordering `tcgen05` after thread synchronization. -/
+  | tmemFenceAfterSync
   deriving Repr, DecidableEq
 
 /-- One basic block in the kernel's transcribed `PostMem2Reg` control-flow graph. -/
@@ -532,6 +573,7 @@ def postDominatesFromBool (cfg : ControlFlowCfg) (src post : Nat) : Bool :=
 def BranchCond.toGuardExpr (c : BranchCond) : GuardExpr :=
   match c with
   | .coord g => g
+  | .warpUniform => .warpDiv
   | .unknown => .unknown
   | .always | .mbarReady _ _ | .mbarSpin _ | .posLoopExit _ | .uniform => .tr
 
@@ -612,9 +654,7 @@ def priorTmemIssueReaches (cfg : ControlFlowCfg) (curBlk : Nat) : Bool :=
     Returns `none` immediately if any hardware ordering, proxy, barrier, or warp rule fails. -/
 def stepOp (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr) (inCycle : Bool)
     (st : CtaState) (op : CfgOp) : Option CtaState :=
-  let leaderClean :=
-    (blkGuard.hasZeroLeaderCheck && !blkGuard.hasUnknown) ||
-    (cfg.blockDimY == 1 && blkGuard.selectsAtMostOneThread)
+  let leaderClean := blkGuard.isSingleLeader cfg.blockDimX cfg.blockDimY
   match op with
   | .syncThreads =>
       some
@@ -689,6 +729,11 @@ def stepOp (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr) (inCycle
           { st with
             barProxy := st.barProxy.set barId merged
             barState := st.barState.set barId .initUnsynced }
+  | .mbarInval barId =>
+      if barId ≥ st.barState.length then
+        none
+      else
+        some { st with barState := st.barState.set barId .uninit }
   | .mbarArrive barId =>
       match st.barState[barId]? with
       | some .syncedIdle | some .armedPlain | some .armedTx | some .completed =>
@@ -817,24 +862,38 @@ def stepOp (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr) (inCycle
                   clusterSyncedSinceTmemUse := false }
         | _, _ => none
   | .tmemLoad ldId =>
-      match st.tmemPhase with
-      | .allocated _ _ =>
-          if !st.allocClusterSynced || !st.tmemReady || st.mmaHazard then
-            none
-          else
-            let nextPending := insertSortedNat ldId st.pendingLoads
-            some
-              { st with
-                pendingLoads := nextPending
-                syncedSinceTmemUse := false
-                clusterSyncedSinceTmemUse := false }
-      | _ => none
+      if !blkGuard.isWarpConvergent cfg.blockDimX cfg.blockDimY then
+        none
+      else
+        match st.tmemPhase with
+        | .allocated _ _ =>
+            if !st.allocClusterSynced || !st.tmemReady || st.mmaHazard then
+              none
+            else
+              let nextPending := insertSortedNat ldId st.pendingLoads
+              some
+                { st with
+                  pendingLoads := nextPending
+                  syncedSinceTmemUse := false
+                  clusterSyncedSinceTmemUse := false }
+        | _ => none
   | .tmemLoadWait =>
       match st.tmemPhase with
       | .allocated _ _ => some { st with pendingLoads := [] }
       | _ => none
   | .tmemLoadUse ldId =>
       if ldId ∈ st.pendingLoads then none else some st
+  | .tmemStoreWait =>
+      if !blkGuard.isWarpConvergent cfg.blockDimX cfg.blockDimY then
+        none
+      else
+        match st.tmemPhase with
+        | .allocated _ _ => some st
+        | _ => none
+  | .tmemFenceBeforeSync | .tmemFenceAfterSync =>
+      match st.tmemPhase with
+      | .allocated _ _ => some st
+      | _ => none
   | .tmemDealloc cols isCg2 =>
       if (isCg2 && cfg.clusterDimX != 2)
           || inCycle || (blkGuard.selectsSingleFullWarp cfg.blockDimX cfg.blockDimY).isNone then
@@ -921,7 +980,7 @@ def stepEdgeWith (sig commitBars : List Nat) (hasWarp : Bool) (st : CtaState) (c
       | _ => none
   | .posLoopExit bodyBlk =>
       if bodyBlk ∈ st.visitedPosBodies then some st else none
-  | .always | .coord _ | .uniform | .unknown => some st
+  | .always | .coord _ | .uniform | .warpUniform | .unknown => some st
 
 /-- Apply an outgoing terminator edge label `cond` from `srcBlk` to post-block state `st`. -/
 def stepEdge (cfg : ControlFlowCfg) (srcBlk : Nat) (st : CtaState) (cond : BranchCond) : Option CtaState :=
@@ -1075,6 +1134,73 @@ def tmemDeallocSites (cfg : ControlFlowCfg) : List Nat :=
     blk.ops.filterMap fun
       | .tmemDealloc cols _ => some cols
       | _ => none
+
+/-- Blocks `b` whose first access to `SharedArray` `s` inside `b` is `.sharedRead s`
+    (i.e. upward-exposed `.sharedRead s` not preceded by an intra-block write to `s`). -/
+def exposedSharedReadBlocks (cfg : ControlFlowCfg) (s : Nat) : List Nat :=
+  (List.range cfg.blocks.length).filter fun b =>
+    let (_, exposed) := (cfg.blockAt b).ops.foldl (fun (written, exp) op =>
+      match op with
+      | .sharedWrite sid | .tmaCopyG2S sid _ _ | .clcTryCancel sid _ | .tmemAlloc sid _ _ =>
+          if sid == s then (true, exp) else (written, exp)
+      | .sharedRead sid =>
+          if sid == s && !written then (written, true) else (written, exp)
+      | _ => (written, exp)) (false, false)
+    exposed
+
+/-- Non-`.unknown`-guarded blocks in `cfg` that initialize `SharedArray` `s`. -/
+def sharedWriterBlocks (cfg : ControlFlowCfg) (s : Nat) : List Nat :=
+  (List.range cfg.blocks.length).filter fun b =>
+    !(activeGuardAt cfg b).hasUnknown &&
+    (cfg.blockAt b).ops.any fun
+      | .sharedWrite sid | .tmaCopyG2S sid _ _ | .clcTryCancel sid _ | .tmemAlloc sid _ _ => sid == s
+      | _ => false
+
+/-- Blocks guaranteeing `SharedArray` `s` has been written before an upward-exposed `.sharedRead s`
+    (either a direct non-`.unknown` writer block, a CTA barrier reachable after a writer, or an
+    `.mbarReady` completion edge when `s` has a writer). -/
+def sharedInitDominators (cfg : ControlFlowCfg) (s : Nat) : List Nat :=
+  let writers := sharedWriterBlocks cfg s
+  if writers.isEmpty then []
+  else
+    let syncsAfterWrite := (syncBarrierBlocks cfg).filter fun sb =>
+      writers.any fun w => canReachAvoiding cfg 0 w [] && canReachAvoiding cfg w sb []
+    let sig := signaledBarrierIds cfg
+    let readyBlks := cfg.blocks.flatMap fun blk =>
+      blk.succs.filterMap fun
+        | (.mbarReady bid _, dst) => if bid ∈ sig then some dst else none
+        | _ => none
+    writers ++ syncsAfterWrite ++ readyBlks
+
+/-- Pairs `(s, rBlk)` where `rBlk` has an upward-exposed `.sharedRead s`. -/
+def sharedReadSites (cfg : ControlFlowCfg) : List (Nat × Nat) :=
+  (List.range cfg.numShared).flatMap fun s =>
+    (exposedSharedReadBlocks cfg s).map fun rBlk => (s, rBlk)
+
+/-- Computable check that every 1-CTA `Barrier`'s arrival sites match its `mbarrier_init` thread count
+    (rejecting multi-thread arrivals on `count = 1` barriers and single non-cyclic leader arrivals on `count > 1` barriers). -/
+def validMbarArrivalCounts (cfg : ControlFlowCfg) : Bool :=
+  if cfg.clusterDimX != 1 then true
+  else
+    (List.range cfg.numBarriers).all fun barId =>
+      let inits := cfg.blocks.flatMap fun blk =>
+        blk.ops.filterMap fun
+          | .mbarInit b c => if b == barId then some c else none
+          | _ => none
+      let arrBlks := (List.range cfg.blocks.length).filter fun blkIdx =>
+        (cfg.blockAt blkIdx).ops.any fun
+          | .mbarArrive b | .mbarArriveExpectTx b _ | .tmemCommit b _ => b == barId
+          | _ => false
+      let count1Ok :=
+        !(1 ∈ inits) ||
+        arrBlks.all fun b => (activeGuardAt cfg b).isSingleLeader cfg.blockDimX cfg.blockDimY
+      let countGt1Ok :=
+        match arrBlks with
+        | [b] =>
+            inits.isEmpty || !(inits.all (· > 1)) || isCyclicBlockBool cfg b ||
+            !(activeGuardAt cfg b).isSingleLeader cfg.blockDimX cfg.blockDimY
+        | _ => true
+      count1Ok && countGt1Ok
 
 /-- Pairs `(initBlk, allocBlk)` where `initBlk` performs `mbarInit` or `sharedWrite` without a
     same-block `clusterSync` and reaches a 2-CTA `tcgen05_alloc_cg2` (`isCg2 = true`) at `allocBlk`. -/

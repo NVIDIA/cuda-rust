@@ -25,7 +25,7 @@ pub mod spec;
 pub mod ssa;
 pub mod translate;
 
-pub use runner::verify_module_kernels;
+pub use runner::{has_verified_kernels, verify_module_kernels};
 
 use std::collections::HashSet;
 

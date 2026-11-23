@@ -54,9 +54,9 @@ What is a **Verification Condition (`VC`)**? It is the plain `Nat` inequality ex
   │
   ├── Contracts/                  2. Declarative Safety Specifications (`Prop`)
   │   ├── Program.lean               `MirNoOobGlobal`, `MirNoOobShared`, `MirDisjointWrites`,
-  │   │                              `MirNoSharedRace`, `MirNoOobTmem`, `MirNoOobClusterRank`,
-  │   │                              `MirAssertRedundant`
-  │   ├── ControlFlow.lean           `UniformBarriers`, `TmemLifecycle`, `WritesOnAllActivePaths`
+  │   │                              `MirNoSharedRace`, `MirWritesAllElems`, `MirNoOobTmem`,
+  │   │                              `MirNoOobClusterRank`, `MirAssertRedundant`
+  │   ├── ControlFlow.lean           `UniformBarriers`, `TmemLifecycle`
   │   └── Access.lean                Standalone 1D coordinate contracts (`NoOobIdx`, `WritesAllElems`)
   │
   └── Proofs/                     3. Reusable Soundness Library (`0 sorryAx`)
@@ -81,7 +81,7 @@ What is a **Verification Condition (`VC`)**? It is the plain `Nat` inequality ex
 | `no_oob_idx(SMEM)`           | `Program.MirNoOobShared`                      | `Program.vcNoOobShared_of_table` + `mir_vc`    |
 | `disjoint_writes(slice)`     | `Program.MirDisjointWrites`                   | `Program.vcDisjointWrites_of_table` + `mir_vc` |
 | `no_data_race(SMEM)`         | `Program.MirNoSharedRace`                     | `Program.vcNoSharedRace_of_table` + `mir_vc`   |
-| `writes_all_elems(slice)`    | `ControlFlow.WritesOnAllActivePaths`          | `ControlFlow.writes_on_active_paths_sound`     |
+| `writes_all_elems(slice)`    | `Program.MirWritesAllElems`                   | `Program.vcWritesAllElems` + `mir_vc`          |
 | `uniform_barriers`           | `ControlFlow.UniformBarriers`                 | `ControlFlow.uniform_barriers_of_stateMap`     |
 | `tmem_lifecycle`             | `ControlFlow.TmemLifecycle` + `MirNoOobTmem`  | `ControlFlow.tmem_lifecycle_of_stateMap`       |
 |*(auto on `map_shared_rank`)* | `Program.MirNoOobClusterRank`                 | `Program.vcNoOobClusterRank_of_table` + `mir_vc`|

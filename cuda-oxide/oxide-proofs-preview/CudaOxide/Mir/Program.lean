@@ -79,7 +79,7 @@ inductive Sreg where
   | ntidX
   /-- `blockDim.y` (`nvvm.read_ptx_sreg_ntid_y`). -/
   | ntidY
-  /-- Warp lane index `threadIdx.x % 32` (`nvvm.read_ptx_sreg_laneid`). -/
+  /-- Warp lane index `(threadIdx.y * blockDim.x + threadIdx.x) % 32` (`nvvm.read_ptx_sreg_laneid`). -/
   | laneId
   /-- CTA cluster X rank `blockIdx.x % clusterDimX` (`nvvm.read_ptx_sreg_cluster_ctaid_x`). -/
   | clusterCtaidX
@@ -157,6 +157,8 @@ inductive Rhs where
   | sharedBase (sharedId : Nat)
   /-- Unsigned `width`-bit binary operation on SSA variables `lhs` and `rhs`. -/
   | binOp (op : BinOp) (width lhs rhs : Nat)
+  /-- Unsigned `width`-bit overflow boolean (`true` iff `lhs op rhs` wraps/underflows `width` bits). -/
+  | checkedOvf (op : BinOp) (width lhs rhs : Nat)
   /-- Unsigned integer comparison on SSA variables `lhs` and `rhs`. -/
   | cmpOp (op : CmpOp) (lhs rhs : Nat)
   /-- Boolean negation (`mir.not`). -/
@@ -313,7 +315,7 @@ def paramBoundsProp (env : InputEnv) : Nat → List ParamKind → Prop
   | idx, (.scalar w) :: rest =>
       (if 0 < w then env.scalar idx < 2 ^ w else True) ∧ paramBoundsProp env (idx + 1) rest
   | idx, _ :: rest =>
-      env.sliceLen idx < 18446744073709551616 ∧ paramBoundsProp env (idx + 1) rest
+      env.sliceLen idx ≤ 9223372036854775807 ∧ paramBoundsProp env (idx + 1) rest
 
 /-- True when `env` satisfies scalar/slice bit-width bounds and `requiresLenGe` relations of `f`. -/
 def MirFunc.validInput (f : MirFunc) (env : InputEnv) : Prop :=
@@ -382,6 +384,17 @@ def bindBlockArgs (callerRegs baseRegs : RegFile) : List BlockArg → List Nat �
   | fa :: fas, av :: avs =>
       bindBlockArgs callerRegs (baseRegs.set fa.varId (callerRegs av)) fas avs
 
+/-- Evaluate the unsigned `width`-bit overflow flag of `mir.checked_add` / `checked_sub` / `checked_mul`. -/
+def evalCheckedOvf (op : BinOp) (width a b : Nat) : Bool :=
+  if width == 0 then false
+  else
+    let m := 2 ^ width
+    match op with
+    | .add => decide (m ≤ a % m + b % m)
+    | .sub => decide (a % m < b % m)
+    | .mul => decide (m ≤ (a % m) * (b % m))
+    | _ => true
+
 /-- Evaluate one `Rhs` expression in `(f, env, t, regs)`. -/
 def evalRhs (f : MirFunc) (env : InputEnv) (t : ThreadCtx) (regs : RegFile) : Rhs → Val
   | .copy src => regs src
@@ -393,7 +406,7 @@ def evalRhs (f : MirFunc) (env : InputEnv) (t : ThreadCtx) (regs : RegFile) : Rh
   | .sreg .ctaidY => .int t.by_
   | .sreg .ntidX => .int f.blockDimX
   | .sreg .ntidY => .int f.blockDimY
-  | .sreg .laneId => .int (t.tx % 32)
+  | .sreg .laneId => .int ((t.ty * f.blockDimX + t.tx) % 32)
   | .sreg .clusterCtaidX => .int (t.bx % max 1 f.clusterDimX)
   | .index1D => .int (wordMod 64 (t.bx * f.blockDimX + t.tx))
   | .coord2DU32 =>
@@ -429,6 +442,10 @@ def evalRhs (f : MirFunc) (env : InputEnv) (t : ThreadCtx) (regs : RegFile) : Rh
   | .cmpOp op l r =>
       match regs l, regs r with
       | .int a, .int b => .bool (evalCmpOp op a b)
+      | _, _ => .unk
+  | .checkedOvf op w l r =>
+      match regs l, regs r with
+      | .int a, .int b => .bool (evalCheckedOvf op w a b)
       | _, _ => .unk
   | .notBool src =>
       match regs src with

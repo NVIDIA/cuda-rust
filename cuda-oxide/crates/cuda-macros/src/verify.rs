@@ -220,6 +220,16 @@ fn expr_targets_static(expr: &Expr, allowed: &[Ident]) -> bool {
         Expr::Reference(refer) => expr_targets_static(&refer.expr, allowed),
         Expr::Paren(paren) => expr_targets_static(&paren.expr, allowed),
         Expr::Group(group) => expr_targets_static(&group.expr, allowed),
+        Expr::Unsafe(u) => {
+            u.block.stmts.last().is_some_and(
+                |s| matches!(s, Stmt::Expr(e, None) if expr_targets_static(e, allowed)),
+            )
+        }
+        Expr::Block(b) => {
+            b.block.stmts.last().is_some_and(
+                |s| matches!(s, Stmt::Expr(e, None) if expr_targets_static(e, allowed)),
+            )
+        }
         Expr::MethodCall(mc)
             if (mc.args.is_empty()
                 && (mc.method == "as_ptr"
@@ -256,13 +266,31 @@ fn expr_targets_static(expr: &Expr, allowed: &[Ident]) -> bool {
     }
 }
 
+/// Peel transparent `Delimiter::None` [`Expr::Group`] wrappers introduced by
+/// outer attribute macros (`#[cuda_module]`, `#[kernel]`) around an expression.
+fn peel_group(mut expr: &Expr) -> &Expr {
+    while let Expr::Group(g) = expr {
+        expr = &g.expr;
+    }
+    expr
+}
+
+/// Mutable counterpart to [`peel_group`] for in-place AST rewriting across
+/// macro-injected [`Expr::Group`] wrappers.
+fn peel_group_mut(mut expr: &mut Expr) -> &mut Expr {
+    while let Expr::Group(g) = expr {
+        expr = &mut g.expr;
+    }
+    expr
+}
+
 impl VerifiedSharedArrayRewriter {
     /// Return true when `expr` indexes a `SharedArray` static in `self.verified_shared`.
     fn is_verified_shared_index(&self, expr: &Expr) -> bool {
-        let Expr::Index(index_expr) = expr else {
+        let Expr::Index(index_expr) = peel_group(expr) else {
             return false;
         };
-        let Expr::Path(path_expr) = &*index_expr.expr else {
+        let Expr::Path(path_expr) = peel_group(&index_expr.expr) else {
             return false;
         };
         path_expr
@@ -275,10 +303,10 @@ impl VerifiedSharedArrayRewriter {
     /// a `g2s` TMA bulk copy targeting `self.verified_shared` + `self.barrier_statics`,
     /// or (under `tmem_lifecycle`) a scoped `tcgen05` / `cvta_generic_to_shared_offset` call.
     fn is_verified_async_barrier_call(&self, expr: &Expr) -> bool {
-        let Expr::Call(call_expr) = expr else {
+        let Expr::Call(call_expr) = peel_group(expr) else {
             return false;
         };
-        let Expr::Path(path_expr) = &*call_expr.func else {
+        let Expr::Path(path_expr) = peel_group(&call_expr.func) else {
             return false;
         };
         let Some(last) = path_expr.path.segments.last() else {
@@ -383,6 +411,10 @@ impl VerifiedSharedArrayRewriter {
 
 impl VisitMut for VerifiedSharedArrayRewriter {
     fn visit_expr_mut(&mut self, expr: &mut Expr) {
+        if let Expr::Group(group) = expr {
+            self.visit_expr_mut(&mut group.expr);
+            return;
+        }
         if let Expr::Unsafe(expr_unsafe) = expr {
             let prev = self.in_unsafe;
             self.in_unsafe = true;
@@ -392,50 +424,100 @@ impl VisitMut for VerifiedSharedArrayRewriter {
         }
 
         if !self.in_unsafe {
-            if let Expr::Assign(assign) = expr
-                && self.is_verified_shared_index(&assign.left)
-            {
-                self.in_unsafe = true;
-                visit_mut::visit_expr_mut(self, &mut assign.right);
-                if let Expr::Index(idx) = &mut *assign.left {
-                    visit_mut::visit_expr_mut(self, &mut idx.index);
+            if let Expr::Assign(assign) = expr {
+                if self.is_verified_shared_index(&assign.left) {
+                    self.visit_expr_mut(&mut assign.right);
+                    if let Expr::Index(idx) = peel_group_mut(&mut assign.left) {
+                        self.visit_expr_mut(&mut idx.index);
+                        let arr = &idx.expr;
+                        let index_expr = &idx.index;
+                        let rhs_expr = &assign.right;
+                        *expr = parse_quote! {
+                            {
+                                let __cuda_verify_val = #rhs_expr;
+                                let __cuda_verify_idx = #index_expr;
+                                unsafe { #arr[__cuda_verify_idx] = __cuda_verify_val; }
+                            }
+                        };
+                        return;
+                    }
                 }
-                self.in_unsafe = false;
-                let inner = expr.clone();
-                *expr = parse_quote! { unsafe { #inner } };
-                return;
+                if let Expr::Unary(unary) = peel_group_mut(&mut assign.left)
+                    && matches!(unary.op, syn::UnOp::Deref(_))
+                    && expr_targets_static(&unary.expr, &self.verified_shared)
+                {
+                    self.visit_expr_mut(&mut assign.right);
+                    self.visit_expr_mut(&mut unary.expr);
+                    let ptr_expr = &unary.expr;
+                    let rhs_expr = &assign.right;
+                    *expr = parse_quote! {
+                        {
+                            let __cuda_verify_val = #rhs_expr;
+                            let __cuda_verify_ptr = #ptr_expr;
+                            unsafe { *__cuda_verify_ptr = __cuda_verify_val; }
+                        }
+                    };
+                    return;
+                }
             }
             if let Expr::RawAddr(raw) = expr
                 && self.is_verified_shared_index(&raw.expr)
+                && let Expr::Index(idx) = peel_group_mut(&mut raw.expr)
             {
-                self.in_unsafe = true;
-                if let Expr::Index(idx) = &mut *raw.expr {
-                    visit_mut::visit_expr_mut(self, &mut idx.index);
-                }
-                self.in_unsafe = false;
-                let inner = expr.clone();
-                *expr = parse_quote! { unsafe { #inner } };
+                self.visit_expr_mut(&mut idx.index);
+                let arr = &idx.expr;
+                let index_expr = &idx.index;
+                let mutability = &raw.mutability;
+                *expr = parse_quote! {
+                    {
+                        let __cuda_verify_idx = #index_expr;
+                        unsafe { &raw #mutability #arr[__cuda_verify_idx] }
+                    }
+                };
                 return;
             }
-            if self.is_verified_shared_index(expr) {
-                self.in_unsafe = true;
-                if let Expr::Index(idx) = expr {
-                    visit_mut::visit_expr_mut(self, &mut idx.index);
-                }
-                self.in_unsafe = false;
-                let inner = expr.clone();
-                *expr = parse_quote! { unsafe { #inner } };
+            if let Expr::Reference(refer) = expr
+                && self.is_verified_shared_index(&refer.expr)
+                && let Expr::Index(idx) = peel_group_mut(&mut refer.expr)
+            {
+                self.visit_expr_mut(&mut idx.index);
+                let arr = &idx.expr;
+                let index_expr = &idx.index;
+                let mutability = &refer.mutability;
+                *expr = parse_quote! {
+                    {
+                        let __cuda_verify_idx = #index_expr;
+                        unsafe { &#mutability #arr[__cuda_verify_idx] }
+                    }
+                };
+                return;
+            }
+            if self.is_verified_shared_index(expr)
+                && let Expr::Index(idx) = peel_group_mut(expr)
+            {
+                self.visit_expr_mut(&mut idx.index);
+                let arr = idx.expr.clone();
+                let index_expr = idx.index.clone();
+                *expr = parse_quote! {
+                    {
+                        let __cuda_verify_idx = #index_expr;
+                        unsafe { #arr[__cuda_verify_idx] }
+                    }
+                };
                 return;
             }
             if let Expr::Unary(unary) = expr
                 && matches!(unary.op, syn::UnOp::Deref(_))
                 && expr_targets_static(&unary.expr, &self.verified_shared)
             {
-                self.in_unsafe = true;
-                visit_mut::visit_expr_mut(self, &mut unary.expr);
-                self.in_unsafe = false;
-                let inner = expr.clone();
-                *expr = parse_quote! { unsafe { #inner } };
+                self.visit_expr_mut(&mut unary.expr);
+                let ptr_expr = &unary.expr;
+                *expr = parse_quote! {
+                    {
+                        let __cuda_verify_ptr = #ptr_expr;
+                        unsafe { *__cuda_verify_ptr }
+                    }
+                };
                 return;
             }
             if let Expr::MethodCall(mc) = expr
@@ -444,26 +526,46 @@ impl VisitMut for VerifiedSharedArrayRewriter {
                 && (expr_targets_static(&mc.receiver, &self.verified_shared)
                     || expr_targets_static(&mc.receiver, &self.barrier_statics))
             {
-                self.in_unsafe = true;
-                visit_mut::visit_expr_mut(self, &mut mc.receiver);
+                self.visit_expr_mut(&mut mc.receiver);
                 for arg in &mut mc.args {
-                    visit_mut::visit_expr_mut(self, arg);
+                    self.visit_expr_mut(arg);
                 }
-                self.in_unsafe = false;
-                let inner = expr.clone();
-                *expr = parse_quote! { unsafe { #inner } };
+                let recv = &mc.receiver;
+                let off = &mc.args[0];
+                *expr = parse_quote! {
+                    {
+                        let __cuda_verify_ptr = #recv;
+                        let __cuda_verify_off = #off;
+                        unsafe { __cuda_verify_ptr.add(__cuda_verify_off) }
+                    }
+                };
                 return;
             }
-            if self.is_verified_async_barrier_call(expr) {
-                self.in_unsafe = true;
-                if let Expr::Call(call_expr) = expr {
-                    for arg in &mut call_expr.args {
-                        visit_mut::visit_expr_mut(self, arg);
-                    }
+            if self.is_verified_async_barrier_call(expr)
+                && let Expr::Call(call_expr) = peel_group_mut(expr)
+            {
+                for arg in &mut call_expr.args {
+                    self.visit_expr_mut(arg);
                 }
-                self.in_unsafe = false;
-                let inner = expr.clone();
-                *expr = parse_quote! { unsafe { #inner } };
+                let func = call_expr.func.clone();
+                let mut arg_bindings: Vec<Stmt> = Vec::with_capacity(call_expr.args.len());
+                let mut arg_idents: Vec<Ident> = Vec::with_capacity(call_expr.args.len());
+                for (idx, arg_expr) in call_expr.args.iter().enumerate() {
+                    let arg_id = Ident::new(
+                        &format!("__cuda_verify_arg_{idx}"),
+                        proc_macro2::Span::call_site(),
+                    );
+                    arg_bindings.push(parse_quote! {
+                        let #arg_id = #arg_expr;
+                    });
+                    arg_idents.push(arg_id);
+                }
+                *expr = parse_quote! {
+                    {
+                        #(#arg_bindings)*
+                        unsafe { (#func)(#(#arg_idents),*) }
+                    }
+                };
                 return;
             }
         }
@@ -660,6 +762,19 @@ fn build_verify_marker_stmts(
     for ident in &args.no_oob_idx {
         if let Some(shared_idx) = shared_statics.iter().position(|name| name == ident) {
             stmts.push(parse_quote! {
+                const _: () = {
+                    fn __assert_verified_shared_element<
+                        T: ::cuda_device::shared::VerifiedSharedElement,
+                        const N: usize,
+                        const A: usize,
+                    >(
+                        _: *const ::cuda_device::SharedArray<T, N, A>,
+                    ) {
+                    }
+                    let _ = || __assert_verified_shared_element(&raw const #ident);
+                };
+            });
+            stmts.push(parse_quote! {
                 ::cuda_device::thread::__verify_no_oob_shared_config::<#shared_idx>();
             });
         } else {
@@ -800,7 +915,7 @@ mod tests {
         let tiled_args: VerifyArgs =
             syn::parse_str("no_oob_idx(TILE_A), no_data_race(TILE_A), uniform_barriers").unwrap();
         let markers = build_verify_marker_stmts(&tiled_args, &params, &shared).unwrap();
-        assert_eq!(markers.len(), 3);
+        assert_eq!(markers.len(), 4);
 
         // `rewrite_verified_shared_accesses` must wrap `g2s` TMA copies on verified `TILE_A`
         // + `BAR`, while leaving unverified `OTHER_TILE` and `s2g` TMA copies unwrapped.
@@ -877,8 +992,8 @@ mod tests {
         let rendered_tmem = quote!(#tmem_fn).to_string();
         assert_eq!(
             rendered_tmem.matches("unsafe").count(),
-            7,
-            "expected 7 scoped tcgen05/cvta calls wrapped in unsafe (leaving OTHER_TILE and OTHER_BAR unwrapped): {rendered_tmem}"
+            8,
+            "expected 1 TMEM_ADDR[0] index + 7 scoped tcgen05/cvta calls wrapped in isolated unsafe blocks (leaving OTHER_TILE and OTHER_BAR unwrapped): {rendered_tmem}"
         );
 
         // Stage 8: `SharedArray<Barrier, 4, 8>` listed in `no_oob_idx(...)` lifts indexed
@@ -903,8 +1018,35 @@ mod tests {
         let rendered_ring = quote!(#ring_fn).to_string();
         assert_eq!(
             rendered_ring.matches("unsafe").count(),
-            3,
-            "expected 3 FULL_BAR mbarrier calls wrapped in unsafe while leaving UNVERIFIED_BAR unwrapped: {rendered_ring}"
+            6,
+            "expected 3 FULL_BAR[0] index + 3 mbarrier calls wrapped in isolated unsafe blocks while leaving UNVERIFIED_BAR unwrapped: {rendered_ring}"
         );
+        assert!(
+            !rendered_ring.contains("unsafe { mbarrier_init (& raw mut UNVERIFIED_BAR"),
+            "UNVERIFIED_BAR must never be wrapped in unsafe: {rendered_ring}"
+        );
+
+        // Hygiene: user subexpressions inside `TILE_A[idx_fn()] = val_fn()` and call arguments
+        // must be evaluated OUTSIDE `unsafe { ... }` so unverified `unsafe` calls still fail rustc.
+        let mut hygiene_fn: ItemFn = parse_quote! {
+            pub fn hygiene_k(a: &[f32], mut c: DisjointSlice<f32>) {
+                static mut TILE_A: SharedArray<f32, 64> = SharedArray::UNINIT;
+                static mut BAR: Barrier = Barrier::UNINIT;
+                TILE_A[danger_idx()] = danger_rhs();
+                let _x = TILE_A[danger_read_idx()];
+                mbarrier_init(&raw mut BAR, danger_count());
+            }
+        };
+        let h_shared = collect_shared_array_statics(&hygiene_fn.block.stmts);
+        rewrite_verified_shared_accesses(&tiled_args, &h_shared, &mut hygiene_fn.block.stmts);
+        for stmt in &hygiene_fn.block.stmts {
+            let s = quote!(#stmt).to_string();
+            if let Some((_, after_unsafe)) = s.split_once("unsafe") {
+                assert!(
+                    !after_unsafe.contains("danger_"),
+                    "user subexpression leaked inside `unsafe` block: {s}"
+                );
+            }
+        }
     }
 }

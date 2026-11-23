@@ -72,6 +72,7 @@ elab "mir_bind_shared_pairs" : tactic => mirBindGoal (List (SymMemEvent × SymMe
 elab "mir_bind_asserts"      : tactic => mirBindGoal (List SymAssertEvent)
 elab "mir_bind_tmem"         : tactic => mirBindGoal (List SymTmemEvent)
 elab "mir_bind_ranks"        : tactic => mirBindGoal (List SymRankEvent)
+elab "mir_bind_writes"       : tactic => mirBindGoal (Option (List SymWriteLeaf))
 
 theorem pow2_8       : (2 : Nat) ^ 8        = 256 := rfl
 theorem pow2_16      : (2 : Nat) ^ 16       = 65536 := rfl
@@ -328,7 +329,7 @@ partial def solveVcGoals (fuel iteFuel : Nat) : TacticM Unit := do
   try evalTactic (← `(tactic|                             -- Step 4: Unfold `SymInt.eval` / `SymBool.holds` into plain `Nat` math
     simp only [CudaOxide.Mir.Program.paramBoundsProp, SymInt.eval, SymBool.holds,
                SymBool.normDisc, extractIteOneCond, SymBool.holdsRaw,
-               SymBool.eval, symSpanInBounds, symRankInBounds, symPairRaceOblig, symSlotGuardOpt,
+               SymBool.eval, symSpanInBounds, symRankInBounds, symWriteLeafOblig, symPairRaceOblig, symSlotGuardOpt,
                evalCmpOp_eq_true, evalCmpOp_eq_false, evalCmpProp,
                CudaOxide.Mir.Program.evalBinOp, CudaOxide.Mir.Program.wordMod, Option.getD,
                ↓reduceIte, eq_self, ne_eq, Nat.not_lt_zero,

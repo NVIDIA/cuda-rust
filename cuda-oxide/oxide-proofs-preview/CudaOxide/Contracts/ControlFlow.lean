@@ -17,7 +17,6 @@ control-flow clauses written in `#[verify(...)]`:
   ────────────────────────────     ────────────────────────────────────────────────────
   `uniform_barriers`               `UniformBarriers cfg`
   `tmem_lifecycle`                 `TmemLifecycle cfg`
-  `writes_all_elems(buf)` (CFG)    `WritesOnAllActivePaths cfg guardEntries writeBlocks`
 ```
 
 Every proposition quantifies over inductive CFG paths (`PathAvoiding`) and
@@ -121,7 +120,10 @@ def UniformBarriers (cfg : ControlFlowCfg) : Prop :=
   (∀ dBlk : Nat, dBlk ∈ unsyncedDsmemBlocks cfg →           --   (5) every cross-CTA DSMEM access executes `cluster_sync()`
     ∀ ret : Nat, ret ∈ returnBlocks cfg →                   --       on all paths before any CTA exits (`mir.return`), AND
       ¬ PathAvoiding cfg ((clusterSyncBlocks cfg).filter (· != dBlk)) dBlk ret) ∧
-  (0 < cfg.numBarriers ∧ tmemAllocSites cfg = [] →          --   (6) when `Barrier`s are used (outside `tmem_lifecycle`),
+  (∀ s rBlk : Nat, (s, rBlk) ∈ sharedReadSites cfg →        --   (6) every upward-exposed `SharedArray` read is dominated
+    ¬ PathAvoiding cfg (sharedInitDominators cfg s) 0 rBlk) ∧ --     from entry `0` by a guaranteed initializer/barrier, AND
+  validMbarArrivalCounts cfg = true ∧                       --   (7) 1-CTA `mbarrier` arrival sites match `mbarrier_init` counts, AND
+  (0 < cfg.numBarriers ∧ tmemAllocSites cfg = [] →          --   (8) when `Barrier`s are used (outside `tmem_lifecycle`),
     SafeCtaExecution false cfg ∧ NoUnbackpressuredLoop cfg) --       `mbarrier` init/proxy/back-pressure hold on all paths.
 
 /-- **`tmem_lifecycle`**: Blackwell Tensor Memory (`TMEM`) is allocated once by a
@@ -141,18 +143,10 @@ def TmemLifecycle (cfg : ControlFlowCfg) : Prop :=
   (∀ dBlk : Nat, dBlk ∈ unsyncedCg2DeallocBlocks cfg →      --   (6) in 2-CTA `_cg2` mode, every `dealloc_cg2` executes
     ∀ ret : Nat, ret ∈ returnBlocks cfg →                   --       `cluster_sync()` on all paths before `mir.return`,
       ¬ PathAvoiding cfg ((clusterSyncBlocks cfg).filter (· != dBlk)) dBlk ret) ∧
+  (∀ s rBlk : Nat, (s, rBlk) ∈ sharedReadSites cfg →        --   (7) every upward-exposed `SharedArray` read is initialized,
+    ¬ PathAvoiding cfg (sharedInitDominators cfg s) 0 rBlk) ∧
+  validMbarArrivalCounts cfg = true ∧                       --   (8) 1-CTA `mbarrier` arrival sites match `mbarrier_init` counts,
   SafeCtaExecution true cfg ∧                               -- Full `tcgen05` / `TMEM` / proxy / `mbarrier` state machine holds,
   NoUnbackpressuredLoop cfg                                 -- AND cyclic `TMEM` / TMA loops enforce back-pressure.
-
-/-- **`writes_all_elems(buf)` (CFG post-dominance)**: At least one `< buf.len()`
-    guard entry exists, and every CFG path from any `idx < buf.len()` guard entry
-    to `mir.return` executes a write block in `writeBlocks`. -/
-def WritesOnAllActivePaths (cfg : ControlFlowCfg)
-    (guardEntries writeBlocks : List Nat) : Prop :=
-  guardEntries ≠ [] ∧                                       -- At least one `idx < len` guard entry exists, AND
-  writeBlocks ≠ [] ∧                                        -- At least one block writes `buf[idx]`, AND
-  ∀ entry : Nat, entry ∈ guardEntries →                     -- From EVERY `idx < len` guard entry block,
-    ∀ ret : Nat, ret ∈ returnBlocks cfg →                   -- to EVERY `mir.return` block in `cfg`,
-      ¬ PathAvoiding cfg writeBlocks entry ret              -- NO path can reach `return` without writing `buf`.
 
 end CudaOxide.Contracts.ControlFlow

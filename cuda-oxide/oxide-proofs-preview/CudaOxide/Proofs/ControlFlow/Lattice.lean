@@ -363,7 +363,7 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
           injection hstep with hstep; subst hstep
           simp only [hcEmp, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
           refine ⟨_, rfl, ?_⟩
-          have hspS := proxyMerge_mono _ _ (if (blkGuard.hasZeroLeaderCheck && !blkGuard.hasUnknown) || (cfg.blockDimY == 1 && blkGuard.selectsAtMostOneThread) then .needsFence else .needsSyncAndFence) (listSubsumes_getD (d := .clean) rfl s hsp)
+          have hspS := proxyMerge_mono _ _ (if blkGuard.isSingleLeader cfg.blockDimX cfg.blockDimY then .needsFence else .needsSyncAndFence) (listSubsumes_getD (d := .clean) rfl s hsp)
           unfold CtaState.subsumes; simp only [Bool.and_eq_true]
           exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
             listSubsumes_set hspS s hsp, hpt⟩,
@@ -376,11 +376,23 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
       · rw [if_neg hpre] at hstep ⊢
         injection hstep with hstep; subst hstep
         refine ⟨_, rfl, ?_⟩
-        have hbpB := proxyMerge_mono _ _ (if (blkGuard.hasZeroLeaderCheck && !blkGuard.hasUnknown) || (cfg.blockDimY == 1 && blkGuard.selectsAtMostOneThread) then .needsFence else .needsSyncAndFence) (listSubsumes_getD (d := .clean) rfl barId hbp)
+        have hbpB := proxyMerge_mono _ _ (if blkGuard.isSingleLeader cfg.blockDimX cfg.blockDimY then .needsFence else .needsSyncAndFence) (listSubsumes_getD (d := .clean) rfl barId hbp)
         unfold CtaState.subsumes; simp only [Bool.and_eq_true]
         exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
           hsp, hpt⟩, hsc⟩,
           listSubsumes_set hbpB barId hbp⟩,
+          listSubsumes_set rfl barId hbs⟩, htp⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htr⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩
+  | mbarInval barId =>                                    -- Case 7b: `mbarrier_inval` resets `barState[barId]` to `.uninit`
+      dsimp only [stepOp] at hstep ⊢
+      rw [← hlenBS]
+      by_cases hpre : barId ≥ abs.barState.length
+      · rw [if_pos hpre] at hstep; contradiction
+      · rw [if_neg hpre] at hstep ⊢
+        injection hstep with hstep; subst hstep
+        refine ⟨_, rfl, ?_⟩
+        unfold CtaState.subsumes; simp only [Bool.and_eq_true]
+        exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
+          hsp, hpt⟩, hsc⟩, hbp⟩,
           listSubsumes_set rfl barId hbs⟩, htp⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htr⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩
   | mbarArrive barId =>                                   -- Case 8: `mbarrier_arrive` arms `barId` (`.armedPlain`)
       dsimp only [stepOp] at hstep ⊢
@@ -430,7 +442,7 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
   | tmaCopyG2S sharedId barId isCg2 =>                    -- Case 10: Async 2D TMA `g2s` checks `.clean` proxies & records pending TMA hazard
       dsimp only [stepOp] at hstep ⊢
       rw [← hlenSP, ← hlenPT, ← hlenBS]
-      by_cases hp1 : ((isCg2 && cfg.clusterDimX != 2) || !((blkGuard.hasZeroLeaderCheck && !blkGuard.hasUnknown) || (cfg.blockDimY == 1 && blkGuard.selectsAtMostOneThread)) || decide (sharedId ≥ abs.sharedProxy.length) || decide (sharedId ≥ abs.sharedPendingTma.length) || decide (barId ≥ abs.barState.length)) = true
+      by_cases hp1 : ((isCg2 && cfg.clusterDimX != 2) || !(blkGuard.isSingleLeader cfg.blockDimX cfg.blockDimY) || decide (sharedId ≥ abs.sharedProxy.length) || decide (sharedId ≥ abs.sharedPendingTma.length) || decide (barId ≥ abs.barState.length)) = true
       · rw [if_pos hp1] at hstep; contradiction
       · rw [if_neg hp1] at hstep ⊢
         by_cases hp2 : (abs.sharedProxy.getD sharedId .needsFence != .clean || abs.barProxy.getD barId .needsFence != .clean) = true
@@ -458,7 +470,7 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
   | clcTryCancel sharedId barId =>                        -- Case 11: Blackwell `clc_try_cancel` checks `.armedTx` & records pending hazard
       dsimp only [stepOp] at hstep ⊢
       rw [← hlenSP, ← hlenPT, ← hlenBS]
-      by_cases hp1 : (decide (cfg.clusterDimX < 1) || !((blkGuard.hasZeroLeaderCheck && !blkGuard.hasUnknown) || (cfg.blockDimY == 1 && blkGuard.selectsAtMostOneThread)) || decide (sharedId ≥ abs.sharedProxy.length) || decide (sharedId ≥ abs.sharedPendingTma.length) || decide (barId ≥ abs.barState.length)) = true
+      by_cases hp1 : (decide (cfg.clusterDimX < 1) || !(blkGuard.isSingleLeader cfg.blockDimX cfg.blockDimY) || decide (sharedId ≥ abs.sharedProxy.length) || decide (sharedId ≥ abs.sharedPendingTma.length) || decide (barId ≥ abs.barState.length)) = true
       · rw [if_pos hp1] at hstep; contradiction
       · rw [if_neg hp1] at hstep ⊢
         by_cases hp2 : (abs.barProxy.getD barId .needsFence != .clean) = true
@@ -531,13 +543,13 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
               by cases isCg2 <;> rfl⟩, hvp⟩
   | tmemAsyncIssue smemIds isCg2 =>                       -- Case 14: Leader `tcgen05_mma*` checks clean SMEM & sets `mmaHazard := true`
       dsimp only [stepOp] at hstep ⊢
-      by_cases hp1 : ((isCg2 && cfg.clusterDimX != 2) || !((blkGuard.hasZeroLeaderCheck && !blkGuard.hasUnknown) || (cfg.blockDimY == 1 && blkGuard.selectsAtMostOneThread)) || !abs.allocClusterSynced) = true
+      by_cases hp1 : ((isCg2 && cfg.clusterDimX != 2) || !(blkGuard.isSingleLeader cfg.blockDimX cfg.blockDimY) || !abs.allocClusterSynced) = true
       · rw [if_pos hp1] at hstep; contradiction
       · rw [if_neg hp1] at hstep
         have hp1f := Bool.eq_false_iff.mpr hp1
         simp only [Bool.or_eq_false_iff, Bool.not_eq_false'] at hp1f
         have hcAc := hbImp hac hp1f.2
-        have hcp1 : ((isCg2 && cfg.clusterDimX != 2) || !((blkGuard.hasZeroLeaderCheck && !blkGuard.hasUnknown) || (cfg.blockDimY == 1 && blkGuard.selectsAtMostOneThread)) || !conc.allocClusterSynced) = false := by
+        have hcp1 : ((isCg2 && cfg.clusterDimX != 2) || !(blkGuard.isSingleLeader cfg.blockDimX cfg.blockDimY) || !conc.allocClusterSynced) = false := by
           simp [hp1f.1.1, hp1f.1.2, hcAc]
         rw [hcp1]; simp only [Bool.false_eq_true, ↓reduceIte]
         cases hap : abs.tmemPhase <;> rw [hap] at hstep htp <;> try contradiction
@@ -576,7 +588,7 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
   | tmemCommit barId isCg2 =>                             -- Case 15: `tcgen05_commit*` ties prior MMA to `barId` & clears `mmaHazard`
       dsimp only [stepOp] at hstep ⊢
       rw [← hlenBS]
-      by_cases hp1 : ((isCg2 && cfg.clusterDimX != 2) || !((blkGuard.hasZeroLeaderCheck && !blkGuard.hasUnknown) || (cfg.blockDimY == 1 && blkGuard.selectsAtMostOneThread)) || !(abs.mmaIssued || priorTmemIssueReaches cfg curBlk) || decide (barId ≥ abs.barState.length)) = true
+      by_cases hp1 : ((isCg2 && cfg.clusterDimX != 2) || !(blkGuard.isSingleLeader cfg.blockDimX cfg.blockDimY) || !(abs.mmaIssued || priorTmemIssueReaches cfg curBlk) || decide (barId ≥ abs.barState.length)) = true
       · rw [if_pos hp1] at hstep; contradiction
       · rw [if_neg hp1] at hstep
         have hp1f := Bool.eq_false_iff.mpr hp1
@@ -606,7 +618,7 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
             · rw [if_pos hcg] at hstep; contradiction
             · rw [if_neg hcg] at hstep
               injection hstep with hstep; subst hstep
-              have hcp1 : ((isCg2 && cfg.clusterDimX != 2) || !((blkGuard.hasZeroLeaderCheck && !blkGuard.hasUnknown) || (cfg.blockDimY == 1 && blkGuard.selectsAtMostOneThread)) || !(conc.mmaIssued || priorTmemIssueReaches cfg curBlk) || decide (barId ≥ abs.barState.length)) = false := by
+              have hcp1 : ((isCg2 && cfg.clusterDimX != 2) || !(blkGuard.isSingleLeader cfg.blockDimX cfg.blockDimY) || !(conc.mmaIssued || priorTmemIssueReaches cfg curBlk) || decide (barId ≥ abs.barState.length)) = false := by
                 simp [hp1f.1.1.1, hp1f.1.1.2, hcMma, hp1f.2]
               rw [hcp1, hbpC, hcp]; simp only [bne_self_eq_false, Bool.false_eq_true, ↓reduceIte]
               have hset := listSubsumes_set (a := .armedPlain) (c := .armedPlain) rfl barId hbs
@@ -614,29 +626,32 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
               rcases hcbValid with hcv | hcv | hcv | hcv <;>
                 (rw [hcv]; dsimp only; rw [if_neg hcg]; refine ⟨_, rfl, ?_⟩; unfold CtaState.subsumes; simp only [Bool.and_eq_true];
                  exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨hsp, hpt⟩, hsc⟩, hbp⟩, hset⟩, tmemPhaseSub_refl _⟩, hac⟩, rfl⟩, hmi⟩, hcbIns⟩, rfl⟩, hpl⟩, rfl⟩, rfl⟩, hrp⟩, hvp⟩))
-  | tmemLoad ldId =>                                      -- Case 16: `tcgen05_ld` checks `tmemReady && !mmaHazard` & records `ldId`
+  | tmemLoad ldId =>                                      -- Case 16: `tcgen05_ld` checks warp convergence + `tmemReady && !mmaHazard` & records `ldId`
       dsimp only [stepOp] at hstep ⊢
-      cases hap : abs.tmemPhase <;> rw [hap] at hstep htp <;> try contradiction
-      rename_i cols allocCg2
-      have hcp : conc.tmemPhase = .allocated cols allocCg2 := by
-        simp only [TmemPhase.subsumes, Bool.or_eq_true, beq_iff_eq] at htp
-        rcases htp with h1 | h2; contradiction; exact h2.symm
-      rw [hcp]; dsimp only at hstep ⊢
-      by_cases hp1 : (!abs.allocClusterSynced || !abs.tmemReady || abs.mmaHazard) = true
-      · rw [if_pos hp1] at hstep; contradiction
-      · rw [if_neg hp1] at hstep
-        have hp1f := Bool.eq_false_iff.mpr hp1
-        simp only [Bool.or_eq_false_iff, Bool.not_eq_false'] at hp1f
-        have hcAc := hbImp hac hp1f.1.1
-        have hcTr := hbImp htr hp1f.1.2
-        have hcMh : conc.mmaHazard = false := hbFalse hmh hp1f.2
-        injection hstep with hstep; subst hstep
-        simp only [hcAc, hcTr, hcMh, Bool.not_true, Bool.or_self, Bool.false_eq_true, ↓reduceIte]
-        refine ⟨_, rfl, ?_⟩
-        unfold CtaState.subsumes; simp only [Bool.and_eq_true]
-        exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
-          hsp, hpt⟩, hsc⟩, hbp⟩, hbs⟩, tmemPhaseSub_refl _⟩, by simp⟩, by simp⟩, hmi⟩, hcb⟩, by simp⟩,
-          natSubset_insert ldId hpl⟩, rfl⟩, rfl⟩, hrp⟩, hvp⟩
+      by_cases hwc : (!blkGuard.isWarpConvergent cfg.blockDimX cfg.blockDimY) = true
+      · rw [if_pos hwc] at hstep; contradiction
+      · rw [if_neg hwc] at hstep ⊢
+        cases hap : abs.tmemPhase <;> rw [hap] at hstep htp <;> try contradiction
+        rename_i cols allocCg2
+        have hcp : conc.tmemPhase = .allocated cols allocCg2 := by
+          simp only [TmemPhase.subsumes, Bool.or_eq_true, beq_iff_eq] at htp
+          rcases htp with h1 | h2; contradiction; exact h2.symm
+        rw [hcp]; dsimp only at hstep ⊢
+        by_cases hp1 : (!abs.allocClusterSynced || !abs.tmemReady || abs.mmaHazard) = true
+        · rw [if_pos hp1] at hstep; contradiction
+        · rw [if_neg hp1] at hstep
+          have hp1f := Bool.eq_false_iff.mpr hp1
+          simp only [Bool.or_eq_false_iff, Bool.not_eq_false'] at hp1f
+          have hcAc := hbImp hac hp1f.1.1
+          have hcTr := hbImp htr hp1f.1.2
+          have hcMh : conc.mmaHazard = false := hbFalse hmh hp1f.2
+          injection hstep with hstep; subst hstep
+          simp only [hcAc, hcTr, hcMh, Bool.not_true, Bool.or_self, Bool.false_eq_true, ↓reduceIte]
+          refine ⟨_, rfl, ?_⟩
+          unfold CtaState.subsumes; simp only [Bool.and_eq_true]
+          exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
+            hsp, hpt⟩, hsc⟩, hbp⟩, hbs⟩, tmemPhaseSub_refl _⟩, by simp⟩, by simp⟩, hmi⟩, hcb⟩, by simp⟩,
+            natSubset_insert ldId hpl⟩, rfl⟩, rfl⟩, hrp⟩, hvp⟩
   | tmemLoadWait =>                                       -- Case 17: `tcgen05_load_wait()` drains `pendingLoads` to `[]`
       dsimp only [stepOp] at hstep ⊢
       cases hap : abs.tmemPhase <;> rw [hap] at hstep htp <;> try contradiction
@@ -659,6 +674,29 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
         have hcNotIn : ¬(ldId ∈ conc.pendingLoads) := fun hm => hin (natSubset_mem hpl hm)
         injection hstep with hstep; subst hstep
         rw [if_neg hcNotIn]; exact ⟨conc, rfl, hsub⟩
+  | tmemStoreWait =>                                      -- Case 18b: `tcgen05_store_wait()` checks warp convergence + allocated `TMEM`
+      dsimp only [stepOp] at hstep ⊢
+      by_cases hwc : (!blkGuard.isWarpConvergent cfg.blockDimX cfg.blockDimY) = true
+      · rw [if_pos hwc] at hstep; contradiction
+      · rw [if_neg hwc] at hstep ⊢
+        cases hap : abs.tmemPhase <;> rw [hap] at hstep htp <;> try contradiction
+        rename_i cols allocCg2
+        have hcp : conc.tmemPhase = .allocated cols allocCg2 := by
+          simp only [TmemPhase.subsumes, Bool.or_eq_true, beq_iff_eq] at htp
+          rcases htp with h1 | h2; contradiction; exact h2.symm
+        rw [hcp]; dsimp only at hstep ⊢
+        injection hstep with hstep; subst hstep
+        exact ⟨conc, rfl, hsub⟩
+  | tmemFenceBeforeSync | tmemFenceAfterSync =>           -- Case 18c: `tcgen05_fence_*` requires allocated `TMEM`
+      dsimp only [stepOp] at hstep ⊢
+      cases hap : abs.tmemPhase <;> rw [hap] at hstep htp <;> try contradiction
+      rename_i cols allocCg2
+      have hcp : conc.tmemPhase = .allocated cols allocCg2 := by
+        simp only [TmemPhase.subsumes, Bool.or_eq_true, beq_iff_eq] at htp
+        rcases htp with h1 | h2; contradiction; exact h2.symm
+      rw [hcp]; dsimp only at hstep ⊢
+      injection hstep with hstep; subst hstep
+      exact ⟨conc, rfl, hsub⟩
   | tmemDealloc cols isCg2 =>                             -- Case 19: Full-warp `tcgen05_dealloc*` checks sync + permit & transitions `.deallocated`
       dsimp only [stepOp] at hstep ⊢
       by_cases hp1 : ((isCg2 && cfg.clusterDimX != 2) || inCycle || (blkGuard.selectsSingleFullWarp cfg.blockDimX cfg.blockDimY).isNone) = true
@@ -756,7 +794,7 @@ theorem stepEdge_mono (cfg : ControlFlowCfg) (srcBlk : Nat) {abs conc nextAbs : 
   have hbImp : ∀ {x y : Bool}, (!x || y) = true → x = true → y = true := by decide
   have hbFalse : ∀ {x y : Bool}, (!x || y) = true → y = false → x = false := by decide
   cases cond with                                         -- Case-split on outgoing `BranchCond` edge
-  | always | coord _ | uniform | unknown =>               -- Case 1: Non-`mbarrier` branch preserves `CtaState` unchanged
+  | always | coord _ | uniform | warpUniform | unknown => -- Case 1: Non-`mbarrier` branch preserves `CtaState` unchanged
       dsimp only [stepEdge, stepEdgeWith] at hstep ⊢
       injection hstep with hstep; subst hstep; exact ⟨conc, rfl, hsub⟩
   | posLoopExit bodyBlk =>

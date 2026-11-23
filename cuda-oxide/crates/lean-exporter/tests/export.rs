@@ -453,18 +453,15 @@ fn exports_safe_vecadd_kernel_and_rejects_unguarded_accesses() {
     lean_exporter::runner::check_generated_lean(&bad_idx_lean, &lean_dir)
         .expect_err("Lean 4 must reject OOB `a[c.len()]` access");
 
-    // Scenario 5d (Hole #7): Conditional inner branch inside `^active` that can skip
-    // writing `c` when `idx < c.len()` is transcribed into `controlFlowCfg` and
-    // rejected by Lean 4's `WritesOnAllActivePaths`!
+    // Scenario 5d: Conditional inner branch inside `^active` that can skip
+    // writing `c` when `idx < c.len()` is rejected by Lean 4's `MirWritesAllElems`!
     let conditional_skip_write = VECADD_FIXTURE.replace(
         "    mir.store (c_elem, sum) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:RawMut>, builtin.fp32) -> ()>;\n    mir.goto () [^exit] []: <() -> ()>",
         "    skip_flag = mir.lt (c_len, idx) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;\n    mir.cond_br (skip_flag) [^do_write, ^exit] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>\n\n  ^do_write():\n    mir.store (c_elem, sum) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:RawMut>, builtin.fp32) -> ()>;\n    mir.goto () [^exit] []: <() -> ()>",
     );
     let skip_lean = export_named_source(&conditional_skip_write, "vecadd")
-        .expect("transcribes conditional skip write into controlFlowCfg");
-    assert!(
-        skip_lean.contains("CudaOxide.Contracts.ControlFlow.WritesOnAllActivePaths controlFlowCfg")
-    );
+        .expect("transcribes conditional skip write into MirFunc");
+    assert!(skip_lean.contains("CudaOxide.Contracts.Program.MirWritesAllElems mirFunc"));
     let Some(lean_dir) = lean_package_dir_if_available() else {
         return;
     };
@@ -1466,7 +1463,7 @@ fn verifies_stage6_tcgen05_tmem_proxy_and_mbarrier_lifecycle() {
     );
     let nested_3_lean = export_named_source(&nested_3_ifs_dealloc, "tcgen05_matmul_verified")
         .expect("transcribes 3-deep nested unknown ifs around tcgen05_dealloc into controlFlowCfg");
-    assert!(nested_3_lean.contains(".unknown"));
+    assert!(nested_3_lean.contains(".warpUniform"));
     lean_exporter::runner::check_generated_lean(&nested_3_lean, &lean_dir).expect_err(
         "Lean 4 must reject 3-level nested runtime `if`s around `tcgen05_dealloc` inside `if warp_id == 0`",
     );
@@ -2038,4 +2035,225 @@ fn proof_cache_records_valid_proofs_and_invalidates_on_mutation() {
         .expect_err("mutated Lean source must miss cache and fail proof check");
 
     let _ = std::fs::remove_dir_all(&cache_dir);
+}
+
+#[test]
+fn audit_hardening_rejects_early_return_uninit_smem_mbar_inval_checked_ovf_2d_lane_ptr_cast_and_calls()
+ {
+    let Some(lean_dir) = lean_package_dir_if_available() else {
+        return;
+    };
+
+    // 1. Pre-guard early return `if idx == 0 { return; }` before `if idx < c.len()` must fail `MirWritesAllElems`:
+    let early_ret_vecadd = VECADD_FIXTURE.replacen(
+        "    in_bounds = mir.lt (idx, c_len)",
+        "    zero_idx = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;\n    is_t0 = mir.eq (idx, zero_idx) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;\n    mir.cond_br (is_t0) [^exit, ^chk_bounds] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>\n\n  ^chk_bounds():\n    in_bounds = mir.lt (idx, c_len)",
+        1,
+    );
+    let early_ret_lean = export_named_source(&early_ret_vecadd, "vecadd")
+        .expect("transcribes pre-guard early return");
+    lean_exporter::runner::check_generated_lean(&early_ret_lean, &lean_dir)
+        .expect_err("Lean 4 must reject `if idx == 0 { return; }` under writes_all_elems");
+
+    // 2. Writing constant `c[0]` instead of `c[idx]` must fail `MirWritesAllElems`:
+    let const_slot_vecadd = VECADD_FIXTURE.replacen(
+        "c_elem = mir.ptr_offset (c_ptr, idx)",
+        "zero_slot = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;\n    c_elem = mir.ptr_offset (c_ptr, zero_slot)",
+        1,
+    );
+    let const_slot_lean =
+        export_named_source(&const_slot_vecadd, "vecadd").expect("transcribes constant c[0] write");
+    lean_exporter::runner::check_generated_lean(&const_slot_lean, &lean_dir)
+        .expect_err("Lean 4 must reject constant `c[0]` write under writes_all_elems");
+
+    // 3. Reading uninitialized `SharedArray` (`TILE_A` never written before `mir.load`) fails `UniformBarriers`:
+    let uninit_smem = SGEMM_TILED_FIXTURE.replacen(
+        "        mir.store (slot_a, alpha) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>, builtin.fp32) -> ()>;\n",
+        "",
+        1,
+    );
+    let uninit_smem_lean = export_named_source(&uninit_smem, "sgemm_tiled_views")
+        .expect("transcribes uninitialized TILE_A read");
+    lean_exporter::runner::check_generated_lean(&uninit_smem_lean, &lean_dir)
+        .expect_err("Lean 4 must reject reading uninitialized SharedArray TILE_A");
+
+    // 4. `mbarrier_inval` before `mbarrier_arrive_expect_tx` resets `BAR` to `.uninit` and fails `UniformBarriers`:
+    let inval_bar = ASYNC_COPY_FIXTURE.replacen(
+        "        _tok = nvvm.mbarrier_arrive_expect_tx_shared (bar_prod_raw, c16384_u32)",
+        "        nvvm.mbarrier_inval_shared (bar_prod_raw) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>) -> ()>;\n        _tok = nvvm.mbarrier_arrive_expect_tx_shared (bar_prod_raw, c16384_u32)",
+        1,
+    );
+    let inval_bar_lean = export_named_source(&inval_bar, "async_copy_stage")
+        .expect("transcribes mbarrier_inval before expect_tx");
+    assert!(inval_bar_lean.contains("(.mbarInval 0)"));
+    lean_exporter::runner::check_generated_lean(&inval_bar_lean, &lean_dir)
+        .expect_err("Lean 4 must reject arriving on an invalidated Barrier");
+
+    // 5. `mbarrier_init(&BAR, 2)` arrived only once by a single `tid == 0` thread fails `validMbarArrivalCounts`:
+    let bad_init_count = ASYNC_COPY_FIXTURE.replacen(
+        "c1_u32 = mir.constant () [] [value: builtin.integer <1: ui32>]",
+        "c1_u32 = mir.constant () [] [value: builtin.integer <2: ui32>]",
+        1,
+    );
+    let bad_cnt_lean = export_named_source(&bad_init_count, "async_copy_stage")
+        .expect("transcribes count = 2 mbarrier_init");
+    lean_exporter::runner::check_generated_lean(&bad_cnt_lean, &lean_dir).expect_err(
+        "Lean 4 must reject mbarrier_init(count = 2) with single non-cyclic leader arrival",
+    );
+
+    // 6. Multi-warp `lane_id() == 0` (8 threads in a 256-thread block) is NOT a single-thread leader:
+    let lane_only_leader = ASYNC_COPY_FIXTURE.replacen(
+        "        tx_u32 = nvvm.read_ptx_sreg_tid_x () [] []: <() -> (builtin.integer ui32)>;\n        tid = mir.cast (tx_u32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;",
+        "        tx_u32 = nvvm.read_ptx_sreg_tid_x () [] []: <() -> (builtin.integer ui32)>;\n        lane_u32 = nvvm.read_ptx_sreg_laneid () [] []: <() -> (builtin.integer ui32)>;\n        tid = mir.cast (lane_u32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;",
+        1,
+    );
+    let lane_leader_lean = export_named_source(&lane_only_leader, "async_copy_stage")
+        .expect("transcribes lane == 0 multi-warp TMA producer");
+    lean_exporter::runner::check_generated_lean(&lane_leader_lean, &lean_dir).expect_err(
+        "Lean 4 must reject `lane_id() == 0` as a single-thread TMA leader in a 256-thread CTA",
+    );
+
+    // 7. `tcgen05_dealloc(tmem_addr + 16, 128)` (non-zero offset) fails `MirNoOobTmem`,
+    //    and `tcgen05_fence_before_thread_sync` emits `.tmemFenceBeforeSync`:
+    let dealloc_nonzero = TCGEN05_MATMUL_FIXTURE
+        .replacen(
+            "        nvvm.tcgen05_dealloc (tmem_addr, c128_dealloc)",
+            "        nvvm.tcgen05_fence_before_thread_sync () [] []: <() -> ()>;\n        off16 = mir.constant () [] [value: builtin.integer <16: ui32>]: <() -> (builtin.integer ui32)>;\n        bad_dealloc_addr = mir.add (tmem_addr, off16) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;\n        nvvm.tcgen05_dealloc (bad_dealloc_addr, c128_dealloc)",
+            1,
+        );
+    let dealloc_nonzero_lean = export_named_source(&dealloc_nonzero, "tcgen05_matmul_verified")
+        .expect("transcribes tcgen05_dealloc with non-zero offset + tcgen05_fence");
+    assert!(dealloc_nonzero_lean.contains(".tmemFenceBeforeSync"));
+    lean_exporter::runner::check_generated_lean(&dealloc_nonzero_lean, &lean_dir)
+        .expect_err("Lean 4 must reject tcgen05_dealloc on non-zero TMEM offset");
+
+    // 8. `tcgen05_ld` inside a sub-warp lane-divergent `if tid == 0` branch fails `TmemLifecycle`:
+    let divergent_tmem_ld = TCGEN05_MATMUL_FIXTURE.replacen(
+        "      ^col_body():\n        col_u32 = mir.cast (col)",
+        "      ^col_body():\n        z64_d = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;\n        is_t0_d = mir.eq (tid, z64_d) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;\n        mir.cond_br (is_t0_d) [^ld_t0, ^sync_before_dealloc] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>\n\n      ^ld_t0():\n        col_u32 = mir.cast (col)",
+        1,
+    );
+    let div_ld_lean = export_named_source(&divergent_tmem_ld, "tcgen05_matmul_verified")
+        .expect("transcribes lane-divergent tcgen05_ld");
+    lean_exporter::runner::check_generated_lean(&div_ld_lean, &lean_dir)
+        .expect_err("Lean 4 must reject sub-warp lane-divergent tcgen05_ld");
+
+    // 9. `mir.checked_add` on `255u8 + 1u8` sets `.1` (`checkedOvf`) to `true` (not `false`!):
+    let checked_ovf_mir = r#"
+builtin.module @checked_ovf_test {
+  ^entry():
+    mir.func @ovf_k: builtin.function <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>) -> ()>
+      [gpu_kernel: builtin.string "true", launch_contract_domain: builtin.integer <1: ui32>, reqntid_x: builtin.integer <32: ui32>, reqntid_y: builtin.integer <1: ui32>, reqntid_z: builtin.integer <1: ui32>, verify_no_oob_idx: builtin.string "0"]
+    {
+      ^entry(a: mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>):
+        c255 = mir.constant () [] [value: builtin.integer <255: ui8>]: <() -> (builtin.integer ui8)>;
+        c1 = mir.constant () [] [value: builtin.integer <1: ui8>]: <() -> (builtin.integer ui8)>;
+        chk = mir.checked_add (c255, c1) [] []: <(builtin.integer ui8, builtin.integer ui8) -> (mir.tuple <[builtin.integer ui8, builtin.integer i1], [], [], 2, 1>)>;
+        ovf = mir.extract_field (chk) [] [index: mir.field_index 1]: <(mir.tuple <[builtin.integer ui8, builtin.integer i1], [], [], 2, 1>) -> (builtin.integer i1)>;
+        mir.cond_br (ovf) [^bad_oob, ^safe_ret] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^bad_oob():
+        a_ptr = mir.extract_field (a) [] [index: mir.field_index 0]: <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>)>;
+        a_len = mir.extract_field (a) [] [index: mir.field_index 1]: <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>) -> (builtin.integer ui64)>;
+        oob_p = mir.ptr_offset (a_ptr, a_len) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>)>;
+        _v = mir.load (oob_p) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>) -> (builtin.fp32)>;
+        mir.return () [] []: <() -> ()>
+
+      ^safe_ret():
+        mir.return () [] []: <() -> ()>
+    }
+}
+"#;
+    let ovf_lean = export_named_source(checked_ovf_mir, "ovf_k")
+        .expect("transcribes mir.checked_add with real CheckedOvf");
+    assert!(ovf_lean.contains(".checkedOvf .add 8"));
+    lean_exporter::runner::check_generated_lean(&ovf_lean, &lean_dir)
+        .expect_err("Lean 4 must see `255u8 + 1u8` overflow = true and reject OOB branch");
+
+    // 10. 2D `laneId` (`16x16` block): `(tx = 0, ty = 1)` has `laneId = 16`, colliding with `TILE_A[16]`:
+    let lane_2d_race = r#"
+builtin.module @lane_2d_test {
+  ^entry():
+    mir.func @lane2d_k: builtin.function <(builtin.integer ui32) -> ()>
+      [gpu_kernel: builtin.string "true", launch_contract_domain: builtin.integer <2: ui32>, reqntid_x: builtin.integer <16: ui32>, reqntid_y: builtin.integer <16: ui32>, reqntid_z: builtin.integer <1: ui32>, verify_no_oob_shared: builtin.string "0", verify_no_data_race: builtin.string "0", verify_uniform_barriers: builtin.string "true"]
+    {
+      ^entry(_n: builtin.integer ui32):
+        tx = nvvm.read_ptx_sreg_tid_x () [] []: <() -> (builtin.integer ui32)>;
+        ty = nvvm.read_ptx_sreg_tid_y () [] []: <() -> (builtin.integer ui32)>;
+        lane = nvvm.read_ptx_sreg_laneid () [] []: <() -> (builtin.integer ui32)>;
+        z32 = mir.constant () [] [value: builtin.integer <0: ui32>]: <() -> (builtin.integer ui32)>;
+        one32 = mir.constant () [] [value: builtin.integer <1: ui32>]: <() -> (builtin.integer ui32)>;
+        is_row1_col0 = mir.eq (tx, z32) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer i1)>;
+        mir.cond_br (is_row1_col0) [^write_by_lane, ^other] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^write_by_lane():
+        is_ty1 = mir.eq (ty, one32) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer i1)>;
+        mir.cond_br (is_ty1) [^do_w1, ^sync] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^do_w1():
+        smem0 = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui32, size: builtin.integer <32: i64>, alloc_key: builtin.string "S", source_name: builtin.string "k::S"]: <() -> (mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:3,kind:Erased>)>;
+        lane64 = mir.cast (lane) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+        p1 = mir.ptr_offset (smem0, lane64) [] []: <(mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:3,kind:Erased>)>;
+        mir.store (p1, one32) [] []: <(mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui32) -> ()>;
+        mir.goto () [^sync] []: <() -> ()>
+
+      ^other():
+        is_ty0 = mir.eq (ty, z32) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer i1)>;
+        mir.cond_br (is_ty0) [^do_w2, ^sync] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^do_w2():
+        smem1 = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui32, size: builtin.integer <32: i64>, alloc_key: builtin.string "S", source_name: builtin.string "k::S"]: <() -> (mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:3,kind:Erased>)>;
+        c16 = mir.constant () [] [value: builtin.integer <16: ui64>]: <() -> (builtin.integer ui64)>;
+        p2 = mir.ptr_offset (smem1, c16) [] []: <(mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:3,kind:Erased>)>;
+        mir.store (p2, one32) [] []: <(mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui32) -> ()>;
+        mir.goto () [^sync] []: <() -> ()>
+
+      ^sync():
+        nvvm.barrier0 () [] []: <() -> ()>;
+        mir.return () [] []: <() -> ()>
+    }
+}
+"#;
+    let lane_2d_lean =
+        export_named_source(lane_2d_race, "lane2d_k").expect("transcribes 2D laneId kernel");
+    lean_exporter::runner::check_generated_lean(&lane_2d_lean, &lean_dir)
+        .expect_err("Lean 4 must catch 2D `(tx=0, ty=1)` laneId == 16 race against S[16]");
+
+    // 11. `PtrToPtr` cast changing pointee byte width (`*mut fp32` -> `*mut u8`) before `mir.ptr_offset` fails closed:
+    let bad_ptr_stride = SGEMM_TILED_FIXTURE.replacen(
+        "        slot_a = mir.ptr_offset (tile_a_mut, smem_idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>)>;\n        mir.store (slot_a, alpha) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>, builtin.fp32) -> ()>;",
+        "        tile_a_u8 = mir.cast (tile_a_mut) [] [cast_kind: mir.cast_kind PtrToPtr]: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>) -> (mir.ptr <builtin.integer ui8 ,mutable:true,addrspace:3,kind:Erased>)>;\n        slot_a = mir.ptr_offset (tile_a_u8, smem_idx) [] []: <(mir.ptr <builtin.integer ui8 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.integer ui8 ,mutable:true,addrspace:3,kind:Erased>)>;\n        z_u8 = mir.constant () [] [value: builtin.integer <0: ui8>]: <() -> (builtin.integer ui8)>;\n        mir.store (slot_a, z_u8) [] []: <(mir.ptr <builtin.integer ui8 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui8) -> ()>;",
+        1,
+    );
+    let stride_err = export_named_source(&bad_ptr_stride, "sgemm_tiled_views").expect_err(
+        "PtrToPtr cast changing pointee element size before ptr_offset must fail closed",
+    );
+    assert!(
+        stride_err
+            .to_string()
+            .contains("element size from 4B to 1B"),
+        "unexpected PtrToPtr stride error: {stride_err}"
+    );
+
+    // 12. Uninlined 0-result `mir.call` (`helper_with_barrier`) and non-`cuda_device` `fake_index_1d` both fail closed:
+    let uninlined_zero_call = VECADD_FIXTURE.replacen(
+        "    in_bounds = mir.lt (idx, c_len)",
+        "    mir.call (idx) [] [callee: builtin.string \"user_crate::helper_with_barrier\"]: <(builtin.integer ui64) -> ()>;\n    in_bounds = mir.lt (idx, c_len)",
+        1,
+    );
+    let call_err = export_named_source(&uninlined_zero_call, "vecadd")
+        .expect_err("uninlined 0-result helper mir.call must fail closed");
+    assert!(
+        call_err.to_string().contains("unmodeled function call"),
+        "unexpected mir.call error: {call_err}"
+    );
+
+    let fake_idx1d = VECADD_FIXTURE.replacen(
+        "_RINvNtNtCs11cuda_device6thread10___internal8index_1d",
+        "user_crate::fake_index_1d",
+        1,
+    );
+    let fake_err = export_named_source(&fake_idx1d, "vecadd")
+        .expect_err("non-cuda_device function named fake_index_1d must fail closed");
+    assert!(fake_err.to_string().contains("unmodeled function call"));
 }

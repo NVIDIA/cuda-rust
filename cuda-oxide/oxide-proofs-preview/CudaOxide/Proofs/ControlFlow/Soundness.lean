@@ -306,6 +306,9 @@ def checkUniformBarriersWith (cfg : ControlFlowCfg) (inv : StateMap) : Bool :=
   ((unsyncedDsmemBlocks cfg).all fun dBlk =>
     let postSyncs := (clusterSyncBlocks cfg).filter (· != dBlk)
     (returnBlocks cfg).all fun ret => certifyUnreachable cfg postSyncs dBlk ret) &&
+  ((sharedReadSites cfg).all fun (s, rBlk) =>
+    certifyUnreachable cfg (sharedInitDominators cfg s) 0 rBlk) &&
+  validMbarArrivalCounts cfg &&
   (!(decide (0 < cfg.numBarriers) && decide (tmemAllocSites cfg = [])) ||
     (validStateMap false cfg inv && checkLoopBackpressure cfg))
 
@@ -314,13 +317,15 @@ theorem uniform_barriers_of_stateMap {cfg : ControlFlowCfg} {inv : StateMap}
     (hcheck : checkUniformBarriersWith cfg inv = true) :
     UniformBarriers cfg := by
   unfold checkUniformBarriersWith at hcheck
-  rcases Bool.and_eq_true_iff.mp hcheck with ⟨h01234, hasync⟩
+  rcases Bool.and_eq_true_iff.mp hcheck with ⟨h0123456, hasync⟩
+  rcases Bool.and_eq_true_iff.mp h0123456 with ⟨h012345, hmbarCnt⟩
+  rcases Bool.and_eq_true_iff.mp h012345 with ⟨h01234, hsinit⟩
   rcases Bool.and_eq_true_iff.mp h01234 with ⟨h0123, hdsmem⟩
   rcases Bool.and_eq_true_iff.mp h0123 with ⟨h012, hmbar⟩
   rcases Bool.and_eq_true_iff.mp h012 with ⟨h01, hcyc⟩
   rcases Bool.and_eq_true_iff.mp h01 with ⟨hcnt, hsync⟩
   rcases Bool.and_eq_true_iff.mp hcyc with ⟨hhasHdr, hloops⟩
-  refine ⟨of_decide_eq_true hcnt, ?_, ⟨?_, ?_⟩, ?_, ?_, ?_⟩
+  refine ⟨of_decide_eq_true hcnt, ?_, ⟨?_, ?_⟩, ?_, ?_, ?_, hmbarCnt, ?_⟩
   · intro b hb
     have hb_ok := List.all_eq_true.mp hsync b hb
     rcases Bool.and_eq_true_iff.mp hb_ok with ⟨htr, hacyc⟩
@@ -347,6 +352,8 @@ theorem uniform_barriers_of_stateMap {cfg : ControlFlowCfg} {inv : StateMap}
   · intro dBlk hdBlk ret hret
     have hd := List.all_eq_true.mp hdsmem dBlk hdBlk
     exact not_pathAvoiding_of_certify (List.all_eq_true.mp hd ret hret)
+  · intro s rBlk hsite
+    exact not_pathAvoiding_of_certify (List.all_eq_true.mp hsinit (s, rBlk) hsite)
   · intro ⟨hbars, hnotmem⟩
     have hcond : (decide (0 < cfg.numBarriers) && decide (tmemAllocSites cfg = [])) = true := by
       simp [hbars, hnotmem]
@@ -382,18 +389,22 @@ def checkTmemLifecycleWith (cfg : ControlFlowCfg) (inv : StateMap) : Bool :=
   let cg2ExitOk := (unsyncedCg2DeallocBlocks cfg).all fun dBlk =>
     let postSyncs := (clusterSyncBlocks cfg).filter (· != dBlk)
     (returnBlocks cfg).all fun ret => certifyUnreachable cfg postSyncs dBlk ret
-  allocOk && cg2EntryOk && cg2ExitOk && validStateMap true cfg inv && checkLoopBackpressure cfg
+  let sinitOk := (sharedReadSites cfg).all fun (s, rBlk) =>
+    certifyUnreachable cfg (sharedInitDominators cfg s) 0 rBlk
+  allocOk && cg2EntryOk && cg2ExitOk && sinitOk && validMbarArrivalCounts cfg && validStateMap true cfg inv && checkLoopBackpressure cfg
 
 /-- Reusable soundness theorem for `tmem_lifecycle` using a precomputed `inv : StateMap`. -/
 theorem tmem_lifecycle_of_stateMap {cfg : ControlFlowCfg} {inv : StateMap}
     (hcheck : checkTmemLifecycleWith cfg inv = true) :
     TmemLifecycle cfg := by
   unfold checkTmemLifecycleWith at hcheck
-  rcases Bool.and_eq_true_iff.mp hcheck with ⟨ha123, hloop⟩
-  rcases Bool.and_eq_true_iff.mp ha123 with ⟨ha12, hvalid⟩
+  rcases Bool.and_eq_true_iff.mp hcheck with ⟨ha12345, hloop⟩
+  rcases Bool.and_eq_true_iff.mp ha12345 with ⟨ha1234, hvalid⟩
+  rcases Bool.and_eq_true_iff.mp ha1234 with ⟨ha123, hmbarCnt⟩
+  rcases Bool.and_eq_true_iff.mp ha123 with ⟨ha12, hsinit⟩
   rcases Bool.and_eq_true_iff.mp ha12 with ⟨ha1, hexit⟩
   rcases Bool.and_eq_true_iff.mp ha1 with ⟨halloc, hentry⟩
-  refine ⟨?_, ?_, ?_, safeCtaExecution_of_stateMap hvalid, noUnbackpressuredLoop_of_check hloop⟩
+  refine ⟨?_, ?_, ?_, ?_, hmbarCnt, safeCtaExecution_of_stateMap hvalid, noUnbackpressuredLoop_of_check hloop⟩
   · cases hs : tmemAllocSites cfg with
     | nil => rw [hs] at halloc; contradiction
     | cons cols rest =>
@@ -411,6 +422,8 @@ theorem tmem_lifecycle_of_stateMap {cfg : ControlFlowCfg} {inv : StateMap}
   · intro dBlk hdBlk ret hret
     have hd := List.all_eq_true.mp hexit dBlk hdBlk
     exact not_pathAvoiding_of_certify (List.all_eq_true.mp hd ret hret)
+  · intro s rBlk hsite
+    exact not_pathAvoiding_of_certify (List.all_eq_true.mp hsinit (s, rBlk) hsite)
 
 open Lean Elab Command Meta in
 /-- Precomputes `cfgStateMap : StateMap` in compiled `MetaM` bytecode (`addDecl` certificate
@@ -426,29 +439,5 @@ elab "cfg_def_state_map " c:ident : command => do
     addDecl <| Declaration.defnDecl {                     -- Emit `cfgStateMap` constant (verified by `validStateMap` via `rfl`)
       name := ns ++ `cfgStateMap, levelParams := [], type := smTy, value := toExpr smVal,
       hints := ReducibilityHints.abbrev, safety := DefinitionSafety.safe }
-
-/-- Computable decision checker for `WritesOnAllActivePaths cfg guardEntries writeBlocks`. -/
-def checkWritesOnActivePaths (cfg : ControlFlowCfg)
-    (guardEntries writeBlocks : List Nat) : Bool :=
-  decide (guardEntries ≠ []) &&
-  decide (writeBlocks ≠ []) &&
-  guardEntries.all fun entry =>
-    (returnBlocks cfg).all fun ret =>
-      certifyUnreachable cfg writeBlocks entry ret
-
-/-- Reusable soundness theorem for `writes_all_elems` CFG post-dominance:
-    proves every path from `idx < len` to `return` executes a write block. -/
-theorem writes_on_active_paths_sound {cfg : ControlFlowCfg}
-    {guardEntries writeBlocks : List Nat}
-    (hcheck : checkWritesOnActivePaths cfg guardEntries writeBlocks = true) :
-    WritesOnAllActivePaths cfg guardEntries writeBlocks := by
-  unfold checkWritesOnActivePaths at hcheck                 -- Unpack non-emptiness + all-pairs `certifyUnreachable`
-  rcases Bool.and_eq_true_iff.mp hcheck with ⟨hne12, hall⟩
-  rcases Bool.and_eq_true_iff.mp hne12 with ⟨hg, hw⟩
-  refine ⟨of_decide_eq_true hg, of_decide_eq_true hw, ?_⟩   -- Prove non-empty lists, then unpack `∀ entry ret`
-  intro entry hentry ret hret
-  have he := List.all_eq_true.mp hall entry hentry          -- Instantiate at `entry ∈ guardEntries`
-  have hr := List.all_eq_true.mp he ret hret                -- Instantiate at `ret ∈ returnBlocks cfg`
-  exact not_pathAvoiding_of_certify hr                      -- Discharge via `not_pathAvoiding_of_certify`
 
 end CudaOxide.Proofs.ControlFlow

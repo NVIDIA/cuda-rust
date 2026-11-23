@@ -132,7 +132,8 @@ def symEvalRhsRaw (f : MirFunc) (sregs : SymRegList) : Rhs → SymVal
   | .sreg .ctaidY => .int .ctaidY
   | .sreg .ntidX => .int (.const f.blockDimX)
   | .sreg .ntidY => .int (.const f.blockDimY)
-  | .sreg .laneId => .int (.binOp .rem 32 .tidX (.const 32))
+  | .sreg .laneId =>
+      .int (.binOp .rem 0 (.binOp .add 0 (.binOp .mul 0 .tidY (.const f.blockDimX)) .tidX) (.const 32))
   | .sreg .clusterCtaidX => .int (.binOp .rem 0 .ctaidX (.const (max 1 f.clusterDimX)))
   | .index1D => .int (.index1D f.blockDimX)
   | .coord2DU32 =>
@@ -169,6 +170,22 @@ def symEvalRhsRaw (f : MirFunc) (sregs : SymRegList) : Rhs → SymVal
       match sregs.getVar l, sregs.getVar r with
       | .int a, .int b => .bool (.cmp op a b)
       | _, _ => .unk
+  | .checkedOvf op w l r =>
+      if w == 0 then
+        match sregs.getVar l, sregs.getVar r with
+        | .int _, .int _ => .bool (.lit false)
+        | _, _ => .unk
+      else
+        match sregs.getVar l, sregs.getVar r with
+        | .int a, .int b =>
+            let wa : SymInt := .intCast w a
+            let wb : SymInt := .intCast w b
+            match op with
+            | .add => .bool (.cmp .le (.const (2 ^ w)) (.binOp .add 0 wa wb))
+            | .sub => .bool (.cmp .lt wa wb)
+            | .mul => .bool (.cmp .le (.const (2 ^ w)) (.binOp .mul 0 wa wb))
+            | _ => .bool (.lit true)
+        | _, _ => .unk
   | .notBool src =>
       match sregs.getVar src with
       | .bool b => .bool (.not b)
@@ -218,7 +235,7 @@ theorem symEvalRhs_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
       cases hss : sregs.getVar slotVar <;> simp [hss, SymVal.matchesVal] at hs ⊢
       simp [evalRhs, hs, SymBool.eval]
   | sreg r =>
-      cases r <;> simp [symEvalRhsRaw, evalRhs, SymVal.matchesVal, SymInt.eval, evalBinOp]
+      cases r <;> simp [symEvalRhsRaw, evalRhs, SymVal.matchesVal, SymInt.eval, evalBinOp, wordMod]
   | cvtaShared ptr =>
       have hp := hmatch ptr
       dsimp only [symEvalRhsRaw]
@@ -249,6 +266,18 @@ theorem symEvalRhs_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
       cases hsl : sregs.getVar l <;> cases hsr : sregs.getVar r <;>
         simp [hsl, hsr, SymVal.matchesVal] at hl hr ⊢
       simp [evalRhs, hl, hr, SymBool.eval]
+  | checkedOvf op w l r =>
+      have hl := hmatch l; have hr := hmatch r
+      dsimp only [symEvalRhsRaw]
+      cases w with
+      | zero =>
+          cases hsl : sregs.getVar l <;> cases hsr : sregs.getVar r <;>
+            simp [hsl, hsr, SymVal.matchesVal] at hl hr ⊢
+          simp [evalRhs, evalCheckedOvf, hl, hr, SymBool.eval]
+      | succ w' =>
+          cases hsl : sregs.getVar l <;> cases hsr : sregs.getVar r <;>
+            simp [hsl, hsr, SymVal.matchesVal] at hl hr ⊢
+          cases op <;> simp [evalRhs, evalCheckedOvf, hl, hr, SymBool.eval, SymInt.eval, evalCmpOp, evalBinOp, wordMod] <;> rfl
   | notBool src =>
       have hs := hmatch src
       dsimp only [symEvalRhsRaw]

@@ -1336,7 +1336,7 @@ theorem collectWriteLeaves_sound (f : MirFunc) (paramId : Nat) (env : InputEnv) 
                             by_cases hd : fBlk ≥ f.blocks.length
                             · rw [if_pos hd] at hl2; contradiction
                             · exact Nat.lt_of_not_ge hd
-                      have hrF := Reachable.stepCondFalse hreach hex hterm hcvMatch hfl
+                      have hrF := Reachable.stepCondFalse hreach hex hterm (by rw [hcvMatch]; simp) hfl
                       have hpcF : (SymBool.and pCond (.not cSym)).eval env t havoc = true := by
                         simp [SymBool.eval, hpc, hce]
                       have hbind := bindSymBlockArgs_correct hmOut' (f.blockAt fBlk).args fArgs outR _ hmOut'
@@ -1351,7 +1351,7 @@ theorem collectWriteLeaves_sound (f : MirFunc) (paramId : Nat) (env : InputEnv) 
                             by_cases hd : tBlk ≥ f.blocks.length
                             · rw [if_pos hd] at hl1; contradiction
                             · exact Nat.lt_of_not_ge hd
-                      have hrT := Reachable.stepCondTrue hreach hex hterm hcvMatch htl
+                      have hrT := Reachable.stepCondTrue hreach hex hterm (by rw [hcvMatch]; simp) htl
                       have hpcT' : (SymBool.and pCond cSym).eval env t havoc = true := by
                         simp [SymBool.eval, hpc, hce]
                       have hbind := bindSymBlockArgs_correct hmOut' (f.blockAt tBlk).args tArgs outR _ hmOut'

@@ -832,10 +832,12 @@ theorem symReachable_sound {f : MirFunc} {tbl : List SymBlockInv}
       cases hget : (symExecStmts f (tbl.getD b0 {}).effCond (tbl.getD b0 {}).regs (tbl.getD b0 {}).phaseSpec (.condBr cond tBlk tArgs fBlk fArgs) (f.blockAt b0).stmts).1.getVar cond with
       | bool cSym =>                                      --   Tracked boolean guard: strengthen `effCond` with `cSym = true`
           rw [hget] at hbrOk hcv
-          rw [hcond, SymVal.matchesVal] at hcv
-          injection hcv with hcTrue
+          rw [SymVal.matchesVal] at hcv
+          rw [hcv] at hcond
+          have hcTrue : cSym.eval env t havoc = true := by -- A tracked condition other than `false` is `true`
+            simpa using hcond
           simp only [Bool.and_eq_true] at hbrOk
-          have hec := symBool_conj_true hpc0 hcTrue.symm
+          have hec := symBool_conj_true hpc0 hcTrue
           obtain ⟨hrDst, havoc', hpcDst, hpsDst, hmDst⟩ :=
             validSymEdge_sound hvalidIn hbrOk.1 hec hmOut hpsOut
           exact ⟨hdst, hrDst, havoc', hpcDst, hpsDst, hmDst⟩
@@ -861,11 +863,13 @@ theorem symReachable_sound {f : MirFunc} {tbl : List SymBlockInv}
       cases hget : (symExecStmts f (tbl.getD b0 {}).effCond (tbl.getD b0 {}).regs (tbl.getD b0 {}).phaseSpec (.condBr cond tBlk tArgs fBlk fArgs) (f.blockAt b0).stmts).1.getVar cond with
       | bool cSym =>                                      --   Tracked boolean guard: strengthen `effCond` with `!cSym = true`
           rw [hget] at hbrOk hcv
-          rw [hcond, SymVal.matchesVal] at hcv
-          injection hcv with hcFalse
+          rw [SymVal.matchesVal] at hcv
+          rw [hcv] at hcond
+          have hcFalse : cSym.eval env t havoc = false := by -- A tracked condition other than `true` is `false`
+            simpa using hcond
           simp only [Bool.and_eq_true] at hbrOk
           have hnotTrue : (SymBool.not cSym).eval env t havoc = true := by
-            simp [SymBool.eval, hcFalse.symm]
+            simp [SymBool.eval, hcFalse]
           have hec := symBool_conj_true hpc0 hnotTrue
           obtain ⟨hrDst, havoc', hpcDst, hpsDst, hmDst⟩ :=
             validSymEdge_sound hvalidIn hbrOk.2 hec hmOut hpsOut

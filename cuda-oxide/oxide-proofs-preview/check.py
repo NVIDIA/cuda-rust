@@ -21,6 +21,7 @@ REJECTED = (
     ("RejectedTmemColOverflow.lean", "TMEM column range overflow"),
     ("RejectedTmemWarpSlice.lean", "TMEM warpgroup lane-slice violation"),
     ("RejectedMutSliceRace.lean", "cross-thread &mut [T] read-write race"),
+    ("RejectedUnknownGuard.lean", "branch pruned on an untracked guard"),
 )
 
 
@@ -74,6 +75,7 @@ def main():
     require_success("env", "lean", "tests/exporter/Scalar.lean")
     require_success("env", "lean", "tests/vecadd/Accepted.lean")
     require_success("env", "lean", "tests/vecadd/Counterexamples.lean")
+    require_success("env", "lean", "tests/program/UnknownGuard.lean")
     print("PASS: scalar semantics, vecadd access model, typed indices, and counterexamples.", flush=True)
     for filename, label in REJECTED:
         result = run_lake("env", "lean", f"tests/vecadd/{filename}")

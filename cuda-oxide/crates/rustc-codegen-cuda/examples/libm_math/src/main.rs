@@ -12,6 +12,12 @@
 //! libdevice intrinsic (`__nv_sinf`, `__nv_expf`, ...); libm's
 //! software-float bodies are never translated.
 //!
+//! Note: `libm::*` on device is libdevice, not the host's libm; do not use it
+//! where bit-for-bit agreement with the host is required — and note that a
+//! correctly rounded implementation is not a substitute for matching the host's
+//! algorithm. Libdevice uses different polynomial approximations and rounding
+//! than host standard C libraries (e.g., glibc).
+//!
 //! Exercises the f32 ("...f") and f64 (bare) entry points, the
 //! tuple-returning `sincosf`, and the fmax/fmin/rint lanes. The host
 //! computes the same expressions with stdlib float methods and compares.

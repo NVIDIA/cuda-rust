@@ -16,5 +16,6 @@ readme = "README.md"
 dialect-mir = { workspace = true }
 dialect-nvvm = { workspace = true }
 pliron = { workspace = true }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
 combine = { workspace = true }

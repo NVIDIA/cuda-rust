@@ -4,12 +4,12 @@ Every `a[i]` in Rust compiles to a bounds comparison and a conditional trap bran
 
 `cuda-oxide` gives you **four ways** to remove per-element bounds checks, ordered from simplest safe APIs to the unverified escape hatch:
 
-| Tool                            | How It Removes Hot-Loop Checks                         | Safety                     |
-|:--------------------------------|:-------------------------------------------------------|:---------------------------|
-| **Read views (`MatrixView32`)** | Checks a whole row or column once before the loop      | Safe (pure Rust types)     |
-| **`requires = (...)`**          | Checks buffer sizes once on the CPU before launch      | Safe (host launch check)   |
-| **`#[verify(no_oob_idx(...))]`**| Proves arbitrary global/shared indices in Lean 4       | Safe (erased at compile)   |
-| **`#[kernel(unchecked_indexing)]`**| Deletes slice/shared bounds checks without proof    | Unsafe contract (UB if OOB)|
+| Tool                               | How It Removes Hot-Loop Checks                         | Safety                       |
+|:-----------------------------------|:-------------------------------------------------------|:-----------------------------|
+| **Read views (`MatrixView32`)**    | Checks a whole row or column once before the loop      | Safe (pure Rust types)       |
+| **`requires = (...)`**             | Checks buffer sizes once on the CPU before launch      | Safe (host launch check)     |
+| **`#[verify(no_oob_idx(...))]`**   | Proves general global/shared indices in Lean 4         | Safe, preview (check erased) |
+| **`#[kernel(unchecked_indexing)]`**| Deletes slice/shared bounds checks without proof       | Unsafe contract (UB if OOB)  |
 
 ---
 
@@ -108,16 +108,16 @@ pub fn sgemm_naive_views(
 
 ---
 
-## 4. `#[verify(no_oob_idx(...))]`: Erase General & Shared-Memory Checks Safely
+## 4. `#[verify(no_oob_idx(...))]` (preview): Erase General & Shared-Memory Checks Safely
 
 Read views cover contiguous rows, columns, and fixed 2D tiles, while GPU kernels also index `SharedArray` tiles (`TILE[ty * 16 + i]`), sub-warp bit-splits (`S_X[tid * 4 + w]`), and multi-stage rings.
 
-Adding `#[verify(no_oob_idx(...))]` proves those index expressions in Lean 4 at compile time and **deletes every proven `mir.assert` check before PTX lowering** with zero `unsafe`:
+Adding `#[verify(no_oob_idx(...))]` (preview) proves those index expressions in Lean 4 at compile time and **deletes every proven `mir.assert` check before PTX lowering** with zero `unsafe`:
 
 - On 2D tiled SGEMM (`safe_gemm_views`), Lean 4 erases all 6 global and shared-memory bounds checks (`~9,390 GFLOPS` on RTX 5090).
 - On 2-CTA Blackwell GEMM (`safe_gemm_sol_final`), Lean 4 erases all 27 shared-memory and barrier-array checks (`2,118 TFLOPS` on B200, `100%+` of `--unchecked-indexing`).
 
-See [Provably Safe Kernels](verified-kernels.md) for walkthroughs.
+See [Provably Safe Kernels (preview)](verified-kernels.md) for walkthroughs.
 
 ---
 

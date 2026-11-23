@@ -17,6 +17,7 @@ The workspace combines:
 - single-source compilation -- host and device code live in the same file, built with one `cargo oxide build`
 - a rustc codegen backend that compiles `#[kernel]` functions to CUDA PTX
 - device-side abstractions (type-safe indexing, shared memory, scoped atomics, barriers, TMA, warp/cluster ops)
+- compile-time Lean 4 kernel verification (`#[verify(...)]` and `lean-preview/`, preview) for shared memory, barriers, and async `tcgen05` / `TMEM` lifecycles
 - compile-time kernel policies for separate tuned specializations without runtime policy arguments
 - a host-side runtime for memory management, pinned host transfers, and kernel launching (`cuda-core`, `cuda-async`)
 - a rust-native compilation pipeline using [Pliron](https://github.com/vaivaswatha/pliron), an MLIR-like IR framework in Rust (Rust → Rust MIR → Pliron IR → LLVM IR → PTX)
@@ -274,6 +275,7 @@ compiles a Rust kernel to PTX, launches it on the GPU, and prints
 |---------------------------|--------------------------------------------------------------------------|
 | `vecadd`                  | Vector addition -- canonical first example                               |
 | `gemm_sol_final`          | Blackwell GEMM SoL (`examples/`): 2-CTA, 7-stage TMA, 2-stage TMEM       |
+| `safe_gemm_sol_final`     | Lean 4 verified Blackwell GEMM SoL (`examples/`, preview): 0 `unsafe`    |
 | `nemotron3_moe`           | Nemotron-3 NVFP4 ReLU² MoE (`models/`): native SIMT + 5th-gen `tcgen05`  |
 | `nemotron3_moe_cute`      | Nemotron-3 NVFP4 ReLU² MoE (`cute-rs-preview/models/`): typed `cute-rs`  |
 | `sm100_qkv_epilogue_cute` | Fused QKV + RMSNorm + FP8 quant + paged KV scatter (`cute-rs-preview/`)  |
@@ -346,7 +348,7 @@ cargo oxide run gemm_sol_final
 
 | Crate                     | Description                                                    |
 |---------------------------|----------------------------------------------------------------|
-| `lean-exporter`           | Experimental `dialect-mir`-to-Lean 4 exporter and proof runner |
+| `lean-exporter`           | Preview `dialect-mir`-to-Lean 4 (`lean-preview/`) exporter and proof runner |
 | `cargo-oxide`             | Cargo subcommand (`cargo oxide run`, etc.)                     |
 | `cuda-intrinsics-gen`     | Extractor and deterministic source generator for the intrinsics |
 | `cuda-artifact-finalizer` | Driver-independent NVVM IR, LTOIR, and PTX finalization         |

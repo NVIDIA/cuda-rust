@@ -19,6 +19,27 @@ theorem foldr_and_of_mem {α : Type} {P : α → Prop} :
   | _ :: _, ⟨hp, _⟩, _, List.Mem.head _ => hp
   | _ :: tl, ⟨_, htl⟩, x, List.Mem.tail _ hm => foldr_and_of_mem tl htl x hm
 
+/-- Remove exact duplicate symbolic events before generating VC obligations. -/
+def dedupEvents {α : Type} [DecidableEq α] : List α → List α
+  | [] => []
+  | x :: xs =>
+      let rest := dedupEvents xs
+      if decide (x ∈ rest) then rest else x :: rest
+
+theorem mem_dedupEvents {α : Type} [DecidableEq α] {x : α} :
+    ∀ {xs : List α}, x ∈ xs → x ∈ dedupEvents xs
+  | [], h => nomatch h
+  | y :: tl, h => by
+      dsimp only [dedupEvents]
+      rcases List.mem_cons.mp h with rfl | htl
+      · split
+        · rename_i hin; exact of_decide_eq_true hin
+        · exact List.Mem.head _
+      · have ih := mem_dedupEvents htl
+        split
+        · exact ih
+        · exact List.Mem.tail _ ih
+
 /-- Helper: bound `(base + k) / elemDiv < bound` from either `base < bound` (`span = 1, elemDiv = 1`)
     or `base + span ≤ bound * elemDiv` (`k < span, 0 < elemDiv`). -/
 def symSpanInBounds (sev : SymMemEvent) (base bound : Nat) : Prop :=
@@ -470,7 +491,7 @@ theorem vcNoOobGlobal_of_table {f : MirFunc} {tbl : List SymBlockInv}
     {memEvs sevs : List SymMemEvent} {paramId : Nat}
     (hvalid : validSymFunc f tbl = true)
     (hmem : collectSymMemEvents f tbl = memEvs)
-    (hevs : (memEvs.filter fun s => s.space == .global && s.bufId == paramId) = sevs)
+    (hevs : dedupEvents (memEvs.filter fun s => s.space == .global && s.bufId == paramId) = sevs)
     (hvc : ∀ env : InputEnv, ∀ t : ThreadCtx, ∀ havoc : Nat → Nat, -- For ANY valid input, thread, and loop state:
       f.validInput env → f.validThread t →                         -- under launch & CTA bounds,
       sevs.foldr (fun sev acc =>
@@ -481,7 +502,7 @@ theorem vcNoOobGlobal_of_table {f : MirFunc} {tbl : List SymBlockInv}
   obtain ⟨havoc, sev, hsev, idxS, k, hks, hdiv, _, hssp, hsbid, _, hopt, hidxEv, hpc, _⟩ :=
     emitsEvent_mem_collect hvalid hIn hemits                -- Step 2: Map concrete `ev` to its symbolic event `sev`
   have hfMem : sev ∈ sevs := by                             -- Step 3: Show `sev` belongs to the filtered `paramId` slice list
-    rw [← hevs, ← hmem, List.mem_filter]; exact ⟨hsev, by simp [hssp, hsp, hsbid, hbid]⟩
+    rw [← hevs]; apply mem_dedupEvents; rw [← hmem, List.mem_filter]; exact ⟨hsev, by simp [hssp, hsp, hsbid, hbid]⟩
   have hp := foldr_and_of_mem _ (foldr_holds_to_eval sevs (hvc env t havoc hIn hTh)) sev hfMem hpc -- Step 4: Extract `omega`'s VC proof for `sev`
   rw [hopt] at hp; dsimp only [Option.getD] at hp           -- Step 5: Unwrap `sev.indexOpt = some idxS`
   rw [← hidxEv]; exact symSpanInBounds_sound hks hdiv hp    -- Step 6: Conclude concrete `ev.index < env.sliceLen paramId`
@@ -492,7 +513,7 @@ theorem vcNoOobShared_of_table {f : MirFunc} {tbl : List SymBlockInv}
     (hvalid : validSymFunc f tbl = true)
     (hmem : collectSymMemEvents f tbl = memEvs)
     (hcap : (f.sharedDecls.getD sharedId { size := 0 }).size = cap)
-    (hevs : (memEvs.filter fun s => s.space == .shared && s.bufId == sharedId) = sevs)
+    (hevs : dedupEvents (memEvs.filter fun s => s.space == .shared && s.bufId == sharedId) = sevs)
     (hvc : ∀ env : InputEnv, ∀ t : ThreadCtx, ∀ havoc : Nat → Nat, -- For ANY valid input, thread, and loop state:
       f.validInput env → f.validThread t →                         -- under launch & CTA bounds,
       sevs.foldr (fun sev acc =>
@@ -503,7 +524,7 @@ theorem vcNoOobShared_of_table {f : MirFunc} {tbl : List SymBlockInv}
   obtain ⟨havoc, sev, hsev, idxS, k, hks, hdiv, _, hssp, hsbid, _, hopt, hidxEv, hpc, _⟩ :=
     emitsEvent_mem_collect hvalid hIn hemits                -- Step 2: Map concrete `ev` to its symbolic event `sev`
   have hfMem : sev ∈ sevs := by                             -- Step 3: Show `sev` belongs to `SharedArray` `sharedId`'s list
-    rw [← hevs, ← hmem, List.mem_filter]; exact ⟨hsev, by simp [hssp, hsp, hsbid, hbid]⟩
+    rw [← hevs]; apply mem_dedupEvents; rw [← hmem, List.mem_filter]; exact ⟨hsev, by simp [hssp, hsp, hsbid, hbid]⟩
   have hp := foldr_and_of_mem _ (foldr_holds_to_eval sevs (hvc env t havoc hIn hTh)) sev hfMem hpc -- Step 4: Extract `omega`'s VC proof for `sev`
   rw [hopt] at hp; dsimp only [Option.getD] at hp           -- Step 5: Unwrap `sev.indexOpt = some idxS`
   rw [← hidxEv, hcap]; exact symSpanInBounds_sound hks hdiv hp -- Step 6: Conclude concrete `ev.index < SHARED.size`
@@ -550,18 +571,230 @@ theorem vcDisjointWrites_of_table {f : MirFunc} {tbl : List SymBlockInv}
   obtain ⟨hbx, hby, htx, hty⟩ := symPairRaceOblig_sound hk1 hd1 hk2 hd2 hp heqIdx -- Step 6: Deduce all 4 coordinates match
   cases t₁; cases t₂; simp_all                              -- Step 7: Conclude `t₁ = t₂`
 
-/-- Bridge theorem for `MirNoSharedRace`: prunes barrier-disjoint event pairs via `PhaseSpec.disjoint`
-    and `symAsyncOrdered`, reducing remaining conflicts on `sharedId` to `tx₁ = tx₂ ∧ ty₁ = ty₂`. -/
+/-- Extract `some c` when `hyp` syntactically entails `t.tx = c` (direct `tid == c` or `warp == w ∧ lane == l`). -/
+def findEqTidX : SymBool → Option Nat
+  | .and p q => (findEqTidX p).orElse fun _ => findEqTidX q
+  | .cmp op a b =>
+      if op == .eq then
+        if a == .tidX then asConstInt b
+        else if b == .tidX then asConstInt a
+        else if a == .intCast 64 .tidX then
+          match asConstInt b with | some c => if decide (c < 4294967296) then some c else none | none => none
+        else if b == .intCast 64 .tidX then
+          match asConstInt a with | some c => if decide (c < 4294967296) then some c else none | none => none
+        else none
+      else none
+  | _ => none
+
+def findEqWarp32 : SymBool → Option Nat
+  | .and p q => (findEqWarp32 p).orElse fun _ => findEqWarp32 q
+  | .cmp op a b =>
+      let wExpr : SymInt := .binOp .div 32 .tidX (.const 32)
+      if op == .eq then
+        if a == wExpr then asConstInt b
+        else if b == wExpr then asConstInt a
+        else none
+      else none
+  | _ => none
+
+def findEqLane32 : SymBool → Option Nat
+  | .and p q => (findEqLane32 p).orElse fun _ => findEqLane32 q
+  | .cmp op a b =>
+      let lExpr : SymInt := .binOp .rem 32 .tidX (.const 32)
+      if op == .eq then
+        if a == lExpr then
+          match asConstInt b with | some l => if decide (l < 32) then some l else none | none => none
+        else if b == lExpr then
+          match asConstInt a with | some l => if decide (l < 32) then some l else none | none => none
+        else none
+      else none
+  | _ => none
+
+/-- Extract `some tx` when `hyp` pins `t.tx` to a single constant lane inside a 1D CTA (`blockDimY = 1`). -/
+def findPinnedSingleThread (f : MirFunc) (hyp : SymBool) : Option Nat :=
+  if f.blockDimY != 1 || decide (4294967296 < f.blockDimX) then none
+  else
+    match findEqTidX hyp with
+    | some c => some c
+    | none =>
+        match findEqWarp32 hyp, findEqLane32 hyp with
+        | some w, some l => some (32 * w + l)
+        | _, _ => none
+
+theorem wordMod64_of_u32 {n : Nat} (h : n < 4294967296) : wordMod 64 n = n := by
+  unfold wordMod; exact Nat.mod_eq_of_lt (Nat.lt_trans h (by decide))
+
+theorem findEqTidX_sound {env : InputEnv} {t : ThreadCtx} {havoc : Nat → Nat} (htx : t.tx < 4294967296) :
+    ∀ (hyp : SymBool) {c : Nat}, findEqTidX hyp = some c → hyp.eval env t havoc = true → t.tx = c
+  | .and p q, _, hf, he => by
+      dsimp only [findEqTidX] at hf
+      simp only [SymBool.eval, Bool.and_eq_true] at he
+      cases hp : findEqTidX p with
+      | some cp => rw [hp] at hf; injection hf with hc; subst hc; exact findEqTidX_sound htx p hp he.1
+      | none => rw [hp] at hf; exact findEqTidX_sound htx q hf he.2
+  | .cmp op a b, c, hf, he => by
+      dsimp only [findEqTidX] at hf
+      have hm := wordMod64_of_u32 htx
+      by_cases hop : (op == .eq) = true
+      · rw [if_pos hop] at hf; rw [beq_iff_eq.mp hop] at he
+        by_cases ha1 : (a == .tidX) = true
+        · rw [if_pos ha1] at hf; rw [beq_iff_eq.mp ha1, asConstInt_eq hf] at he
+          simp only [SymBool.eval, SymInt.eval, evalCmpOp_eq_true, evalCmpProp] at he; exact he
+        · rw [if_neg ha1] at hf
+          by_cases hb1 : (b == .tidX) = true
+          · rw [if_pos hb1] at hf; rw [beq_iff_eq.mp hb1, asConstInt_eq hf] at he
+            simp only [SymBool.eval, SymInt.eval, evalCmpOp_eq_true, evalCmpProp] at he; exact he.symm
+          · rw [if_neg hb1] at hf
+            by_cases ha2 : (a == .intCast 64 .tidX) = true
+            · rw [if_pos ha2] at hf
+              cases hcb : asConstInt b <;> rw [hcb] at hf <;> try contradiction
+              dsimp only at hf; split at hf <;> try contradiction
+              injection hf with hc; subst hc
+              rw [beq_iff_eq.mp ha2, asConstInt_eq hcb] at he
+              simp only [SymBool.eval, SymInt.eval, evalCmpOp_eq_true, evalCmpProp, hm] at he; exact he
+            · rw [if_neg ha2] at hf
+              by_cases hb2 : (b == .intCast 64 .tidX) = true
+              · rw [if_pos hb2] at hf
+                cases hca : asConstInt a <;> rw [hca] at hf <;> try contradiction
+                dsimp only at hf; split at hf <;> try contradiction
+                injection hf with hc; subst hc
+                rw [beq_iff_eq.mp hb2, asConstInt_eq hca] at he
+                simp only [SymBool.eval, SymInt.eval, evalCmpOp_eq_true, evalCmpProp, hm] at he; exact he.symm
+              · rw [if_neg hb2] at hf; contradiction
+      · rw [if_neg hop] at hf; contradiction
+  | .lit _, _, hf, _ | .mbarReady _ _, _, hf, _ | .not _, _, hf, _ | .or _ _, _, hf, _ | .ite _ _ _, _, hf, _ => by
+      contradiction
+
+theorem findEqWarp32_sound {env : InputEnv} {t : ThreadCtx} {havoc : Nat → Nat} :
+    ∀ (hyp : SymBool) {w : Nat}, findEqWarp32 hyp = some w → hyp.eval env t havoc = true → t.tx / 32 = w
+  | .and p q, _, hf, he => by
+      dsimp only [findEqWarp32] at hf
+      simp only [SymBool.eval, Bool.and_eq_true] at he
+      cases hp : findEqWarp32 p with
+      | some wp => rw [hp] at hf; injection hf with hw; subst hw; exact findEqWarp32_sound p hp he.1
+      | none => rw [hp] at hf; exact findEqWarp32_sound q hf he.2
+  | .cmp op a b, w, hf, he => by
+      dsimp only [findEqWarp32] at hf
+      by_cases hop : (op == .eq) = true
+      · rw [if_pos hop] at hf; rw [beq_iff_eq.mp hop] at he
+        by_cases ha : (a == .binOp .div 32 .tidX (.const 32)) = true
+        · rw [if_pos ha] at hf; rw [beq_iff_eq.mp ha, asConstInt_eq hf] at he
+          simp only [SymBool.eval, SymInt.eval, evalBinOp, evalCmpOp_eq_true, evalCmpProp] at he; exact he
+        · rw [if_neg ha] at hf
+          by_cases hb : (b == .binOp .div 32 .tidX (.const 32)) = true
+          · rw [if_pos hb] at hf; rw [beq_iff_eq.mp hb, asConstInt_eq hf] at he
+            simp only [SymBool.eval, SymInt.eval, evalBinOp, evalCmpOp_eq_true, evalCmpProp] at he; exact he.symm
+          · rw [if_neg hb] at hf; contradiction
+      · rw [if_neg hop] at hf; contradiction
+  | .lit _, _, hf, _ | .mbarReady _ _, _, hf, _ | .not _, _, hf, _ | .or _ _, _, hf, _ | .ite _ _ _, _, hf, _ => by
+      contradiction
+
+theorem findEqLane32_sound {env : InputEnv} {t : ThreadCtx} {havoc : Nat → Nat} :
+    ∀ (hyp : SymBool) {l : Nat}, findEqLane32 hyp = some l → hyp.eval env t havoc = true → t.tx % 32 = l
+  | .and p q, _, hf, he => by
+      dsimp only [findEqLane32] at hf
+      simp only [SymBool.eval, Bool.and_eq_true] at he
+      cases hp : findEqLane32 p with
+      | some lp => rw [hp] at hf; injection hf with hl; subst hl; exact findEqLane32_sound p hp he.1
+      | none => rw [hp] at hf; exact findEqLane32_sound q hf he.2
+  | .cmp op a b, l, hf, he => by
+      dsimp only [findEqLane32] at hf
+      by_cases hop : (op == .eq) = true
+      · rw [if_pos hop] at hf; rw [beq_iff_eq.mp hop] at he
+        by_cases ha : (a == .binOp .rem 32 .tidX (.const 32)) = true
+        · rw [if_pos ha] at hf
+          cases hcb : asConstInt b <;> rw [hcb] at hf <;> try contradiction
+          dsimp only at hf; split at hf <;> try contradiction
+          injection hf with hl; subst hl
+          rw [beq_iff_eq.mp ha, asConstInt_eq hcb] at he
+          simp only [SymBool.eval, SymInt.eval, evalBinOp, evalCmpOp_eq_true, evalCmpProp] at he; exact he
+        · rw [if_neg ha] at hf
+          by_cases hb : (b == .binOp .rem 32 .tidX (.const 32)) = true
+          · rw [if_pos hb] at hf
+            cases hca : asConstInt a <;> rw [hca] at hf <;> try contradiction
+            dsimp only at hf; split at hf <;> try contradiction
+            injection hf with hl; subst hl
+            rw [beq_iff_eq.mp hb, asConstInt_eq hca] at he
+            simp only [SymBool.eval, SymInt.eval, evalBinOp, evalCmpOp_eq_true, evalCmpProp] at he; exact he.symm
+          · rw [if_neg hb] at hf; contradiction
+      · rw [if_neg hop] at hf; contradiction
+  | .lit _, _, hf, _ | .mbarReady _ _, _, hf, _ | .not _, _, hf, _ | .or _ _, _, hf, _ | .ite _ _ _, _, hf, _ => by
+      contradiction
+
+/-- Computable syntactic test: do `s1` and `s2` execute exclusively on the exact same single CTA thread? -/
+def symPinsSameThread (f : MirFunc) (s1 s2 : SymMemEvent) : Bool :=
+  match findPinnedSingleThread f s1.pathCond, findPinnedSingleThread f s2.pathCond with
+  | some c1, some c2 => c1 == c2
+  | _, _ => false
+
+theorem symPinsSameThread_sound {f : MirFunc} {env : InputEnv} {t₁ t₂ : ThreadCtx}
+    {h₁ h₂ : Nat → Nat} {s1 s2 : SymMemEvent}
+    (hT1 : f.validThread t₁) (hT2 : f.validThread t₂)
+    (hbx : t₁.bx = t₂.bx) (hby : t₁.by_ = t₂.by_)
+    (hpin : symPinsSameThread f s1 s2 = true)
+    (hpc1 : s1.pathCond.eval env t₁ h₁ = true) (hpc2 : s2.pathCond.eval env t₂ h₂ = true) :
+    t₁ = t₂ := by
+  have singlePin : ∀ (t : ThreadCtx) (h : Nat → Nat) (p : SymBool) (c : Nat),
+      f.validThread t → findPinnedSingleThread f p = some c → p.eval env t h = true → t.tx = c ∧ t.ty = 0 := by
+    intro t h p c hTh hf he
+    unfold findPinnedSingleThread at hf
+    split at hf
+    · contradiction
+    · rename_i hok
+      simp only [Bool.or_eq_true, bne_iff_ne, decide_eq_true_eq, not_or, Classical.not_not] at hok
+      have htxB : t.tx < 4294967296 := by have := hTh.1; omega
+      have hty0 : t.ty = 0 := by have := hTh.2.1; rw [hok.1] at this; omega
+      refine ⟨?_, hty0⟩
+      cases heq : findEqTidX p with
+      | some c0 => rw [heq] at hf; injection hf with hc; subst hc; exact findEqTidX_sound htxB p heq he
+      | none =>
+          rw [heq] at hf
+          cases hw : findEqWarp32 p <;> cases hl : findEqLane32 p <;> rw [hw, hl] at hf <;> try contradiction
+          injection hf with hc; subst hc
+          have hdw := findEqWarp32_sound p hw he
+          have hdl := findEqLane32_sound p hl he
+          have hdiv := Nat.div_add_mod t.tx 32
+          omega
+  unfold symPinsSameThread at hpin
+  cases hp1 : findPinnedSingleThread f s1.pathCond <;>
+    cases hp2 : findPinnedSingleThread f s2.pathCond <;> rw [hp1, hp2] at hpin <;> try contradiction
+  rename_i c1 c2
+  have hcEq : c1 = c2 := beq_iff_eq.mp hpin
+  subst hcEq
+  obtain ⟨htx1, hty1⟩ := singlePin t₁ h₁ s1.pathCond c1 hT1 hp1 hpc1
+  obtain ⟨htx2, hty2⟩ := singlePin t₂ h₂ s2.pathCond c1 hT2 hp2 hpc2
+  cases t₁; cases t₂; simp_all
+
+/-- Upper-triangular pair enumeration `{(x_i, x_j) | i ≤ j}` avoiding symmetric `(s1, s2)` / `(s2, s1)` duplication. -/
+def upperTriPairs {α : Type} : List α → List (α × α)
+  | [] => []
+  | x :: xs => (x :: xs).map (x, ·) ++ upperTriPairs xs
+
+theorem mem_upperTriPairs {α : Type} {x y : α} :
+    ∀ {xs : List α}, x ∈ xs → y ∈ xs → (x, y) ∈ upperTriPairs xs ∨ (y, x) ∈ upperTriPairs xs
+  | [], hx, _ => nomatch hx
+  | _ :: _, List.Mem.head _, hy =>
+      Or.inl (List.mem_append_left _ (List.mem_map.mpr ⟨y, hy, rfl⟩))
+  | _ :: _, List.Mem.tail _ hx, List.Mem.head _ =>
+      Or.inr (List.mem_append_left _ (List.mem_map.mpr ⟨x, List.Mem.tail _ hx, rfl⟩))
+  | _ :: _, List.Mem.tail _ hx, List.Mem.tail _ hy =>
+      match mem_upperTriPairs hx hy with
+      | Or.inl h1 => Or.inl (List.mem_append_right _ h1)
+      | Or.inr h2 => Or.inr (List.mem_append_right _ h2)
+
+/-- Bridge theorem for `MirNoSharedRace`: prunes barrier-disjoint, mbarrier-ordered,
+    same-single-thread, and symmetric duplicate event pairs, reducing remaining conflicts on `sharedId` to `tx₁ = tx₂ ∧ ty₁ = ty₂`. -/
 theorem vcNoSharedRace_of_table {f : MirFunc} {tbl : List SymBlockInv}
     {memEvs : List SymMemEvent} {sharedId : Nat}
     {pairs : List (SymMemEvent × SymMemEvent × Option (SymInt × SymInt))}
     (hvalid : validSymFunc f tbl = true)
     (hmem : collectSymMemEvents f tbl = memEvs)
-    (hpairs : (let sevs := memEvs.filter fun s => s.space == .shared && s.bufId == sharedId
-               ((sevs.flatMap fun s1 => sevs.map fun s2 => (s1, s2)).filter fun p =>
+    (hpairs : (let sevs := dedupEvents (memEvs.filter fun s => s.space == .shared && s.bufId == sharedId)
+               ((upperTriPairs sevs).filter fun p =>
                  (p.1.isWrite || p.2.isWrite) &&
                  !(p.1.phaseSpec.disjoint p.2.phaseSpec) &&
-                 !(symAsyncOrdered f p.1 p.2)).map fun p =>
+                 !(symAsyncOrdered f p.1 p.2) &&
+                 !(symPinsSameThread f p.1 p.2)).map fun p =>
                    (p.1, p.2, extractAsyncSlotPair f p.1 p.2)) = pairs)
     (hvc : ∀ env : InputEnv, ∀ t₁ t₂ : ThreadCtx, ∀ h₁ h₂ : Nat → Nat, -- For ANY two threads `t₁, t₂` in the same CTA:
       f.validInput env → f.validThread t₁ → f.validThread t₂ →
@@ -575,43 +808,69 @@ theorem vcNoSharedRace_of_table {f : MirFunc} {tbl : List SymBlockInv}
              ((p.2.1.indexOpt.getD (.const 0)).eval env t₂ h₂)
              (t₁.tx = t₂.tx ∧ t₁.ty = t₂.ty))) ∧ acc) True) :
     MirNoSharedRace f sharedId := by
-  intro env t₁ t₂ ev₁ ev₂ hIn hT1 hT2 hbx hby hem1 hem2 hsp1 hsp2 hb1 hb2 hph hnotOrd hw hidx -- Step 1: Pick two same-CTA events in the same phase
+  intro env t₁ t₂ ev₁ ev₂ hIn hT1 hT2 hbx hby hem1 hem2 hsp1 hsp2 hb1 hb2 hph hnotOrd hw hidx
   obtain ⟨h₁, s1, hs1, i1, k1, hk1, hd1, hw1, hssp1, hsbid1, hab1, ho1, hi1, hpc1, hps1⟩ :=
-    emitsEvent_mem_collect hvalid hIn hem1                  -- Step 2a: Map `ev₁` to symbolic event `s1`
+    emitsEvent_mem_collect hvalid hIn hem1
   obtain ⟨h₂, s2, hs2, i2, k2, hk2, hd2, hw2, hssp2, hsbid2, hab2, ho2, hi2, hpc2, hps2⟩ :=
-    emitsEvent_mem_collect hvalid hIn hem2                  -- Step 2b: Map `ev₂` to symbolic event `s2`
-  by_cases hdisj : s1.phaseSpec.disjoint s2.phaseSpec = true -- Step 3: Prune if separated by `sync_threads()` (`ev₁.phase ≠ ev₂.phase`)
+    emitsEvent_mem_collect hvalid hIn hem2
+  by_cases hdisj : s1.phaseSpec.disjoint s2.phaseSpec = true
   · exact False.elim (phaseSpec_disjoint_sound hdisj hps1 hps2 hph)
-  · by_cases haord : symAsyncOrdered f s1 s2 = true         -- Step 4: Prune if ordered by a constant `mbarrier` handoff
+  · by_cases haord : symAsyncOrdered f s1 s2 = true
     · exact False.elim (hnotOrd (symAsyncOrdered_sound haord hab1 hab2 hpc1 hpc2))
-    · rw [hmem] at hs1 hs2                                  -- Step 5: Otherwise `(s1, s2)` was kept in `pairs` for `omega`
-      have hm1 : s1 ∈ memEvs.filter (fun s => s.space == .shared && s.bufId == sharedId) := by
-        rw [List.mem_filter]; exact ⟨hs1, by simp [hssp1, hsp1, hsbid1, hb1]⟩
-      have hm2 : s2 ∈ memEvs.filter (fun s => s.space == .shared && s.bufId == sharedId) := by
-        rw [List.mem_filter]; exact ⟨hs2, by simp [hssp2, hsp2, hsbid2, hb2]⟩
-      have hpair : (s1, s2, extractAsyncSlotPair f s1 s2) ∈ pairs := by
-        rw [← hpairs, List.mem_map]
-        refine ⟨(s1, s2), ?_, rfl⟩
-        rw [List.mem_filter]
-        refine ⟨List.mem_flatMap.mpr ⟨s1, hm1, List.mem_map.mpr ⟨s2, hm2, rfl⟩⟩, ?_⟩
-        dsimp only
+    · by_cases hpin : symPinsSameThread f s1 s2 = true
+      · exact symPinsSameThread_sound hT1 hT2 hbx hby hpin hpc1 hpc2
+      · rw [hmem] at hs1 hs2
+        have hm1 : s1 ∈ dedupEvents (memEvs.filter (fun s => s.space == .shared && s.bufId == sharedId)) := by
+          apply mem_dedupEvents; rw [List.mem_filter]; exact ⟨hs1, by simp [hssp1, hsp1, hsbid1, hb1]⟩
+        have hm2 : s2 ∈ dedupEvents (memEvs.filter (fun s => s.space == .shared && s.bufId == sharedId)) := by
+          apply mem_dedupEvents; rw [List.mem_filter]; exact ⟨hs2, by simp [hssp2, hsp2, hsbid2, hb2]⟩
         have hwOr : (s1.isWrite || s2.isWrite) = true := by
-          rw [hw1, hw2]; rcases hw with hwL | hwR
-          · simp [hwL]
-          · simp [hwR]
+          rw [hw1, hw2]; rcases hw with hwL | hwR <;> simp_all
         have hnd : (!(s1.phaseSpec.disjoint s2.phaseSpec)) = true := by
           cases hc : s1.phaseSpec.disjoint s2.phaseSpec <;> simp_all
         have hna : (!(symAsyncOrdered f s1 s2)) = true := by
           cases hc : symAsyncOrdered f s1 s2 <;> simp_all
-        simp [hwOr, hnd, hna]
-      have hp0 := foldr_and_of_mem _ (foldr_holds2_to_eval pairs (hvc env t₁ t₂ h₁ h₂ hIn hT1 hT2 hbx hby))
-        (s1, s2, extractAsyncSlotPair f s1 s2) hpair hpc1 hpc2 -- Step 6: Extract `omega`'s proof for `(s1, s2)`
-      have hp := symAsyncSlotGuard_sound hab1 hab2 hpc1 hpc2 hnotOrd hp0 -- Step 7: Discharge `slot₁ ≠ slot₂` from `¬ asyncOrdered`
-      rw [ho1, ho2] at hp; dsimp only [Option.getD] at hp
-      have heqIdx : (i1.eval env t₁ h₁ + k1) / s1.elemDiv = (i2.eval env t₂ h₂ + k2) / s2.elemDiv := by
-        rw [hi1, hi2, hidx]
-      obtain ⟨htx, hty⟩ := symPairRaceOblig_sound hk1 hd1 hk2 hd2 hp heqIdx -- Step 8: Deduce `tx₁ = tx₂ ∧ ty₁ = ty₂`
-      cases t₁; cases t₂; simp_all                          -- Step 9: Combine with `bx₁ = bx₂, by₁ = by₂` to get `t₁ = t₂`
+        have hnp : (!(symPinsSameThread f s1 s2)) = true := by
+          cases hc : symPinsSameThread f s1 s2 <;> simp_all
+        rcases mem_upperTriPairs hm1 hm2 with h12 | h21
+        · have hpair : (s1, s2, extractAsyncSlotPair f s1 s2) ∈ pairs := by
+            rw [← hpairs, List.mem_map]
+            refine ⟨(s1, s2), List.mem_filter.mpr ⟨h12, ?_⟩, rfl⟩
+            simp [hwOr, hnd, hna, hnp]
+          have hp0 := foldr_and_of_mem _ (foldr_holds2_to_eval pairs (hvc env t₁ t₂ h₁ h₂ hIn hT1 hT2 hbx hby))
+            (s1, s2, extractAsyncSlotPair f s1 s2) hpair hpc1 hpc2
+          have hp := symAsyncSlotGuard_sound hab1 hab2 hpc1 hpc2 hnotOrd hp0
+          rw [ho1, ho2] at hp; dsimp only [Option.getD] at hp
+          have heqIdx : (i1.eval env t₁ h₁ + k1) / s1.elemDiv = (i2.eval env t₂ h₂ + k2) / s2.elemDiv := by
+            rw [hi1, hi2, hidx]
+          obtain ⟨htx, hty⟩ := symPairRaceOblig_sound hk1 hd1 hk2 hd2 hp heqIdx
+          cases t₁; cases t₂; simp_all
+        · have hnotOrd2 : ¬ asyncOrdered f env ev₂ ev₁ := fun ho => hnotOrd ho.symm
+          by_cases hdisj2 : s2.phaseSpec.disjoint s1.phaseSpec = true
+          · exact False.elim (phaseSpec_disjoint_sound hdisj2 hps2 hps1 hph.symm)
+          · by_cases haord2 : symAsyncOrdered f s2 s1 = true
+            · exact False.elim (hnotOrd2 (symAsyncOrdered_sound haord2 hab2 hab1 hpc2 hpc1))
+            · by_cases hpin2 : symPinsSameThread f s2 s1 = true
+              · exact (symPinsSameThread_sound hT2 hT1 hbx.symm hby.symm hpin2 hpc2 hpc1).symm
+              · have hpair : (s2, s1, extractAsyncSlotPair f s2 s1) ∈ pairs := by
+                  rw [← hpairs, List.mem_map]
+                  refine ⟨(s2, s1), List.mem_filter.mpr ⟨h21, ?_⟩, rfl⟩
+                  have hwOr2 : (s2.isWrite || s1.isWrite) = true := by rw [Bool.or_comm]; exact hwOr
+                  have hnd2 : (!(s2.phaseSpec.disjoint s1.phaseSpec)) = true := by
+                    cases hc : s2.phaseSpec.disjoint s1.phaseSpec <;> simp_all
+                  have hna2 : (!(symAsyncOrdered f s2 s1)) = true := by
+                    cases hc : symAsyncOrdered f s2 s1 <;> simp_all
+                  have hnp2 : (!(symPinsSameThread f s2 s1)) = true := by
+                    cases hc : symPinsSameThread f s2 s1 <;> simp_all
+                  simp [hwOr2, hnd2, hna2, hnp2]
+                have hp0 := foldr_and_of_mem _ (foldr_holds2_to_eval pairs (hvc env t₂ t₁ h₂ h₁ hIn hT2 hT1 hbx.symm hby.symm))
+                  (s2, s1, extractAsyncSlotPair f s2 s1) hpair hpc2 hpc1
+                have hp := symAsyncSlotGuard_sound hab2 hab1 hpc2 hpc1 hnotOrd2 hp0
+                rw [ho2, ho1] at hp; dsimp only [Option.getD] at hp
+                have heqIdx : (i2.eval env t₂ h₂ + k2) / s2.elemDiv = (i1.eval env t₁ h₁ + k1) / s1.elemDiv := by
+                  rw [hi2, hi1, hidx]
+                obtain ⟨htx, hty⟩ := symPairRaceOblig_sound hk2 hd2 hk1 hd1 hp heqIdx
+                cases t₁; cases t₂; simp_all
 
 /-- Soundness of `vcAssertRedundant` from pre-computed `assEvs = collectSymAssertEvents f tbl`. -/
 theorem vcAssertRedundant_of_table {f : MirFunc} {tbl : List SymBlockInv}

@@ -959,6 +959,7 @@ dependencies = [
  "dialect-mir",
  "dialect-nvvm",
  "pliron",
+ "sha2",
  "thiserror 2.0.21",
 ]
 

@@ -4,14 +4,14 @@ On a CPU, `rustc` prevents data races through single-thread ownership: one mutab
 
 `cuda-oxide` closes that gap in **three layers**, so most kernels need zero `unsafe`:
 
-| Layer       | Mechanism                                   | What It Covers                                               | `unsafe` Needed? |
-|:------------|:--------------------------------------------|:-------------------------------------------------------------|:-----------------|
-| **Layer 1** | Rust types (`DisjointSlice` + `ThreadIndex`)| One-thread-per-slot and tiled global writes (`PreparedLaunch`)| No               |
-| **Layer 2** | `#[verify(...)]` (Lean 4 proof at compile)  | `SharedArray`, `&mut [T]`, barriers, TMA, clusters, `TMEM`   | No               |
-| **Layer 3** | Scoped `unsafe` + `// SAFETY:` contract     | Raw pointer casts, custom warp masks, unverified intrinsics  | Yes, scoped      |
+| Layer       | Mechanism                                          | What It Covers                                               | `unsafe` Needed? |
+|:------------|:---------------------------------------------------|:-------------------------------------------------------------|:-----------------|
+| **Layer 1** | Rust types (`DisjointSlice` + `ThreadIndex`)       | One-thread-per-slot and tiled global writes (`PreparedLaunch`)| No               |
+| **Layer 2** | `#[verify(...)]` (Lean 4 proof, preview)           | `SharedArray`, `&mut [T]`, barriers, TMA, clusters, `TMEM`   | No               |
+| **Layer 3** | Scoped `unsafe` + `// SAFETY:` contract            | Raw pointer casts, custom warp masks, unverified intrinsics  | Yes, scoped      |
 
 - **Start in Layer 1** for elementwise, stencil, and view-based kernels (requires only `rustc`).
-- **Reach for Layer 2 (`#[verify]`)** when threads cooperate through shared memory, plain `&mut [T]`, `mbarrier` rings, 2-CTA clusters, or Blackwell `tcgen05` / `TMEM`; see [Provably Safe Kernels](verified-kernels.md).
+- **Reach for Layer 2 (`#[verify]`, preview)** when threads cooperate through shared memory, plain `&mut [T]`, `mbarrier` rings, 2-CTA clusters, or Blackwell `tcgen05` / `TMEM`; see [Provably Safe Kernels (preview)](verified-kernels.md).
 - **Drop to Layer 3 (`unsafe`)** only for operations outside both layers.
 
 ---
@@ -145,7 +145,7 @@ For hoisting *input* slice bounds checks on `a[...]` and `b[...]` out of inner l
 
 ---
 
-## Layer 2: Cooperative & Async Kernels (`#[verify]`)
+## Layer 2: Cooperative & Async Kernels (`#[verify]`, preview)
 
 Layer 1 handles independent per-thread writes, while cooperative GPU kernels share `static mut SharedArray` tiles, stage DMA transfers with `Barrier`, or pass plain `&mut [T]` buffers.
 
@@ -168,7 +168,7 @@ What `#[verify(...)]` unlocks in safe Rust (zero `unsafe`, zero runtime check ov
 - **Plain `&mut [T]` parameters**: Unverified `&mut [T]` kernel parameters are rejected at compile time; `#[verify(no_oob_idx(c), disjoint_writes(c))]` proves cross-thread exclusivity and unlocks `&mut [T]`.
 - **Async TMA, warp rings, 2-CTA clusters, and Blackwell `TMEM`**: Proves `mbarrier` token ordering, `SharedArray<Barrier, N>` ring back-pressure, 2-CTA `cluster_sync()` + `map_shared_rank` rank bounds, `CLC` responses, and `tcgen05` + `TMEM` lifecycles (`tmem_lifecycle`).
 
-See [Provably Safe Kernels](verified-kernels.md) for the full guide and nine runnable examples from `safe_vecadd` to `2.118 PFLOP/s` Blackwell GEMM.
+See [Provably Safe Kernels (preview)](verified-kernels.md) for the full guide and nine runnable examples from `safe_vecadd` to `2.118 PFLOP/s` Blackwell GEMM.
 
 ---
 

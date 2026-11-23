@@ -154,6 +154,10 @@ def mergeSymRegLists (iteCond c1 c2 : SymBool) (r1 r2 : SymRegList) : SymRegList
             match v1, v2 with
             | .int e1, .int e2 =>
                 if (symIntRemNodes 36 e1).isNone || (symIntRemNodes 36 e2).isNone then .unk
+                else if iteCond == c1 && symImpliesVal c1 c2 false
+                    && c2 != .lit true && c2 != .lit false && (symBoolRemNodes 96 c2).isSome
+                    && !(match c2 with | .or _ _ => true | _ => false) then
+                  .int (.ite c2 e2 e1)
                 else
                   match e2 with
                   | .havoc _ _ =>

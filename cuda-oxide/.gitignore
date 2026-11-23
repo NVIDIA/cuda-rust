@@ -5,7 +5,7 @@
 .smoketest-logs/
 .regress-gemm-sol/
 /.layer-target/
-/lean/.lake/
+/lean-preview/.lake/
 *.tar.gz
 
 # GPU compilation artifacts.

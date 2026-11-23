@@ -32,7 +32,7 @@ fn export(source: &str) -> String {
     export_named_source(source, "global_index").expect("valid scalar MIR")
 }
 
-/// Resolve the `cuda-oxide/lean` package directory when `lake` is installed,
+/// Resolve the `cuda-oxide/lean-preview` package directory when `lake` is installed,
 /// panicking if `CUDA_OXIDE_REQUIRE_LEAN=1` is set and Lean is unavailable.
 fn lean_package_dir_if_available() -> Option<std::path::PathBuf> {
     let lean_dir = lean_exporter::runner::default_lean_package_dir();
@@ -1996,4 +1996,46 @@ fn verifies_stage10_dual_commit_cg2_multicast_and_dynamic_tile_kind_bounds() {
         err.to_string().contains("omega could not prove the goal"),
         "unexpected Lean error for OOB dynamic tile_kind TMEM bound: {err}"
     );
+}
+
+#[test]
+fn proof_cache_records_valid_proofs_and_invalidates_on_mutation() {
+    let Some(lean_dir) = lean_package_dir_if_available() else {
+        return;
+    };
+    let cache_dir = std::env::temp_dir().join(format!(
+        "cuda_oxide_lean_cache_test_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_dir_all(&cache_dir);
+
+    let valid_lean = export_named_source(VECADD_FIXTURE, "vecadd").expect("exports vecadd");
+    lean_exporter::runner::check_generated_lean_in_cache(&valid_lean, &lean_dir, Some(&cache_dir))
+        .expect("cold proof check succeeds and populates cache");
+    let entries_after_cold = std::fs::read_dir(&cache_dir)
+        .expect("cache dir created")
+        .count();
+    assert_eq!(entries_after_cold, 1, "expected 1 SHA-256 .ok cache marker");
+
+    let t0 = std::time::Instant::now();
+    lean_exporter::runner::check_generated_lean_in_cache(&valid_lean, &lean_dir, Some(&cache_dir))
+        .expect("warm cached proof check succeeds");
+    assert!(
+        t0.elapsed().as_millis() < 250,
+        "cached proof check must skip spawning Lean"
+    );
+
+    let broken_lean = valid_lean.replacen(
+        "requiresLenGe := [(0, 2), (1, 2)]",
+        "requiresLenGe := []",
+        1,
+    );
+    lean_exporter::runner::check_generated_lean_in_cache(&broken_lean, &lean_dir, Some(&cache_dir))
+        .expect_err("mutated Lean source must miss cache and fail proof check");
+
+    let _ = std::fs::remove_dir_all(&cache_dir);
 }

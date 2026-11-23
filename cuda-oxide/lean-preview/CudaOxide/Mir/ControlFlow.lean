@@ -538,19 +538,25 @@ def BranchCond.toGuardExpr (c : BranchCond) : GuardExpr :=
 /-- Compute the active dominating `GuardExpr` at basic block `b` across all 2-way branches.
     Any nested `.unknown` branch (`1..N` levels deep) attaches `.unknown` until reconvergence. -/
 def activeGuardAt (cfg : ControlFlowCfg) (b : Nat) : GuardExpr :=
-  let indices := List.range cfg.blocks.length
-  indices.foldl (fun acc brBlk =>
-    match (cfg.blockAt brBlk).succs with
-    | [(c0, d0), (c1, d1)] =>
-        if brBlk == b || d0 == d1
-            || (c0.toGuardExpr == .tr && c1.toGuardExpr == .tr)
-            || !dominatesBool cfg brBlk b then
-          acc
-        else
-          let g0 := if !canReachAvoiding cfg d1 b [brBlk] then c0.toGuardExpr else .tr
-          let g1 := if !canReachAvoiding cfg d0 b [brBlk] then c1.toGuardExpr else .tr
-          acc.conj (g0.conj g1)
-    | _ => acc) .tr
+  let reach0 := reachableNodesAvoiding cfg 0 []
+  if !(b ∈ reach0) then .tr
+  else
+    let indices := List.range cfg.blocks.length
+    indices.foldl (fun acc brBlk =>
+      match (cfg.blockAt brBlk).succs with
+      | [(c0, d0), (c1, d1)] =>
+          let g0e := c0.toGuardExpr
+          let g1e := c1.toGuardExpr
+          if brBlk == b || d0 == d1
+              || (g0e == .tr && g1e == .tr)
+              || !(brBlk ∈ reach0)
+              || canReachAvoiding cfg 0 b [brBlk] then
+            acc
+          else
+            let g0 := if !canReachAvoiding cfg d1 b [brBlk] then g0e else .tr
+            let g1 := if !canReachAvoiding cfg d0 b [brBlk] then g1e else .tr
+            acc.conj (g0.conj g1)
+      | _ => acc) .tr
 
 /-- True when at least one valid thread `(tx < blockDimX, ty < blockDimY)` satisfies `g`
     (checks lanes `0..31` plus warp leaders `w * 32` to keep WHNF reduction compact). -/

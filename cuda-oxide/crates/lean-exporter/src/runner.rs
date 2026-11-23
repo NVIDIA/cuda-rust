@@ -9,7 +9,7 @@
 //! ```text
 //!   Generated `.lean` string
 //!     │
-//!     ▼  writes temp file & runs `lake env lean` in `cuda-oxide/lean/`
+//!     ▼  writes temp file & runs `lake env lean` in `cuda-oxide/lean-preview/`
 //!   Lean 4 Type-Checker + Kernel
 //!     ├── Exit code != 0?                 ──► Reject build (proof failed!)
 //!     ├── Output mentions `sorryAx`?      ──► Reject build (unproved theorem!)
@@ -33,6 +33,7 @@ use pliron::{
     operation::Operation,
     printable::Printable,
 };
+use sha2::{Digest, Sha256};
 
 use crate::{
     ExportError,
@@ -59,13 +60,99 @@ pub const LEAN_EXPORT_DISCOVERED_ENV: &str = "CUDA_OXIDE_LEAN_EXPORT_DISCOVERED_
 /// erasing `mir.assert` bounds checks.
 pub const LEAN_EXPORT_ONLY_ENV: &str = "CUDA_OXIDE_LEAN_EXPORT_ONLY";
 
-/// Locate the `cuda-oxide/lean` package directory relative to this crate.
+/// Environment flag disabling the content-addressed Lean proof cache (used by
+/// `check-exporter.py`, integration tests, and CI proof jobs so every test run
+/// invokes the real Lean 4 kernel).
+pub const NO_LEAN_CACHE_ENV: &str = "CUDA_OXIDE_NO_LEAN_CACHE";
+
+/// Recursively collect sorted `(relative_path, full_path)` pairs matching `extension` under `root`.
+fn collect_files_sorted(root: &Path, extension: &str) -> Vec<(String, PathBuf)> {
+    let mut stack = vec![root.to_path_buf()];
+    let mut files = Vec::new();
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().and_then(|e| e.to_str()) == Some(extension) {
+                let rel = path
+                    .strip_prefix(root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .into_owned();
+                files.push((rel, path));
+            }
+        }
+    }
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    files
+}
+
+/// Compute a content-addressed SHA-256 cache key over the Lean toolchain pin,
+/// every compiled `.olean` (or `.lean` source when `.olean`s are absent) in
+/// `lean_package_dir`, and the exact generated `lean_source`.
+fn proof_cache_key(lean_source: &str, lean_package_dir: &Path) -> Option<String> {
+    let mut hasher = Sha256::new();
+    hasher.update(b"cuda-oxide-lean-proof-cache-v1\0");
+    let toolchain = fs::read(lean_package_dir.join("lean-toolchain")).ok()?;
+    hasher.update(&toolchain);
+    hasher.update(b"\0");
+
+    let olean_dir = lean_package_dir.join(".lake/build/lib/lean");
+    let library_files = if olean_dir.join("CudaOxide.olean").is_file() {
+        collect_files_sorted(&olean_dir, "olean")
+    } else {
+        collect_files_sorted(&lean_package_dir.join("CudaOxide"), "lean")
+    };
+    if library_files.is_empty() {
+        return None;
+    }
+    for (rel, path) in library_files {
+        hasher.update(rel.as_bytes());
+        hasher.update(b"\0");
+        let bytes = fs::read(path).ok()?;
+        hasher.update((bytes.len() as u64).to_le_bytes());
+        hasher.update(&bytes);
+    }
+    hasher.update(b"\0source\0");
+    hasher.update((lean_source.len() as u64).to_le_bytes());
+    hasher.update(lean_source.as_bytes());
+
+    let digest = hasher.finalize();
+    let mut hex = String::with_capacity(64);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(hex, "{byte:02x}");
+    }
+    Some(hex)
+}
+
+/// Directory holding verified Lean proof cache markers (`~/.cargo/cuda-oxide/lean-cache`).
+fn proof_cache_dir() -> PathBuf {
+    if let Some(dir) = env::var_os("CUDA_OXIDE_LEAN_CACHE_DIR") {
+        return PathBuf::from(dir);
+    }
+    if let Some(home) = env::var_os("HOME") {
+        let candidate = PathBuf::from(home).join(".cargo/cuda-oxide/lean-cache");
+        if fs::create_dir_all(&candidate).is_ok() {
+            return candidate;
+        }
+    }
+    let fallback = env::temp_dir().join("cuda-oxide-lean-cache");
+    let _ = fs::create_dir_all(&fallback);
+    fallback
+}
+
+/// Locate the `cuda-oxide/lean-preview` package directory relative to this crate.
 pub fn default_lean_package_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
         .expect("cuda-oxide workspace root")
-        .join("lean")
+        .join("lean-preview")
 }
 
 /// Locate the `lake` build tool on `PATH` or inside `~/.elan/bin/lake`.
@@ -117,6 +204,20 @@ pub fn is_lean_available(lean_package_dir: &Path) -> bool {
 /// Run Lean 4 on `lean_source` (using direct `lean` + `LEAN_PATH` when `.olean` artifacts
 /// are already built, falling back to `lake env lean`) and audit proof axioms.
 pub fn check_generated_lean(lean_source: &str, lean_package_dir: &Path) -> Result<(), ExportError> {
+    let cache_dir = if env::var_os(NO_LEAN_CACHE_ENV).is_some_and(|v| v == "1") {
+        None
+    } else {
+        Some(proof_cache_dir())
+    };
+    check_generated_lean_in_cache(lean_source, lean_package_dir, cache_dir.as_deref())
+}
+
+/// Same as [`check_generated_lean`] with an explicit optional `cache_dir` (pass `None` to bypass caching).
+pub fn check_generated_lean_in_cache(
+    lean_source: &str,
+    lean_package_dir: &Path,
+    cache_dir: Option<&Path>,
+) -> Result<(), ExportError> {
     let lake = find_lake_executable()?;
     let lean_bin = lake.with_file_name("lean");
     let olean_dir = lean_package_dir.join(".lake/build/lib/lean");
@@ -125,6 +226,17 @@ pub fn check_generated_lean(lean_source: &str, lean_package_dir: &Path) -> Resul
     if let Ok(dump_path) = env::var("CUDA_OXIDE_DUMP_LEAN") {
         let _ = fs::write(dump_path, lean_source);
     }
+
+    let cache_marker = cache_dir.and_then(|dir| {
+        let _ = fs::create_dir_all(dir);
+        proof_cache_key(lean_source, lean_package_dir).map(|key| dir.join(format!("{key}.ok")))
+    });
+    if let Some(ref marker) = cache_marker
+        && marker.is_file()
+    {
+        return Ok(());
+    }
+
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -192,39 +304,13 @@ pub fn check_generated_lean(lean_source: &str, lean_package_dir: &Path) -> Resul
             }
         }
     }
+    if let Some(marker) = cache_marker {
+        let tmp = marker.with_extension(format!("tmp.{}", std::process::id()));
+        if fs::write(&tmp, b"ok\n").is_ok() {
+            let _ = fs::rename(&tmp, &marker);
+        }
+    }
     Ok(())
-}
-
-/// Combine multiple generated kernel `.lean` modules into a single `.lean` source file
-/// with one shared `import CudaOxide` header so all kernels in a crate check in one run.
-fn combine_lean_modules(modules: &[String]) -> String {
-    if modules.len() == 1 {
-        return modules[0].clone();
-    }
-    let mut combined = String::from(
-        "import CudaOxide\n\nset_option linter.unusedSimpArgs false\nset_option maxRecDepth 4096\nset_option maxHeartbeats 800000\n\n",
-    );
-    for (idx, src) in modules.iter().enumerate() {
-        let body = src
-            .lines()
-            .filter(|l| {
-                !l.starts_with("--") && !l.starts_with("import ") && !l.starts_with("set_option ")
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        let namespaced = body
-            .replace(
-                "namespace CudaOxide.Generated",
-                &format!("namespace CudaOxide.Generated.Kernel{idx}"),
-            )
-            .replace(
-                "end CudaOxide.Generated",
-                &format!("end CudaOxide.Generated.Kernel{idx}"),
-            );
-        combined.push_str(&namespaced);
-        combined.push_str("\n\n");
-    }
-    combined
 }
 
 /// Verify every `mir.func` in `module` that carries `#[verify(...)]` attributes,
@@ -299,8 +385,25 @@ pub fn verify_module_kernels(
         return Ok(());
     }
 
-    let batched_source = combine_lean_modules(&lean_modules);
-    check_generated_lean(&batched_source, &lean_dir)?;
+    if lean_modules.len() == 1 {
+        check_generated_lean(&lean_modules[0], &lean_dir)?;
+    } else {
+        std::thread::scope(|s| -> Result<(), ExportError> {
+            let handles: Vec<_> = lean_modules
+                .iter()
+                .map(|src| {
+                    let lean_dir_ref = &lean_dir;
+                    s.spawn(move || check_generated_lean(src, lean_dir_ref))
+                })
+                .collect();
+            for handle in handles {
+                handle
+                    .join()
+                    .map_err(|_| reject("lean verifier", "parallel Lean worker panicked"))??;
+            }
+            Ok(())
+        })?;
+    }
 
     for (name, translated) in &prepared {
         match translated {

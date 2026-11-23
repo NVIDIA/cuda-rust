@@ -155,20 +155,23 @@ elab "mir_mul_mono" : tactic => withMainContext do
   let andRef ← IO.mkRef (#[] : Array (Expr × Expr))       -- because `omega` only reasons over linear `+` and constant `*`
   let orRef  ← IO.mkRef (#[] : Array (Expr × Expr))
   let xorRef ← IO.mkRef (#[] : Array (Expr × Expr))
-  let collect (e : Expr) : MetaM Unit := do               -- Walk an expression tree recording binary `*`, `&`, `|`, `^` apps
+  let pushUniq (ref : IO.Ref (Array (Expr × Expr))) (a b : Expr) : IO Unit :=
+    ref.modify fun acc =>
+      if acc.any (fun (x, y) => x == a && y == b) then acc else acc.push (a, b)
+  let collect (e : Expr) : MetaM Unit := do               -- Walk an expression tree recording unique `*`, `&`, `|`, `^` apps
     e.forEach fun sub => do
       if sub.isAppOfArity ``HMul.hMul 6 then
         let args := sub.getAppArgs
-        mulRef.modify fun acc => acc.push (args[4]!, args[5]!)
+        pushUniq mulRef args[4]! args[5]!
       else if sub.isAppOfArity ``HAnd.hAnd 6 then
         let args := sub.getAppArgs
-        andRef.modify fun acc => acc.push (args[4]!, args[5]!)
+        pushUniq andRef args[4]! args[5]!
       else if sub.isAppOfArity ``HOr.hOr 6 then
         let args := sub.getAppArgs
-        orRef.modify fun acc => acc.push (args[4]!, args[5]!)
+        pushUniq orRef args[4]! args[5]!
       else if sub.isAppOfArity ``HXor.hXor 6 then
         let args := sub.getAppArgs
-        xorRef.modify fun acc => acc.push (args[4]!, args[5]!)
+        pushUniq xorRef args[4]! args[5]!
   collect (← instantiateMVars (← getMainTarget))          -- Scan the target proposition
   for decl in (← getLCtx) do                              -- Scan all hypotheses in scope
     if !decl.isImplementationDetail then
@@ -387,15 +390,18 @@ partial def solveVcGoals (fuel iteFuel : Nat) : TacticM Unit := do
         let (sPos, sNeg) ← (← getMainGoal).byCases condExpr hName
         let simpExcept (thmStx : TSyntax `Lean.Parser.Tactic.simpLemma) : TacticM Unit := do
           if (← getGoals).isEmpty then return
-          try evalTactic (← `(tactic| simp only [$thmStx, ↓reduceIte, eq_self, Nat.not_lt_zero, and_false, false_and, or_false, false_or, and_true, true_and, or_true, true_or])) catch _ => pure ()
-          if (← getGoals).isEmpty then return
           let decls ← withMainContext do pure (← getLCtx).decls.toList
+          let mut locIds : Array Ident := #[]
           for dOpt in decls do
-            if (← getGoals).isEmpty then return
             if let some d := dOpt then
               if !d.isImplementationDetail && d.userName != hName then
-                let dId := mkIdent d.userName
-                try evalTactic (← `(tactic| simp only [$thmStx, ↓reduceIte, eq_self, Nat.not_lt_zero, and_false, false_and, or_false, false_or, and_true, true_and, or_true, true_or] at $dId:ident)) catch _ => pure ()
+                locIds := locIds.push (mkIdent d.userName)
+          try
+            if locIds.isEmpty then
+              evalTactic (← `(tactic| simp only [$thmStx, ↓reduceIte, eq_self, Nat.not_lt_zero, and_false, false_and, or_false, false_or, and_true, true_and, or_true, true_or]))
+            else
+              evalTactic (← `(tactic| simp only [$thmStx, ↓reduceIte, eq_self, Nat.not_lt_zero, and_false, false_and, or_false, false_or, and_true, true_and, or_true, true_or] at $locIds* ⊢))
+          catch _ => pure ()
         setGoals [sPos.mvarId]
         simpExcept (← `(Lean.Parser.Tactic.simpLemma| eq_true $hIte:ident))
         solveVcGoals (fuel - 1) (iteFuel - 1)

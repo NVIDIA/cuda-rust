@@ -747,13 +747,22 @@ pub fn launch_contract(attr: TokenStream, item: TokenStream) -> TokenStream {
     launch_attrs::launch_contract_entry(attr, item)
 }
 
-/// Declares formal verification obligations for a kernel, checked by Lean 4 at
-/// the `PostMem2Reg` `dialect-mir` stage.
+/// Declares preview formal verification obligations for a kernel, checked by
+/// Lean 4 (`cuda-oxide/lean-preview`) at the `PostMem2Reg` `dialect-mir` stage.
 ///
-/// Supported clauses name the kernel's slice and `DisjointSlice` parameters:
-/// - `no_oob_idx(a, b, c)`: every indexed read or write stays within `0..len`
+/// **Preview:** `#[verify(...)]` covers a validated subset of `PostMem2Reg`
+/// integer, shared-memory, barrier, cluster, and `tcgen05` / `TMEM` MIR.
+/// Kernels outside that subset fail closed at compile time, and clause syntax
+/// may evolve between releases.
+///
+/// Supported clauses name the kernel's slice parameters, `SharedArray`s, and
+/// hardware contracts:
+/// - `no_oob_idx(a, TILE)`: every indexed read or write stays in bounds
+/// - `no_data_race(TILE)`: no two CTA threads conflict on shared memory in one phase
 /// - `disjoint_writes(c)`: distinct launched threads never write the same slot
 /// - `writes_all_elems(c)`: every element in `0..c.len()` has a writer thread
+/// - `uniform_barriers`: CTA/cluster barriers and `mbarrier` waits are safe
+/// - `tmem_lifecycle`: Blackwell `TMEM` bounds, warpgroup slices, and async order
 ///
 /// ```ignore
 /// #[launch_contract(

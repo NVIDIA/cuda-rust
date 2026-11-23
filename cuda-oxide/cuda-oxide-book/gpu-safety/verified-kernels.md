@@ -1,4 +1,9 @@
-# Provably Safe Kernels
+# Provably Safe Kernels (preview)
+
+:::{admonition} Preview
+:class: warning
+Compile-time Lean 4 verification (`#[verify(...)]` and `cuda-oxide/lean-preview/`) is in preview. It covers a validated subset of `PostMem2Reg` integer, shared-memory, barrier, 2-CTA cluster, and Blackwell `tcgen05` / `TMEM` MIR through the pinned Lean `v4.33.1` toolchain. Kernels outside that subset fail closed at compile time, and attribute syntax and supported operations may change between releases.
+:::
 
 On a CPU, **Safe Rust** means your program has zero undefined behavior:
 - No out-of-bounds memory accesses

@@ -117,10 +117,10 @@ check-intrinsics base_ref="HEAD^":
     cargo run -p cuda-intrinsics-gen -- probe --all --skip-terminal --per-target
     cargo run -p cuda-intrinsics-gen -- check-abi-history --base-ref {{base_ref}}
 
-# Run the Lean 4 formal verification model and MIR exporter proof checks
+# Run the Lean 4 formal verification model and MIR exporter proof checks (preview)
 check-lean:
-    python3 lean/check.py
-    python3 lean/check-exporter.py
+    CUDA_OXIDE_NO_LEAN_CACHE=1 python3 lean-preview/check.py
+    CUDA_OXIDE_NO_LEAN_CACHE=1 python3 lean-preview/check-exporter.py
 
 # Build docs warning-free + run doctests (mirrors the docs CI gate). The `test`
 # recipe uses `--all-targets`, which skips doctests, so this covers them.

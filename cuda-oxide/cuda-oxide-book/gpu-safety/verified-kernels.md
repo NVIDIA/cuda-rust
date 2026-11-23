@@ -114,7 +114,7 @@ cuda-oxide translates the kernel instruction by instruction before loop unrollin
 ### Trusted Computing Base
 
 Lean 4 checks every proof from scratch and rejects anything that leaves a gap or adds custom assumptions. Everything outside that proof check is part of the **Trusted Computing Base (TCB)**:
-- **MIR import and SSA promotion**: Lowering Rust into compiler IR and turning stack variables into SSA registers.
+- **MIR import and SSA promotion**: Lowering Rust into compiler IR and turning stack variables into SSA registers (`--device-debug` skips SSA promotion and is rejected on `#[verify]` modules; pass `--lineinfo` for source-line info instead).
 - **The Lean transcriber**: Copying basic blocks and control-flow ops into Lean 4, and stopping immediately if it sees an unsupported instruction or attribute.
 - **Downstream lowering**: Deleting proven bounds checks, unrolling loops, and generating LLVM IR and PTX after verification passes.
 - **Host launch checks and CUDA runtime**: Checking block sizes and buffer lengths on the CPU before launching the kernel.

@@ -266,6 +266,8 @@ fn expr_targets_static(expr: &Expr, allowed: &[Ident]) -> bool {
     }
 }
 
+/// Peel transparent `Delimiter::None` [`Expr::Group`] wrappers introduced by
+/// outer attribute macros (`#[cuda_module]`, `#[kernel]`) around an expression.
 fn peel_group(mut expr: &Expr) -> &Expr {
     while let Expr::Group(g) = expr {
         expr = &g.expr;
@@ -273,6 +275,8 @@ fn peel_group(mut expr: &Expr) -> &Expr {
     expr
 }
 
+/// Mutable counterpart to [`peel_group`] for in-place AST rewriting across
+/// macro-injected [`Expr::Group`] wrappers.
 fn peel_group_mut(mut expr: &mut Expr) -> &mut Expr {
     while let Expr::Group(g) = expr {
         expr = &mut g.expr;

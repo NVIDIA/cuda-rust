@@ -1,0 +1,9 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+// Hand-authored dialect-mir fixture, not extracted from a Rust kernel.
+mir.func @global_index: builtin.function <(builtin.integer ui64, builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)> [] {
+  ^entry(block: builtin.integer ui64, block_size: builtin.integer ui64, lane: builtin.integer ui64):
+    product = mir.mul (block, block_size) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+    index = mir.add (product, lane) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+    mir.return (index) [] []: <(builtin.integer ui64) -> ()>
+}

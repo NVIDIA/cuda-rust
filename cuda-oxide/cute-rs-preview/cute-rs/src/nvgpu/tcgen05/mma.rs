@@ -7,11 +7,76 @@
 //! block-scaled NVFP4 (`MmaMXF4NVF4Op`) tiled MMA.
 
 use super::{
-    __compiler, OperandA, OperandB, SharedTile, Sm100ScaleTile, Sm100SharedTile, SmemLayout,
+    __compiler, MmaHalfElement, OperandA, OperandB, SharedTile, Sm100ScaleTile, Sm100SharedTile,
+    SmemLayout,
 };
 use crate::layout::ReifySmem2D;
 use crate::utils::blockscaled::{Mkl, Nkl};
 use core::marker::PhantomData;
+
+/// Controls how an SM107 Tensor Core collector buffer retains or releases an operand (`CollectorOp`).
+///
+/// Pair `Fill` with `LastUse` to load `B` from shared memory once across two `A` tiles:
+///
+/// ```text
+/// MMA 0 (CollectorFill):    reads B from SMEM and stashes it in the B collector
+/// MMA 1 (CollectorLastUse): reuses B from the collector and frees the slot
+/// ```
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CollectorOp {
+    /// Read from shared memory and discard the collector slot (`CollectorOp.DISCARD`).
+    Discard = 0,
+    /// Reuse the stashed operand one final time and release the slot (`CollectorOp.LASTUSE`).
+    LastUse = 1,
+    /// Read from shared memory and keep the operand in the collector (`CollectorOp.FILL`).
+    Fill = 2,
+    /// Reuse the stashed operand and keep it in the collector (`CollectorOp.USE`).
+    Use = 3,
+}
+
+/// Sealed trait restricting type-level collector markers to valid [`CollectorOp`] variants.
+mod sealed_collector {
+    /// Implemented only by [`super::CollectorDiscard`], [`super::CollectorLastUse`],
+    /// [`super::CollectorFill`], and [`super::CollectorUse`].
+    pub trait CollectorMarker {}
+}
+
+/// Compile-time [`CollectorOp`] marker carried in [`SM107BlockScaledMmaMXF8F6F4Op`]'s type parameters.
+pub trait CollectorOpMarker: sealed_collector::CollectorMarker + Copy {
+    /// Encoded [`CollectorOp`] discriminant (`0..=3`) read by the compiler.
+    const OP: CollectorOp;
+}
+
+/// Type-level marker for [`CollectorOp::Discard`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CollectorDiscard;
+/// Type-level marker for [`CollectorOp::LastUse`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CollectorLastUse;
+/// Type-level marker for [`CollectorOp::Fill`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CollectorFill;
+/// Type-level marker for [`CollectorOp::Use`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CollectorUse;
+
+impl sealed_collector::CollectorMarker for CollectorDiscard {}
+impl CollectorOpMarker for CollectorDiscard {
+    const OP: CollectorOp = CollectorOp::Discard;
+}
+impl sealed_collector::CollectorMarker for CollectorLastUse {}
+impl CollectorOpMarker for CollectorLastUse {
+    const OP: CollectorOp = CollectorOp::LastUse;
+}
+impl sealed_collector::CollectorMarker for CollectorFill {}
+impl CollectorOpMarker for CollectorFill {
+    const OP: CollectorOp = CollectorOp::Fill;
+}
+impl sealed_collector::CollectorMarker for CollectorUse {}
+impl CollectorOpMarker for CollectorUse {
+    const OP: CollectorOp = CollectorOp::Use;
+}
 
 /// Two-CTA FP16 tiled MMA with two N partitions sharing the A collector.
 ///
@@ -208,24 +273,33 @@ impl<AL: ReifySmem2D, BL: ReifySmem2D, const M: u32, const K: u32>
     }
 }
 
-/// Independent shared/shared FP16 MMA with FP32 accumulation (`tcgen05.MmaF16BF16Op`).
+/// Independent shared/shared FP16 or BF16 MMA with FP32 accumulation (`tcgen05.MmaF16BF16Op`).
 ///
-/// `M = 128`; `N` is a multiple of 16 in `16..=256`; `K` is a positive
-/// multiple of 16; `GROUP` is 1 or 2. M/N describe the complete product.
-/// Each CTA's layouts must cover A `(M / GROUP, K)` and B `(N / GROUP, K)`
-/// and satisfy [`SharedLayout`](super::SharedLayout)'s restrictions.
-pub struct MmaSs<AL, BL, const M: u32, const N: u32, const K: u32, const GROUP: u32>(
-    #[doc = "Carries both per-CTA shared operand layouts."] PhantomData<(AL, BL)>,
+/// For `GROUP = 1`, `M` is `64` or `128`; for `GROUP = 2`, `M` is `128` or `256`.
+/// `N` is a multiple of 16 in `16..=256`; `K` is a positive multiple of 16.
+/// M/N describe the complete product across the CTA group. Each CTA's layouts
+/// must cover A `(M / GROUP, K)` and B `(N / GROUP, K)` and satisfy [`SharedLayout`](super::SharedLayout).
+pub struct MmaSs<AL, BL, const M: u32, const N: u32, const K: u32, const GROUP: u32, T = f16>(
+    #[doc = "Carries both per-CTA shared operand layouts and the 16-bit element type."]
+    PhantomData<(AL, BL, T)>,
 );
-impl<AL: SmemLayout, BL: SmemLayout, const M: u32, const N: u32, const K: u32, const G: u32>
-    MmaSs<AL, BL, M, N, K, G>
+impl<
+    AL: SmemLayout,
+    BL: SmemLayout,
+    const M: u32,
+    const N: u32,
+    const K: u32,
+    const G: u32,
+    T: MmaHalfElement,
+> MmaSs<AL, BL, M, N, K, G, T>
 {
     /// Check group size, collective dimensions and per-CTA shared operand shapes.
     const VALID: () = {
         let () = AL::VALID;
         let () = BL::VALID;
         assert!(G == 1 || G == 2);
-        assert!(M == 128 && N >= 16 && N <= 256 && N.is_multiple_of(16));
+        assert!((G == 1 && (M == 64 || M == 128)) || (G == 2 && (M == 128 || M == 256)));
+        assert!(N >= 16 && N <= 256 && N.is_multiple_of(16));
         assert!(K >= 16 && K.is_multiple_of(16));
         assert!(AL::ROWS == M / G && BL::ROWS == N / G);
         assert!(AL::COLS == K && BL::COLS == K);
@@ -245,12 +319,12 @@ impl<AL: SmemLayout, BL: SmemLayout, const M: u32, const N: u32, const K: u32, c
     pub unsafe fn gemm(
         &self,
         dst: u32,
-        a: &SharedTile<AL, OperandA>,
-        b: &SharedTile<BL, OperandB>,
+        a: &SharedTile<AL, OperandA, T>,
+        b: &SharedTile<BL, OperandB, T>,
         accumulate: bool,
     ) {
         unsafe {
-            __compiler::mma_ss::<AL, BL, M, N, K, G>(
+            __compiler::mma_ss::<AL, BL, M, N, K, G, T>(
                 dst,
                 a.base,
                 b.base,
@@ -261,8 +335,135 @@ impl<AL: SmemLayout, BL: SmemLayout, const M: u32, const N: u32, const K: u32, c
         }
     }
 }
-impl<AL: SmemLayout, BL: SmemLayout, const M: u32, const N: u32, const K: u32, const G: u32> Default
-    for MmaSs<AL, BL, M, N, K, G>
+impl<
+    AL: SmemLayout,
+    BL: SmemLayout,
+    const M: u32,
+    const N: u32,
+    const K: u32,
+    const G: u32,
+    T: MmaHalfElement,
+> Default for MmaSs<AL, BL, M, N, K, G, T>
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Vera Rubin (`sm_107a`) `MXFP8` (`Float8E4M3FN` + `Float8E8M0FNU`, `SF_VEC = 32`, `K = 64`)
+/// block-scaled `tcgen05` MMA atom (`SM107BlockScaledMmaMXF8F6F4Op`).
+///
+/// One `K = 128` TMA stage holds two `K = 64` MMA steps (`sub_k = 0` and `1`) and one 512-byte
+/// `UE8M0` scale atom per operand. Set `BCollector` to [`CollectorFill`] and [`CollectorLastUse`]
+/// to reuse one `B` tile across two `M`-halves without re-reading shared memory.
+#[derive(Debug)]
+pub struct SM107BlockScaledMmaMXF8F6F4Op<
+    AL,
+    BL,
+    const M: u32 = 128,
+    const N: u32 = 128,
+    const GROUP: u32 = 1,
+    BCollector = CollectorDiscard,
+>(
+    #[doc = "Zero-byte marker carrying per-CTA shared layouts and the B-collector policy."]
+    PhantomData<(AL, BL, BCollector)>,
+);
+
+impl<AL, BL, const M: u32, const N: u32, const GROUP: u32, BCollector> Copy
+    for SM107BlockScaledMmaMXF8F6F4Op<AL, BL, M, N, GROUP, BCollector>
+{
+}
+impl<AL, BL, const M: u32, const N: u32, const GROUP: u32, BCollector> Clone
+    for SM107BlockScaledMmaMXF8F6F4Op<AL, BL, M, N, GROUP, BCollector>
+{
+    #[inline(always)]
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<
+    AL: ReifySmem2D,
+    BL: ReifySmem2D,
+    const M: u32,
+    const N: u32,
+    const GROUP: u32,
+    BCollector: CollectorOpMarker,
+> SM107BlockScaledMmaMXF8F6F4Op<AL, BL, M, N, GROUP, BCollector>
+{
+    /// Compile-time verification of SM107 `MXF8F6F4` (`K = 64` per MMA, `K = 128` per TMA/scale stage)
+    /// dimensions and 128-byte swizzled (`Swizzle<3, 4, 3>`) `Float8E4M3FN` shared tile shapes.
+    const VALID: () = {
+        assert!(GROUP == 1 || GROUP == 2);
+        assert!((GROUP == 1 && M == 128) || (GROUP == 2 && M == 256));
+        assert!(N >= 16 && N <= 256 && N.is_multiple_of(16));
+        assert!(AL::SHAPE.0 == (M / GROUP) as i64 && AL::SHAPE.1 == 128);
+        assert!(BL::SHAPE.0 == N as i64 / GROUP as i64 && BL::SHAPE.1 == 128);
+        assert!(AL::NUM_BITS == 3 && AL::NUM_BASE == 4 && AL::NUM_SHIFT == 3 && AL::OFFSET == 0);
+        assert!(BL::NUM_BITS == 3 && BL::NUM_BASE == 4 && BL::NUM_SHIFT == 3 && BL::OFFSET == 0);
+    };
+
+    /// Validate the static SM107 `MXF8F6F4` MMA configuration at compile time.
+    #[must_use]
+    #[inline(always)]
+    pub const fn new() -> Self {
+        let () = Self::VALID;
+        Self(PhantomData)
+    }
+
+    /// Copy one 512-byte `(32, 4, 4)` `Float8E8M0FNU` scale atom (`K = 128` at `SF_VEC = 32`) at
+    /// `step` from shared memory into 4 TMEM columns at `tmem_col` via `tcgen05.cp.32x128b.warpx4`.
+    ///
+    /// # Safety
+    /// One elected lane in the leader CTA must issue this operation after `s_scale` is ready in shared memory.
+    #[inline(always)]
+    pub unsafe fn copy<Role>(tmem_col: u32, s_scale: &Sm100ScaleTile<Role>, step: usize) {
+        unsafe {
+            __compiler::sm107_block_scaled_copy::<GROUP>(tmem_col, s_scale.base, step as u32);
+        }
+    }
+
+    /// Issue one `K = 64` sub-step (`sub_k` in `0..2` within the `K = 128` stage) of an SM107
+    /// `tcgen05.mma.kind::mxf8f6f4.block_scale` instruction (`CuTeDSL cute.gemm`).
+    ///
+    /// # Safety
+    /// One elected lane in the leader CTA must issue this operation on `sm_107a` after `a`, `b`,
+    /// and the TMEM scales at `sfa_tmem` and `sfb_tmem` are ready.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    pub unsafe fn gemm(
+        &self,
+        tmem_d: u32,
+        a: &Sm100SharedTile<AL, OperandA>,
+        b: &Sm100SharedTile<BL, OperandB>,
+        sfa_tmem: u32,
+        sfb_tmem: u32,
+        sub_k: usize,
+        accumulate: bool,
+    ) {
+        let _ = (Mkl, Nkl);
+        unsafe {
+            __compiler::sm107_block_scaled_gemm::<AL, BL, M, N, GROUP, BCollector>(
+                tmem_d,
+                a.base,
+                b.base,
+                sfa_tmem,
+                sfb_tmem,
+                sub_k as u32,
+                accumulate,
+            );
+        }
+    }
+}
+
+impl<
+    AL: ReifySmem2D,
+    BL: ReifySmem2D,
+    const M: u32,
+    const N: u32,
+    const GROUP: u32,
+    BCollector: CollectorOpMarker,
+> Default for SM107BlockScaledMmaMXF8F6F4Op<AL, BL, M, N, GROUP, BCollector>
 {
     fn default() -> Self {
         Self::new()

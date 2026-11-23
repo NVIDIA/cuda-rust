@@ -28,6 +28,7 @@ const COMMANDS_SOURCE: &str = concat!(
     include_str!("fmt.rs"),
     include_str!("host_cargo.rs"),
     include_str!("interop.rs"),
+    include_str!("lean_export.rs"),
     include_str!("ltoir.rs"),
     include_str!("materialize.rs"),
     include_str!("passthrough.rs"),

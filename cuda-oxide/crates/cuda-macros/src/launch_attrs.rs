@@ -92,7 +92,7 @@ pub(crate) fn standalone_requires_params(item_fn: &ItemFn) -> Option<Vec<CudaMod
 /// Shared core of [`standalone_requires_params`], usable with a saved copy
 /// of a kernel's original inputs before scope parameters are appended or
 /// wrapper signatures are synthesized.
-fn requires_params_from_inputs(
+pub(crate) fn requires_params_from_inputs(
     inputs: &syn::punctuated::Punctuated<FnArg, syn::token::Comma>,
 ) -> Option<Vec<CudaModuleParam>> {
     let mut params = Vec::new();
@@ -187,6 +187,19 @@ pub(crate) fn inject_launch_contract_markers(args: &LaunchContractArgs, input: &
             ::cuda_device::shared::__dynamic_shared_alignment::<#alignment>();
         };
         input.block.stmts.insert(next, alignment_marker);
+        next += 1;
+    }
+
+    if let Some(params) = standalone_requires_params(input) {
+        for (lhs_idx, rhs_idx) in
+            crate::verify::extract_requires_len_ge_pairs(&args.requires, &params)
+        {
+            let req_marker: syn::Stmt = parse_quote! {
+                ::cuda_device::thread::__launch_contract_requires_len_ge_config::<#lhs_idx, #rhs_idx>();
+            };
+            input.block.stmts.insert(next, req_marker);
+            next += 1;
+        }
     }
 }
 

@@ -84,14 +84,40 @@ if warp_id == 0 {
 
 ---
 
+## 3. Vera Rubin (`sm_107a`): `K = 64` MXFP8, B-Collector Reuse, and PDL
+
+Vera Rubin (`sm_107a`) keeps the same `tcgen05` and `TMEM` programming model as SM100, and adds two hardware upgrades that `cute-rs` exposes directly in types:
+
+1. **Deeper `K = 64` `MXFP8` Tensor Cores (`SM107BlockScaledMmaMXF8F6F4Op`):** Every 32 `Float8E4M3FN` values share one power-of-two `UE8M0` scale byte (`Sm1xxBlockScaleKMajor<32>`). One `K = 128` TMA stage holds a single 512-byte scale atom and feeds two `K = 64` MMA instructions (`sub_k = 0` and `1`).
+2. **Hardware B-collector reuse (`CollectorFill` + `CollectorLastUse`):** When a CTA computes a tall `256x128` output tile from two `128x128` `A` halves (`a0`, `a1`) and one shared `128x128` `B` tile, the first MMA stashes `B` inside the Tensor Core's B-collector so the second MMA reuses `B` without touching shared memory again:
+
+```rust
+type ATileSmem = ComposedLayout<Swizzle<3, 4, 3>, 0, RowMajor<128, 128>>;
+type BTileSmem = ComposedLayout<Swizzle<3, 4, 3>, 0, RowMajor<128, 128>>;
+type MmaBKeep  = SM107BlockScaledMmaMXF8F6F4Op<ATileSmem, BTileSmem, 128, 128, 1, CollectorFill>;
+type MmaBReuse = SM107BlockScaledMmaMXF8F6F4Op<ATileSmem, BTileSmem, 128, 128, 1, CollectorLastUse>;
+
+// Copy each 512-byte UE8M0 scale atom into 4 TMEM columns, then run both K=64 steps:
+MmaBKeep::copy(sfa0_col, &sfa0_tile, 0);
+MmaBKeep::copy(sfa1_col, &sfa1_tile, 0);
+MmaBKeep::copy(sfb_col,  &sfb_tile,  0);
+mma_keep.gemm(tmem,       &a0_tile, &b_tile, sfa0_col, sfb_col, 0, accumulate); // stashes B
+mma_reuse.gemm(tmem + 128, &a1_tile, &b_tile, sfa1_col, sfb_col, 0, accumulate); // reuses B
+```
+
+Both Rubin GEMM examples (`sm107_bf16_gemm_cute` and `sm107_mxfp8_gemm_cute`) also show **Programmatic Dependent Launch (`PDL`)** via `cute_rs::arch::{griddepcontrol_wait, griddepcontrol_launch_dependents}`, which lets the next kernel in a chain start prefetching weights while the previous kernel finishes writing its last output tiles.
+
+---
+
 ## Where to Go Next
 
-| Workload | Location | Highlights |
-| :------- | :------- | :--------- |
-| **Elementwise / SwiGLU / RMSNorm** | `cuda-oxide/cute-rs-preview/examples/{elementwise,swiglu,rmsnorm}_cute` | 1D tiling, register transforms, warp reductions, and ragged tails. |
-| **FFN & RoPE KV-Cache Attention** | `cuda-oxide/cute-rs-preview/examples/{ffn,rope_cache}_cute` | BF16 tensor-core projections, typed weight roles, and 128-wide GQA. |
-| **MXFP4 GEMV & Block-Scaled GEMM** | `cuda-oxide/cute-rs-preview/examples/{nvfp4_gemv,blockscale_gemm}_cute` | Packed FP4 + `Float8E8M0FNU` scales, 3-stage TMA pipelines, and `*_ctm` counterparts. |
-| **SM100a 2-CTA GEMM & Attention** | `cuda-oxide/cute-rs-preview/examples/{fp16_gemm_256x352,sm100_fmha_prefill,sm100_mla_decode_fp16,sm100_qkv_epilogue}_cute` | Two-CTA cluster TMA, 2-stage TMEM ping-pong, FlashAttention / MLA decode, and fused QKV + FP8 paged KV scatter. |
-| **Nemotron-3 NVFP4 ReLU² MoE** | `cuda-oxide/cute-rs-preview/models/nemotron3_moe_cute` | Hardware block-scaled NVFP4 (`tcgen05.mma...mxf4nvf4.block_scale`) grouped MoE on B200 (`sm_100a`). |
-| **Qwen3-8B (BF16 & NVFP4)** | `cuda-oxide/cute-rs-preview/models/qwen3_8b_cute` | 36-layer `Qwen/Qwen3-8B` (`H=4096, I=12288, GQA 32:8`) in BF16 and NVFP4 (`Float4E2M1FN` + `Float8E4M3FN`, `SF_VEC = 16`) on RTX 5090 (`visual.md`). |
-| **End-to-End Qwen3-TTS Model** | `cuda-oxide/cute-rs-preview/models/qwen_decoder_cute` | Complete Talker + Predictor speech synthesis on SM120a (see `visual.md` inside that folder for a visual tour). |
+| Workload                           | Location                                                                     | Highlights                                                                  |
+|:-----------------------------------|:-----------------------------------------------------------------------------|:----------------------------------------------------------------------------|
+| **Elementwise / SwiGLU / RMSNorm** | `cuda-oxide/cute-rs-preview/examples/{elementwise,swiglu,rmsnorm}_cute`      | 1D tiling, register transforms, warp reductions, and ragged tails.          |
+| **FFN & RoPE KV-Cache Attention**  | `cuda-oxide/cute-rs-preview/examples/{ffn,rope_cache}_cute`                  | BF16 tensor-core projections, typed weight roles, and 128-wide GQA.         |
+| **MXFP4 GEMV & Block-Scaled GEMM** | `cuda-oxide/cute-rs-preview/examples/{nvfp4_gemv,blockscale_gemm}_cute`      | Packed FP4 + `UE8M0` scales, 3-stage TMA pipelines, and `*_ctm` twins.      |
+| **SM100a 2-CTA GEMM & Attention**  | `cuda-oxide/cute-rs-preview/examples/{fp16_gemm_256x352,sm100_*}_cute`       | Two-CTA cluster TMA, TMEM ping-pong, FMHA/MLA, and fused QKV + FP8 KV.      |
+| **Vera Rubin (`sm_107a`) GEMMs**   | `cuda-oxide/cute-rs-preview/examples/sm107_{bf16,mxfp8}_gemm_cute`           | 2-CTA BF16 (`2.67 PFLOP/s`) and `K=64` MXFP8 + B-collector (`5.17 PFLOP/s`).|
+| **Nemotron-3 NVFP4 ReLU² MoE**     | `cuda-oxide/cute-rs-preview/models/nemotron3_moe_cute`                       | Block-scaled NVFP4 (`mxf4nvf4`) grouped MoE on B200 (`sm_100a`) & Rubin.    |
+| **Qwen3-8B (BF16 & NVFP4)**        | `cuda-oxide/cute-rs-preview/models/qwen3_8b_cute`                            | 36-layer `Qwen/Qwen3-8B` in BF16 and NVFP4 (`SF_VEC = 16`) on RTX 5090.     |
+| **End-to-End Qwen3-TTS Model**     | `cuda-oxide/cute-rs-preview/models/qwen_decoder_cute`                        | Complete Talker + Predictor speech synthesis on SM120a (`visual.md`).       |

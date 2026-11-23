@@ -198,6 +198,14 @@ pub fn prepare_mir_module(
         "module post-mem2reg-compiler-result-forwarding",
     )?;
 
+    lean_exporter::verify_module_kernels(ctx, module, preparation.verbose).map_err(|error| {
+        PipelineError::Verification {
+            name: "lean-kernel-verification".to_string(),
+            message: error.to_string(),
+            operation: None,
+        }
+    })?;
+
     // Formation passes that need promoted SSA values but must still see the
     // original loop CFG run here. In particular, a reduction formation pass
     // cannot safely infer a source loop once generic unrolling has cloned it.

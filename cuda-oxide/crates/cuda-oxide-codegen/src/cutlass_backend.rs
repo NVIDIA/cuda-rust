@@ -18,11 +18,17 @@ use std::path::{Path, PathBuf};
 pub const CUTLASS_FULL_CUTE_MLIR22_PROFILE: &str = "cutlass-full-cute-mlir22";
 
 /// Official CUTLASS release providing the compiler-library ABI.
-pub const CUTLASS_COMPILER_VERSION: &str = "4.7.0";
+pub const CUTLASS_COMPILER_VERSION: &str = "4.8.1";
 
-/// SHA-256 of the official x86_64/CUDA-13 CUTLASS 4.7 compiler library.
+/// SHA-256 of the official Linux/CUDA-13 CUTLASS 4.8.1 compiler library for the host architecture.
+#[cfg(target_arch = "aarch64")]
 pub const CUTLASS_COMPILER_LIBRARY_SHA256: &str =
-    "57df017e3585a10443c74c8b4cd99bda854242fb2f4c9534cf56d58c2c741628";
+    "2b5585de761ee91d1b170d2b7f6b98da573e2165c46dfc7232ae339467120b1f";
+
+/// SHA-256 of the official Linux/CUDA-13 CUTLASS 4.8.1 compiler library for the host architecture.
+#[cfg(not(target_arch = "aarch64"))]
+pub const CUTLASS_COMPILER_LIBRARY_SHA256: &str =
+    "36a4314dddcc9082448720530d49bc112cf88a9f45f43a3f27d8df8d7791d8fa";
 
 /// Version-pinned ABI mode for external `gpu.module` device images. Concrete
 /// CUTLASS wrapper ABIs require FunctionMetadata and cannot represent this
@@ -35,9 +41,9 @@ const CUTLASS_EXTERNAL_MODULE_ABI: &str =
 /// The C API pass manager is already anchored on `builtin.module`; adding a
 /// second `builtin.module(...)` wrapper changes the pass nesting and does not
 /// lower this input. The leading canonicalization is also part of the pinned
-/// contract: CUTLASS 4.7's default first stage does not accept the generic
+/// contract: CUTLASS 4.8.1's default first stage does not accept the generic
 /// operation form emitted by the profile.
-const CUTLASS_PRECOMPILED_PIPELINE: &str = "canonicalize,cute-to-nvvm{check-inline-asm=false cubin-format=bin opt-level=3 use-software-pipeline-pass=true use-fold-static-pass=true use-insert-range-information-pass=true use-loop-invariant-pass=true use-strength-reduction-pass=true use-eliminate-unnecessary-sync-pass=true use-infer-loop-attrs-pass=true enable-cuda-dialect=true cuda-dialect-external-module=true}";
+const CUTLASS_PRECOMPILED_PIPELINE: &str = "canonicalize,cute-to-nvvm{check-inline-asm=false cubin-format=bin opt-level=3 use-software-pipeline-pass=true use-fold-static-pass=true use-insert-range-information-pass=true use-loop-invariant-pass=true use-strength-reduction-pass=true use-eliminate-unnecessary-sync-pass=true enable-cuda-dialect=true cuda-dialect-external-module=true}";
 
 #[cfg(test)]
 #[path = "tests/cutlass/sm100.rs"]
@@ -149,7 +155,7 @@ type ExpectedKernelAbis = BTreeMap<String, Vec<KernelParameterKind>>;
 /// Compile one rendered profile module and atomically publish a verified CUDA
 /// image suitable for `cuModuleLoadData`.
 ///
-/// CUTLASS 4.7 returns a host relocatable object. Its exact, fingerprint-pinned
+/// CUTLASS 4.8.1 returns a host relocatable object. Its exact, fingerprint-pinned
 /// contract contains one local data symbol named `kernels_binary`; that symbol
 /// is either a raw CUDA ELF image or a CUDA fatbinary. A fatbinary must contain
 /// exactly one matching, uncompressed cubin, which is extracted so the public
@@ -459,14 +465,23 @@ fn split_abi_items(input: &str) -> Result<Vec<&str>, String> {
     Ok(items)
 }
 
+fn expected_host_elf_architecture() -> object::Architecture {
+    if cfg!(target_arch = "aarch64") {
+        object::Architecture::Aarch64
+    } else {
+        object::Architecture::X86_64
+    }
+}
+
 fn extract_kernels_binary(object_bytes: &[u8]) -> Result<Vec<u8>, String> {
     let file = object::File::parse(object_bytes).map_err(|error| error.to_string())?;
+    let expected_arch = expected_host_elf_architecture();
     if file.format() != object::BinaryFormat::Elf
         || file.kind() != object::ObjectKind::Relocatable
-        || file.architecture() != object::Architecture::X86_64
+        || file.architecture() != expected_arch
     {
         return Err(format!(
-            "expected an x86-64 ELF relocatable, got {:?}/{:?}/{:?}",
+            "expected a {expected_arch:?} ELF relocatable, got {:?}/{:?}/{:?}",
             file.format(),
             file.kind(),
             file.architecture()
@@ -752,7 +767,7 @@ fn validate_cuda_cubin(
 /// Check each cubin's launch argument layout against the exported MLIR.
 ///
 /// CUDA records parameter sizes and offsets in each kernel's `.nv.info` section.
-/// We support the record format emitted by the pinned CUTLASS 4.7 / CUDA 13.x
+/// We support the record format emitted by the pinned CUTLASS 4.8.1 / CUDA 13.x
 /// toolchain and reject unknown or malformed records.
 fn validate_kernel_parameter_abi(
     kernel: &str,
@@ -1466,7 +1481,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires the installed official CUTLASS 4.7 compiler; does not require a GPU"]
+    #[ignore = "requires the installed official CUTLASS 4.8.1 compiler; does not require a GPU"]
     fn cutlass_f32_direct_launch_abi_compiles() {
         let compiler_path = std::env::var_os("CUDA_OXIDE_TEST_CUTLASS_COMPILER")
             .expect("set CUDA_OXIDE_TEST_CUTLASS_COMPILER to the pinned compiler library");
@@ -1503,7 +1518,7 @@ mod tests {
     fn flattened_bool_and_i32_match_pinned_cuda_parameter_records() {
         let abis = expected_kernel_abis(MIXED_SCALAR_SIGNATURE, &["mixed_abi".into()]).unwrap();
         let parameters = &abis["mixed_abi"];
-        // CUTLASS 4.7 / CUDA 13 emits i1 as one byte, matching the original
+        // CUTLASS 4.8.1 / CUDA 13 emits i1 as one byte, matching the original
         // Rust bool carrier passed to push_kernel_scalar by typed launchers.
         assert_eq!(
             parameters
@@ -1571,7 +1586,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires the installed official CUTLASS 4.7 compiler; does not require a GPU"]
+    #[ignore = "requires the installed official CUTLASS 4.8.1 compiler; does not require a GPU"]
     fn cutlass_mixed_bool_i32_direct_launch_abi_compiles() {
         let compiler_path = std::env::var_os("CUDA_OXIDE_TEST_CUTLASS_COMPILER")
             .expect("set CUDA_OXIDE_TEST_CUTLASS_COMPILER to the pinned compiler library");

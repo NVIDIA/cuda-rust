@@ -74,6 +74,10 @@ pub(crate) enum Sm100Fn {
     BlockScaledCopy,
     /// Issue one `K = 64` step of a group-one block-scaled `mxf4nvf4` MMA.
     BlockScaledGemm,
+    /// Copy one 512-byte `(32, 4, 4)` `UE8M0` scale atom into TMEM for `GROUP` CTAs.
+    Sm107BlockScaledCopy,
+    /// Issue one `K = 64` sub-step of an SM107 `mxf8f6f4` block-scaled MMA.
+    Sm107BlockScaledGemm,
 }
 
 /// Report an unsupported source contract at this CuTe boundary.
@@ -156,9 +160,9 @@ fn shared_operands(kind: Sm100Fn) -> &'static [usize] {
     match kind {
         TmemAlloc => &[0],
         TmemDealloc | StoreCommit | StoreAcquire | StoreTail => &[],
-        TmaStore | BlockScaledCopy => &[1],
+        TmaStore | BlockScaledCopy | Sm107BlockScaledCopy => &[1],
         TiledMma => &[1, 2, 3],
-        BlockScaledGemm => &[1, 2],
+        BlockScaledGemm | Sm107BlockScaledGemm => &[1, 2],
         TmemEpilogue => &[1],
         ClusterTmaLoad => &[1, 4],
         PipelineInit | AccumulatorInit => &[0, 1],
@@ -174,11 +178,12 @@ fn operand_count(kind: Sm100Fn) -> usize {
         TmemAlloc | TmemDealloc | AccumulatorCommit | AccumulatorRelease => 1,
         PipelineInit | PipelineExpect | PipelineRelease | AccumulatorInit | AccumulatorAcquire
         | AccumulatorWait => 2,
-        PipelineAcquire | PipelineWait | BlockScaledCopy => 3,
+        PipelineAcquire | PipelineWait | BlockScaledCopy | Sm107BlockScaledCopy => 3,
         TmemEpilogue | TmaStore => 4,
         StoreCommit | StoreAcquire | StoreTail => 0,
         TiledMma => 5,
         ClusterTmaLoad => 6,
+        Sm107BlockScaledGemm => 7,
         BlockScaledGemm => 9,
     }
 }
@@ -396,6 +401,36 @@ pub(crate) fn emit(
             },
         )
         .get_operation(),
+        Sm107BlockScaledCopy => CuteSm100BlockScaledCopyOp::new(
+            ctx,
+            operands,
+            CuteSm100ScaleCopyPlanAttr {
+                cta_group: constant(&static_args, 0, &loc)?,
+            },
+        )
+        .get_operation(),
+        Sm107BlockScaledGemm => {
+            let Some(GenericArgKind::Type(col_ty)) = static_args.0.get(5) else {
+                return Err(invalid(
+                    "Sm107BlockScaledGemm generic argument 5 must be a collector marker type",
+                ));
+            };
+            let b_collector =
+                super::static_config::decode_collector_marker(col_ty).map_err(invalid)?;
+            CuteSm107BlockScaledGemmOp::new(
+                ctx,
+                operands,
+                CuteSm107BlockScaledMmaPlanAttr {
+                    m: constant(&static_args, 2, &loc)?,
+                    n: constant(&static_args, 3, &loc)?,
+                    cta_group: constant(&static_args, 4, &loc)?,
+                    b_collector,
+                    a_layout: layout(&static_args, 0)?,
+                    b_layout: layout(&static_args, 1)?,
+                },
+            )
+            .get_operation()
+        }
     };
     operation.deref_mut(ctx).set_loc(loc.clone());
     insert(ctx, operation, block, after);

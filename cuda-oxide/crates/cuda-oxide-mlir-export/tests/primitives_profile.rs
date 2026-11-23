@@ -60,7 +60,7 @@ fn primitives_profile_pins_consumer_and_target() {
     let profile = CutlassPrimitivesMlir22::new("sm_100a").unwrap();
     let manifest = profile.manifest();
     assert_eq!(manifest.profile, "cutlass-primitives-mlir22");
-    assert_eq!(manifest.consumer_revision, "cutlass-compiler-v4.7.0");
+    assert_eq!(manifest.consumer_revision, "cutlass-compiler-v4.8.1");
     assert_eq!(manifest.llvm_major, 22);
     assert_eq!(
         manifest.pliron_revision,
@@ -70,7 +70,7 @@ fn primitives_profile_pins_consumer_and_target() {
         manifest.interop_revision,
         cuda_oxide_mlir_export::INTEROP_REVISION
     );
-    for arch in ["sm_103a", "sm_120a"] {
+    for arch in ["sm_103a", "sm_107a", "sm_120a"] {
         assert_eq!(
             CutlassPrimitivesMlir22::new(arch)
                 .unwrap()
@@ -79,7 +79,7 @@ fn primitives_profile_pins_consumer_and_target() {
             arch
         );
     }
-    for arch in ["sm_90a", "sm_120", "sm_100", "sm_103", "garbage"] {
+    for arch in ["sm_90a", "sm_120", "sm_100", "sm_103", "sm_107", "garbage"] {
         assert!(CutlassPrimitivesMlir22::new(arch).is_err());
     }
 }

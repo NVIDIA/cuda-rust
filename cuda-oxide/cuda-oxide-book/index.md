@@ -114,7 +114,11 @@ Schedule across stream pools. Await results with `.await`.
 :::
 
 :::{grid-item-card} 🧩  Typed CuTe Kernels (preview)
-Encode layouts, swizzles, TMA pipelines, and tensor-core MMA in Rust's type system with [cute-rs](cute/overview.md), compiled through CUTLASS 4.7 for `sm_100a`, `sm_103a`, and `sm_120a`. See the [support matrix](cute/support-matrix.md).
+Encode layouts, swizzles, TMA pipelines, and tensor-core MMA in Rust's type system with [cute-rs](cute/overview.md), compiled through CUTLASS 4.8.1 for `sm_100a`, `sm_103a`, `sm_107a` (Vera Rubin), and `sm_120a`. See the [support matrix](cute/support-matrix.md).
+:::
+
+:::{grid-item-card} 🛡️  Provably Safe Kernels (preview)
+Prove bounds, shared-memory race freedom, barrier uniformity, and async `tcgen05` / `TMEM` lifecycles at compile time in Lean 4 with [`#[verify(...)]`](gpu-safety/verified-kernels.md), erasing proven bounds checks before PTX codegen.
 :::
 
 ::::
@@ -151,6 +155,7 @@ gpu-programming/error-handling-and-debugging
 
 gpu-safety/the-safety-model
 gpu-safety/bounds-checks
+gpu-safety/verified-kernels
 ```
 
 ```{toctree}

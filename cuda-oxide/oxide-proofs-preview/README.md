@@ -1,6 +1,6 @@
-# Lean 4 Kernel Verification (`cuda-oxide/lean-preview`, preview)
+# Lean 4 Kernel Verification (`cuda-oxide/oxide-proofs-preview`, preview)
 
-> **Preview:** Compile-time Lean 4 verification (`#[verify(...)]` and `cuda-oxide/lean-preview/`) is a preview feature, like `cute-rs-preview/`. It covers a validated subset of `PostMem2Reg` integer, shared-memory, barrier, cluster, and `tcgen05` / `TMEM` MIR; unsupported operations fail closed at compile time, and attribute syntax may change between releases.
+> **Preview:** Compile-time Lean 4 verification (`#[verify(...)]` and `cuda-oxide/oxide-proofs-preview/`) is a preview feature, like `cute-rs-preview/`. It covers a validated subset of `PostMem2Reg` integer, shared-memory, barrier, cluster, and `tcgen05` / `TMEM` MIR; unsupported operations fail closed at compile time, and attribute syntax may change between releases.
 
 **Rust proves memory validity and non-aliasing on the host; `#[launch_contract]` checks grid/length preconditions once before launch; Lean 4 proves GPU bounds, race freedom, barrier uniformity, and async hardware lifecycles at compile time.**
 

@@ -9,7 +9,7 @@
 //! ```text
 //!   Generated `.lean` string
 //!     │
-//!     ▼  writes temp file & runs `lake env lean` in `cuda-oxide/lean-preview/`
+//!     ▼  writes temp file & runs `lake env lean` in `cuda-oxide/oxide-proofs-preview/`
 //!   Lean 4 Type-Checker + Kernel
 //!     ├── Exit code != 0?                 ──► Reject build (proof failed!)
 //!     ├── Output mentions `sorryAx`?      ──► Reject build (unproved theorem!)
@@ -146,13 +146,13 @@ fn proof_cache_dir() -> PathBuf {
     fallback
 }
 
-/// Locate the `cuda-oxide/lean-preview` package directory relative to this crate.
+/// Locate the `cuda-oxide/oxide-proofs-preview` package directory relative to this crate.
 pub fn default_lean_package_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
         .expect("cuda-oxide workspace root")
-        .join("lean-preview")
+        .join("oxide-proofs-preview")
 }
 
 /// Locate the `lake` build tool on `PATH` or inside `~/.elan/bin/lake`.

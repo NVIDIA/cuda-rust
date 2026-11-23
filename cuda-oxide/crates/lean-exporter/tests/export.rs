@@ -32,7 +32,7 @@ fn export(source: &str) -> String {
     export_named_source(source, "global_index").expect("valid scalar MIR")
 }
 
-/// Resolve the `cuda-oxide/lean-preview` package directory when `lake` is installed,
+/// Resolve the `cuda-oxide/oxide-proofs-preview` package directory when `lake` is installed,
 /// panicking if `CUDA_OXIDE_REQUIRE_LEAN=1` is set and Lean is unavailable.
 fn lean_package_dir_if_available() -> Option<std::path::PathBuf> {
     let lean_dir = lean_exporter::runner::default_lean_package_dir();

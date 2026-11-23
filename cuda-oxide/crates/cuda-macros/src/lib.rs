@@ -748,7 +748,7 @@ pub fn launch_contract(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 /// Declares preview formal verification obligations for a kernel, checked by
-/// Lean 4 (`cuda-oxide/lean-preview`) at the `PostMem2Reg` `dialect-mir` stage.
+/// Lean 4 (`cuda-oxide/oxide-proofs-preview`) at the `PostMem2Reg` `dialect-mir` stage.
 ///
 /// **Preview:** `#[verify(...)]` covers a validated subset of `PostMem2Reg`
 /// integer, shared-memory, barrier, cluster, and `tcgen05` / `TMEM` MIR.

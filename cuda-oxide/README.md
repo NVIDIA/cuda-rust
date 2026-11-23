@@ -17,7 +17,7 @@ The workspace combines:
 - single-source compilation -- host and device code live in the same file, built with one `cargo oxide build`
 - a rustc codegen backend that compiles `#[kernel]` functions to CUDA PTX
 - device-side abstractions (type-safe indexing, shared memory, scoped atomics, barriers, TMA, warp/cluster ops)
-- compile-time Lean 4 kernel verification (`#[verify(...)]` and `lean-preview/`, preview) for shared memory, barriers, and async `tcgen05` / `TMEM` lifecycles
+- compile-time Lean 4 kernel verification (`#[verify(...)]` and `oxide-proofs-preview/`, preview) for shared memory, barriers, and async `tcgen05` / `TMEM` lifecycles
 - compile-time kernel policies for separate tuned specializations without runtime policy arguments
 - a host-side runtime for memory management, pinned host transfers, and kernel launching (`cuda-core`, `cuda-async`)
 - a rust-native compilation pipeline using [Pliron](https://github.com/vaivaswatha/pliron), an MLIR-like IR framework in Rust (Rust → Rust MIR → Pliron IR → LLVM IR → PTX)
@@ -348,7 +348,7 @@ cargo oxide run gemm_sol_final
 
 | Crate                     | Description                                                    |
 |---------------------------|----------------------------------------------------------------|
-| `lean-exporter`           | Preview `dialect-mir`-to-Lean 4 (`lean-preview/`) exporter and proof runner |
+| `lean-exporter`           | Preview `dialect-mir` exporter for `oxide-proofs-preview/`     |
 | `cargo-oxide`             | Cargo subcommand (`cargo oxide run`, etc.)                     |
 | `cuda-intrinsics-gen`     | Extractor and deterministic source generator for the intrinsics |
 | `cuda-artifact-finalizer` | Driver-independent NVVM IR, LTOIR, and PTX finalization         |

@@ -119,8 +119,8 @@ check-intrinsics base_ref="HEAD^":
 
 # Run the Lean 4 formal verification model and MIR exporter proof checks (preview)
 check-lean:
-    CUDA_OXIDE_NO_LEAN_CACHE=1 python3 lean-preview/check.py
-    CUDA_OXIDE_NO_LEAN_CACHE=1 python3 lean-preview/check-exporter.py
+    CUDA_OXIDE_NO_LEAN_CACHE=1 python3 oxide-proofs-preview/check.py
+    CUDA_OXIDE_NO_LEAN_CACHE=1 python3 oxide-proofs-preview/check-exporter.py
 
 # Build docs warning-free + run doctests (mirrors the docs CI gate). The `test`
 # recipe uses `--all-targets`, which skips doctests, so this covers them.

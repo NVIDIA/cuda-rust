@@ -380,8 +380,8 @@ jobs:
           apt-get install -y --no-install-recommends llvm-23
           llc-23 --version | head -2
 
-      - name: Install Elan and build Lean 4 proof library (lean-preview)
-        working-directory: cuda-oxide/lean-preview
+      - name: Install Elan and build Lean 4 proof library (oxide-proofs-preview)
+        working-directory: cuda-oxide/oxide-proofs-preview
         run: |
           set -euo pipefail
           curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \

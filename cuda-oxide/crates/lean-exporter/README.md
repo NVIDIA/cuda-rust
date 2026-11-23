@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # `dialect-mir` to Lean 4 Exporter (`lean-exporter`, preview)
 
-> **Preview:** `#[verify(...)]` and `lean-exporter` are in preview alongside `cuda-oxide/lean-preview/`. Expect attribute syntax and supported MIR coverage to evolve between releases.
+> **Preview:** `#[verify(...)]` and `lean-exporter` are in preview alongside `cuda-oxide/oxide-proofs-preview/`. Expect attribute syntax and supported MIR coverage to evolve between releases.
 
 Thin, fail-closed transcriber that converts `PostMem2Reg` `dialect-mir` into Lean 4 (`MirFunc` + `ControlFlowCfg`) so Lean 4 proves kernel safety before `cuda-oxide` lowers MIR to PTX.
 
@@ -85,5 +85,5 @@ cargo oxide lean-export crates/lean-exporter/fixtures/vecadd.mir --function veca
 
 # 3. Run unit, negative, and Lean proof tests:
 cargo test -p lean-exporter
-python3 lean-preview/check-exporter.py
+python3 oxide-proofs-preview/check-exporter.py
 ```

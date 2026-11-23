@@ -312,7 +312,7 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Install Elan and pinned Lean 4 toolchain
-        working-directory: cuda-oxide/lean-preview
+        working-directory: cuda-oxide/oxide-proofs-preview
         run: |
           set -euo pipefail
           curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
@@ -327,6 +327,6 @@ jobs:
           CUDA_OXIDE_NO_LEAN_CACHE: "1"
         run: |
           export PATH="$HOME/.elan/bin:$PATH"
-          python3 lean-preview/check.py
-          python3 lean-preview/check-exporter.py
+          python3 oxide-proofs-preview/check.py
+          python3 oxide-proofs-preview/check-exporter.py
           cargo test -p lean-exporter --all-targets

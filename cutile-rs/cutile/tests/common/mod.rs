@@ -36,7 +36,8 @@ pub fn supports_tile_ir(features: &[cutile_ir::requirements::Feature]) -> bool {
 }
 
 /// Process-wide lock serializing tests that assert on global kernel-cache
-/// state (presence of a key) or the global JIT compile counter.
+/// state (presence of a key) or the global JIT compile counter, and tests
+/// that change the default tile libraries, which are part of every key.
 ///
 /// The in-memory kernel cache and `cutile::tile_kernel::jit_compile_count()`
 /// are process-global. A test that measures "did this call compile or hit the

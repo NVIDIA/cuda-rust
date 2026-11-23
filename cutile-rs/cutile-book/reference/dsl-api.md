@@ -172,6 +172,39 @@ mod my_kernels {
 
 See `cutile-examples/examples/inter_module.rs` for a runnable version.
 
+### Name Resolution
+
+Calls, tag types and foreign functions resolve by their path where they are
+written, as in Rust: through `use` imports (including renames and globs),
+`pub use` re-exports, and `crate::` or `super::` paths. Two modules can each
+define an item with the same name; each use reaches the one it names.
+
+- A type that the host passes as a kernel generic argument resolves in the
+  kernel's module. When two loaded modules declare it and the kernel's module
+  does not import it, it is a compile error; pass its module path
+  (`upper_fill::Fill`) instead.
+- `#[cutile::module]`s in different places can share a short name such as
+  `kernels`: each `use` reaches the module its path names. A path that
+  starts with a short name several loaded modules share, without a `use`
+  (`helpers::f(x)`, or a host-named tag `helpers::Fill`), is a compile
+  error: write its crate or absolute path, or `use` the module.
+- Inline `mod`s inside one `#[cutile::module]` share its namespace, so two of
+  them cannot declare functions, consts or statics with the same name. Put
+  such declarations in separate `#[cutile::module]`s. They may declare
+  structs, traits or type aliases with the same name, but naming one of
+  those is a compile error.
+- The JIT does not track which inline `mod` makes a call. A plain name that
+  only an inline `mod` declares, while an import, a glob import or
+  `cutile::core` also provides it, is a compile error that names both: call
+  the item by its path (`approx::exp(x)`) or import it by name
+  (`use self::approx::exp;`).
+
+### Foreign Tile-Library Functions
+
+A body-less `unsafe fn` marked `#[cutile::foreign]` declares a function
+implemented by a tile library (`.tilelib`). See
+[Tile Libraries](../guide/tile-libraries.md) for declarations, host setup and safety.
+
 ### `cutile::core` internals
 
 `cutile::core` (defined in `_core.rs`) is itself a `#[cutile::module]`
@@ -407,6 +440,10 @@ operation.
 The raw intrinsics live in `cutile::core`; view constructors and their
 types also live in `cutile::tileir`. They are for callers that can uphold
 the documented unsafe invariants. Existing convenience APIs remain unchanged.
+
+For CUDA 13.5 peer and multicast memory access, see
+[Unsafe GPU communication](unsafe-comms.md), including the synchronization
+primitives, mapping contracts, and runnable two-GPU example.
 The JIT checks both the selected assembler's bytecode version and the actual
 target architecture. Type, attribute and operand-configuration requirements
 apply even when an operation itself predates them.
@@ -772,6 +809,31 @@ let ptrs: PointerTile<*mut f32, { [128] }> = base.broadcast(shape![128]).offset_
 let (values, token): (Tile<f32, { [128] }>, Token) =
     load_ptr_tko(ptrs, ordering::Weak, None::<scope::TileBlock>, None, None, None, Latency::<0>);
 ```
+
+(masked-pointer-loads)=
+#### Masked pointer loads
+
+`load_ptr_tko` accepts a mask with the pointer tile's shape and an optional
+scalar padding value. Masked-off lanes receive padding; the frontend broadcasts
+that scalar across the complete result shape, including rank-two and rank-three
+tiles. For example, inside an unsafe device function:
+
+```rust
+// ptrs: PointerTile<*const f16, {[BM, BK]}>
+// valid: Tile<bool, {[BM, BK]}>
+let zero: f16 = convert_scalar(0.0f32);
+let (values, token): (Tile<f16, {[BM, BK]}>, Token) = unsafe {
+    load_ptr_tko(ptrs, ordering::Weak, None::<scope::TileBlock>,
+                 Some(valid), Some(zero), None, Latency::<1>)
+};
+```
+
+The caller must ensure every enabled lane addresses a live, correctly aligned
+allocation with the required synchronization. Pointer loads do not infer tensor
+bounds or strides. Construct the mask from the actual shape, use the actual
+strides, and widen operands to `i64` before offset multiplication. Keep tokens
+when subsequent operations depend on the load. See
+[memory operations and atomics](#low-level-memory-ops) for ordering and scope.
 
 #### Atomics
 

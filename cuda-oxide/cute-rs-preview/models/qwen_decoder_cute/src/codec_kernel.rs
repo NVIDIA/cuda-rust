@@ -3,16 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 //! Waveform kernels use time-major [time, channel] storage throughout.
-use ctm_rs::memory::DisjointSlice;
-use ctm_rs::{cuda_module, kernel, launch_contract, thread};
 use cute_rs::BFloat16;
+use cutlass_primitives as prims;
+use prims::memory::DisjointSlice;
+use prims::{cuda_module, kernel, launch_contract, thread};
 
 /// Device convolution, normalization and activation operations for time-major batches.
 #[cuda_module]
 pub mod kernels {
     use super::*;
 
-    use cute_rs::mma::bf16::{Bf16Mma16x8x16, FragmentC};
+    use cute_rs::nvgpu::warp::bf16::{Bf16Mma16x8x16, FragmentC};
     use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
 
     /// Read one virtual im2col element, zero-filling outside the input extent.

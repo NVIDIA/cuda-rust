@@ -5,10 +5,11 @@
 
 //! Shared FP32/BF16 RMSNorm kernels with explicit BF16 rounding boundaries.
 
-use ctm_rs::memory::DisjointSlice;
-use ctm_rs::{cuda_module, kernel, thread};
 use cute_rs::BFloat16;
 use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
+use cutlass_primitives as prims;
+use prims::memory::DisjointSlice;
+use prims::{cuda_module, kernel, thread};
 
 /// Four complete warps own four independent rows in every block.
 pub(crate) const ROWS_PER_BLOCK: usize = 4;

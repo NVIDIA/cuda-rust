@@ -479,21 +479,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // smoketest's `verdict_standard` correctly flags as FAIL.
     println!("Test 9: non-move reference captures");
     {
-        let scale = 0.5f32;
-        let bias = 8.0f32;
-        println!("  scale = {}, bias = {}", scale, bias);
-        println!("  captures are borrowed by the closure environment");
+        let supports_hmm = unsafe {
+            let mut device = 0;
+            let mut value = 0i32;
+            cuda_core::sys::cuCtxGetDevice(&mut device)
+                == cuda_core::sys::cudaError_enum_CUDA_SUCCESS
+                && cuda_core::sys::cuDeviceGetAttribute(
+                    &mut value,
+                    cuda_core::sys::CUdevice_attribute_enum_CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS,
+                    device,
+                ) == cuda_core::sys::cudaError_enum_CUDA_SUCCESS
+                && value != 0
+        };
+        if !supports_hmm {
+            println!(
+                "  skipping non-move reference capture: device/OS does not support pageable host memory access (HMM)\n"
+            );
+        } else {
+            let scale = 0.5f32;
+            let bias = 8.0f32;
+            println!("  scale = {}, bias = {}", scale, bias);
+            println!("  captures are borrowed by the closure environment");
 
-        run_launch_matrix!(
-            "non-move reference captures",
-            map::<f32, _>,
-            map,
-            map_async,
-            |x: f32| x * scale + bias,
-            |x| x * scale + bias,
-            1e-5
-        );
-        println!();
+            run_launch_matrix!(
+                "non-move reference captures",
+                map::<f32, _>,
+                map,
+                map_async,
+                |x: f32| x * scale + bias,
+                |x| x * scale + bias,
+                1e-5
+            );
+            println!();
+        }
     }
 
     // =========================================================================

@@ -11,6 +11,10 @@ mod attention;
 #[path = "../../../examples/rope_cache_cute/src/attention_kernel.rs"]
 /// Shared CuTe kernels for split attention and its stable merge.
 mod attention_kernel;
+#[allow(dead_code)]
+#[path = "../../../examples/common/attention_metadata.rs"]
+/// Checked host metadata for BF16 attention and contiguous key/value caches.
+mod attention_metadata;
 #[path = "../../../examples/rope_cache_cute/src/attention_reference.rs"]
 /// Independent CPU attention calculations used by numerical checks.
 mod attention_reference;
@@ -35,10 +39,18 @@ mod cute_boundary;
 mod decode_linear;
 /// Resident-input projection microbenchmarks, separate from model timing.
 mod decode_linear_bench;
+#[allow(dead_code)]
+#[path = "../../../examples/common/decoder.rs"]
+/// Checked BF16 decoder arguments, embedding indices and normalization roles.
+mod decoder;
 /// Shared typed scratch and ordered layer submission for private execution regions.
 mod decoder_execution;
 /// CuTe kernels for embeddings, biased projections and row operations.
 mod element_kernel;
+#[allow(dead_code)]
+#[path = "../../../examples/common/ffn.rs"]
+/// Checked host arguments for BF16 projections and feed-forward compositions.
+mod ffn;
 #[path = "../../../examples/ffn_cute/src/kernel.rs"]
 /// Shared CuTe projection and activation kernels from the feed-forward example.
 mod ffn_kernel;

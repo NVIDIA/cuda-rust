@@ -279,7 +279,7 @@ fn emit_tma_copy_2d_views(
     copy_op
 }
 
-/// `cute_rs::copy::cooperative::copy_g2s::<Atom, ThrL, ValL, TileL, SmemL, T>`
+/// `cute_rs::atom::cooperative::copy_g2s::<Atom, ThrL, ValL, TileL, SmemL, T>`
 ///
 /// The importer's whole job is flattening: read the validated static
 /// configuration from the substs, read the runtime facts out of the carrier
@@ -426,7 +426,7 @@ pub(crate) fn emit_copy_g2s(
     Ok(emit_goto(ctx, *target_idx, copy_op, block_map, loc))
 }
 
-/// `cute_rs::mma::load_matrix_{a,b}::<SmemL>(src, warp_tile, lane) -> Frag`
+/// `cute_rs::nvgpu::warp::load_matrix_{a,b}::<SmemL>(src, warp_tile, lane) -> Frag`
 ///
 /// Flattening only, like `copy_g2s`: the shared base comes out of the
 /// carrier, the tuple splits into two coordinates, and the destination
@@ -898,7 +898,7 @@ fn finish_with_copy(
     Ok(emit_goto(ctx, *target_idx, copy_op, block_map, loc))
 }
 
-/// `cute_rs::copy::vector::load_tile::<T, N>(src: &[T], idx: usize) -> [T; N]`
+/// `cute_rs::atom::vector::load_tile::<T, N>(src: &[T], idx: usize) -> [T; N]`
 ///
 /// The returned tile is written directly into the destination local's slot
 /// (memory-to-memory `cute.copy`), so there is no SSA result to record.
@@ -982,7 +982,7 @@ pub(crate) fn emit_load_tile(
     )
 }
 
-/// `cute_rs::copy::vector::assume::<D>(x: usize) -> usize`
+/// `cute_rs::atom::vector::assume::<D>(x: usize) -> usize`
 ///
 /// The result equals the input at runtime, but the SSA edge carries `D`:
 ///
@@ -1045,7 +1045,838 @@ pub(crate) fn emit_assume_div(
     Ok(emit_goto(ctx, *target_idx, goto_prev, block_map, loc))
 }
 
-/// `cute_rs::copy::vector::store_tile::<T, N>(dst: *mut T, idx: usize, vals: &[T; N])`
+/// `cute_rs::numeric::__compiler::cvt_f32_to_bf16(value: f32) -> u16`
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_cvt_f32_to_bf16(
+    ctx: &mut Context,
+    body: &mir::Body,
+    args: &[mir::Operand],
+    destination: &mir::Place,
+    target: &Option<usize>,
+    block_ptr: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    value_map: &mut ValueMap,
+    block_map: &[Ptr<BasicBlock>],
+    loc: Location,
+) -> TranslationResult<Ptr<Operation>> {
+    if args.len() != 1 || !destination.projection.is_empty() {
+        return input_err!(
+            loc,
+            TranslationErr::unsupported(
+                "cvt_f32_to_bf16 expects 1 argument and direct destination".to_string()
+            )
+        );
+    }
+    let (val, prev) = translate_operand(
+        ctx,
+        body,
+        &args[0],
+        value_map,
+        block_ptr,
+        prev_op,
+        loc.clone(),
+    )?;
+    let op = dialect_cute::tensor_ops::CuteConvertF32ToBf16Op::new(ctx, val).get_operation();
+    op.deref_mut(ctx).set_loc(loc.clone());
+    insert(ctx, op, block_ptr, prev.or(prev_op));
+    let res = op.deref(ctx).get_result(0);
+    let goto_prev = value_map
+        .store_local(ctx, destination.local, res, block_ptr, Some(op))
+        .unwrap_or(op);
+    let Some(target_idx) = target else {
+        return input_err!(
+            loc,
+            TranslationErr::unsupported(
+                "cvt_f32_to_bf16 call without target not supported".to_string()
+            )
+        );
+    };
+    Ok(emit_goto(ctx, *target_idx, goto_prev, block_map, loc))
+}
+
+/// `cute_rs::numeric::__compiler::cvt_f32_to_e4m3(value: f32) -> u8`
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_cvt_f32_to_e4m3(
+    ctx: &mut Context,
+    body: &mir::Body,
+    args: &[mir::Operand],
+    destination: &mir::Place,
+    target: &Option<usize>,
+    block_ptr: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    value_map: &mut ValueMap,
+    block_map: &[Ptr<BasicBlock>],
+    loc: Location,
+) -> TranslationResult<Ptr<Operation>> {
+    if args.len() != 1 || !destination.projection.is_empty() {
+        return input_err!(
+            loc,
+            TranslationErr::unsupported(
+                "cvt_f32_to_e4m3 expects 1 argument and direct destination".to_string()
+            )
+        );
+    }
+    let (val, prev) = translate_operand(
+        ctx,
+        body,
+        &args[0],
+        value_map,
+        block_ptr,
+        prev_op,
+        loc.clone(),
+    )?;
+    let op = dialect_cute::tensor_ops::CuteConvertF32ToE4m3Op::new(ctx, val).get_operation();
+    op.deref_mut(ctx).set_loc(loc.clone());
+    insert(ctx, op, block_ptr, prev.or(prev_op));
+    let res = op.deref(ctx).get_result(0);
+    let goto_prev = value_map
+        .store_local(ctx, destination.local, res, block_ptr, Some(op))
+        .unwrap_or(op);
+    let Some(target_idx) = target else {
+        return input_err!(
+            loc,
+            TranslationErr::unsupported(
+                "cvt_f32_to_e4m3 call without target not supported".to_string()
+            )
+        );
+    };
+    Ok(emit_goto(ctx, *target_idx, goto_prev, block_map, loc))
+}
+
+/// `cute_rs::numeric::__compiler::cvt_e4m3_to_f32(bits: u8) -> f32`
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_cvt_e4m3_to_f32(
+    ctx: &mut Context,
+    body: &mir::Body,
+    args: &[mir::Operand],
+    destination: &mir::Place,
+    target: &Option<usize>,
+    block_ptr: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    value_map: &mut ValueMap,
+    block_map: &[Ptr<BasicBlock>],
+    loc: Location,
+) -> TranslationResult<Ptr<Operation>> {
+    if args.len() != 1 || !destination.projection.is_empty() {
+        return input_err!(
+            loc,
+            TranslationErr::unsupported(
+                "cvt_e4m3_to_f32 expects 1 argument and direct destination".to_string()
+            )
+        );
+    }
+    let (val, prev) = translate_operand(
+        ctx,
+        body,
+        &args[0],
+        value_map,
+        block_ptr,
+        prev_op,
+        loc.clone(),
+    )?;
+    let op = dialect_cute::tensor_ops::CuteConvertE4m3ToF32Op::new(ctx, val).get_operation();
+    op.deref_mut(ctx).set_loc(loc.clone());
+    insert(ctx, op, block_ptr, prev.or(prev_op));
+    let res = op.deref(ctx).get_result(0);
+    let goto_prev = value_map
+        .store_local(ctx, destination.local, res, block_ptr, Some(op))
+        .unwrap_or(op);
+    let Some(target_idx) = target else {
+        return input_err!(
+            loc,
+            TranslationErr::unsupported(
+                "cvt_e4m3_to_f32 call without target not supported".to_string()
+            )
+        );
+    };
+    Ok(emit_goto(ctx, *target_idx, goto_prev, block_map, loc))
+}
+
+/// `cute_rs::numeric::__compiler::cvt_f32x8_to_e2m1x8(v0..v7: f32) -> u32`
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_cvt_f32x8_to_e2m1x8(
+    ctx: &mut Context,
+    body: &mir::Body,
+    args: &[mir::Operand],
+    destination: &mir::Place,
+    target: &Option<usize>,
+    block_ptr: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    value_map: &mut ValueMap,
+    block_map: &[Ptr<BasicBlock>],
+    loc: Location,
+) -> TranslationResult<Ptr<Operation>> {
+    if args.len() != 8 || !destination.projection.is_empty() {
+        return input_err!(
+            loc,
+            TranslationErr::unsupported(
+                "cvt_f32x8_to_e2m1x8 expects 8 arguments and direct destination".to_string()
+            )
+        );
+    }
+    let mut vals = Vec::with_capacity(8);
+    let mut cur_prev = prev_op;
+    for arg in args {
+        let (val, prev) =
+            translate_operand(ctx, body, arg, value_map, block_ptr, cur_prev, loc.clone())?;
+        cur_prev = prev.or(cur_prev);
+        vals.push(val);
+    }
+    let op = dialect_cute::tensor_ops::CuteConvertF32x8ToE2m1x8Op::new(ctx, vals).get_operation();
+    op.deref_mut(ctx).set_loc(loc.clone());
+    insert(ctx, op, block_ptr, cur_prev);
+    let res = op.deref(ctx).get_result(0);
+    let goto_prev = value_map
+        .store_local(ctx, destination.local, res, block_ptr, Some(op))
+        .unwrap_or(op);
+    let Some(target_idx) = target else {
+        return input_err!(
+            loc,
+            TranslationErr::unsupported(
+                "cvt_f32x8_to_e2m1x8 call without target not supported".to_string()
+            )
+        );
+    };
+    Ok(emit_goto(ctx, *target_idx, goto_prev, block_map, loc))
+}
+
+/// Extract the scalar leaf type of `elem_ty` (unwrapping 1-field `#[repr(transparent)]` wrapper structs
+/// such as `BFloat16(u16)`, `Float8E4M3FN(u8)`, and `Float4E2M1FNx8(u32)`).
+fn scalar_leaf_type(ctx: &Context, elem_ty: TypeHandle) -> (TypeHandle, bool) {
+    let ty_ref = elem_ty.deref(ctx);
+    if let Some(strct) = ty_ref.downcast_ref::<MirStructType>()
+        && strct.field_types.len() == 1
+    {
+        return (strct.field_types[0], true);
+    }
+    (elem_ty, false)
+}
+
+/// Unwrap a scalar `Value` if its type is a 1-field wrapper struct (`BFloat16`, `Float8E4M3FN`, `Float4E2M1FNx8`).
+fn unwrap_scalar_value(
+    ctx: &mut Context,
+    val: Value,
+    block_ptr: Ptr<BasicBlock>,
+    prev: Option<Ptr<Operation>>,
+    loc: &Location,
+) -> (Value, TypeHandle, Option<Ptr<Operation>>) {
+    let ty = val.get_type(ctx);
+    let (leaf_ty, is_wrapper) = scalar_leaf_type(ctx, ty);
+    if !is_wrapper {
+        return (val, ty, prev);
+    }
+    let op = Operation::new(
+        ctx,
+        MirExtractFieldOp::get_concrete_op_info(),
+        vec![leaf_ty],
+        vec![val],
+        vec![],
+        0,
+    );
+    op.deref_mut(ctx).set_loc(loc.clone());
+    MirExtractFieldOp::new(op).set_attr_index(ctx, FieldIndexAttr(0));
+    insert(ctx, op, block_ptr, prev);
+    (op.deref(ctx).get_result(0), leaf_ty, Some(op))
+}
+
+/// Read all `N` scalar elements from a `&RegisterTile<T, N>` reference operand using constant-index
+/// `MirFieldAddrOp` + `MirArrayElementAddrOp` + `MirLoadOp` chains so `forward_constant_projected_aggregates`
+/// eliminates intermediate tile slots in MIR.
+fn load_register_tile_scalars(
+    ctx: &mut Context,
+    tile_ptr: Value,
+    block_ptr: Ptr<BasicBlock>,
+    prev: Option<Ptr<Operation>>,
+    loc: &Location,
+) -> TranslationResult<(Vec<Value>, TypeHandle, Option<Ptr<Operation>>)> {
+    use core::num::NonZeroUsize;
+    use dialect_mir::ops::{MirArrayElementAddrOp, MirConstantOp};
+    use dialect_mir::types::MirArrayType;
+    use pliron::builtin::attributes::IntegerAttr;
+    use pliron::builtin::types::{IntegerType, Signedness};
+    use pliron::utils::apint::APInt;
+
+    let (arr_ptr, arr_ty, arr_op) =
+        struct_field_addr(ctx, tile_ptr, 0, "RegisterTile", block_ptr, prev, loc)?;
+    let (elem_ty, n, is_mutable, address_space) = {
+        let ptr_ty = arr_ptr.get_type(ctx);
+        let ptr_ref = ptr_ty.deref(ctx);
+        let Some(ptr) = ptr_ref.downcast_ref::<MirPtrType>() else {
+            return input_err!(
+                loc.clone(),
+                TranslationErr::unsupported("RegisterTile field 0 pointer invalid".to_string())
+            );
+        };
+        let arr_ref = arr_ty.deref(ctx);
+        let Some(arr) = arr_ref.downcast_ref::<MirArrayType>() else {
+            return input_err!(
+                loc.clone(),
+                TranslationErr::unsupported("RegisterTile field 0 is not MirArrayType".to_string())
+            );
+        };
+        (
+            arr.element_type(),
+            arr.size as usize,
+            ptr.is_mutable,
+            ptr.address_space,
+        )
+    };
+    let (leaf_ty, is_wrapper) = scalar_leaf_type(ctx, elem_ty);
+    let elem_ptr_ty: TypeHandle = MirPtrType::get(ctx, elem_ty, is_mutable, address_space).into();
+    let u64_ty = IntegerType::get(ctx, 64, Signedness::Unsigned);
+
+    let mut cur_prev = Some(arr_op);
+    let mut vals = Vec::with_capacity(n);
+    for i in 0..n {
+        let idx_op = Operation::new(
+            ctx,
+            MirConstantOp::get_concrete_op_info(),
+            vec![u64_ty.into()],
+            vec![],
+            vec![],
+            0,
+        );
+        idx_op.deref_mut(ctx).set_loc(loc.clone());
+        let apint = APInt::from_u64(i as u64, NonZeroUsize::new(64).unwrap());
+        MirConstantOp::new(idx_op).set_attr_value(ctx, IntegerAttr::new(u64_ty, apint));
+        insert(ctx, idx_op, block_ptr, cur_prev);
+        let idx_val = idx_op.deref(ctx).get_result(0);
+
+        let elem_addr_op = Operation::new(
+            ctx,
+            MirArrayElementAddrOp::get_concrete_op_info(),
+            vec![elem_ptr_ty],
+            vec![arr_ptr, idx_val],
+            vec![],
+            0,
+        );
+        elem_addr_op.deref_mut(ctx).set_loc(loc.clone());
+        insert(ctx, elem_addr_op, block_ptr, Some(idx_op));
+        let elem_ptr = elem_addr_op.deref(ctx).get_result(0);
+
+        let (leaf_ptr, after_addr) = if is_wrapper {
+            let (lp, _, lp_op) = struct_field_addr(
+                ctx,
+                elem_ptr,
+                0,
+                "RegisterTile element wrapper",
+                block_ptr,
+                Some(elem_addr_op),
+                loc,
+            )?;
+            (lp, lp_op)
+        } else {
+            (elem_ptr, elem_addr_op)
+        };
+        let (val_i, load_op) =
+            load_through(ctx, leaf_ptr, leaf_ty, block_ptr, Some(after_addr), loc);
+        vals.push(val_i);
+        cur_prev = Some(load_op);
+    }
+    Ok((vals, leaf_ty, cur_prev))
+}
+
+/// Package `M` scalar result values into `MirConstructStructOp(RegisterTile, [MirConstructArrayOp(...)])`
+/// and store into `destination.local`.
+#[allow(clippy::too_many_arguments)]
+fn store_register_tile_scalars(
+    ctx: &mut Context,
+    body: &mir::Body,
+    destination: &mir::Place,
+    scalars: Vec<Value>,
+    block_ptr: Ptr<BasicBlock>,
+    prev: Ptr<Operation>,
+    value_map: &mut ValueMap,
+    loc: &Location,
+) -> TranslationResult<Ptr<Operation>> {
+    use dialect_mir::ops::{MirConstructArrayOp, MirConstructStructOp};
+    use dialect_mir::types::MirArrayType;
+
+    let dest_rust_ty = destination.ty(body.locals()).map_err(|e| {
+        pliron::input_error_noloc!(TranslationErr::unsupported(format!(
+            "cannot query RegisterTile destination type: {e:?}"
+        )))
+    })?;
+    let dest_ty = translate_type(ctx, &dest_rust_ty)?;
+    let arr_ty = {
+        let ty_ref = dest_ty.deref(ctx);
+        let Some(strct) = ty_ref.downcast_ref::<MirStructType>() else {
+            return input_err!(
+                loc.clone(),
+                TranslationErr::unsupported(
+                    "RegisterTile destination is not MirStructType".to_string()
+                )
+            );
+        };
+        strct.field_types[0]
+    };
+    let elem_ty = {
+        let arr_ref = arr_ty.deref(ctx);
+        let Some(arr) = arr_ref.downcast_ref::<MirArrayType>() else {
+            return input_err!(
+                loc.clone(),
+                TranslationErr::unsupported("RegisterTile field 0 is not MirArrayType".to_string())
+            );
+        };
+        arr.element_type()
+    };
+    let (_, is_wrapper) = scalar_leaf_type(ctx, elem_ty);
+    let mut cur_prev = prev;
+    let mut elem_vals = Vec::with_capacity(scalars.len());
+    if is_wrapper {
+        for s in scalars {
+            let wrap_op = Operation::new(
+                ctx,
+                MirConstructStructOp::get_concrete_op_info(),
+                vec![elem_ty],
+                vec![s],
+                vec![],
+                0,
+            );
+            wrap_op.deref_mut(ctx).set_loc(loc.clone());
+            insert(ctx, wrap_op, block_ptr, Some(cur_prev));
+            elem_vals.push(wrap_op.deref(ctx).get_result(0));
+            cur_prev = wrap_op;
+        }
+    } else {
+        elem_vals = scalars;
+    }
+    let arr_op = Operation::new(
+        ctx,
+        MirConstructArrayOp::get_concrete_op_info(),
+        vec![arr_ty],
+        elem_vals,
+        vec![],
+        0,
+    );
+    arr_op.deref_mut(ctx).set_loc(loc.clone());
+    insert(ctx, arr_op, block_ptr, Some(cur_prev));
+    let arr_val = arr_op.deref(ctx).get_result(0);
+
+    let tile_op = Operation::new(
+        ctx,
+        MirConstructStructOp::get_concrete_op_info(),
+        vec![dest_ty],
+        vec![arr_val],
+        vec![],
+        0,
+    );
+    tile_op.deref_mut(ctx).set_loc(loc.clone());
+    insert(ctx, tile_op, block_ptr, Some(arr_op));
+    let tile_val = tile_op.deref(ctx).get_result(0);
+    Ok(value_map
+        .store_local(ctx, destination.local, tile_val, block_ptr, Some(tile_op))
+        .unwrap_or(tile_op))
+}
+
+/// Extract all `Const` generic arguments of `func` as `u64` values in declaration order.
+fn callee_const_u64s(func: &mir::Operand, loc: &Location) -> TranslationResult<Vec<u64>> {
+    let mir::Operand::Constant(const_op) = func else {
+        return input_err!(
+            loc.clone(),
+            TranslationErr::unsupported("RegisterTile hook called indirectly".to_string())
+        );
+    };
+    let rustc_public::ty::TyKind::RigidTy(rustc_public::ty::RigidTy::FnDef(_, substs)) =
+        const_op.const_.ty().kind()
+    else {
+        return input_err!(
+            loc.clone(),
+            TranslationErr::unsupported("RegisterTile hook is not a FnDef".to_string())
+        );
+    };
+    let mut out = Vec::new();
+    for arg in &substs.0 {
+        if let rustc_public::ty::GenericArgKind::Const(c) = arg {
+            out.push(super::layout::const_u64(c, "RegisterTile", loc)?);
+        }
+    }
+    Ok(out)
+}
+
+/// Emit `dialect-cute` vector ops (`CuteVector*Op`) for `cute_rs::tensor::__compiler::register_tile_*`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_register_tile_vector_op(
+    ctx: &mut Context,
+    body: &mir::Body,
+    func: &mir::Operand,
+    cute_fn: super::registry::CuteFn,
+    args: &[mir::Operand],
+    destination: &mir::Place,
+    target: &Option<usize>,
+    block_ptr: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    value_map: &mut ValueMap,
+    block_map: &[Ptr<BasicBlock>],
+    loc: Location,
+) -> TranslationResult<Ptr<Operation>> {
+    use super::registry::CuteFn;
+    use dialect_cute::tensor_ops::{
+        CuteVectorBinaryOp, CuteVectorBitcastOp, CuteVectorBroadcastOp, CuteVectorCastOp,
+        CuteVectorConcatOp, CuteVectorReduceOp, CuteVectorScalarOp, CuteVectorSliceOp,
+        CuteVectorUnaryOp,
+    };
+
+    if !destination.projection.is_empty() {
+        return input_err!(
+            loc,
+            TranslationErr::unsupported(
+                "register_tile vector op destination with projections not supported".to_string()
+            )
+        );
+    }
+    let consts = callee_const_u64s(func, &loc)?;
+    let mut cur_prev = prev_op;
+
+    let goto_prev = match cute_fn {
+        CuteFn::RegisterTileBroadcast => {
+            let n = consts[0] as usize;
+            let (raw_val, prev) = translate_operand(
+                ctx,
+                body,
+                &args[0],
+                value_map,
+                block_ptr,
+                cur_prev,
+                loc.clone(),
+            )?;
+            let (val, lane_ty, prev) =
+                unwrap_scalar_value(ctx, raw_val, block_ptr, prev.or(cur_prev), &loc);
+            let op = CuteVectorBroadcastOp::new(ctx, val, lane_ty, n).get_operation();
+            op.deref_mut(ctx).set_loc(loc.clone());
+            insert(ctx, op, block_ptr, prev);
+            let results: Vec<Value> = (0..n).map(|i| op.deref(ctx).get_result(i)).collect();
+            store_register_tile_scalars(
+                ctx,
+                body,
+                destination,
+                results,
+                block_ptr,
+                op,
+                value_map,
+                &loc,
+            )?
+        }
+        CuteFn::RegisterTileBinary => {
+            let n = consts[0] as usize;
+            let kind = consts[1];
+            let (lhs_ptr, prev) = translate_operand(
+                ctx,
+                body,
+                &args[0],
+                value_map,
+                block_ptr,
+                cur_prev,
+                loc.clone(),
+            )?;
+            cur_prev = prev.or(cur_prev);
+            let (rhs_ptr, prev) = translate_operand(
+                ctx,
+                body,
+                &args[1],
+                value_map,
+                block_ptr,
+                cur_prev,
+                loc.clone(),
+            )?;
+            cur_prev = prev.or(cur_prev);
+            let (mut operands, lane_ty, prev) =
+                load_register_tile_scalars(ctx, lhs_ptr, block_ptr, cur_prev, &loc)?;
+            let (rhs_scalars, _, prev) =
+                load_register_tile_scalars(ctx, rhs_ptr, block_ptr, prev, &loc)?;
+            operands.extend(rhs_scalars);
+            let op = CuteVectorBinaryOp::new(ctx, operands, lane_ty, n, kind).get_operation();
+            op.deref_mut(ctx).set_loc(loc.clone());
+            insert(ctx, op, block_ptr, prev);
+            let results: Vec<Value> = (0..n).map(|i| op.deref(ctx).get_result(i)).collect();
+            store_register_tile_scalars(
+                ctx,
+                body,
+                destination,
+                results,
+                block_ptr,
+                op,
+                value_map,
+                &loc,
+            )?
+        }
+        CuteFn::RegisterTileScalar => {
+            let n = consts[0] as usize;
+            let kind = consts[1];
+            let (lhs_ptr, prev) = translate_operand(
+                ctx,
+                body,
+                &args[0],
+                value_map,
+                block_ptr,
+                cur_prev,
+                loc.clone(),
+            )?;
+            cur_prev = prev.or(cur_prev);
+            let (raw_rhs, prev) = translate_operand(
+                ctx,
+                body,
+                &args[1],
+                value_map,
+                block_ptr,
+                cur_prev,
+                loc.clone(),
+            )?;
+            cur_prev = prev.or(cur_prev);
+            let (rhs, _, prev) = unwrap_scalar_value(ctx, raw_rhs, block_ptr, cur_prev, &loc);
+            let (mut operands, lane_ty, prev) =
+                load_register_tile_scalars(ctx, lhs_ptr, block_ptr, prev, &loc)?;
+            operands.push(rhs);
+            let op = CuteVectorScalarOp::new(ctx, operands, lane_ty, n, kind).get_operation();
+            op.deref_mut(ctx).set_loc(loc.clone());
+            insert(ctx, op, block_ptr, prev);
+            let results: Vec<Value> = (0..n).map(|i| op.deref(ctx).get_result(i)).collect();
+            store_register_tile_scalars(
+                ctx,
+                body,
+                destination,
+                results,
+                block_ptr,
+                op,
+                value_map,
+                &loc,
+            )?
+        }
+        CuteFn::RegisterTileUnary => {
+            let n = consts[0] as usize;
+            let kind = consts[1];
+            let (src_ptr, prev) = translate_operand(
+                ctx,
+                body,
+                &args[0],
+                value_map,
+                block_ptr,
+                cur_prev,
+                loc.clone(),
+            )?;
+            cur_prev = prev.or(cur_prev);
+            let (operands, lane_ty, prev) =
+                load_register_tile_scalars(ctx, src_ptr, block_ptr, cur_prev, &loc)?;
+            let op = CuteVectorUnaryOp::new(ctx, operands, lane_ty, n, kind).get_operation();
+            op.deref_mut(ctx).set_loc(loc.clone());
+            insert(ctx, op, block_ptr, prev);
+            let results: Vec<Value> = (0..n).map(|i| op.deref(ctx).get_result(i)).collect();
+            store_register_tile_scalars(
+                ctx,
+                body,
+                destination,
+                results,
+                block_ptr,
+                op,
+                value_map,
+                &loc,
+            )?
+        }
+        CuteFn::RegisterTileReduce => {
+            let kind = consts[1];
+            let (src_ptr, prev) = translate_operand(
+                ctx,
+                body,
+                &args[0],
+                value_map,
+                block_ptr,
+                cur_prev,
+                loc.clone(),
+            )?;
+            cur_prev = prev.or(cur_prev);
+            let (init_val, prev) = translate_operand(
+                ctx,
+                body,
+                &args[1],
+                value_map,
+                block_ptr,
+                cur_prev,
+                loc.clone(),
+            )?;
+            cur_prev = prev.or(cur_prev);
+            let (mut operands, _, prev) =
+                load_register_tile_scalars(ctx, src_ptr, block_ptr, cur_prev, &loc)?;
+            operands.push(init_val);
+            let op = CuteVectorReduceOp::new(ctx, operands, kind).get_operation();
+            op.deref_mut(ctx).set_loc(loc.clone());
+            insert(ctx, op, block_ptr, prev);
+            let res = op.deref(ctx).get_result(0);
+            value_map
+                .store_local(ctx, destination.local, res, block_ptr, Some(op))
+                .unwrap_or(op)
+        }
+        CuteFn::RegisterTileCast => {
+            let n = consts[0] as usize;
+            let kind = consts[1];
+            let (src_ptr, prev) = translate_operand(
+                ctx,
+                body,
+                &args[0],
+                value_map,
+                block_ptr,
+                cur_prev,
+                loc.clone(),
+            )?;
+            cur_prev = prev.or(cur_prev);
+            let (operands, _, prev) =
+                load_register_tile_scalars(ctx, src_ptr, block_ptr, cur_prev, &loc)?;
+            let dest_rust_ty = destination.ty(body.locals()).unwrap();
+            let dest_ty = translate_type(ctx, &dest_rust_ty)?;
+            let arr_ty = dest_ty
+                .deref(ctx)
+                .downcast_ref::<MirStructType>()
+                .unwrap()
+                .field_types[0];
+            let elem_ty = arr_ty
+                .deref(ctx)
+                .downcast_ref::<dialect_mir::types::MirArrayType>()
+                .unwrap()
+                .element_type();
+            let (dst_lane_ty, _) = scalar_leaf_type(ctx, elem_ty);
+            let op = CuteVectorCastOp::new(ctx, operands, dst_lane_ty, n, kind).get_operation();
+            op.deref_mut(ctx).set_loc(loc.clone());
+            insert(ctx, op, block_ptr, prev);
+            let results: Vec<Value> = (0..n).map(|i| op.deref(ctx).get_result(i)).collect();
+            store_register_tile_scalars(
+                ctx,
+                body,
+                destination,
+                results,
+                block_ptr,
+                op,
+                value_map,
+                &loc,
+            )?
+        }
+        CuteFn::RegisterTileBitcast => {
+            let m = consts[1] as usize;
+            let (src_ptr, prev) = translate_operand(
+                ctx,
+                body,
+                &args[0],
+                value_map,
+                block_ptr,
+                cur_prev,
+                loc.clone(),
+            )?;
+            cur_prev = prev.or(cur_prev);
+            let (operands, _, prev) =
+                load_register_tile_scalars(ctx, src_ptr, block_ptr, cur_prev, &loc)?;
+            let dest_rust_ty = destination.ty(body.locals()).unwrap();
+            let dest_ty = translate_type(ctx, &dest_rust_ty)?;
+            let arr_ty = dest_ty
+                .deref(ctx)
+                .downcast_ref::<MirStructType>()
+                .unwrap()
+                .field_types[0];
+            let elem_ty = arr_ty
+                .deref(ctx)
+                .downcast_ref::<dialect_mir::types::MirArrayType>()
+                .unwrap()
+                .element_type();
+            let (dst_lane_ty, _) = scalar_leaf_type(ctx, elem_ty);
+            let op = CuteVectorBitcastOp::new(ctx, operands, dst_lane_ty, m).get_operation();
+            op.deref_mut(ctx).set_loc(loc.clone());
+            insert(ctx, op, block_ptr, prev);
+            let results: Vec<Value> = (0..m).map(|i| op.deref(ctx).get_result(i)).collect();
+            store_register_tile_scalars(
+                ctx,
+                body,
+                destination,
+                results,
+                block_ptr,
+                op,
+                value_map,
+                &loc,
+            )?
+        }
+        CuteFn::RegisterTileSlice => {
+            let offset = consts[1];
+            let m = consts[2] as usize;
+            let (src_ptr, prev) = translate_operand(
+                ctx,
+                body,
+                &args[0],
+                value_map,
+                block_ptr,
+                cur_prev,
+                loc.clone(),
+            )?;
+            cur_prev = prev.or(cur_prev);
+            let (operands, lane_ty, prev) =
+                load_register_tile_scalars(ctx, src_ptr, block_ptr, cur_prev, &loc)?;
+            let op = CuteVectorSliceOp::new(ctx, operands, lane_ty, m, offset).get_operation();
+            op.deref_mut(ctx).set_loc(loc.clone());
+            insert(ctx, op, block_ptr, prev);
+            let results: Vec<Value> = (0..m).map(|i| op.deref(ctx).get_result(i)).collect();
+            store_register_tile_scalars(
+                ctx,
+                body,
+                destination,
+                results,
+                block_ptr,
+                op,
+                value_map,
+                &loc,
+            )?
+        }
+        CuteFn::RegisterTileConcat => {
+            let m = consts[1] as usize;
+            let (lo_ptr, prev) = translate_operand(
+                ctx,
+                body,
+                &args[0],
+                value_map,
+                block_ptr,
+                cur_prev,
+                loc.clone(),
+            )?;
+            cur_prev = prev.or(cur_prev);
+            let (hi_ptr, prev) = translate_operand(
+                ctx,
+                body,
+                &args[1],
+                value_map,
+                block_ptr,
+                cur_prev,
+                loc.clone(),
+            )?;
+            cur_prev = prev.or(cur_prev);
+            let (mut operands, lane_ty, prev) =
+                load_register_tile_scalars(ctx, lo_ptr, block_ptr, cur_prev, &loc)?;
+            let (hi_scalars, _, prev) =
+                load_register_tile_scalars(ctx, hi_ptr, block_ptr, prev, &loc)?;
+            operands.extend(hi_scalars);
+            let op = CuteVectorConcatOp::new(ctx, operands, lane_ty, m).get_operation();
+            op.deref_mut(ctx).set_loc(loc.clone());
+            insert(ctx, op, block_ptr, prev);
+            let results: Vec<Value> = (0..m).map(|i| op.deref(ctx).get_result(i)).collect();
+            store_register_tile_scalars(
+                ctx,
+                body,
+                destination,
+                results,
+                block_ptr,
+                op,
+                value_map,
+                &loc,
+            )?
+        }
+        _ => unreachable!(),
+    };
+
+    let Some(target_idx) = target else {
+        return input_err!(
+            loc,
+            TranslationErr::unsupported(
+                "register_tile vector op call without target not supported".to_string()
+            )
+        );
+    };
+    Ok(emit_goto(ctx, *target_idx, goto_prev, block_map, loc))
+}
+
+/// `cute_rs::atom::vector::store_tile::<T, N>(dst: *mut T, idx: usize, vals: &[T; N])`
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_store_tile(
     ctx: &mut Context,
@@ -1102,7 +1933,7 @@ pub(crate) fn emit_store_tile(
     )
 }
 
-/// `cute_rs::copy::tma::copy_tma_2d::<T, SmemL>(desc, (r, c), &mut SmemTile, bar)`
+/// `cute_rs::nvgpu::cpasync::copy_tma_2d::<T, SmemL>(desc, (r, c), &mut SmemTile, bar)`
 ///
 /// The descriptor becomes a global transport view; the selected shared base
 /// and exact remaining capacity become a shared transport view. One
@@ -1234,7 +2065,7 @@ pub(crate) fn emit_copy_tma(
     Ok(emit_goto(ctx, *target_idx, copy_op, block_map, loc))
 }
 
-/// `cute_rs::copy::tma::copy_tma_s2g_2d::<T, SmemL>(desc, (r, c), SmemTile)`
+/// `cute_rs::nvgpu::cpasync::copy_tma_s2g_2d::<T, SmemL>(desc, (r, c), SmemTile)`
 ///
 /// The recognized boundary recovers the CTA-shared source proof from the
 /// carrier, splits the tile coordinate, and creates two short-lived TMA views

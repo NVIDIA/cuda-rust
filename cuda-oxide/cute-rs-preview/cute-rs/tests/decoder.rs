@@ -6,9 +6,19 @@
 //! Decoder geometry and embedding indices can be checked without a GPU.
 #![cfg(feature = "host")]
 
-use cute_rs::attention::AttentionError;
-use cute_rs::decoder::{DecoderError, DecoderShape, EmbeddingShape, TokenIds};
-use cute_rs::ffn::{FfnError, RowMajorShape};
+#[allow(dead_code)]
+#[path = "../../examples/common/attention_metadata.rs"]
+mod attention_metadata;
+#[allow(dead_code)]
+#[path = "../../examples/common/decoder.rs"]
+mod decoder;
+#[allow(dead_code)]
+#[path = "../../examples/common/ffn.rs"]
+mod ffn;
+
+use attention_metadata::AttentionError;
+use decoder::{DecoderError, DecoderShape, EmbeddingShape, TokenIds};
+use ffn::{FfnError, RowMajorShape};
 
 #[test]
 fn talker_and_predictor_keep_hidden_query_and_kv_widths_distinct() {

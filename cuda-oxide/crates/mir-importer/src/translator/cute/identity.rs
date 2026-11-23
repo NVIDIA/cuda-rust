@@ -34,20 +34,20 @@ pub(super) enum CuteIdentity {
 /// requires auditing that fallback and updating the exact-list test.
 const CUTE_SOURCE_ABSTRACTION_MODULES: &[&str] = &[
     "arch",
-    "mma::bf16",
-    "block_scaled",
-    "mma::block_scaled",
-    "copy::cooperative",
-    "epilogue::sm120",
+    "nvgpu::warp::bf16",
+    "utils::blockscaled",
+    "nvgpu::warp::block_scaled",
+    "atom::cooperative",
+    "nvgpu::warp::epilogue",
     "numeric",
     "pipeline",
-    "reduction",
-    "scheduler",
-    "sm100",
-    "attention::sm100",
+    "utils::scheduler",
+    "utils::tmem_allocator",
+    "nvgpu::cpasync",
+    "nvgpu::tcgen05",
     "static_layout",
     "tensor",
-    "copy::tiled",
+    "atom::tiled",
 ];
 
 /// Match a complete module path, including every namespace separator.
@@ -80,10 +80,9 @@ fn is_source_abstraction_path(path: &str, crate_name: &str) -> bool {
 /// admitted separately.
 const CUTE_SOURCE_CALLBACK_MODULES: &[&str] = &[
     "arch",
-    "mma::bf16",
+    "nvgpu::warp::bf16",
     "numeric",
     "tensor::partition",
-    "reduction",
     "static_layout",
 ];
 
@@ -183,19 +182,18 @@ mod canonical_path_tests {
             "cute_rs::arch::exp2_f32",
             "cute_rs::tensor::partition::{impl#3}::get",
             "cute_rs::static_layout::{impl#1}::crd2idx",
-            "cute_rs::mma::bf16::{impl#1}::get_slice",
-            "cute_rs::reduction::{impl#0}::observe",
+            "cute_rs::nvgpu::warp::bf16::{impl#1}::get_slice",
         ] {
             let crate_name = path.split_once("::").unwrap().0;
             assert!(is_source_callback_path(path, crate_name), "rejected {path}");
         }
         for path in [
-            "cute_rs::copy::vector::load_tile",
+            "cute_rs::atom::vector::load_tile",
             "cute_rs::tensor::make_tensor_read",
             "cute_rs::tensor::{impl#6}::local_tile",
             "cute_rs::tensor::{impl#7}::load",
             "cute_rs::pipeline::{impl#4}::advance",
-            "cute_rs::sm100::tcgen05_alloc",
+            "cute_rs::nvgpu::tcgen05::tcgen05_alloc",
             "cute_rs::numeric_extra::silu_bf16",
             "cute_rs::other::numeric::silu_bf16",
             "other::numeric::silu_bf16",
@@ -217,7 +215,7 @@ mod canonical_path_tests {
     #[test]
     fn grouped_domains_keep_source_and_callback_boundaries_separate() {
         for crate_name in ["cute_rs", "cute-rs"] {
-            for module in ["mma::bf16", "tensor::partition"] {
+            for module in ["nvgpu::warp::bf16", "tensor::partition"] {
                 let path = format!("{crate_name}::{module}::{{impl#3}}::load");
                 assert!(is_source_abstraction_path(&path, crate_name), "{path}");
                 assert!(is_source_callback_path(&path, crate_name), "{path}");
@@ -230,11 +228,11 @@ mod canonical_path_tests {
                 }
             }
             for module in [
-                "mma::block_scaled",
-                "copy::cooperative",
-                "copy::tiled",
-                "epilogue::sm120",
-                "attention::sm100",
+                "nvgpu::warp::block_scaled",
+                "atom::cooperative",
+                "atom::tiled",
+                "nvgpu::warp::epilogue",
+                "nvgpu::tcgen05",
             ] {
                 let path = format!("{crate_name}::{module}::{{impl#3}}::operation");
                 assert!(is_source_abstraction_path(&path, crate_name), "{path}");
@@ -246,13 +244,11 @@ mod canonical_path_tests {
                 );
             }
             for relative in [
-                "mma::unregistered_instruction",
-                "mma::other::operation",
-                "copy::vector::unregistered_copy",
-                "copy::other::operation",
-                "attention::metadata::operation",
-                "attention::other::operation",
-                "epilogue::other::operation",
+                "nvgpu::warp::unregistered_instruction",
+                "nvgpu::warp::other::operation",
+                "atom::vector::unregistered_copy",
+                "atom::other::operation",
+                "nvgpu::other::operation",
                 "tensor::{impl#0}::load",
             ] {
                 let path = format!("{crate_name}::{relative}");
@@ -266,7 +262,7 @@ mod canonical_path_tests {
     fn cache_aware_global_store_has_an_exact_compiler_boundary() {
         let spec = super::CUTE_FNS
             .iter()
-            .find(|spec| spec.canonical == "cute_rs::copy::vector::store_global_no_allocate")
+            .find(|spec| spec.canonical == "cute_rs::atom::vector::store_global_no_allocate")
             .expect("global store marker");
         assert_eq!(spec.func, super::CuteFn::StoreGlobalNoAllocate);
         assert_eq!(
@@ -286,24 +282,24 @@ mod canonical_path_tests {
             super::CUTE_SOURCE_ABSTRACTION_MODULES,
             &[
                 "arch",
-                "mma::bf16",
-                "block_scaled",
-                "mma::block_scaled",
-                "copy::cooperative",
-                "epilogue::sm120",
+                "nvgpu::warp::bf16",
+                "utils::blockscaled",
+                "nvgpu::warp::block_scaled",
+                "atom::cooperative",
+                "nvgpu::warp::epilogue",
                 "numeric",
                 "pipeline",
-                "reduction",
-                "scheduler",
-                "sm100",
-                "attention::sm100",
+                "utils::scheduler",
+                "utils::tmem_allocator",
+                "nvgpu::cpasync",
+                "nvgpu::tcgen05",
                 "static_layout",
                 "tensor",
-                "copy::tiled",
+                "atom::tiled",
             ]
         );
         assert!(is_source_abstraction_path(
-            "cute_rs::block_scaled::tensor::BlockScaledTensor<...>::thread_row",
+            "cute_rs::utils::blockscaled::tensor::BlockScaledTensor<...>::thread_row",
             "cute_rs"
         ));
         assert!(is_source_abstraction_path(
@@ -315,15 +311,15 @@ mod canonical_path_tests {
             "cute_rs"
         ));
         assert!(is_source_abstraction_path(
-            "cute_rs::copy::tiled::ThrCopy<...>::copy",
+            "cute_rs::atom::tiled::ThrCopy<...>::copy",
             "cute_rs"
         ));
         assert!(is_source_abstraction_path(
-            "cute_rs::mma::block_scaled::tiled::Mxf4TiledMma<...>::gemm",
+            "cute_rs::nvgpu::warp::block_scaled::tiled::Mxf4TiledMma<...>::gemm",
             "cute_rs"
         ));
         assert!(is_source_abstraction_path(
-            "cute_rs::epilogue::sm120::Sm120EpilogueWarp128x128::store_atom",
+            "cute_rs::nvgpu::warp::epilogue::Sm120EpilogueWarp128x128::store_atom",
             "cute_rs"
         ));
         assert!(is_source_abstraction_path(
@@ -331,11 +327,11 @@ mod canonical_path_tests {
             "cute_rs"
         ));
         assert!(is_source_abstraction_path(
-            "cute_rs::scheduler::StaticPersistentTileScheduler<...>::get_current_work",
+            "cute_rs::utils::scheduler::StaticPersistentTileScheduler<...>::get_current_work",
             "cute_rs"
         ));
         assert!(!is_source_abstraction_path(
-            "cute_rs::copy::vector::load_tile",
+            "cute_rs::atom::vector::load_tile",
             "cute_rs"
         ));
         assert!(!is_source_abstraction_path(
@@ -353,10 +349,9 @@ mod canonical_path_tests {
     #[test]
     fn typed_partition_and_bf16_modules_have_closed_source_boundaries() {
         for (module, method) in [
-            ("copy::cooperative", "SharedRow<...>::zip_fold"),
+            ("atom::cooperative", "SharedRow<...>::zip_fold"),
             ("static_layout", "Layout<...>::crd2idx"),
-            ("mma::bf16", "Bf16Mma16x8x16::get_slice"),
-            ("reduction", "argmax_bf16"),
+            ("nvgpu::warp::bf16", "Bf16Mma16x8x16::get_slice"),
         ] {
             for crate_name in ["cute_rs", "cute-rs"] {
                 assert!(is_source_abstraction_path(
@@ -379,11 +374,11 @@ mod canonical_path_tests {
         }
         // Hardware/compiler stubs continue to require explicit registration.
         assert!(!is_source_abstraction_path(
-            "cute_rs::mma::unregistered_instruction",
+            "cute_rs::nvgpu::warp::unregistered_instruction",
             "cute_rs"
         ));
         assert!(!is_source_abstraction_path(
-            "cute_rs::copy::vector::unregistered_copy",
+            "cute_rs::atom::vector::unregistered_copy",
             "cute_rs"
         ));
     }
@@ -419,19 +414,19 @@ mod canonical_path_tests {
     fn block_scaled_method_path_ignores_only_the_impl_owner_spelling() {
         assert_eq!(
             block_scaled_method_name_from_path(
-                "cute_rs::block_scaled::tensor::KMajor<Mode>>::from_slices"
+                "cute_rs::utils::blockscaled::tensor::KMajor<Mode>>::from_slices"
             ),
             Some("from_slices")
         );
         assert_eq!(
             block_scaled_method_name_from_path(
-                "cute_rs::block_scaled::gemv::{impl#21}::dot_accumulate"
+                "cute_rs::utils::blockscaled::gemv::{impl#21}::dot_accumulate"
             ),
             Some("dot_accumulate")
         );
         assert_eq!(
             block_scaled_method_name_from_path(
-                "cute_rs::block_scaled::__compiler::block_scaled_dot_k64"
+                "cute_rs::utils::blockscaled::__compiler::block_scaled_dot_k64"
             ),
             None,
             "compiler hooks are recognized only by the exact helper table"
@@ -447,16 +442,18 @@ mod canonical_path_tests {
     fn scheduler_method_path_ignores_only_the_impl_owner_spelling() {
         assert_eq!(
             scheduler_method_name_from_path(
-                "cute_rs::scheduler::StaticPersistentTileScheduler<...>>::has_work"
+                "cute_rs::utils::scheduler::StaticPersistentTileScheduler<...>>::has_work"
             ),
             Some("has_work")
         );
         assert_eq!(
-            scheduler_method_name_from_path("cute_rs::scheduler::{impl#4}::tile_idx"),
+            scheduler_method_name_from_path("cute_rs::utils::scheduler::{impl#4}::tile_idx"),
             Some("tile_idx")
         );
         assert_eq!(
-            scheduler_method_name_from_path("cute_rs::scheduler::__compiler::scheduler_has_work"),
+            scheduler_method_name_from_path(
+                "cute_rs::utils::scheduler::__compiler::scheduler_has_work"
+            ),
             Some("scheduler_has_work"),
             "the exact helper table takes precedence over method classification"
         );
@@ -487,29 +484,29 @@ mod canonical_path_tests {
     fn shared_mma_method_path_keeps_module_and_method_exact() {
         assert_eq!(
             smem_mma_method_name_from_path(
-                "cute_rs::mma::block_scaled::tiled::Mxf4TiledMma<...>>::load_a_128",
-                "mma::block_scaled::tiled"
+                "cute_rs::nvgpu::warp::block_scaled::tiled::Mxf4TiledMma<...>>::load_a_128",
+                "nvgpu::warp::block_scaled::tiled"
             ),
             Some("load_a_128")
         );
         assert_eq!(
             smem_mma_method_name_from_path(
-                "cute-rs::copy::tiled::{impl#7}::from_raw_parts",
-                "copy::tiled"
+                "cute-rs::atom::tiled::{impl#7}::from_raw_parts",
+                "atom::tiled"
             ),
             Some("from_raw_parts")
         );
         assert_eq!(
             smem_mma_method_name_from_path(
                 "cute_rs::other::Mxf4TiledMma<...>>::load_a_128",
-                "mma::block_scaled::tiled"
+                "nvgpu::warp::block_scaled::tiled"
             ),
             None
         );
         assert_eq!(
             smem_mma_method_name_from_path(
-                "cute_rs::mma::block_scaled::load_a_128",
-                "mma::block_scaled::tiled"
+                "cute_rs::nvgpu::warp::block_scaled::load_a_128",
+                "nvgpu::warp::block_scaled::tiled"
             ),
             None,
             "a free function is not an inherent method"
@@ -522,22 +519,22 @@ mod canonical_path_tests {
     fn accumulator_gemm_is_keyed_by_the_fragments_module() {
         assert_eq!(
             smem_mma_method_name_from_path(
-                "cute_rs::mma::block_scaled::fragments::{impl#4}::gemm",
-                "mma::block_scaled::fragments"
+                "cute_rs::nvgpu::warp::block_scaled::fragments::{impl#4}::gemm",
+                "nvgpu::warp::block_scaled::fragments"
             ),
             Some("gemm")
         );
         assert_eq!(
             smem_mma_method_name_from_path(
-                "cute_rs::mma::block_scaled::fragments::Mxf4AccumulatorTile2x8::gemm",
-                "mma::block_scaled::fragments"
+                "cute_rs::nvgpu::warp::block_scaled::fragments::Mxf4AccumulatorTile2x8::gemm",
+                "nvgpu::warp::block_scaled::fragments"
             ),
             Some("gemm")
         );
         assert_eq!(
             smem_mma_method_name_from_path(
-                "cute_rs::mma::block_scaled::tiled::Mxf4TiledMma<...>>::gemm",
-                "mma::block_scaled::fragments"
+                "cute_rs::nvgpu::warp::block_scaled::tiled::Mxf4TiledMma<...>>::gemm",
+                "nvgpu::warp::block_scaled::fragments"
             ),
             None
         );
@@ -548,15 +545,15 @@ mod canonical_path_tests {
     fn epilogue_method_paths_keep_each_owner_module_exact() {
         assert_eq!(
             smem_mma_method_name_from_path(
-                "cute_rs::epilogue::sm120::Sm120Epilogue128x128::sync_ready_for_tma",
-                "epilogue::sm120"
+                "cute_rs::nvgpu::warp::epilogue::Sm120Epilogue128x128::sync_ready_for_tma",
+                "nvgpu::warp::epilogue"
             ),
             Some("sync_ready_for_tma")
         );
         assert_eq!(
             smem_mma_method_name_from_path(
-                "cute_rs::mma::block_scaled::epilogue::{impl#9}::store_tile",
-                "mma::block_scaled::epilogue"
+                "cute_rs::nvgpu::warp::block_scaled::epilogue::{impl#9}::store_tile",
+                "nvgpu::warp::block_scaled::epilogue"
             ),
             Some("store_tile")
         );
@@ -568,11 +565,11 @@ mod canonical_path_tests {
         );
         assert_eq!(
             smem_mma_method_name_from_path(
-                "cute_rs::epilogue::sm120::Sm120EpilogueWarp128x128::store_tile",
-                "mma::block_scaled::epilogue"
+                "cute_rs::nvgpu::warp::epilogue::Sm120EpilogueWarp128x128::store_tile",
+                "nvgpu::warp::block_scaled::epilogue"
             ),
             None,
-            "store_tile is defined in mma::block_scaled::epilogue, not epilogue::sm120"
+            "store_tile is defined in nvgpu::warp::block_scaled::epilogue, not nvgpu::warp::epilogue"
         );
     }
 }

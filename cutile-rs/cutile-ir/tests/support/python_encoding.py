@@ -56,6 +56,9 @@ elif operation == "StoreViewTko":
     weak = next(r for r in encoding.MemoryOrderingSemantics if r.value == b"\x00")
     function(cb, type_id(0), value(0), value(1), [value(2)], value(3),
              weak, None, None, [option == "true"])
+elif operation == "Select":
+    # The reference has no hint argument: `option` (hinted) changes nothing.
+    function(cb, type_id(1), value(0), value(1), value(2))
 elif operation == "Atan2":
     function(cb, type_id(1), value(0), value(1))
 else:

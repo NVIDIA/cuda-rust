@@ -5,6 +5,8 @@
 //! Bounded safetensors reads and owned, role-checked Qwen checkpoint weights.
 
 use crate::{
+    decoder::{AttentionWeights, BiasWeights, DecoderWeights, EmbeddingWeights, NormWeights},
+    ffn::{FfnWeights, ProjectionWeights},
     generation::{
         PREDICTOR_LAYERS, PredictorWeights, REMAINING_CODES, TALKER_LAYERS, TalkerWeights,
         TextWeights,
@@ -12,11 +14,7 @@ use crate::{
     operator::Result,
 };
 use cuda_core::{CudaStream, DeviceBuffer};
-use cute_rs::{
-    BFloat16,
-    decoder::{AttentionWeights, BiasWeights, DecoderWeights, EmbeddingWeights, NormWeights},
-    ffn::{FfnWeights, ProjectionWeights},
-};
+use cute_rs::BFloat16;
 use safetensors::tensor::{Dtype, Metadata, TensorInfo};
 use std::{
     collections::BTreeMap,

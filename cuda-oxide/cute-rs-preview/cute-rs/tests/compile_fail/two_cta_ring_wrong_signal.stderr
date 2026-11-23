@@ -5,12 +5,12 @@ error[E0277]: the trait bound `TensorMemory: TmaPolicy` is not satisfied
    |                ^^^^^^^^^^^^^^^^^^ the trait `TmaPolicy` is not implemented for `TensorMemory`
    |
 help: the trait `TmaPolicy` is implemented for `AsyncCompletion`
-  --> src/attention/sm100/pipeline.rs
+  --> src/pipeline/sm100.rs
    |
    | impl TmaPolicy for AsyncCompletion {}
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 note: required by a bound in `TwoCtaRing::<STAGES, Full, Empty>::producer_expect_tx`
-  --> src/attention/sm100/pipeline.rs
+  --> src/pipeline/sm100.rs
    |
    |     pub unsafe fn producer_expect_tx(self, ticket: u32, bytes: u32)
    |                   ------------------ required by a bound in this associated function
@@ -25,7 +25,7 @@ error[E0277]: the trait bound `SharedToAsync: MmaPolicy` is not satisfied
    |                ^^^^^^^^ the trait `MmaPolicy` is not implemented for `SharedToAsync`
    |
 help: the following other types implement trait `MmaPolicy`
-  --> src/attention/sm100/pipeline.rs
+  --> src/pipeline/sm100.rs
    |
    | impl MmaPolicy for AsyncCompletion {}
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `AsyncCompletion`
@@ -39,7 +39,7 @@ help: the following other types implement trait `MmaPolicy`
    | impl MmaPolicy for SharedReuse {}
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `SharedReuse`
 note: required by a bound in `TwoCtaRing::<STAGES, Full, Empty>::mma_full`
-  --> src/attention/sm100/pipeline.rs
+  --> src/pipeline/sm100.rs
    |
    |     pub unsafe fn mma_full(self, ticket: u32)
    |                   -------- required by a bound in this associated function
@@ -54,7 +54,7 @@ error[E0277]: the trait bound `SharedReuse: SignalPolicy` is not satisfied
    |                ^^^^^^^^^^^^ the trait `SignalPolicy` is not implemented for `SharedReuse`
    |
 help: the following other types implement trait `SignalPolicy`
-  --> src/attention/sm100/pipeline.rs
+  --> src/pipeline/sm100.rs
    |
    | impl SignalPolicy for TensorMemory {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `TensorMemory`
@@ -62,7 +62,7 @@ help: the following other types implement trait `SignalPolicy`
    | impl SignalPolicy for SharedToAsync {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `SharedToAsync`
 note: required by a bound in `TwoCtaRing::<STAGES, Full, Empty>::thread_empty`
-  --> src/attention/sm100/pipeline.rs
+  --> src/pipeline/sm100.rs
    |
    |     pub unsafe fn thread_empty(self, ticket: u32)
    |                   ------------ required by a bound in this associated function
@@ -77,7 +77,7 @@ error[E0277]: the trait bound `AsyncCompletion: SignalPolicy` is not satisfied
    |                ^^^^^^^^^^^ the trait `SignalPolicy` is not implemented for `AsyncCompletion`
    |
 help: the following other types implement trait `SignalPolicy`
-  --> src/attention/sm100/pipeline.rs
+  --> src/pipeline/sm100.rs
    |
    | impl SignalPolicy for TensorMemory {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `TensorMemory`
@@ -85,7 +85,7 @@ help: the following other types implement trait `SignalPolicy`
    | impl SignalPolicy for SharedToAsync {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `SharedToAsync`
 note: required by a bound in `TwoCtaRing::<STAGES, Full, Empty>::thread_full`
-  --> src/attention/sm100/pipeline.rs
+  --> src/pipeline/sm100.rs
    |
    |     pub unsafe fn thread_full(self, ticket: u32)
    |                   ----------- required by a bound in this associated function
@@ -100,7 +100,7 @@ error[E0277]: the trait bound `LocalMemory: MmaPolicy` is not satisfied
    |               ^^^^^^^^^ the trait `MmaPolicy` is not implemented for `LocalMemory`
    |
 help: the following other types implement trait `MmaPolicy`
-  --> src/attention/sm100/pipeline.rs
+  --> src/pipeline/sm100.rs
    |
    | impl MmaPolicy for AsyncCompletion {}
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `AsyncCompletion`
@@ -114,7 +114,7 @@ help: the following other types implement trait `MmaPolicy`
    | impl MmaPolicy for SharedReuse {}
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `SharedReuse`
 note: required by a bound in `TwoCtaRing::<STAGES, Full, Empty>::mma_empty`
-  --> src/attention/sm100/pipeline.rs
+  --> src/pipeline/sm100.rs
    |
    |     pub unsafe fn mma_empty(self, ticket: u32)
    |                   --------- required by a bound in this associated function

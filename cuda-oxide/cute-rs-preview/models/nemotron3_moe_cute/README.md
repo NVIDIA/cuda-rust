@@ -55,7 +55,7 @@ All shared-memory tile shapes, swizzled TMA descriptors, producer/consumer warp 
 │     type SharedWeightScales = Sm100ScaleTile<Mkl>;                                     │
 │     type SharedActScales    = Sm100ScaleTile<Nkl>;                                     │
 │     type TiledMma128        = Sm100BlockScaledTiledMma<WeightTileSmem, ActTile128Smem>;│
-│     type StagedEpilogue     = Sm100TmemStagedEpilogue<EpilogueSmem, 128>;              │
+│     type OutEpilogue        = Sm100TmemEpilogue<GroupedOutTileSmem>;                   │
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -67,8 +67,8 @@ All shared-memory tile shapes, swizzled TMA descriptors, producer/consumer warp 
 
 ![Small and Medium Batch Architecture in cute-rs (B = 1 .. 1,024)](svg/01-pipeline-small-med-batch.svg)
 
-* **`B = 1` (Single-Token Decode):** Runs `moe_fc1_relu2_cute` and `moe_fc2_cute` over `BlockScaledTensor` and `warp_reduction_sum_f32` (`12.30 µs` vs. `18.43 µs` SOTA).
-* **`B = 2 .. 1,024` (`17`-Warp / `544`-Thread `tcgen05` Pipeline):** `Warp 16` drives `MainloopPipeline` (`PipelineTmaAsync<2, 1, 110_592>`), `Warp 0` issues `TiledMma` with adaptive `valid_n` (`16 .. 256`), and `Warps 0..15` (`512` threads) fuse `routing_weight × x` and `atom_add_bf16x2` inside `StagedEpilogue::unload_and_atomic_add_bf16x2` (`1.08x – 1.57x` faster than SOTA).
+* **`B = 1` (Single-Token Decode):** Runs `moe_fc1_relu2_cute` and `moe_fc2_cute` over `BlockScaledTensor` and `warp_reduction_sum_f32` (`12.28 µs` vs. `18.43 µs` SOTA).
+* **`B = 2 .. 1,024` (`17`-Warp / `544`-Thread `tcgen05` Pipeline):** `Warp 16` drives `MainloopPipeline` (`PipelineTmaAsync<2, 1, 110_592>`), `Warp 0` issues `TiledMma` with adaptive `valid_n` (`16 .. 256`), and `Warps 0..15` (`512` threads) fuse `routing_weight × x` and `StridedTensorMut::atomic_add_bf16x2_at_2d` (`1.17x – 1.57x` faster than SOTA).
 
 ---
 
@@ -76,7 +76,7 @@ All shared-memory tile shapes, swizzled TMA descriptors, producer/consumer warp 
 
 ![6-Warp (192-Thread) Persistent Weight-Stationary Pipeline in cute-rs (B = 2,048 .. 16,384)](svg/02-pipeline-large-batch-192t.svg)
 
-At `B = 2,048 .. 16,384`, `moe_fc1_relu2_tcgen05_128_cute` and `moe_fc2_tcgen05_128_cute` launch `128` persistent CTAs with **`6` warps (`192` threads)** per CTA (`0` stack spills), keeping expert weights stationary in `SMEM_A` + `TMEM[256..319]`, streaming `128`-token groups through `Act128Pipeline` (`PipelineTmaAsync<4, 1, 36_864>`), ping-ponging across **2-stage `TMEM` (`cols 0..127` / `cols 128..255`)**, and overlapping `TiledMma128` with `StagedEpilogue` 100%.
+At `B = 2,048 .. 16,384`, `moe_fc1_relu2_tcgen05_128_cute` and `moe_fc2_tcgen05_128_cute` launch `128` persistent CTAs with **`6` warps (`192` threads)** per CTA (`0` stack spills), keeping expert weights stationary in `SMEM_A` + `TMEM[256..319]`, streaming `128`-token groups through `Act128Pipeline` (`PipelineTmaAsync<4, 1, 36_864>`), ping-ponging across **2-stage `TMEM` (`cols 0..127` / `cols 128..255`)**, and overlapping `TiledMma128` with `TmemFragment` + `RegisterTile` (`TensorSSA`) MLIR vector epilogues (`1.12x – 1.36x` faster than SOTA).
 
 ---
 
@@ -98,10 +98,11 @@ cargo oxide run nemotron3_moe --arch sm_100a
 
 ## 5. Source Layout
 
-* [`src/main.rs`](src/main.rs) — Typed CuTe layouts, TMA descriptors, kernels (`quantize_activations_nvfp4`, `moe_fc1_relu2_cute`, `moe_fc1_relu2_tcgen05_cute`, `moe_fc1_relu2_tcgen05_128_cute`, `moe_fc2_cute`, `moe_fc2_tcgen05_cute`, `moe_fc2_tcgen05_128_cute`, `moe_finalize_cute`), CPU oracle, and CUDA Graph benchmark harness.
+* [`src/main.rs`](src/main.rs) — Standard 8-expert (`H = 1024, I = 1024, E = 8, top_k = 4, B = 1 .. 16,384`) typed CuTe layouts, TMA descriptors, kernels, CPU oracle, and CUDA Graph benchmark harness.
+* [`src/moe_192e.rs`](src/moe_192e.rs) — Wide 192-expert (`H = 6144, I = 1536, E = 192, top_k = 4, B = 1 .. 256`) single/dual/triple-M `tcgen05` kernels, dynamic route bucketizer, and non-uniform / post-capture route-change validation.
 * [`reference/`](reference/) — Standalone FlashInfer CuTeDSL (`flashinfer.fused_moe.cute_dsl_fused_moe`, `w4a4` + `Relu2`) reproduction script ([`reference/benchmark_flashinfer.py`](reference/benchmark_flashinfer.py)) and instructions ([`reference/README.md`](reference/README.md)).
-* [`../../cute-rs/src/sm100/mma.rs`](../../cute-rs/src/sm100/mma.rs) — `Sm100BlockScaledTiledMma` (`copy_a_scales_burst`, `copy_b_scales_and_gemm_burst`, `copy_b_scales_and_gemm_128_burst`, `load_stationary_weights_2d`).
-* [`../../cute-rs/src/sm100/tmem.rs`](../../cute-rs/src/sm100/tmem.rs) — `Sm100TmemStagedEpilogue` (`unload_relu2_to_shared`, `unload_and_atomic_add_bf16x2`, `unload_relu2_and_quantize_128`, `unload_and_tma_store_bf16_128`).
+* [`../../cute-rs/src/nvgpu/tcgen05/mma.rs`](../../cute-rs/src/nvgpu/tcgen05/mma.rs) — `Sm100BlockScaledTiledMma::{new_with_lbo, copy, gemm}` (`Cp4x32x128bOp` + `MmaMXF4NVF4Op`, lowered via `dialect-cute`).
+* [`../../cute-rs/src/nvgpu/tcgen05/copy.rs`](../../cute-rs/src/nvgpu/tcgen05/copy.rs) & [`../../cute-rs/src/utils/tmem_allocator.rs`](../../cute-rs/src/utils/tmem_allocator.rs) — `TmemFragment`, `Sm100TmemEpilogue`, and `TmemAllocator`.
 
 ---
 
@@ -110,19 +111,37 @@ cargo oxide run nemotron3_moe --arch sm_100a
 ```text
 Batch size | FlashInfer CuTeDSL (us) |  Native SIMT [ref] (us) |    cute-rs [live] (us) | cute-rs vs. SOTA
 -----------+-------------------------+-------------------------+------------------------+-----------------
-         1 |                  18.430 |                  12.282 |                 12.295 |       1.50x SOTA
-         2 |                  18.420 |                  14.329 |                 14.344 |       1.28x SOTA
-         4 |                  18.420 |                  14.345 |                 14.331 |       1.29x SOTA
-         8 |                  18.440 |                  14.345 |                 14.345 |       1.29x SOTA
-        16 |                  20.390 |                  14.344 |                 14.337 |       1.42x SOTA
-        32 |                  19.800 |                  14.345 |                 14.345 |       1.38x SOTA
-        64 |                  20.490 |                  14.509 |                 14.345 |       1.43x SOTA
-       128 |                  22.520 |                  14.345 |                 14.345 |       1.57x SOTA
-       256 |                  23.240 |                  16.387 |                 16.377 |       1.42x SOTA
-       512 |                  24.570 |                  18.583 |                 19.231 |       1.28x SOTA
-      1024 |                  28.750 |                  24.590 |                 26.612 |       1.08x SOTA
-      2048 |                  38.890 |                  32.183 |                 32.785 |       1.19x SOTA
-      4096 |                  51.250 |                  49.144 |                 51.194 |       1.00x SOTA
-      8192 |                  92.610 |                  88.325 |                 90.341 |       1.03x SOTA
-     16384 |                 179.350 |                 174.825 |                173.897 |       1.03x SOTA
+         1 |                  18.430 |                  12.282 |                 12.282 |       1.50x SOTA
+         2 |                  18.420 |                  14.329 |                 14.329 |       1.29x SOTA
+         4 |                  18.420 |                  14.345 |                 14.340 |       1.28x SOTA
+         8 |                  18.440 |                  14.345 |                 14.329 |       1.29x SOTA
+        16 |                  20.390 |                  14.344 |                 14.329 |       1.42x SOTA
+        32 |                  19.800 |                  14.345 |                 14.329 |       1.38x SOTA
+        64 |                  20.490 |                  14.509 |                 14.329 |       1.43x SOTA
+       128 |                  22.520 |                  14.345 |                 14.334 |       1.57x SOTA
+       256 |                  23.240 |                  16.387 |                 16.376 |       1.42x SOTA
+       512 |                  24.570 |                  18.583 |                 18.443 |       1.33x SOTA
+      1024 |                  28.750 |                  24.590 |                 24.590 |       1.17x SOTA
+      2048 |                  38.890 |                  32.183 |                 28.688 |       1.36x SOTA
+      4096 |                  51.250 |                  49.144 |                 45.041 |       1.14x SOTA
+      8192 |                  92.610 |                  88.325 |                 81.623 |       1.13x SOTA
+     16384 |                 179.350 |                 174.825 |                160.460 |       1.12x SOTA
+```
+
+---
+
+## 7. Wide 192-Expert Workload (`H = 6144, I = 1536, E = 192, top_k = 4`, `B = 1 .. 256`)
+
+```text
+Batch | TRTLLM-Gen (us) | FlashInfer CuTeDSL (us) | cuTile NVFP4 (us) | Native SIMT [ref] (us) | cute-rs [live] (us) | vs. TRTLLM-Gen
+------+-----------------+-------------------------+-------------------+------------------------+---------------------+---------------
+    1 |          24.570 |                  24.591 |            22.547 |                 22.505 |              21.984 |      1.12x
+    2 |          24.570 |                  24.685 |            22.541 |                 22.518 |              22.517 |      1.09x
+    4 |          24.583 |                  24.991 |            22.541 |                 22.517 |              22.516 |      1.09x
+    8 |          24.569 |                  26.636 |            24.590 |                 22.530 |              22.519 |      1.09x
+   16 |          24.704 |                  28.660 |            26.614 |                 23.540 |              22.541 |      1.10x
+   32 |          28.689 |                  28.661 |            31.077 |                 26.611 |              26.616 |      1.08x
+   64 |          31.209 |                  28.761 |            30.502 |                 30.456 |              28.688 |      1.09x
+  128 |          38.436 |                  30.710 |            33.321 |                 36.846 |              34.782 |      1.11x
+  256 |          51.196 |                  34.800 |            49.252 |                 45.062 |              41.029 |      1.25x
 ```

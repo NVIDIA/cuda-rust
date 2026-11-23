@@ -9,7 +9,7 @@ error[E0308]: mismatched types
    = note: expected struct `SmemTile<f16, RowMajor<8, 8>>`
               found struct `SmemTile<f16, RowMajor<4, 16>>`
 note: function defined here
-  --> src/copy/tma/mod.rs
+  --> src/nvgpu/cpasync/mod.rs
    |
    | pub unsafe fn copy_tma_s2g_2d<T, SmemL>(
    |               ^^^^^^^^^^^^^^^

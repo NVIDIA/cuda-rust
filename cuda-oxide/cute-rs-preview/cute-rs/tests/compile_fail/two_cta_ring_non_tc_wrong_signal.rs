@@ -4,7 +4,7 @@
  */
 
 //! Compile-fail probe: reject completion signals unavailable for async-copy reuse and local-shared policies.
-use cute_rs::attention::sm100::pipeline::{
+use cute_rs::pipeline::sm100::{
     AsyncCompletion, AsyncCopyReuse, Consumer, LocalShared, RingCursor, TwoCtaRing,
 };
 

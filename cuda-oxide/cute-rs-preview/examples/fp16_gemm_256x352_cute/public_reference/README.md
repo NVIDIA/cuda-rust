@@ -45,7 +45,7 @@ must pass `atol=0.1, rtol=1e-5`. `--json` saves `verification: "both-pass"`,
 input hashes, binary/reference hashes, launch settings and both timings.
 A standalone Rust result marked `external-oracle-required` is not independent
 verification. JSON keys remain `cuda_oxide` and `python_reference`; the Rust
-`implementation` distinguishes `cute-rs` and `ctm-rs`.
+`implementation` distinguishes `cute-rs` and `cutlass-primitives`.
 
 Diagnostics go to stderr. The last two stdout lines identify the Python and
 Rust implementations, with microseconds and TFLOP/s. The latter uses

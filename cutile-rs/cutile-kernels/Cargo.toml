@@ -15,5 +15,8 @@ readme = "README.md"
 cutile = { workspace = true }
 cutile-compiler = { workspace = true }
 
+[dev-dependencies]
+cutile-ir = { workspace = true }
+
 [lints]
 workspace = true

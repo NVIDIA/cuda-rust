@@ -272,15 +272,13 @@ fn error_response(id: Value, error: &dyn std::fmt::Display, fatal: bool) -> Valu
 // GPU boundary: host-only protocol tests below need no CUDA context or runtime.
 use crate::{
     checkpoint::QwenWeights,
+    decoder::BiasWeights,
+    ffn::{ProjectionRole, ProjectionWeights},
     generation::{PredictorWeights, TalkerWeights},
     model::{Batch, Runner},
 };
 use cuda_core::CudaContext;
-use cute_rs::{
-    BFloat16,
-    decoder::BiasWeights,
-    ffn::{ProjectionRole, ProjectionWeights},
-};
+use cute_rs::BFloat16;
 use std::{fs, path::Path};
 
 /// Upload owned input, execute the production role-typed projection, and read back.

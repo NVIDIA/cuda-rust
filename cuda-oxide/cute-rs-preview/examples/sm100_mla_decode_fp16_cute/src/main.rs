@@ -12,7 +12,7 @@ mod comparison;
 mod kernel;
 
 use cuda_core::{CudaContext, DeviceBuffer, LaunchConfig1D, sys};
-use cute_rs::attention::sm100::create_tensor_map_tiled;
+use cute_rs::nvgpu::cpasync::sm100_host::create_tensor_map_tiled;
 use serde::Deserialize;
 use serde_json::json;
 use std::{

@@ -55,6 +55,21 @@ pub(crate) mod decode_linear;
 #[path = "../../qwen_decoder_cute/src/element_kernel.rs"]
 pub(crate) mod element_kernel;
 
+/// Checked host metadata for BF16 attention and contiguous key/value caches.
+#[allow(dead_code)]
+#[path = "../../../examples/common/attention_metadata.rs"]
+pub mod attention_metadata;
+
+/// Checked BF16 decoder arguments, embedding indices and normalization roles.
+#[allow(dead_code)]
+#[path = "../../../examples/common/decoder.rs"]
+pub mod decoder;
+
+/// Checked host arguments for BF16 projections and feed-forward compositions.
+#[allow(dead_code)]
+#[path = "../../../examples/common/ffn.rs"]
+pub mod ffn;
+
 /// Shared BF16 Tensor-Core MMA projection and SwiGLU activation kernels.
 #[allow(dead_code)]
 #[path = "../../../examples/ffn_cute/src/kernel.rs"]

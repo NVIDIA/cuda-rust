@@ -39,7 +39,7 @@ shape its direction by sharing feedback on your experience.
 |  | cuda-oxide (SIMT) | cutile-rs (Tile) |
 | --- | --- | --- |
 | Feels familiar to | CUDA C++ programmers: threads, blocks, shared memory | NumPy or PyTorch programmers: ndarray / tensor operations on multi-dimensional tiles |
-| Safety | Data-race freedom for disjoint slice accesses; you control thread synchronization and shared memory | Data-race freedom by construction within a kernel: no explicit thread indexing, shared memory, or synchronization |
+| Safety | Data-race freedom for disjoint slice accesses via Rust types, plus optional compile-time Lean 4 verification (`#[verify]`, preview) for shared memory, barriers, and async ops | Data-race freedom by construction within a kernel: no explicit thread indexing, shared memory, or synchronization |
 | Indexing | Explicit thread/block indices | Implicit via partitions |
 | Compiles | Ahead of time, Rust → PTX | JIT at first launch, Rust → Tile IR → cubin |
 | Toolchain | Pinned stable Rust (`1.99.1`), managed by `cargo oxide` | Stable Rust 1.89 or newer |
@@ -80,6 +80,10 @@ and cuda-oxide each have a book with installation instructions, guides, and
 reference material. The runtime crates (cuda-bindings, cuda-core, cuda-async)
 are documented in the cutile-rs book.
 
+For reusable Tile kernels, including fused QKV and NVFP4 MoE, see the
+[`cutile-kernels` catalog](cutile-rs/cutile-kernels/README.md) and
+[runnable examples](cutile-rs/cutile-examples/README.md).
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for commit sign-off requirements, pull requests, and CI. Both components build on stable Rust and pin their toolchains in their respective `rust-toolchain.toml` files (with `rustc-dev` and `llvm-tools` for `cuda-oxide`, managed via `cargo oxide`); each book covers its own setup.
@@ -92,3 +96,5 @@ host crates. Every published crate declares `license = "Apache-2.0"`.
 
 Third-party attributions are listed in
 [`cuda-oxide/THIRD_PARTY_NOTICES`](./cuda-oxide/THIRD_PARTY_NOTICES).
+The TileGym-derived [fused QKV kernel](cutile-rs/cutile-kernels/src/experimental/qkv.rs)
+retains its MIT license and notice in the source.

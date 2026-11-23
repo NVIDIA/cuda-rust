@@ -80,7 +80,7 @@
   <text class="t tx-amber l" x="56" y="310">Mode A — BF16 Tensor Core (m16n8k16)</text>
   <text class="ts tx-amber l mono" x="56" y="338">• Weights: 13,248.6 MiB (36 layers, 2 bytes/param)</text>
   <text class="ts tx-amber l mono" x="56" y="362">• RTX 5090: 333.7 tok/s prefill | 69.8 tok/s decode</text>
-  <text class="ts tx-amber l" x="56" y="384">• Uses cute_rs::mma::bf16::Bf16Mma16x8x16 + FP32 accumulate</text>
+  <text class="ts tx-amber l" x="56" y="384">• Uses cute_rs::nvgpu::warp::bf16::Bf16Mma16x8x16 + FP32 accumulate</text>
 
   <rect class="c-coral" x="536" y="282" width="468" height="118" rx="8" stroke-width="1"/>
   <text class="t tx-coral l" x="556" y="310">Mode B — True NVFP4 (E2M1 + E4M3 Scale, SF_VEC = 16)</text>

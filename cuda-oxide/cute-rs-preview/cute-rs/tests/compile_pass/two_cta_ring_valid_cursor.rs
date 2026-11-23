@@ -4,7 +4,7 @@
  */
 
 //! Compile-pass probe: type-check producer and consumer cursors with matching ring policies and stage counts.
-use cute_rs::attention::sm100::pipeline::{
+use cute_rs::pipeline::sm100::{
     AsyncCompletion, Consumer, Producer, RingCursor, SharedReuse, SharedToAsync, TensorMemory,
     TwoCtaRing,
 };

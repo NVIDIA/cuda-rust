@@ -65,8 +65,9 @@ CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir cargo oxide run nemotron3_moe_cute --arch
 
 ## 4. Source Layout
 
-* [`src/kernels.rs`](src/kernels.rs) — All GPU kernels (`fused_route_and_quantize_tcgen05`, `tcgen05_grouped_fc1_relu2_requant`, `tcgen05_grouped_fc1_relu2_requant_128`, `tcgen05_grouped_fc2`, `tcgen05_grouped_fc2_128`, `moe_finalize_tcgen05`, and small-batch `dp4a` kernels).
-* [`src/main.rs`](src/main.rs) — Deterministic synthetic data generator, CPU reference oracle, 2D TMA descriptor setup (`cuTensorMapEncodeTiled`), CUDA Graph capture/replay harness, and 3-way benchmark table printer.
+* [`src/kernels.rs`](src/kernels.rs) — Standard 8-expert GPU kernels (`fused_route_and_quantize_tcgen05`, `tcgen05_grouped_fc1_relu2_requant`, `tcgen05_grouped_fc1_relu2_requant_128`, `tcgen05_grouped_fc2`, `tcgen05_grouped_fc2_128`, `moe_finalize_tcgen05`, and small-batch `dp4a` kernels).
+* [`src/moe_192e.rs`](src/moe_192e.rs) — Wide 192-expert (`H = 6144, I = 1536, E = 192, top_k = 4, B = 1 .. 256`) single/dual/triple-M `tcgen05` kernels, dynamic route bucketizer, and non-uniform / post-capture route-change validation.
+* [`src/main.rs`](src/main.rs) — Deterministic synthetic data generator, CPU reference oracle, 2D TMA descriptor setup (`cuTensorMapEncodeTiled`), CUDA Graph capture/replay harness, and benchmark table printer.
 * [`reference/`](reference/) — Standalone FlashInfer CuTeDSL (`flashinfer.fused_moe.cute_dsl_fused_moe`, `w4a4` + `Relu2`) reproduction script ([`reference/benchmark_flashinfer.py`](reference/benchmark_flashinfer.py)) and instructions ([`reference/README.md`](reference/README.md)).
 * [`visual.md`](visual.md) — Visual architecture guide with SVG diagrams under [`svg/`](svg/).
 
@@ -92,4 +93,22 @@ Batch size | FlashInfer CuTeDSL (us) | Native SIMT [live] (us) |     cute-rs [re
       4096 |                  51.250 |                  49.144 |                 51.192 |      1.04x SOTA
       8192 |                  92.610 |                  88.291 |                 90.351 |      1.05x SOTA
      16384 |                 179.350 |                 174.835 |                173.943 |      1.03x SOTA
+```
+
+---
+
+## 6. Wide 192-Expert Workload (`H = 6144, I = 1536, E = 192, top_k = 4`, `B = 1 .. 256`)
+
+```text
+Batch | TRTLLM-Gen (us) | FlashInfer CuTeDSL (us) | cuTile NVFP4 (us) | Native SIMT [live] (us) | cute-rs [ref] (us) | vs. TRTLLM-Gen
+------+-----------------+-------------------------+-------------------+-------------------------+--------------------+---------------
+    1 |          24.570 |                  24.591 |            22.547 |                  22.506 |             22.519 |      1.09x
+    2 |          24.570 |                  24.685 |            22.541 |                  22.518 |             22.539 |      1.09x
+    4 |          24.583 |                  24.991 |            22.541 |                  22.517 |             22.530 |      1.09x
+    8 |          24.569 |                  26.636 |            24.590 |                  22.518 |             22.541 |      1.09x
+   16 |          24.704 |                  28.660 |            26.614 |                  23.551 |             24.564 |      1.05x
+   32 |          28.689 |                  28.661 |            31.077 |                  26.611 |             28.667 |      1.08x
+   64 |          31.209 |                  28.761 |            30.502 |                  30.467 |             32.752 |      1.02x
+  128 |          38.436 |                  30.710 |            33.321 |                  36.845 |             40.611 |      1.04x
+  256 |          51.196 |                  34.800 |            49.252 |                  45.062 |             49.138 |      1.14x
 ```

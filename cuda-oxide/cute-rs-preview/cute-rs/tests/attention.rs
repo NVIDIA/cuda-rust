@@ -6,7 +6,11 @@
 //! Attention and cache extents are checked without allocating device memory.
 #![cfg(feature = "host")]
 
-use cute_rs::attention::{AttentionError, AttentionShape, AttentionWindow, CacheShape};
+#[allow(dead_code)]
+#[path = "../../examples/common/attention_metadata.rs"]
+mod attention_metadata;
+
+use attention_metadata::{AttentionError, AttentionShape, AttentionWindow, CacheShape};
 
 #[test]
 fn gqa_dimensions_preserve_independent_query_and_kv_widths() {

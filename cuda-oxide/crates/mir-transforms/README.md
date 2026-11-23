@@ -20,8 +20,9 @@ latch branch, which the LLVM exporter marks with `llvm.loop.unroll.disable`.
 
 Two more sources ship with it. `canonicalize.rs` prepares a loop for the
 unroller: it merges multiple back-edges (several `continue`s) into one
-synthetic latch and forwards header-carried values out of each loop exit so
-full unrolling can resolve uses past an early `break`.
+synthetic latch, forwards header-carried values out of each loop exit so
+full unrolling can resolve uses past an early `break`, and drops branches to
+blocks that only reach `mir.unreachable` so they do not count as loop exits.
 `scalarize_borrowed_aggregate_reads.rs` rewrites bounded read-only array
 loads behind non-promotable `mir.field_addr` / `mir.array_element_addr`
 projections into value operations (`mir.extract_field` plus

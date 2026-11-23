@@ -19,6 +19,7 @@ mod compile_binary_op;
 mod compile_block;
 mod compile_cuda_tile_op;
 mod compile_expression;
+mod compile_foreign;
 mod compile_global;
 mod compile_inline;
 mod compile_intrinsic;

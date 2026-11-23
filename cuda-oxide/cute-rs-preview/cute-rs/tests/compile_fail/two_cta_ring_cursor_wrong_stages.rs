@@ -4,7 +4,7 @@
  */
 
 //! Compile-fail probe: reject cursors whose stage count differs from the ring.
-use cute_rs::attention::sm100::pipeline::{
+use cute_rs::pipeline::sm100::{
     AsyncCompletion, Consumer, Producer, RingCursor, TwoCtaRing,
 };
 

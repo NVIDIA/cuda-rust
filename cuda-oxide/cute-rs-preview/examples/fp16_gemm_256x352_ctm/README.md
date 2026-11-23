@@ -19,7 +19,7 @@ A/B global → TMA → shared [5 stages] → paired MMA → TMEM
 C global   ← TMA ← shared [2 stages] ← FP16 + optional row bias
 ```
 
-`ctm-rs` expresses this schedule through typed instructions and physical formats,
+`cutlass-primitives` expresses this schedule through typed instructions and physical formats,
 with explicit barriers and storage lifetimes. The Rust kernel uses no CuTe
 operations or layout algebra. The [CuTe version](../fp16_gemm_256x352_cute/README.md)
 expresses the same schedule with typed layouts, tensor operations and pipelines.
@@ -54,7 +54,7 @@ inputs. The command ends with:
 
 ```text
 CUTLASS (CuTe + CTM): <time> us, <rate> TFLOP/s
-ctm-rs: <time> us, <rate> TFLOP/s
+cutlass-primitives: <time> us, <rate> TFLOP/s
 ```
 
 Add `--has-bias` for row bias. The standalone Rust executable uses CPU
@@ -70,7 +70,7 @@ durations from a separate capture; TFLOP/s uses the CUDA-event median.
 
 | Implementation | CUDA events (µs) | TFLOP/s | Nsight kernel (µs) |
 | --- | ---: | ---: | ---: |
-| Rust CTM (`ctm-rs`) | 780.320 | 1392.540 | 774.207 |
+| Rust CTM (`cutlass-primitives`) | 780.320 | 1392.540 | 774.207 |
 | Python CTM (CUTLASS primitives + CuTe helpers) | 770.848 | 1409.651 | 751.392 |
 
 Event intervals can include launch gaps; Nsight durations exclude gaps between

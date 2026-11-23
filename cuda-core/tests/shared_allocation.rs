@@ -4,8 +4,11 @@
  */
 
 use cuda_core::{Context, DeviceBuffer, RawDeviceBuffer};
-use std::sync::{mpsc, Arc};
+use std::sync::Arc;
+#[path = "support/stream_gate.rs"]
+mod stream_gate;
 use std::time::{Duration, Instant};
+use stream_gate::StreamGate as Gate;
 
 fn metadata(context: usize) -> RawDeviceBuffer {
     // SAFETY: these fake handles are used only for bookkeeping; no CUDA API
@@ -19,8 +22,12 @@ fn metadata(context: usize) -> RawDeviceBuffer {
     }
 }
 
+// Gated work must not overlap another test's context-synchronizing setup.
+static GPU_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn byte_views_share_extent_identity_and_access_exclusion() {
+    let _guard = GPU_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let raw = metadata(0x2000);
     let view = raw.slice_bytes(16, 32).unwrap();
     assert_eq!(view.cu_deviceptr(), raw.cu_deviceptr() + 16);
@@ -42,6 +49,7 @@ fn byte_views_share_extent_identity_and_access_exclusion() {
 
 #[test]
 fn same_ordinal_does_not_mean_same_context() {
+    let _guard = GPU_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let raw = metadata(0x2000);
     let other = metadata(0x3000);
     assert_eq!(raw.device_id(), other.device_id());
@@ -54,26 +62,9 @@ fn same_ordinal_does_not_mean_same_context() {
     assert!(result.is_err());
 }
 
-struct Gate(mpsc::Sender<()>);
-impl Gate {
-    fn arm(stream: &cuda_core::Stream) -> Self {
-        let (tx, rx) = mpsc::channel();
-        stream
-            .launch_host_function(move || {
-                let _ = rx.recv_timeout(Duration::from_secs(10));
-            })
-            .unwrap();
-        Self(tx)
-    }
-}
-impl Drop for Gate {
-    fn drop(&mut self) {
-        let _ = self.0.send(());
-    }
-}
-
 #[test]
 fn pending_copy_excludes_other_stream_and_outlives_dropped_buffer() {
+    let _guard = GPU_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let context = Context::new(0).unwrap();
     let stream = context.new_stream().unwrap();
     let other = context.new_stream().unwrap();
@@ -82,12 +73,8 @@ fn pending_copy_excludes_other_stream_and_outlives_dropped_buffer() {
     let gate = Gate::arm(&stream);
     buffer.zero_async(&stream).unwrap();
     assert!(storage.acquire(&other, false, false).is_err());
-    let before = Instant::now();
     drop(buffer);
-    assert!(
-        before.elapsed() < Duration::from_secs(2),
-        "buffer drop waited for GPU work"
-    );
+    gate.assert_held();
     assert!(storage.acquire(&other, false, false).is_err());
     drop(gate);
     stream.synchronize().unwrap();
@@ -99,17 +86,14 @@ fn pending_copy_excludes_other_stream_and_outlives_dropped_buffer() {
 
 #[test]
 fn stream_drop_is_nonblocking_and_holds_context_until_completion() {
+    let _guard = GPU_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let context = Context::new(0).unwrap();
     let stream = context.new_stream().unwrap();
     let gate = Gate::arm(&stream);
     let weak = Arc::downgrade(&context);
     drop(context);
-    let before = Instant::now();
     drop(stream);
-    assert!(
-        before.elapsed() < Duration::from_secs(2),
-        "stream drop waited for GPU work"
-    );
+    gate.assert_held();
     assert!(weak.upgrade().is_some());
     drop(gate);
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -124,6 +108,7 @@ fn stream_drop_is_nonblocking_and_holds_context_until_completion() {
 
 #[test]
 fn fresh_thread_allocation_binds_its_context() {
+    let _guard = GPU_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let context = Context::new(0).unwrap();
     let stream = context.new_stream().unwrap();
     std::thread::spawn(move || {
@@ -136,6 +121,7 @@ fn fresh_thread_allocation_binds_its_context() {
 
 #[test]
 fn empty_and_peeled_buffers_preserve_shared_read_access() {
+    let _guard = GPU_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let context = Context::new(0).unwrap();
     let stream = context.new_stream().unwrap();
     let empty = DeviceBuffer::<u32>::from_host(&stream, &[]).unwrap();

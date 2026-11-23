@@ -140,6 +140,9 @@ pub struct TileRustValue {
     pub(crate) type_meta: Option<TypeMeta>,
     pub(crate) mutability: Mutability,
     pub(crate) bounds: Option<Bounds<i64>>,
+    /// Advisory metadata on this Rust value, not a fact about its truth value.
+    /// Copies retain it; new computations and control-flow joins discard it.
+    pub(crate) condition_likelihood: Option<bool>,
     pub(crate) string_literal: Option<syn::Expr>,
     pub(crate) enum_variant: Option<String>,
     pub(crate) enum_payload: Option<Box<syn::Expr>>,
@@ -171,6 +174,7 @@ impl TileRustValue {
             type_meta: None,
             mutability: Mutability::Unset,
             bounds: None,
+            condition_likelihood: None,
             string_literal: None,
             enum_variant: None,
             enum_payload: None,
@@ -195,6 +199,7 @@ impl TileRustValue {
             type_meta: None,
             mutability: Mutability::Unset,
             bounds: None,
+            condition_likelihood: None,
             string_literal: None,
             enum_variant: None,
             enum_payload: None,
@@ -223,6 +228,7 @@ impl TileRustValue {
             type_meta,
             mutability: Mutability::Unset,
             bounds: None,
+            condition_likelihood: None,
             string_literal: None,
             enum_variant: None,
             enum_payload: None,
@@ -251,6 +257,7 @@ impl TileRustValue {
             type_meta: None,
             mutability: Mutability::Unset,
             bounds,
+            condition_likelihood: None,
             string_literal: None,
             enum_variant: None,
             enum_payload: None,
@@ -275,6 +282,7 @@ impl TileRustValue {
             type_meta: None,
             mutability: Mutability::Unset,
             bounds: None,
+            condition_likelihood: None,
             string_literal: Some(string_literal),
             enum_variant: None,
             enum_payload: None,
@@ -303,6 +311,7 @@ impl TileRustValue {
             type_meta: None,
             mutability: Mutability::Unset,
             bounds: None,
+            condition_likelihood: None,
             string_literal: None,
             enum_variant: Some(variant.into()),
             enum_payload: payload.map(Box::new),
@@ -336,6 +345,7 @@ impl TileRustValue {
                 type_meta: None,
                 mutability: Mutability::Unset,
                 bounds: None,
+                condition_likelihood: None,
                 string_literal: None,
                 enum_variant: None,
                 enum_payload: None,
@@ -361,6 +371,7 @@ impl TileRustValue {
             type_meta: None,
             mutability: Mutability::Unset,
             bounds: None,
+            condition_likelihood: None,
             string_literal: Some(literal_expr),
             enum_variant: None,
             enum_payload: None,
@@ -524,6 +535,7 @@ impl TileRustValue {
     /// path and keep their brands.
     pub(crate) fn invalidate_join_facts(&mut self) {
         self.bounds = None;
+        self.condition_likelihood = None;
         self.term = None;
         self.index_origin = None;
         self.partition_axis_origin = None;
@@ -565,7 +577,21 @@ impl TileRustValue {
         self.verify()?;
         let mut result = self.clone();
         match self.kind {
-            Kind::String => {}
+            Kind::String => {
+                // `self` holds the string from before the region (a branch,
+                // a loop, a block) that reassigns the variable. Region
+                // arguments and results carry no strings, so the string in
+                // a loop body and after the region is unknown: a use is an
+                // error, not the stale string. A string tag names its type
+                // and stays.
+                if let Some(Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(_),
+                    ..
+                })) = &result.string_literal
+                {
+                    result.string_literal = Some(Expr::Verbatim(Default::default()));
+                }
+            }
             Kind::PrimitiveType => {
                 result.value = Some(values[pos]);
                 pos += 1;

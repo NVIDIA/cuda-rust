@@ -58,12 +58,13 @@ jobs:
           - package: cuda-intrinsics-gen
           - package: cuda-target-spec
           - package: cuda-intrinsics
+          - package: lean-exporter
           - package: llvm-export
           - package: dialect-mir
           - package: dialect-nvvm
           - package: mir-importer
           # CuTe types, semantic IR, and MLIR export need no CUDA toolkit.
-          # cute-rs and ctm-rs compile host metadata through cuda-host, so
+          # cute-rs and cutlass-primitives compile host metadata through cuda-host, so
           # they run in rust-unit-tests-cuda.
           - package: cute-layout
           - package: dialect-cute
@@ -83,6 +84,12 @@ jobs:
           - package: oxide-tile-export
           # The Tile IR bytecode writer for those descriptions. Pure Rust.
           - package: oxide-tilebc
+          # The linkage provider ABI and runtime. The -sys crate generates its
+          # bindings from the Tile IR compiler's header, which the build reads
+          # from TILEIR_LINKAGE_PROVIDER_INCLUDE_DIR; without it the build fails
+          # with instructions, so these lanes need that directory provisioned.
+          - package: oxide-tile-provider-sys
+          - package: oxide-tile-provider
           - package: reserved-oxide-symbols
           # trybuild compile-fail suite for ThreadIndex / DisjointSlice safety
           - package: cuda-device
@@ -94,6 +101,8 @@ jobs:
           # pure and validates options, provenance, and cubin structure; the
           # live-toolkit smoke test remains explicitly ignored.
           - package: cuda-artifact-finalizer
+          # Shared, driverless CUDA Toolkit path and library discovery policy.
+          - package: cuda-toolkit-discovery
           # cargo subcommand wrapper; pure Rust, no CUDA toolkit required.
           # Running it on a runner with NO toolkit installed is the
           # regression gate for issue #87.
@@ -135,10 +144,10 @@ jobs:
   # cuda.h crates. A container is chosen per job, so these cannot share the
   # rust image above without also handing cargo-oxide a toolkit.
   rust-unit-tests-cuda:
-    name: cargo test -p ${{ matrix.package }}
+    name: cargo test -p ${{ matrix.test.package }}${{ matrix.cuda.suffix }}
     runs-on: linux-amd64-cpu4
     container:
-      image: nvidia/cuda:13.3.1-devel-ubuntu24.04
+      image: ${{ matrix.cuda.image }}
       env:
         DEBIAN_FRONTEND: noninteractive
     env:
@@ -146,14 +155,24 @@ jobs:
     timeout-minutes: 30
     strategy:
       fail-fast: false
+      # Every crate below runs against each toolkit image. The baseline keeps its
+      # existing job names (empty suffix); the newer image is a separate lane.
       matrix:
-        include:
+        cuda:
+          - image: nvidia/cuda:13.3.1-devel-ubuntu24.04
+            suffix: ""
+          # Same image digest as Docker Hub's nvidia/cuda:13.5.0-devel-ubuntu24.04;
+          # nvcr.io has no anonymous pull limit. Pinned to the newest CUDA
+          # release published as of 2026-11-09.
+          - image: nvcr.io/nvidia/cuda:13.5.0-devel-ubuntu24.04
+            suffix: " (CUDA 13.5.0)"
+        test:
           # Includes a real llc -> ptxas spine-kernel validation.
           - package: cuda-oxide-codegen
           # Facade macro tests compile host metadata through cuda-host.
           - package: cute-rs
-          - package: ctm-rs
-          - package: ctm-rs
+          - package: cutlass-primitives
+          - package: cutlass-primitives
             test_args: --all-targets --features host
           # launch_requires_unsafe trybuild fixture dev-depends on
           # cuda-host/cuda-core, which transitively pull cuda-bindings.
@@ -170,7 +189,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install LLVM 21 (llc/opt for the NVPTX backend)
-        if: matrix.package == 'cuda-oxide-codegen'
+        if: matrix.test.package == 'cuda-oxide-codegen'
         run: |
           set -euo pipefail
           source /etc/os-release
@@ -190,7 +209,7 @@ jobs:
           sysroot="$(rustc --print sysroot)"
           export LIBRARY_PATH="${sysroot}/lib:${LIBRARY_PATH:-}"
           export LD_LIBRARY_PATH="${sysroot}/lib:${LD_LIBRARY_PATH:-}"
-          cargo test -p ${{ matrix.package }} ${{ matrix.test_args || '--all-targets' }}
+          cargo test -p ${{ matrix.test.package }} ${{ matrix.test.test_args || '--all-targets' }}
 
   rustc-codegen-cuda-unit-tests:
     name: cargo test --lib (rustc-codegen-cuda)
@@ -278,3 +297,36 @@ jobs:
           fi
           echo "ABI history base: ${base_ref}"
           cargo run -p cuda-intrinsics-gen -- check-abi-history --base-ref "${base_ref}"
+
+  lean-verification:
+    name: Lean 4 formal verification & exporter checks (preview)
+    runs-on: linux-amd64-cpu4
+    container:
+      image: rust:1.98.0-bookworm
+    timeout-minutes: 30
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@v4
+
+      - name: Mark the workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Install Elan and pinned Lean 4 toolchain
+        working-directory: cuda-oxide/oxide-proofs-preview
+        run: |
+          set -euo pipefail
+          curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+            | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+          "$HOME/.elan/bin/lake" --version
+
+      - name: Run Lean 4 model, negative counterexamples, and exporter proof checks
+        working-directory: cuda-oxide
+        env:
+          CUDA_OXIDE_REQUIRE_LEAN: "1"
+          CUDA_OXIDE_NO_LEAN_CACHE: "1"
+        run: |
+          export PATH="$HOME/.elan/bin:$PATH"
+          python3 oxide-proofs-preview/check.py
+          python3 oxide-proofs-preview/check-exporter.py
+          cargo test -p lean-exporter --all-targets

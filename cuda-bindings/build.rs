@@ -324,6 +324,33 @@ fn generate_type_bindings(toolkit: &ResolvedToolkit, out_dir: &Path) -> Result<(
         .generate()?;
     let source = bindings.to_string();
     emit_layout_cfgs(&source);
+    // On Windows MSVC target, Clang defaults all C enums to signed c_int, whereas
+    // on Linux Clang maps enums with only positive values to unsigned c_uint.
+    // Standardize non-negative CUDA enums to unsigned c_uint for cross-platform consistency.
+    let positive_enums = [
+        "CUstream_flags_enum",
+        "CUlaunchAttributeID_enum",
+        "CUctx_flags_enum",
+        "CUevent_flags_enum",
+        "CUevent_wait_flags_enum",
+        "cudaError_enum",
+        "CUdevice_attribute_enum",
+        "CUfunction_attribute_enum",
+        "CUjit_option_enum",
+    ];
+    let source = source
+        .lines()
+        .map(|line| {
+            for enum_name in &positive_enums {
+                let target = format!("pub type {enum_name} = ::std::os::raw::c_int;");
+                if line == target {
+                    return format!("pub type {enum_name} = ::core::ffi::c_uint;");
+                }
+            }
+            line.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     fs::write(out_dir.join("types.rs"), source)?;
     Ok(())
 }

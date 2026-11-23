@@ -8,13 +8,6 @@ use crate::{
     checkpoint::SafeTensorFile,
     codec_attention,
     codec_ops::{self, CheckpointLayout, ConvWeights},
-    model::{self, Batch},
-    operator::Result,
-    rotary::RotarySpec,
-};
-use cuda_core::{CudaStream, DeviceBuffer};
-use cute_rs::{
-    BFloat16,
     decoder::{
         BiasWeights, EmbeddingWeights, FinalNorm, InputNorm, NormRole, NormWeights,
         PostAttentionNorm, TokenIds,
@@ -23,7 +16,12 @@ use cute_rs::{
         AttentionOutput, ChannelContract, ChannelExpand, Down, Gate, InputProjection, Key,
         OutputProjection, ProjectionRole, ProjectionWeights, Query, Up, Value,
     },
+    model::{self, Batch},
+    operator::Result,
+    rotary::RotarySpec,
 };
+use cuda_core::{CudaStream, DeviceBuffer};
+use cute_rs::BFloat16;
 use safetensors::tensor::Dtype;
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 

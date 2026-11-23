@@ -11,9 +11,10 @@
 //! shapes use a tensor-core kernel with split K instead: every slice is its
 //! own K16 MMA chain, and the FP32 slice sums are added in slice order before
 //! the single BF16 rounding. `reference_linear` chooses the entry per shape.
-use ctm_rs::memory::DisjointSlice;
-use ctm_rs::{cuda_module, kernel, launch_contract, thread};
 use cute_rs::BFloat16;
+use cutlass_primitives as prims;
+use prims::memory::DisjointSlice;
+use prims::{cuda_module, kernel, launch_contract, thread};
 
 /// Device entries reproducing the reference reduction order for decode shapes.
 ///
@@ -23,7 +24,9 @@ use cute_rs::BFloat16;
 #[cuda_module]
 pub mod kernels {
     use super::*;
-    use cute_rs::mma::bf16::{APartition, BPartition, Bf16Mma16x8x16, FragmentC, PackedDecode};
+    use cute_rs::nvgpu::warp::bf16::{
+        APartition, BPartition, Bf16Mma16x8x16, FragmentC, PackedDecode,
+    };
     use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
     use cute_rs::{RegisterTile, Tensor};
 

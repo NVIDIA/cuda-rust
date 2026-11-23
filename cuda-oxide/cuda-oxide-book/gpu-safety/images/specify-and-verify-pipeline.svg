@@ -1,0 +1,128 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 360" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <style>
+    :root, svg {
+      --bg: #ffffff;
+      --bg-stroke: #e2e8f0;
+      --panel: #f8fafc;
+      --panel-stroke: #cbd5e1;
+      --box: #ffffff;
+      --box-stroke: #cbd5e1;
+      --fg: #0f172a;
+      --text: #334155;
+      --sub: #475569;
+      --muted: #64748b;
+      --green: #15803d;
+      --green-text: #14532d;
+      --green-sub: #166534;
+      --green-soft: #f0fdf4;
+      --green-border: #86efac;
+      --blue-text: #1e3a8a;
+      --blue-soft: #eff6ff;
+      --blue-border: #93c5fd;
+      --amber: #b45309;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root, svg {
+        --bg: #161b22;
+        --bg-stroke: #30363d;
+        --panel: #1e242c;
+        --panel-stroke: #3d444d;
+        --box: #13171d;
+        --box-stroke: #3d444d;
+        --fg: #f0f6fc;
+        --text: #c9d1d9;
+        --sub: #b1bac4;
+        --muted: #8b949e;
+        --green: #3fb950;
+        --green-text: #7ee787;
+        --green-sub: #56d364;
+        --green-soft: #12261e;
+        --green-border: #2ea043;
+        --blue-text: #a5d6ff;
+        --blue-soft: #132238;
+        --blue-border: #388bfd;
+        --amber: #f0883e;
+      }
+    }
+  </style>
+  <defs>
+    <marker id="arrow-dark" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M 0 0.8 L 7.5 4 L 0 7.2 Z" style="fill: var(--sub)"/>
+    </marker>
+    <marker id="arrow-green2" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M 0 0.8 L 7.5 4 L 0 7.2 Z" style="fill: var(--green)"/>
+    </marker>
+  </defs>
+
+  <rect width="1080" height="360" rx="14" style="fill: var(--bg); stroke: var(--bg-stroke)" stroke-width="1.5"/>
+
+  <!-- Title -->
+  <text x="40" y="42" font-size="18" font-weight="700" style="fill: var(--fg)">Specify &amp; Verify: The Proof Detour</text>
+  <text x="40" y="64" font-size="13" style="fill: var(--muted)">Host checks preconditions once per launch; Lean 4 proves kernel memory accesses once at compile time.</text>
+
+  <!-- Box 1: Rust Source -->
+  <g transform="translate(36, 94)">
+    <rect width="218" height="190" rx="10" style="fill: var(--panel); stroke: var(--panel-stroke)" stroke-width="1.5"/>
+    <text x="109" y="28" text-anchor="middle" font-size="13.5" font-weight="700" style="fill: var(--fg)">1. Rust Kernel</text>
+    <rect x="14" y="42" width="190" height="58" rx="6" style="fill: var(--blue-soft); stroke: var(--blue-border)"/>
+    <text x="22" y="61" font-family="'Roboto Mono', monospace" font-size="10.5" style="fill: var(--blue-text)">#[launch_contract(</text>
+    <text x="22" y="77" font-family="'Roboto Mono', monospace" font-size="10.5" style="fill: var(--blue-text)">  requires = (a.len &gt;= c.len)</text>
+    <text x="22" y="92" font-family="'Roboto Mono', monospace" font-size="10.5" style="fill: var(--blue-text)">)]</text>
+
+    <rect x="14" y="108" width="190" height="66" rx="6" style="fill: var(--green-soft); stroke: var(--green-border)"/>
+    <text x="22" y="127" font-family="'Roboto Mono', monospace" font-size="10.5" style="fill: var(--green-text)">#[verify(</text>
+    <text x="22" y="143" font-family="'Roboto Mono', monospace" font-size="10.5" style="fill: var(--green-text)">  no_oob_idx(a, b, c),</text>
+    <text x="22" y="159" font-family="'Roboto Mono', monospace" font-size="10.5" style="fill: var(--green-text)">  no_data_race(TILE)</text>
+    <text x="22" y="171" font-family="'Roboto Mono', monospace" font-size="10.5" style="fill: var(--green-text)">)]</text>
+  </g>
+
+  <line x1="254" y1="189" x2="288" y2="189" style="stroke: var(--sub)" stroke-width="1.8" marker-end="url(#arrow-dark)"/>
+
+  <!-- Box 2: PostMem2Reg dialect-mir -->
+  <g transform="translate(292, 94)">
+    <rect width="230" height="190" rx="10" style="fill: var(--panel); stroke: var(--panel-stroke)" stroke-width="1.5"/>
+    <text x="115" y="28" text-anchor="middle" font-size="13.5" font-weight="700" style="fill: var(--fg)">2. PostMem2Reg MIR</text>
+    <text x="115" y="48" text-anchor="middle" font-size="11.5" style="fill: var(--muted)">Pipeline pauses in memory</text>
+
+    <rect x="16" y="60" width="198" height="112" rx="6" style="fill: var(--box); stroke: var(--box-stroke)"/>
+    <text x="26" y="82" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--text)">^active:</text>
+    <text x="34" y="101" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--amber)">mir.assert(idx &lt; a.len)</text>
+    <text x="34" y="120" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--text)">v1 = mir.load(a[idx])</text>
+    <text x="34" y="139" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--amber)">mir.assert(idx &lt; b.len)</text>
+    <text x="34" y="158" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--text)">v2 = mir.load(b[idx])</text>
+  </g>
+
+  <line x1="522" y1="189" x2="556" y2="189" style="stroke: var(--sub)" stroke-width="1.8" marker-end="url(#arrow-dark)"/>
+
+  <!-- Box 3: Lean 4 Proof Check -->
+  <g transform="translate(560, 94)">
+    <rect width="242" height="190" rx="10" style="fill: var(--green-soft); stroke: var(--green)" stroke-width="1.8"/>
+    <text x="121" y="28" text-anchor="middle" font-size="13.5" font-weight="700" style="fill: var(--green-text)">3. Lean 4 Verifier</text>
+    <text x="121" y="48" text-anchor="middle" font-size="11.5" style="fill: var(--green-sub)">lean-exporter + lake env lean</text>
+
+    <rect x="16" y="60" width="210" height="112" rx="6" style="fill: var(--box); stroke: var(--green-border)"/>
+    <text x="26" y="81" font-family="'Roboto Mono', monospace" font-size="10.8" style="fill: var(--green-text)">def mirFunc : MirFunc := ...</text>
+    <text x="26" y="102" font-family="'Roboto Mono', monospace" font-size="10.8" style="fill: var(--fg)">theorem verify_no_oob_idx :</text>
+    <text x="34" y="119" font-family="'Roboto Mono', monospace" font-size="10.8" style="fill: var(--green)">MirNoOobGlobal ... := by</text>
+    <text x="34" y="136" font-family="'Roboto Mono', monospace" font-size="10.8" style="fill: var(--text)">mir_vc mirFunc</text>
+    <text x="26" y="158" font-family="'Roboto Mono', monospace" font-size="10.5" style="fill: var(--muted)">#print axioms (0 sorryAx)</text>
+  </g>
+
+  <line x1="802" y1="189" x2="836" y2="189" style="stroke: var(--green)" stroke-width="2" marker-end="url(#arrow-green2)"/>
+
+  <!-- Box 4: Elided PTX -->
+  <g transform="translate(840, 94)">
+    <rect width="204" height="190" rx="10" style="fill: var(--panel); stroke: var(--panel-stroke)" stroke-width="1.5"/>
+    <text x="102" y="28" text-anchor="middle" font-size="13.5" font-weight="700" style="fill: var(--fg)">4. Emitted PTX</text>
+    <text x="102" y="48" text-anchor="middle" font-size="11.5" font-weight="600" style="fill: var(--green)">mir.assert checks erased!</text>
+
+    <rect x="16" y="60" width="172" height="112" rx="6" style="fill: var(--box); stroke: var(--box-stroke)"/>
+    <text x="26" y="86" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--text)">ld.global.f32 %f1, [a]</text>
+    <text x="26" y="108" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--text)">ld.global.f32 %f2, [b]</text>
+    <text x="26" y="130" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--text)">add.f32       %f3, ...</text>
+    <text x="26" y="152" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--green)">// 0 trap branches</text>
+  </g>
+
+  <!-- Bottom note -->
+  <text x="540" y="326" text-anchor="middle" font-size="12.5" style="fill: var(--sub)">If any proof obligation fails in Step 3, compilation stops immediately before PTX is emitted.</text>
+</svg>

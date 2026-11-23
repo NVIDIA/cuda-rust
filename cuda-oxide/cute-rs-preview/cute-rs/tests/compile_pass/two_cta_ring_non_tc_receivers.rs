@@ -4,7 +4,7 @@
  */
 
 //! Compile-pass probe: type-check raw and cursor operations supported by async-copy and local-shared receivers.
-use cute_rs::attention::sm100::pipeline::{
+use cute_rs::pipeline::sm100::{
     AsyncCompletion, AsyncCopyReuse, Consumer, LocalShared, Producer, RingCursor, TwoCtaRing,
 };
 

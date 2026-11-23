@@ -60,9 +60,10 @@ fn tma_view_of(ctx: &Context, value: Value) -> Option<CuteTmaViewType> {
         .cloned()
 }
 
-/// Return the supported scalar carrier width in bytes, excluding decoded packed formats.
+/// Return the supported scalar carrier width in bytes, including transparent scalar wrappers.
 fn transport_element_bytes(ctx: &Context, element: TypeHandle) -> Option<u64> {
-    let element = element.deref(ctx);
+    let (scalar, _) = crate::types::scalar_transport_layout(ctx, element, 0)?;
+    let element = scalar.deref(ctx);
     if element.downcast_ref::<MirFP16Type>().is_some() {
         Some(2)
     } else if element.downcast_ref::<FP32Type>().is_some() {

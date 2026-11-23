@@ -9,7 +9,7 @@ description = "FP32 and BF16 RMSNorm with explicit storage and collective contra
 [workspace]
 
 [dependencies]
-ctm-rs = { path = "../../ctm-rs" }
+cutlass-primitives = { path = "../../cutlass-primitives" }
 cute-rs = { path = "../../cute-rs", features = ["host"] }
 cuda-device = { path = "../../../crates/cuda-device" }
 cuda-host = { path = "../../../crates/cuda-host" }

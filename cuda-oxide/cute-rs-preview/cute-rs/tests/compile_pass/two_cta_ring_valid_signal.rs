@@ -4,7 +4,7 @@
  */
 
 //! Compile-pass probe: type-check the completion signals permitted by each ring policy.
-use cute_rs::attention::sm100::pipeline::{
+use cute_rs::pipeline::sm100::{
     AsyncCompletion, SharedReuse, SharedToAsync, TensorMemory, TwoCtaRing,
 };
 

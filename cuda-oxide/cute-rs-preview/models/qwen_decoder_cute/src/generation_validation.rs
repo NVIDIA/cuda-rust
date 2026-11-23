@@ -4,6 +4,8 @@
  */
 //! Structured full-depth fixture: isolates model wiring from learned weights.
 use crate::{
+    decoder::{BiasWeights, EmbeddingWeights, NormWeights, TokenIds},
+    ffn::ProjectionWeights,
     generation::*,
     layer_validation::DeviceLayer,
     model::{Batch, DecoderCache, Runner},
@@ -11,11 +13,7 @@ use crate::{
     reference::{self, LayerWeights},
 };
 use cuda_core::DeviceBuffer;
-use cute_rs::{
-    BFloat16,
-    decoder::{BiasWeights, EmbeddingWeights, NormWeights, TokenIds},
-    ffn::ProjectionWeights,
-};
+use cute_rs::BFloat16;
 
 /// Construct positive-zero BF16 storage for sparse fixture matrices.
 fn zeros(len: usize) -> Vec<BFloat16> {

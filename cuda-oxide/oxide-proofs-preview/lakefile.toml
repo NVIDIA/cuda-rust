@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name = "cuda-oxide-verification"
+version = "0.1.0"
+defaultTargets = ["CudaOxide"]
+
+[[lean_lib]]
+name = "CudaOxide"

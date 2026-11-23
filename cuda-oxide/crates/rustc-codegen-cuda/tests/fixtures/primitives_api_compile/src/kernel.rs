@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-use ctm_rs::cuda_module;
+use cutlass_primitives as prims;
+use prims::cuda_module;
 
 // Keep this boundary present: concrete shared pointers must adapt to a
 // generic Rust helper ABI without changing pointee, mutability or pointer kind.
@@ -11,7 +12,8 @@ fn generic_shared_identity(pointer: *mut u8) -> *mut u8 {
 
 #[cuda_module]
 mod probes {
-    use ctm_rs::{
+    use super::prims;
+    use prims::{
         async_copy, barrier,
         cluster::{self, CtaMask},
         convert, fence, float,
@@ -154,7 +156,7 @@ mod probes {
     #[launch_bounds(32)]
     #[launch_contract(domain = 1, coordinates = u32, block = (32, 1, 1))]
     pub fn primitives_attention(mut out: DisjointSlice<f32>, packed: *mut u32) {
-        use ctm_rs::mma::{Accumulator16x8, F16A, F16B, mma_f16};
+        use prims::mma::{Accumulator16x8, F16A, F16B, mma_f16};
         unsafe {
             async_copy::cp_async_commit_group();
             async_copy::cp_async_wait_group::<0>();

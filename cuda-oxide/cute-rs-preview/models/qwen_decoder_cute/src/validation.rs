@@ -4,16 +4,14 @@
  */
 //! Independent synthetic checks, including observable BF16 rounding boundaries.
 use crate::{
+    decoder::{BiasWeights, EmbeddingWeights, TokenIds},
+    ffn::{InputProjection, ProjectionWeights},
     model::{Batch, Runner},
     operator::Result,
     reference,
 };
 use cuda_core::{CudaContext, DeviceBuffer};
-use cute_rs::{
-    BFloat16,
-    decoder::{BiasWeights, EmbeddingWeights, TokenIds},
-    ffn::{InputProjection, ProjectionWeights},
-};
+use cute_rs::BFloat16;
 
 /// Extract BF16 storage bits for exact comparisons, including signed zero.
 fn bits(values: &[BFloat16]) -> Vec<u16> {

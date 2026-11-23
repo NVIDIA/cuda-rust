@@ -133,15 +133,16 @@ cuda-oxide is split into focused crates. Here is every one and its role:
 | `mir-transforms`     | Analyzes and optimizes `dialect-mir` before lowering; currently provides loop unrolling |
 | `nvvm-transforms`    | Converts lowered LLVM operations to the form accepted by the selected NVVM dialect     |
 | `llvm-export`        | Re-exports `pliron-llvm`'s LLVM dialect + cuda-oxide's textual `.ll` exporter          |
-| `cuda-oxide-mlir-export` | CUTLASS 4.7 mappings and profiles; upstream MLIR printing                                     |
+| `cuda-oxide-mlir-export` | CUTLASS 4.8.1 mappings and profiles; upstream MLIR printing                                   |
 | `dialect-nvvm`       | pliron dialect for NVIDIA GPU intrinsics (`tid`, `ntid`, barriers, TMA)                |
 | `mir-lower`          | Lowers `dialect-mir` to the LLVM dialect -- the main transformation pass               |
+| `lean-exporter`      | Preview: exports `dialect-mir` to `oxide-proofs-preview/` for `#[verify]`              |
 | `cargo-oxide`        | CLI tool: `cargo oxide build`, `cargo oxide run`, `cargo oxide pipeline`               |
 | `cuda-device`        | Device-side API: intrinsics, `DisjointSlice`, barriers, shared memory, warp ops        |
 | `cute-layout`       | CuTe-style layout algebra and coordinate mapping                                       |
-| `ctm-rs`            | Typed instruction-level CUDA primitives |
+| `cutlass-primitives`            | Typed instruction-level CUDA primitives |
 | `cute-rs`           | Typed CuTe tensors, tiles, copies, pipelines, and MMA operations                        |
-| `cuda-macros`        | Proc macros: `#[kernel]`, `#[device]`                                                  |
+| `cuda-macros`        | Proc macros: `#[kernel]`, `#[device]`, `#[launch_contract]`, `#[verify]`               |
 | `cuda-host`          | Host-side typed module loading and launch helpers                                      |
 | `cuda-core`          | Shared with cutile-rs: safe Driver API bindings; shared context, stream and buffer types   |
 | `cuda-core-derive`   | Shared with cutile-rs: `#[derive(DeviceCopy)]` proc-macro for `cuda-core`              |
@@ -150,9 +151,12 @@ cuda-oxide is split into focused crates. Here is every one and its role:
 | `cuda-intrinsics`    | Generated low-level CUDA intrinsic declarations                                        |
 | `cuda-intrinsics-gen`| Extractor and deterministic source generator for the intrinsics                        |
 | `cuda-artifact-finalizer` | Driver-independent NVVM IR, LTOIR, and PTX finalization                           |
+| `cuda-toolkit-discovery` | Workspace-private CUDA Toolkit path discovery                                      |
 | `oxide-artifacts`    | Architecture-neutral embedded device artifact metadata                                 |
 | `oxide-tile-export`  | Export descriptions shared by `cuda-macros`, the backend and `cargo-oxide`; part of the Tile IR interop work, not released yet |
 | `oxide-tilebc`       | Tile IR bytecode writer for those export descriptions |
+| `oxide-tile-provider-sys` | Raw bindings to the Tile IR linkage provider C ABI, generated from the compiler's header at build time |
+| `oxide-tile-provider` | Runtime of a tile library that is a linkage provider: answers the assembler's callbacks from embedded descriptions and device code |
 | `dialect-iket`       | pliron dialect modelling in-kernel event tracing                                       |
 | `iket-lower`         | `dialect-iket` profiles + instrumentation lowering                                     |
 | `dialect-ptx`        | pliron dialect modelling structured PTX                                                |

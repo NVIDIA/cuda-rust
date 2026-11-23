@@ -4,7 +4,7 @@
  */
 
 //! Compile-fail probe: reject a zero-stage ring during const evaluation.
-use cute_rs::attention::sm100::pipeline::{AsyncCompletion, TwoCtaRing};
+use cute_rs::pipeline::sm100::{AsyncCompletion, TwoCtaRing};
 
 /// Reject a zero-stage ring during const evaluation.
 

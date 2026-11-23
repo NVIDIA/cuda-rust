@@ -28,12 +28,17 @@
 //! first needs [`fold_checked_step`]: core steps it through `checked_add`. An
 //! `isize` step casts through `i64` and back; the importer drops that cast
 //! because both are the same dialect type, so the block matches `i64`.
+//!
+//! [`fold_branches_to_unreachable`] removes a branch to a block that only
+//! reaches `mir.unreachable`, so the `otherwise` arm of a `match` in the body
+//! does not count as a loop exit.
 
 use dialect_mir::attributes::MirCastKindAttr;
 use dialect_mir::ops::{
     MirAddOp, MirCastOp, MirCheckedAddOp, MirCheckedSubOp, MirCondBranchOp, MirConstantOp,
     MirConstructEnumOp, MirEnumPayloadOp, MirEqOp, MirFieldAddrOp, MirGetDiscriminantOp, MirGotoOp,
     MirLoadOp, MirNeOp, MirNotOp, MirStorageDeadOp, MirStorageLiveOp, MirStoreOp, MirSubOp,
+    MirUnreachableOp,
 };
 use dialect_mir::types::MirEnumType;
 use pliron::basic_block::BasicBlock;
@@ -96,6 +101,79 @@ pub(crate) fn hoist_header_constants(
         op.insert_before(ctx, anchor);
     }
     !constants.is_empty()
+}
+
+/// Whether `block` does nothing but reach `mir.unreachable`. Storage markers
+/// emit no instruction, so they do not count as work. A panic path is not such
+/// a block: it calls the panic handler or traps before its `mir.unreachable`.
+fn is_unreachable_block(ctx: &Context, block: Ptr<BasicBlock>) -> bool {
+    let Some(term) = block.deref(ctx).get_terminator(ctx) else {
+        return false;
+    };
+    Operation::get_op::<MirUnreachableOp>(term, ctx).is_some()
+        && block.deref(ctx).iter(ctx).all(|op| {
+            op == term
+                || Operation::get_op::<MirStorageLiveOp>(op, ctx).is_some()
+                || Operation::get_op::<MirStorageDeadOp>(op, ctx).is_some()
+        })
+}
+
+/// Replace each `mir.cond_br` in `blocks` with one successor that only reaches
+/// `mir.unreachable` by a `mir.goto` to its other successor. Returns whether
+/// any branch changed.
+///
+/// rustc lowers a `match` on an enum to a `switchInt` whose `otherwise` arm is
+/// `unreachable`, and the importer keeps that arm as a branch. In a loop, the
+/// branch reads as a second exit, so `unwrap_or` on an `Option` in the body is
+/// enough to make partial unrolling decline the loop. `mir.unreachable` lowers
+/// to LLVM `unreachable`, so taking that arm is undefined behavior and the
+/// branch always goes the other way; LLVM folds the same branch later.
+pub(crate) fn fold_branches_to_unreachable(
+    ctx: &mut Context,
+    blocks: &FxHashSet<Ptr<BasicBlock>>,
+) -> bool {
+    let mut folds = Vec::new();
+    for &block in blocks {
+        let Some(term) = block.deref(ctx).get_terminator(ctx) else {
+            continue;
+        };
+        if Operation::get_op::<MirCondBranchOp>(term, ctx).is_none() {
+            continue;
+        }
+        let successors: Vec<_> = term.deref(ctx).successors().collect();
+        let [first, second] = successors[..] else {
+            continue;
+        };
+        // a branch whose both successors are unreachable is itself unreachable;
+        // leave it for LLVM rather than pick an arbitrary successor
+        let taken = match (
+            is_unreachable_block(ctx, first),
+            is_unreachable_block(ctx, second),
+        ) {
+            (false, true) => 0,
+            (true, false) => 1,
+            _ => continue,
+        };
+        let Some(operands) = successor_operands(ctx, term, taken) else {
+            continue;
+        };
+        folds.push((block, term, successors[taken], operands));
+    }
+
+    let changed = !folds.is_empty();
+    for (block, term, target, operands) in folds {
+        Operation::erase(term, ctx);
+        let goto = Operation::new(
+            ctx,
+            MirGotoOp::get_concrete_op_info(),
+            vec![],
+            operands,
+            vec![target],
+            0,
+        );
+        goto.insert_at_back(block, ctx);
+    }
+    changed
 }
 
 /// Route direct outside uses of header-carried values through block arguments.

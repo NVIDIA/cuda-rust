@@ -108,8 +108,8 @@ impl TargetCapabilities {
             location: Box::new(loc.clone()),
         })?;
         match ty {
-            Type::WithPointerAttribute(base, _) => {
-                Feature::PointerAttribute.check(self, loc)?;
+            Type::WithPointerAttribute(base, attribute) => {
+                attribute.feature().check(self, loc)?;
                 self.check_type(base, feature, loc)
             }
             Type::Scalar(s) => self.check_scalar(*s, feature, loc),
@@ -233,6 +233,9 @@ impl TargetCapabilities {
                             if key == "num_worker_warps_per_cta" {
                                 Feature::WorkerWarps.check(self, loc)?;
                             }
+                            if key == "min_ctas_per_sm" {
+                                Feature::MinCtasPerSm.check(self, loc)?;
+                            }
                             let mut hint_sm =
                                 arch.strip_prefix("sm_").and_then(|s| s.parse::<u32>().ok());
                             if arch == "default"
@@ -253,6 +256,17 @@ impl TargetCapabilities {
                                 }
                             }
                             let valid = match (key.as_str(), value) {
+                                ("min_ctas_per_sm", Attribute::Integer(n, _)) => {
+                                    op.opcode == Opcode::Entry && (0..=32).contains(n)
+                                }
+                                ("discardable_perf_hints", Attribute::String(_)) => {
+                                    self.require_version(
+                                        "discardable_perf_hints",
+                                        BytecodeVersion::V13_4,
+                                        loc,
+                                    )?;
+                                    true
+                                }
                                 ("num_cta_in_cga", Attribute::Integer(n, _)) => {
                                     op.opcode == Opcode::Entry && matches!(n, 1 | 2 | 4 | 8 | 16)
                                 }
@@ -260,9 +274,11 @@ impl TargetCapabilities {
                                     op.opcode == Opcode::Entry && (1..=32).contains(n)
                                 }
                                 ("num_worker_warps_per_cta", Attribute::Integer(n, _)) => {
+                                    // Tile IR 13.5 restores the 1..=32 power-of-two
+                                    // domain; the 4/8 restriction is only 13.4.
                                     op.opcode == Opcode::Entry
                                         && if self.bytecode_version
-                                            >= Feature::WorkerWarpsRestricted.since()
+                                            == Feature::WorkerWarpsRestricted.since()
                                         {
                                             matches!(n, 4 | 8)
                                         } else {

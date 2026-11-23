@@ -3,16 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 //! BF16 grouped-query attention using parallel, stable 64-key reductions.
-use ctm_rs::{
+use cute_rs::arch::NamedBarrier;
+use cute_rs::layout::{C, ComposedLayout, CopyG2S, Layout, LeadingDim, RowMajor, Swizzle};
+use cute_rs::static_layout::StaticLayout;
+use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
+use cute_rs::{BFloat16, GmemMatrix, RegisterTile, SmemTile, TiledCopy};
+use cutlass_primitives as prims;
+use prims::{
     cuda_module, kernel, launch_bounds, launch_contract,
     memory::{DisjointSlice, DynamicSharedArray},
     thread,
 };
-use cute_rs::arch::NamedBarrier;
-use cute_rs::markers::{C, ComposedLayout, CopyG2S, Layout, LeadingDim, RowMajor, Swizzle};
-use cute_rs::static_layout::StaticLayout;
-use cute_rs::tensor::partition::{StridedTensor, StridedTensorMut};
-use cute_rs::{BFloat16, GmemMatrix, RegisterTile, SmemTile, TiledCopy};
 
 /// Shared bytes for two 64-by-128 BF16 tiles and FP32 reduction state.
 pub const PARTIAL_SHARED_BYTES: u32 = 35_104;
@@ -225,7 +226,7 @@ pub mod kernels {
                 values,
                 tid as u32,
             );
-            cute_rs::copy::cooperative::finish_async_copies::<1, 128>();
+            cute_rs::atom::cooperative::finish_async_copies::<1, 128>();
 
             let query_base = (query_row * query_heads as usize + query_head) * 128;
             // Four neighboring lanes sum 32 dimensions apiece. Two passes

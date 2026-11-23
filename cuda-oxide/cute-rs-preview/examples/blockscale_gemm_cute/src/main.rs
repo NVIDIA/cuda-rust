@@ -57,11 +57,8 @@
 //!   cargo oxide run blockscale_gemm_cute --arch sm_120a
 
 use core::{marker::PhantomData, mem::size_of};
-use ctm_rs::mbarrier::Barrier;
-use ctm_rs::memory::DynamicSharedArray;
-use ctm_rs::{cuda_module, kernel, launch_bounds, launch_contract, thread, warp};
 use cuda_core::{CudaContext, LaunchConfig1D};
-use cute_rs::copy::tma::{TmaEncodeOptions, create_tensor_map_tiled_with_options};
+use cute_rs::nvgpu::cpasync::{TmaEncodeOptions, create_tensor_map_tiled_with_options};
 use cute_rs::{
     C, ComposedLayout, Consumer, Layout, Mkl, Mxf4AccumulatorTile2x8, Mxf4E2M1, Mxf4TiledMma, Nkl,
     PipelineState, PipelineTmaAsync, PipelineTmaStore, Producer, RowMajor, SharedScaleAtom,
@@ -69,6 +66,10 @@ use cute_rs::{
     Sm120ScaleAtom, SmemTile, StaticPersistentTileScheduler, Swizzle, TensorMap, copy_tma_2d,
     copy_tma_s2g_2d, size_in_bytes,
 };
+use cutlass_primitives as prims;
+use prims::mbarrier::Barrier;
+use prims::memory::DynamicSharedArray;
+use prims::{cuda_module, kernel, launch_bounds, launch_contract, thread, warp};
 
 /// Output row count for the fixed benchmark problem.
 const M: usize = 2048;

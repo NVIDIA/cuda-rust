@@ -7,102 +7,166 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Changed
+### Removed
 
-- Tile and SIMT share `cuda_async` operations, scheduling, futures and launch
-  marshalling; the separate `cuda_async::simt` namespace is removed. Raw launch
-  packets require unsafe finalization before scheduling. Generic scalar Tile
-  parameters require `DeviceCopy` alongside `DType`.
-- Dropping a host future returns without waiting for GPU work. Submissions
-  retain allocations and access leases independently through completion,
-  including graph replay and partial-error paths.
+- Remove `cutile::tileir::load_view_tko_valid_check` and
+  `cutile_ir::requirements::Feature::ValidityCheck`: validity checking is
+  unsupported by the public CUDA 13.5 tooling. Low-level IR containing the
+  `valid_check` attribute now reports an error instead of emitting unsupported
+  bytecode. Callers that passed `false` can use `cutile::core::load_view_raw`
+  with the final boolean argument removed; there is no supported replacement
+  for `true`. The Tile workspace moves to 0.6.0 for this API removal; shared host
+  crates remain at 0.5.0. Remove the corresponding documentation claims below.
 
-### Fixed
+### Added
 
-- CUDA bindings resolve forward-declared struct definitions correctly with
-  libclang 22 instead of emitting an empty placeholder with the wrong layout.
-- Retiring tensor completion leases retain allocation access independently of
-  user-visible buffer views. Converting a uniquely owned tensor into a buffer
-  no longer reports a false alias while completion retirement is pending.
-- Safe `DeviceBuffer` element and chunk casts require `NoUninit` on the source,
-  preventing `MaybeUninit` elements or struct padding from becoming initialized
-  destination values. Boolean-to-byte casts remain supported.
-- Tensor uniqueness tracks user-visible aliases separately from completion
-  leases. Concurrent lease creation or release can no longer permit an aliased
-  mutable partition or spuriously reject unique storage.
-- Host-side `KernelInputStored` and `KernelOutputStored` require `unsafe impl`
-  with explicit type, ABI, extent, retention, and access obligations. Safe custom
-  bindings can no longer mislabel boolean storage as byte kernel arguments.
-- `PinnedHostBuffer` aligns its usable pointer for the element type and frees
-  the original CUDA allocation. Highly aligned host elements no longer produce
-  misaligned Rust slices; sizes exceeding Rust's slice limits are rejected.
-- `DeviceBuffer::zeroed` waits for initialization to finish before returning,
-  so another stream cannot read uninitialized element representations.
-- Atomic buffer conversions use `DeviceRepr` instead of `TransparentWrapper`,
-  preserving owned-buffer conversions without permitting invalid shared-reference
-  conversions between atomics and their scalar representations.
-- `Tensor::reinterpret` requires the target element type to implement
-  `bytemuck::AnyBitPattern`. Reinterpreting byte storage as `Tensor<bool>`
-  could expose values other than `0` and `1`, which is undefined behavior
-  when the tensor is read back, and is now a compile error. Numeric element
-  types, including `f16`, `bf16`, and the FP8 and packed FP4 storage types,
-  are unaffected (NVIDIA/cuda-rust#1506).
-- Generated kernel entry setup and assumptions now use the user function's
-  signature as their source location, preserving the inlined body's own
-  statement locations and helper scopes.
-- Generated constants without captured source spans use their containing
-  function definition, retaining exact user-expression locations and nested
-  cross-file inline caller chains.
-- Generated short-circuit and folded constants now use the original expression's
-  source location, preserving inlined helper scopes and call chains.
-- Const-generic array bindings retain their function or method signature as
-  their source origin, and generated reduction bodies retain the reduction
-  call's location and inline chain.
-- Failed host launch checks report their original accesses and inline callers,
-  retaining distinct origins when equivalent predicates share one comparison.
+- Add strided long-prefill attention entries with independent K/V head strides,
+  including split-K prefill. Existing contiguous entry signatures are unchanged.
+- Add experimental FP16 GEMM, causal attention and routed MoE variants with
+  shared host examples, correctness coverage and optimization guidance.
+
+- Add opt-in B200 profiles to the fused QKV and NVFP4 MoE examples. Add public
+  CTK 13.5 setup instructions, explicit large MoE fixture selection, focused
+  correctness runs and raw timing samples; retain the original default profiles.
+- Add optional cheap screening and budget-reserved paired confirmation to the
+  preparation pipeline. Preparation stops before fresh incumbent comparisons;
+  incomplete confirmation retains the incumbent and records raw samples and
+  failures. The RMSNorm autotune example uses this path. Confirmation defaults
+  are configurable repeatability heuristics, not statistical guarantees.
+- Ordinary launches can join CPU preparation of the same specialization and
+  load its binary on the launching thread. Retained prepared binaries are
+  reusable without explicit installation. Waiting callers have independent
+  cancellation, and interrupted or abandoned compilation remains retryable.
+- Add an opt-in autotuning preparation pipeline under `experimental-tune`,
+  separating CPU CUBIN compilation from foreground loading, correctness checks
+  and measurement. It defaults to one candidate ahead, supports bounded workers
+  and cooperative deadlines, and reports invalidity separately from timeouts
+  and infrastructure failures. Results require independent finalist confirmation;
+  the existing synchronous tuner and resume-log format are unchanged.
+- Refresh `cutile-kernels` from Grout with split-K prefill/merge, persistent
+  RMSNorm, and the remaining baseline and single-token variants. NVFP4 MoE
+  routing, quantization, FC1/FC2, and finalization kernels now live in the
+  reusable corpus and are shared by the example. Peak performance requires
+  the CUDA Toolkit 13.5 Tile IR assembler (#1746).
+- Add a reusable fused QKV projection, Q/K RMSNorm, FP8 conversion and paged
+  KV-scatter kernel, with a correctness example and opt-in CUDA graph benchmark
+  sweep. The initial schedule is not B200-tuned (#1746).
+- Foreign functions take global-memory pointer operands: a `*const E` or
+  `*mut E` parameter is a rank-0 `tile<ptr<E>>` operand. `subtensor_mut_ptr`
+  on a mutable tensor gives the address of the current tile block's writable
+  sub-tensor, as `load` and `store` see it, with an `i64` offset. Getting it
+  is safe; unlike `load` and `store`, a write through it is not masked to the
+  tensor's bounds, so the writing function's `# Safety` contract states the
+  bounds (#1749).
 
 ### Changed
 
-- Advance the lockstep Tile and shared host crates to v0.5.0 for the breaking
-  safety-contract and host-runtime changes.
-- Tile and SIMT now share the `cuda-core` context, stream, event, module, launch
-  configuration, and allocation types. Replace `cuda_core::simt` imports with
-  crate-root imports; use `Context` for context ownership and `Device` for a
-  physical GPU identity. Foreign allocations must provide their actual context.
-- Typed buffers and tensors can share allocations without copying through
-  `Tensor::from_buffer`, `Tensor::into_buffer`, and contiguous borrowed buffer
-  views. Views share context identity, byte offsets, and access exclusion.
-  Completion leases retain allocations after early drops and forgotten launches;
-  buffer and stream cleanup no longer waits for GPU work on the dropping thread.
-- Tile numeric storage wrappers implement `DeviceCopy` alongside `DType`; the
-  traits remain independent and packed FP4 keeps its byte storage representation.
-- `CompileOptions` uses one `CodegenMode` for device debugging and optimization.
-  The last `debug_info(...)` or `opt_level(...)` setter wins; full debugging
-  always uses optimization level zero. Replace `device_debug(true)` with
-  `debug_info(DebugInfoLevel::Full)` and `lineinfo(true)` with
-  `debug_info(DebugInfoLevel::Line)`. The old public `opt_level`, `device_debug`,
-  and `lineinfo` fields are replaced by `codegen` (v0.5.0 API change).
-- `CUTILE_JIT_DEBUG=none|line|full`, `CUTILE_JIT_OPT_LEVEL=0|1|2|3`, and
-  `CUTILE_JIT_SANITIZE=none|memcheck` override kernel options at runtime, before
-  frontend compilation and assembler/cache selection. Overrides are read once
-  per process; invalid values or full debug combined with an explicit runtime
-  optimization level fail with a named JIT error.
+- The static tile-library GPU tests always assemble their library from its
+  `.mlir` sources; the checked-in bytecode is removed. They take
+  `cuda-tile-translate` from `CUTILE_TILE_TRANSLATE`, or from next to
+  `tileiras`.
 
-- cuTile Rust now lives in the [NVIDIA/cuda-rust](https://github.com/NVIDIA/cuda-rust)
-  repository under `cutile-rs/`, next to cuda-oxide (SIMT) and the shared host
-  crates (`cuda-bindings`, `cuda-core`, `cuda-core-derive`, `cuda-async`) at the
-  repository root. The book moved to
-  [nvidia.github.io/cuda-rust/cutile](https://nvidia.github.io/cuda-rust/cutile/)
-  and release tags are namespaced `cutile-rs/vX.Y.Z`. Crate names and versions
-  are unchanged.
+### Documentation
+
+- Link the Tile library provider catalog and CUDA Oxide export workflow;
+  refresh kernel/example discovery, workspace paths, CUDA 13.5 setup, and
+  bytecode-version negotiation instructions (#1746).
 
 ### Fixed
 
-- `TensorView::view` keeps the slice offset when it recomputes the
-  specialization, so a view over a slice that starts off a 16-byte boundary
-  no longer advertises the allocation's alignment. Before, the JIT emitted
-  vectorized loads for such views and launches failed with CUDA error 716
-  (misaligned address).
+- Keep FP16 operands in the experimental FP16-output GEMM instead of widening
+  them before MMA; retain FP32 accumulation and a final FP16 conversion.
+- Fix scalar padding broadcasts for multidimensional masked pointer loads.
+
+- Keep masked QKV tail-row slot pointers in bounds, retaining the original
+  M=67 fixture and numerical checks under compiler-instrumented memcheck.
+- Update the optional `cuda-tile-rs` bindings and `cuda-tile-translate` build
+  from CUDA Tile IR 13.2 to the public 13.5 release, including SIMT preview
+  support and translator round-trip tests.
+- A kernel's in-memory cache key no longer holds the tile-library list as
+  written, only the digest of the resolved, de-duplicated libraries. A launch
+  that names a default library again, or names a library through another
+  path, used to compile the kernel a second time and load a second module,
+  with its own copy of every `Global` (#1749).
+
+## [0.5.0] - 2026-11-04
+
+CUDA 13.5 tile-library calls and GPU communication, a shared Tile/SIMT host
+runtime, and stronger memory-safety contracts.
+
+### Added
+
+- **Tile libraries (public preview, CUDA 13.5):** typed
+  `#[cutile::foreign] unsafe fn` declarations, JIT-resolved string arguments,
+  implicit output values, and host-configured linking. Memory ordering survives
+  branches, loops, and wrappers; cache keys include library contents and declared
+  provider dependencies/settings. See the [tile-library guide](https://github.com/NVIDIA/cuda-rust/blob/9dc26c50a8c90026bcd0dfa7dc4b36f189126946/cutile-rs/cutile-book/guide/tile-libraries.md).
+- **Unsafe communication:** unicast/multicast pointer classification, multicast
+  load-reduce/reduce/store and atomic-view inbounds promises
+  in `cutile::tileir`. System-scope signaling and alias fences support explicit
+  synchronization. The [communication reference](https://github.com/NVIDIA/cuda-rust/blob/9dc26c50a8c90026bcd0dfa7dc4b36f189126946/cutile-rs/cutile-book/reference/unsafe-comms.md)
+  includes a runnable unicast/multicast example.
+- Minimum CTA residency controls and safe `condition.likely::<true/false>()`
+  methods for scalar booleans and boolean tiles. **Likelihood hints are discarded
+  in 13.5 bytecode and have no backend performance effect.**
+
+### Changed / migration from 0.4
+
+- Update Tile and shared host crates together to **0.5.0**. Replace
+  `cuda_core::simt` imports with crate-root imports and use the unified
+  `cuda_async` API. `Context` owns a context; `Device` identifies a GPU.
+  Foreign allocations must supply their actual context. Buffers and tensors
+  share storage through `Tensor::from_buffer`, `into_buffer`, and contiguous views.
+- Scalar kernel parameters require `DeviceCopy` alongside `DType`.
+  `KernelInputStored` / `KernelOutputStored` now require `unsafe impl` with
+  documented ABI, extent, lifetime, and access obligations; raw launch packets
+  require unsafe finalization. Safe buffer casts require `NoUninit` sources,
+  tensor reinterpretation requires `AnyBitPattern` targets, and atomic buffer
+  conversions use `DeviceRepr`. Arbitrary bytes cannot be reinterpreted as `bool`.
+- `CompileOptions::codegen` replaces the separate debug/optimization fields.
+  Replace `device_debug(true)` with `debug_info(DebugInfoLevel::Full)` and
+  `lineinfo(true)` with `debug_info(DebugInfoLevel::Line)`. The last setter wins;
+  full debugging uses optimization level zero. Runtime overrides are
+  `CUTILE_JIT_DEBUG`, `CUTILE_JIT_OPT_LEVEL`, and `CUTILE_JIT_SANITIZE`.
+- Compiler integrations use scoped `CUDATileModules::resolve_function` instead of
+  removed flat function lookups. `TileirasOptions` gains `tilelibs` and loses
+  `Copy`; `Opcode` and `Attribute` gain preview variants. Compiler structures and
+  call/cache interfaces also change, including `ModuleItems`, `SiteResolution`,
+  `TileKernel::jit_compile`, and `kernel_cache_slot`.
+
+### Fixed
+
+- Generic wrappers, nested trait calls, const-generic tags, inferred type
+  arguments, and module-scoped function/constant resolution. Unsupported module
+  references error instead of selecting unrelated same-named items.
+- Correct 13.5 `if`/`select` bytecode and preservation of peer-pointer attributes.
+  Added bytecode-reader, assembler, foreign-call ordering/preservation, and
+  two-GPU signaling/buffer-reuse regressions.
+- Allocation retention and access exclusion through asynchronous completion,
+  graph replay, and early drops; tensor uniqueness; aligned pinned buffers;
+  completed zero-initialization; sliced-view alignment; libclang 22 bindings;
+  and generated/inlined debug locations.
+- Optional CPU-reference dependencies updated to Candle 0.11.1 and patched ZIP,
+  with all-feature dependency checks.
+
+### Prerequisites and limits
+
+Baseline support starts at emitted Tile IR 13.2 on supported targets; individual
+operations and GPUs impose additional requirements. New 13.5 operations need a
+compatible assembler. Tile libraries need matching toolkit-built libraries and
+13.5 preview support; their declarations/calls are unsafe. Pointer operands and
+shape/tuple constant parameters are not yet supported. `#[inout]` returns an
+updated value while preserving the caller's original immutable tile.
+
+Unicast/multicast target `sm_100`, `sm_103`, and `sm_107`: unicast needs NVLink;
+multicast additionally needs NVLink SHARP-capable NVSwitch. Callers establish
+mappings and synchronization. See the
+[compatibility matrix](https://github.com/NVIDIA/cuda-rust/blob/9dc26c50a8c90026bcd0dfa7dc4b36f189126946/cutile-rs/cutile-book/reference/compatibility.md).
+Rust 1.89+ is required; the library builds on 1.89, and runtime validation used 1.98.0.
+
+Source lives in [NVIDIA/cuda-rust](https://github.com/NVIDIA/cuda-rust) under
+`cutile-rs/`; the [book](https://nvidia.github.io/cuda-rust/cutile/) and release tags
+(`cutile-rs/vX.Y.Z`) use the unified repository. Crate names are unchanged.
 
 ## [0.4.0] - 2026-09-25
 

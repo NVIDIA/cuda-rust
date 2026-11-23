@@ -197,6 +197,11 @@ instructions.
 run `cd cuda-oxide` and then `nix develop` with flakes enabled. Container setup
 is documented in [cuda-oxide/.devcontainer/README.md](cuda-oxide/.devcontainer/README.md).
 
+Git-backed Nix flakes only include files known to Git. After adding a crate or
+source file, run `git add -N <path>` before `nix develop` to make it visible to
+Nix without staging its contents. Otherwise, Cargo can report a missing
+workspace manifest or module even though the file exists locally.
+
 ### Running the cuda-oxide checks
 
 Most of CI is one command. The SIMT tree ships a `Justfile` that mirrors the
@@ -304,6 +309,10 @@ header` job). Third-party subtrees and OSRB-reviewed exceptions are listed in
 that script.
 
 ### Testing
+
+For concurrency tests, follow the [synchronization guidance and audit](docs/testing/concurrency-audit.md).
+Use observable state and explicit handshakes; keep timeouts as failing watchdogs,
+not evidence that an operation blocked or returned promptly.
 
 - Compiler pipeline changes should be validated against the existing examples
   in `cuda-oxide/crates/rustc-codegen-cuda/examples/`.

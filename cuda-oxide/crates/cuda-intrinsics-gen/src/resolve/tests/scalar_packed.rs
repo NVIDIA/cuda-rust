@@ -951,6 +951,59 @@ fn checked_in_scalar_math_overlay_pins_the_current_libnvvm_override_set() {
 }
 
 #[test]
+fn checked_in_scalar_math_floors_are_turing_and_fail_closed() {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let (overlay, _) =
+        read_overlay(&repo_root, &repo_root.join("intrinsics/overlay.toml")).unwrap();
+    let imported: ImportedFile = read_json(&repo_root.join("intrinsics/imported.json")).unwrap();
+    let declarations = imported
+        .intrinsics
+        .iter()
+        .map(|record| (record.source_record.as_str(), record))
+        .collect::<BTreeMap<_, _>>();
+    let scalar_math = overlay
+        .intrinsics
+        .iter()
+        .filter(|record| record.family == "scalar_math")
+        .collect::<Vec<_>>();
+    assert_eq!(scalar_math.len(), 41);
+
+    let with_floor = |policy: &OverlayIntrinsic, minimum_sm: &str| {
+        let mut moved = policy.clone();
+        moved.minimum_sm = Some(minimum_sm.into());
+        for lowering in &mut moved.backend_lowerings {
+            lowering.minimum_sm = Some(minimum_sm.into());
+        }
+        moved
+    };
+    for policy in scalar_math {
+        // tanh.approx.f32 is PTX-native and has no imported declaration
+        let declaration = policy
+            .source_record
+            .as_deref()
+            .map(|record| declarations[record]);
+        let source = resolve_policy_source(policy).unwrap();
+        assert_eq!(policy.minimum_ptx, "7.0", "{}", policy.id);
+        assert_eq!(policy.minimum_sm.as_deref(), Some("sm_75"), "{}", policy.id);
+        assert!(policy.backend_lowerings.iter().all(|lowering| {
+            lowering.minimum_ptx.as_deref() == Some("7.0")
+                && lowering.minimum_sm.as_deref() == Some("sm_75")
+        }));
+        validate_policy(policy, &source, declaration, 1).unwrap();
+
+        // the old family-wide sm_80 floor and anything below Turing are rejected
+        for minimum_sm in ["sm_80", "sm_72"] {
+            let moved = with_floor(policy, minimum_sm);
+            assert!(
+                validate_policy(&moved, &source, declaration, 1).is_err(),
+                "{} accepted {minimum_sm}",
+                policy.id
+            );
+        }
+    }
+}
+
+#[test]
 fn extended_minmax_admission_is_exact_and_fail_closed() {
     let variants = canonical_extended_minmax_variants();
     let admission = ExtendedMinMaxAdmission {

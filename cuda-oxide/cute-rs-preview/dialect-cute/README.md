@@ -19,7 +19,7 @@ alias to the same module, preserving its existing types and functions.
 | Preferred path | Compatibility alias | Contents |
 | --- | --- | --- |
 | `ops::copy` | `copy_ops` | Direct and cooperative copies, raw TMA transport, cache-aware global stores. |
-| `ops::tensor` | `tensor_ops` | Tensor construction, partitioning, selection, and transfers. |
+| `ops::tensor` | `tensor_ops` | Tensor construction, partitioning, selection, transfers, reduced-precision conversions (`BFloat16`, `Float8E4M3FN`, `Float4E2M1FN`), and `RegisterTile` (`TensorSSA`) vector operations (`cute.vector_*`). |
 | `ops::gemv` | `gemv_ops` | Scaled tensor views and block-scaled dot products. |
 | `ops::gemm_tma` | `gemm_tma_ops` | Typed global/shared transport views and GEMM TMA copies. |
 | `ops::mma` | `smem_mma_ops` | Shared tensor overlays, fragments, matrix loads, and tiled GEMM. |

@@ -592,7 +592,7 @@ fn sm120_tma_uses_local_shared_barrier_and_no_multicast() {
         text.contains("operandSegmentSizes = array<i32: 1, 1, 2, 1, 0, 0, 0, 0>"),
         "{text}"
     );
-    assert!(text.contains("useIntrinsic = false"), "{text}");
+    assert!(!text.contains("useIntrinsic"));
     assert!(!text.contains("cta_2"));
 }
 

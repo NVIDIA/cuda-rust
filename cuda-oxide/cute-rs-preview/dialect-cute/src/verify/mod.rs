@@ -94,9 +94,12 @@ use crate::{
         CuteSchedulerNew1dOp, CuteWorkTileCoordinatesOp,
     },
     ops::tensor::{
-        CuteTensorBaseOp, CuteTensorIsFullOp, CuteTensorLoadIntoOp, CuteTensorMakeOp,
-        CuteTensorSliceOp, CuteTensorStoreElementAbsOp, CuteTensorStoreFromOp,
-        CuteTensorZippedDivideOp,
+        CuteConvertE4m3ToF32Op, CuteConvertF32ToBf16Op, CuteConvertF32ToE4m3Op,
+        CuteConvertF32x8ToE2m1x8Op, CuteTensorBaseOp, CuteTensorIsFullOp, CuteTensorLoadIntoOp,
+        CuteTensorMakeOp, CuteTensorSliceOp, CuteTensorStoreElementAbsOp, CuteTensorStoreFromOp,
+        CuteTensorZippedDivideOp, CuteVectorBinaryOp, CuteVectorBitcastOp, CuteVectorBroadcastOp,
+        CuteVectorCastOp, CuteVectorConcatOp, CuteVectorReduceOp, CuteVectorScalarOp,
+        CuteVectorSliceOp, CuteVectorUnaryOp,
     },
     ops::{
         CuteAssumeDivOp, CuteCopyG2SOp, CuteCopyOp, CuteLdmatrixOp, CuteTmaLoad2dOp,
@@ -176,6 +179,32 @@ fn verify_local_op(ctx: &Context, operation: Ptr<Operation>) -> Result {
         Some(verify_as!(CuteTensorStoreFromOp))
     } else if opid == CuteTensorStoreElementAbsOp::get_opid_static() {
         Some(verify_as!(CuteTensorStoreElementAbsOp))
+    } else if opid == CuteConvertF32ToBf16Op::get_opid_static() {
+        Some(verify_as!(CuteConvertF32ToBf16Op))
+    } else if opid == CuteConvertF32ToE4m3Op::get_opid_static() {
+        Some(verify_as!(CuteConvertF32ToE4m3Op))
+    } else if opid == CuteConvertE4m3ToF32Op::get_opid_static() {
+        Some(verify_as!(CuteConvertE4m3ToF32Op))
+    } else if opid == CuteConvertF32x8ToE2m1x8Op::get_opid_static() {
+        Some(verify_as!(CuteConvertF32x8ToE2m1x8Op))
+    } else if opid == CuteVectorBroadcastOp::get_opid_static() {
+        Some(verify_as!(CuteVectorBroadcastOp))
+    } else if opid == CuteVectorBinaryOp::get_opid_static() {
+        Some(verify_as!(CuteVectorBinaryOp))
+    } else if opid == CuteVectorScalarOp::get_opid_static() {
+        Some(verify_as!(CuteVectorScalarOp))
+    } else if opid == CuteVectorUnaryOp::get_opid_static() {
+        Some(verify_as!(CuteVectorUnaryOp))
+    } else if opid == CuteVectorReduceOp::get_opid_static() {
+        Some(verify_as!(CuteVectorReduceOp))
+    } else if opid == CuteVectorCastOp::get_opid_static() {
+        Some(verify_as!(CuteVectorCastOp))
+    } else if opid == CuteVectorBitcastOp::get_opid_static() {
+        Some(verify_as!(CuteVectorBitcastOp))
+    } else if opid == CuteVectorSliceOp::get_opid_static() {
+        Some(verify_as!(CuteVectorSliceOp))
+    } else if opid == CuteVectorConcatOp::get_opid_static() {
+        Some(verify_as!(CuteVectorConcatOp))
     } else if opid == CuteTensorMake2DOp::get_opid_static() {
         Some(verify_as!(CuteTensorMake2DOp))
     } else if opid == CuteScaledViewMakeOp::get_opid_static() {

@@ -32,9 +32,12 @@ use dialect_cute::smem_mma_ops::{
     CuteMmaPartitionBOp, CuteSmemTensorOverlayOp, CuteTiledGemmOp, CuteTiledMmaSliceOp,
 };
 use dialect_cute::tensor_ops::{
-    CuteTensorBaseOp, CuteTensorIsFullOp, CuteTensorLoadIntoOp, CuteTensorMakeOp,
-    CuteTensorSliceOp, CuteTensorStoreElementAbsOp, CuteTensorStoreFromOp,
-    CuteTensorZippedDivideOp,
+    CuteConvertE4m3ToF32Op, CuteConvertF32ToBf16Op, CuteConvertF32ToE4m3Op,
+    CuteConvertF32x8ToE2m1x8Op, CuteTensorBaseOp, CuteTensorIsFullOp, CuteTensorLoadIntoOp,
+    CuteTensorMakeOp, CuteTensorSliceOp, CuteTensorStoreElementAbsOp, CuteTensorStoreFromOp,
+    CuteTensorZippedDivideOp, CuteVectorBinaryOp, CuteVectorBitcastOp, CuteVectorBroadcastOp,
+    CuteVectorCastOp, CuteVectorConcatOp, CuteVectorReduceOp, CuteVectorScalarOp,
+    CuteVectorSliceOp, CuteVectorUnaryOp,
 };
 use dialect_mir::attributes::MirCastKindAttr;
 use dialect_mir::ops::{MirAllocaOp, MirCastOp};
@@ -94,6 +97,23 @@ pub fn prepare_mir_module(
                 "high-level CuTe operations require MIR variable promotion; full variable debug information is not supported for this kernel"
                     .to_string(),
             ));
+        }
+        if lean_exporter::has_verified_kernels(ctx, module) {
+            return Err(PipelineError::Lowering(
+                "#[verify] kernels require MIR variable promotion (mem2reg); full variable debug information (--device-debug) is not supported, use --lineinfo instead"
+                    .to_string(),
+            ));
+        }
+        if has_wgmma_mma_operations(ctx, module) {
+            let mut analyses = pliron::pass::AnalysisManager::default();
+            pliron::opts::mem2reg::mem2reg(module, ctx, &mut analyses).map_err(|error| {
+                PipelineError::Verification {
+                    name: "mem2reg".to_string(),
+                    message: error.disp(ctx).to_string(),
+                    operation: None,
+                }
+            })?;
+            verify_operation(ctx, module, "module post-wgmma-debug-mem2reg")?;
         }
         return Ok(Vec::new());
     }
@@ -167,11 +187,30 @@ pub fn prepare_mir_module(
         message: error.disp(ctx).to_string(),
         operation: None,
     })?;
+    mir_transforms::forward_compiler_result_bundles::forward_constant_projected_aggregates(
+        module,
+        ctx,
+        &mut analyses,
+        preparation.verbose,
+    )
+    .map_err(|error| PipelineError::Verification {
+        name: "post-mem2reg constant-projected aggregate forwarding".to_string(),
+        message: error.disp(ctx).to_string(),
+        operation: None,
+    })?;
     verify_operation(
         ctx,
         module,
         "module post-mem2reg-compiler-result-forwarding",
     )?;
+
+    lean_exporter::verify_module_kernels(ctx, module, preparation.verbose).map_err(|error| {
+        PipelineError::Verification {
+            name: "lean-kernel-verification".to_string(),
+            message: error.to_string(),
+            operation: None,
+        }
+    })?;
 
     // Formation passes that need promoted SSA values but must still see the
     // original loop CFG run here. In particular, a reduction formation pass
@@ -225,6 +264,18 @@ pub fn prepare_mir_module(
             operation: None,
         })?;
     verify_operation(ctx, module, "module post-unroll")?;
+    mir_transforms::forward_compiler_result_bundles::forward_constant_projected_aggregates(
+        module,
+        ctx,
+        &mut analyses,
+        preparation.verbose,
+    )
+    .map_err(|error| PipelineError::Verification {
+        name: "post-unroll constant-projected aggregate forwarding".to_string(),
+        message: error.disp(ctx).to_string(),
+        operation: None,
+    })?;
+    verify_operation(ctx, module, "module post-unroll-aggregate-forwarding")?;
 
     run_optional_mir_passes(
         ctx,
@@ -234,6 +285,32 @@ pub fn prepare_mir_module(
         &mut analyses,
     )?;
     Ok(warnings)
+}
+
+/// Return whether `root` contains any pointer-form WGMMA MMA operation whose
+/// accumulator lifetime must be fused into register SSA values before lowering.
+fn has_wgmma_mma_operations(ctx: &Context, root: Ptr<Operation>) -> bool {
+    use dialect_nvvm::ops::{
+        WgmmaMmaM64N64K8F32Tf32Op, WgmmaMmaM64N64K16F32Bf16Op, WgmmaMmaM64N64K16F32F16Op,
+        WgmmaMmaM64N128K16F32Bf16Op,
+    };
+
+    let mut pending = vec![root];
+    while let Some(operation) = pending.pop() {
+        if Operation::is_op::<WgmmaMmaM64N64K16F32Bf16Op>(operation, ctx)
+            || Operation::is_op::<WgmmaMmaM64N64K16F32F16Op>(operation, ctx)
+            || Operation::is_op::<WgmmaMmaM64N64K8F32Tf32Op>(operation, ctx)
+            || Operation::is_op::<WgmmaMmaM64N128K16F32Bf16Op>(operation, ctx)
+        {
+            return true;
+        }
+        for region in operation.deref(ctx).regions() {
+            for block in region.deref(ctx).iter(ctx) {
+                pending.extend(block.deref(ctx).iter(ctx));
+            }
+        }
+    }
+    false
 }
 
 fn has_high_level_cute_operations(ctx: &Context, root: Ptr<Operation>) -> bool {
@@ -250,6 +327,21 @@ fn has_high_level_cute_operations(ctx: &Context, root: Ptr<Operation>) -> bool {
                 operation, ctx,
             )
             || Operation::is_op::<CuteTensorStoreElementAbsOp>(operation, ctx)
+            || Operation::is_op::<CuteConvertF32ToBf16Op>(operation, ctx)
+            || Operation::is_op::<CuteConvertF32ToE4m3Op>(operation, ctx)
+            || Operation::is_op::<CuteConvertE4m3ToF32Op>(operation, ctx)
+            || Operation::is_op::<CuteConvertF32x8ToE2m1x8Op>(operation, ctx)
+            || Operation::is_op::<CuteVectorBroadcastOp>(operation, ctx)
+            || Operation::is_op::<CuteVectorBinaryOp>(operation, ctx)
+            || Operation::is_op::<CuteVectorScalarOp>(operation, ctx)
+            || Operation::is_op::<CuteVectorUnaryOp>(operation, ctx)
+            || Operation::is_op::<CuteVectorReduceOp>(operation, ctx)
+            || Operation::is_op::<CuteVectorCastOp>(operation, ctx)
+            || Operation::is_op::<CuteVectorBitcastOp>(operation, ctx)
+            || Operation::is_op::<CuteVectorSliceOp>(operation, ctx)
+            || Operation::is_op::<CuteVectorConcatOp>(operation, ctx)
+            || Operation::is_op::<CuteSm100BlockScaledCopyOp>(operation, ctx)
+            || Operation::is_op::<CuteSm100BlockScaledGemmOp>(operation, ctx)
             || Operation::is_op::<CuteTensorMake2DOp>(operation, ctx)
             || Operation::is_op::<CuteScaledViewMakeOp>(operation, ctx)
             || Operation::is_op::<CuteScaledViewRowOp>(operation, ctx)
@@ -518,6 +610,44 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(error, PipelineError::InvalidMirPassPipeline(_)));
+    }
+
+    #[test]
+    fn debug_mode_rejects_verified_kernels_instead_of_bypassing_lean() {
+        let mut ctx = Context::new();
+        dialect_mir::register(&mut ctx);
+        let module = ModuleOp::new(&mut ctx, "test".try_into().unwrap());
+        let function_type = FunctionType::get(&ctx, vec![], vec![]);
+        let function = Operation::new(
+            &mut ctx,
+            MirFuncOp::get_concrete_op_info(),
+            vec![],
+            vec![],
+            vec![],
+            1,
+        );
+        let function_op = MirFuncOp::new(&mut ctx, function, TypeAttr::new(function_type.into()));
+        function_op.set_symbol_name(&mut ctx, "verified_k".try_into().unwrap());
+        function.deref_mut(&ctx).attributes.set(
+            pliron::identifier::Identifier::try_from("verify_uniform_barriers").unwrap(),
+            pliron::builtin::attributes::UnitAttr::new(),
+        );
+        module.append_operation(&mut ctx, function, 0);
+
+        let error = prepare_mir_module(
+            &mut ctx,
+            module.get_operation(),
+            MirPreparation {
+                promote_and_unroll: false,
+                verbose: false,
+                mir_pass_pipeline: None,
+            },
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&error, PipelineError::Lowering(msg) if msg.contains("--lineinfo")),
+            "expected --device-debug to fail closed on #[verify] kernels, got: {error}"
+        );
     }
 
     #[test]

@@ -261,16 +261,14 @@ impl Verify for CuteTensorViewType {
                 let storage_ty = transport.deref(ctx);
                 let plain_integer_is_supported = storage_ty
                     .downcast_ref::<IntegerType>()
-                    .is_some_and(|integer| {
-                        integer.is_unsigned() && matches!(integer.width(), 8 | 16 | 32)
-                    });
+                    .is_some_and(|integer| matches!(integer.width(), 8 | 16 | 32 | 64 | 128));
                 let plain_is_supported = storage_ty.downcast_ref::<MirFP16Type>().is_some()
                     || storage_ty.downcast_ref::<FP32Type>().is_some()
                     || plain_integer_is_supported;
                 if !plain_is_supported {
                     return verify_err!(
                         Location::Unknown,
-                        "plain cute.tensor_view supports u8, u16, u32, f16, and f32 carriers or proven transparent scalar wrappers only"
+                        "plain cute.tensor_view supports 8..=128-bit integer, f16, and f32 carriers or proven transparent scalar wrappers only"
                     );
                 }
                 if self.role != CuteTensorRoleAttr::Generic {

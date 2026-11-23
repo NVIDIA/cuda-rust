@@ -11,6 +11,12 @@ mod common;
 #[path = "gpu/tile_ir_13_4.rs"]
 mod tile_ir_13_4;
 
+#[path = "gpu/static_tilelib.rs"]
+mod static_tilelib;
+
+#[path = "gpu/subtensor_mut_ptr.rs"]
+mod subtensor_mut_ptr;
+
 #[path = "gpu/tensor.rs"]
 mod tensor;
 

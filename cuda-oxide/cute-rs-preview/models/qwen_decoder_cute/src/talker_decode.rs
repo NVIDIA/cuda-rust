@@ -9,13 +9,14 @@
 //! The public synchronous runners and their cross-stream readiness rules remain.
 
 use crate::checkpoint::QwenWeights;
+use crate::decoder::DecoderShape;
 use crate::decoder_execution::{Completion, LayerScratch, Modules, grid, one_warp};
 use crate::generation::{TALKER_LAYERS, TalkerStep, TalkerWeights};
 use crate::model::{Batch, DecoderCache, EPSILON, ExecutionCache};
 use crate::operator::Result;
 use crate::rotary::RotarySpec;
 use cuda_core::{CudaStream, DeviceBuffer};
-use cute_rs::{BFloat16, decoder::DecoderShape};
+use cute_rs::BFloat16;
 use std::sync::Arc;
 
 /// Require exact Talker layer geometry, initialized weight extents and one context.

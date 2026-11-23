@@ -871,6 +871,24 @@ fn requires_relations_generate_overflow_safe_checks_in_checked_launchers_only() 
     );
 }
 
+#[test]
+fn writes_all_elems_generates_host_grid_coverage_check_in_checked_launchers() {
+    let module: ItemMod = parse_quote! {
+        mod kernels {
+            #[kernel]
+            #[launch_contract(domain = 1, block = (256, 1, 1))]
+            #[verify(no_oob_idx(c), disjoint_writes(c), writes_all_elems(c))]
+            pub fn fill_all(mut c: DisjointSlice<f32>) {}
+        }
+    };
+    let expanded = expand_to_compact_string(module);
+    assert!(
+        expanded.contains("\"c.len()<=grid.x*block.x(writes_all_elems)\""),
+        "expected writes_all_elems grid coverage check in host launcher: {expanded}"
+    );
+    assert!(expanded.contains("saturating_mul"), "{expanded}");
+}
+
 #[cfg(feature = "async")]
 #[test]
 fn requires_relations_wrap_async_launchers_in_result() {
@@ -1175,6 +1193,51 @@ fn contracted_mut_slice_is_rejected_in_favor_of_disjoint_slice() {
             .to_string()
             .contains("contracted kernels cannot take `&mut [T]`")
     );
+}
+
+#[test]
+fn contracted_mut_slice_requires_both_no_oob_idx_and_disjoint_writes_in_verify() {
+    let missing_disjoint: ItemMod = parse_quote! {
+        mod kernels {
+            #[kernel]
+            #[launch_contract(domain = 1, block = (64, 1, 1))]
+            #[verify(no_oob_idx(out))]
+            pub fn missing_dw(out: &mut [u32]) {}
+        }
+    };
+    let err1 = expand_cuda_module(missing_disjoint)
+        .expect_err("mutable slice without disjoint_writes must fail closed");
+    assert!(
+        err1.to_string()
+            .contains("requires both `no_oob_idx(out)` and `disjoint_writes(out)`")
+    );
+
+    let missing_oob: ItemMod = parse_quote! {
+        mod kernels {
+            #[kernel]
+            #[launch_contract(domain = 1, block = (64, 1, 1))]
+            #[verify(disjoint_writes(out))]
+            pub fn missing_bounds(out: &mut [u32]) {}
+        }
+    };
+    let err2 = expand_cuda_module(missing_oob)
+        .expect_err("mutable slice without no_oob_idx must fail closed");
+    assert!(
+        err2.to_string()
+            .contains("requires both `no_oob_idx(out)` and `disjoint_writes(out)`")
+    );
+
+    let valid_mut_slice: ItemMod = parse_quote! {
+        mod kernels {
+            #[kernel]
+            #[launch_contract(domain = 1, block = (64, 1, 1), requires = (a.len() >= out.len()))]
+            #[verify(no_oob_idx(a, out), disjoint_writes(out), writes_all_elems(out))]
+            pub fn verified_mut(a: &[f32], out: &mut [f32]) {}
+        }
+    };
+    let expanded = expand_to_compact_string(valid_mut_slice);
+    assert!(expanded.contains("fnprepare_verified_mut("));
+    assert!(expanded.contains("pubfnverified_mut("));
 }
 
 #[test]

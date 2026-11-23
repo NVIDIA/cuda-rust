@@ -17,6 +17,7 @@ The workspace combines:
 - single-source compilation -- host and device code live in the same file, built with one `cargo oxide build`
 - a rustc codegen backend that compiles `#[kernel]` functions to CUDA PTX
 - device-side abstractions (type-safe indexing, shared memory, scoped atomics, barriers, TMA, warp/cluster ops)
+- compile-time Lean 4 kernel verification (`#[verify(...)]` and `oxide-proofs-preview/`, preview) for shared memory, barriers, and async `tcgen05` / `TMEM` lifecycles
 - compile-time kernel policies for separate tuned specializations without runtime policy arguments
 - a host-side runtime for memory management, pinned host transfers, and kernel launching (`cuda-core`, `cuda-async`)
 - a rust-native compilation pipeline using [Pliron](https://github.com/vaivaswatha/pliron), an MLIR-like IR framework in Rust (Rust → Rust MIR → Pliron IR → LLVM IR → PTX)
@@ -147,13 +148,15 @@ cargo oxide update
 
 ## Setup
 
+For native Windows (`x86_64-pc-windows-msvc`), see the [Windows Setup guide](cuda-oxide-book/getting-started/windows.md) for Visual Studio Build Tools, CUDA Toolkit, `libclang`, `vcpkg` (`libffi`), and PowerShell instructions.
+
 ### Requirements
 
 - **cargo-oxide** — cargo subcommand that drives the build pipeline (`cargo oxide run`, `build`, `sanitize`, `debug`, etc.)
 - **Rust 1.99.1 (stable)** with `rust-src`, `rustc-dev`, and `llvm-tools` components (pinned in `rust-toolchain.toml`)
 - **CUDA Toolkit** (13.0+, including the cuRAND headers; `libcurand-dev` on Ubuntu). The shared `cuda-bindings` crate loads `libcuda` at run time and needs a CUDA 13.x driver (R580+)
 - **Clang + libclang dev headers** (`clang-21` / `libclang-common-21-dev`) — needed by `bindgen` when building the host `cuda-bindings` crate
-- **Linux** (tested on Ubuntu 24.04)
+- **Linux** (tested on Ubuntu 24.04) or **Windows x86_64 MSVC** (Windows 10 22H2 / Windows 11)
 
 ### Install
 
@@ -272,9 +275,12 @@ compiles a Rust kernel to PTX, launches it on the GPU, and prints
 |---------------------------|--------------------------------------------------------------------------|
 | `vecadd`                  | Vector addition -- canonical first example                               |
 | `gemm_sol_final`          | Blackwell GEMM SoL (`examples/`): 2-CTA, 7-stage TMA, 2-stage TMEM       |
+| `safe_gemm_sol_final`     | Lean 4 verified Blackwell GEMM SoL (`examples/`, preview): 0 `unsafe`    |
 | `nemotron3_moe`           | Nemotron-3 NVFP4 ReLU² MoE (`models/`): native SIMT + 5th-gen `tcgen05`  |
 | `nemotron3_moe_cute`      | Nemotron-3 NVFP4 ReLU² MoE (`cute-rs-preview/models/`): typed `cute-rs`  |
 | `sm100_qkv_epilogue_cute` | Fused QKV + RMSNorm + FP8 quant + paged KV scatter (`cute-rs-preview/`)  |
+| `sm107_bf16_gemm_cute`    | Rubin (`sm_107a`) & Blackwell two-CTA persistent BF16 GEMM + PDL         |
+| `sm107_mxfp8_gemm_cute`   | Rubin (`sm_107a`) persistent MXFP8 (`E4M3 + UE8M0`) GEMM + B-reuse + PDL |
 | `qwen3_8b_cute`           | End-to-end 36-layer `Qwen/Qwen3-8B` in BF16 and NVFP4 (`cute-rs-preview`)|
 | `qwen_decoder_cute`       | End-to-end `Qwen3-TTS 1.7B` neural audio codec & speech decoder          |
 | `host_closure`            | Generic kernels with closures passed from host                           |
@@ -289,6 +295,7 @@ compiles a Rust kernel to PTX, launches it on the GPU, and prints
 | `mathdx_ffi_test`         | cuFFTDx thread-level FFT + cuBLASDx block-level GEMM                     |
 | `device_ffi_test`         | Device FFI: Rust kernels calling C++ CCCL warp-level reductions via LTOIR|
 | `async_vecadd`            | Async GPU execution with `cuda-async` and `DeviceOperation`              |
+| `cuda_graph`              | SIMT launches captured into a `CudaGraph`, replayed vs eager launches    |
 | `cross_crate_kernel`      | Library crates defining kernels, bundled into binaries                   |
 | `cuda_module_in_lib`      | `#[cuda_module]` in a library crate, loaded by embedded bundle name      |
 
@@ -306,7 +313,7 @@ cargo oxide run gemm_sol_final
 | `cuda-device`       | Device intrinsics (`thread::*`, `warp::*`, barriers)                      |
 | `cute-layout`       | CuTe-style layout algebra and coordinate mapping |
 | `cute-rs`           | Typed CuTe tensors, tiles, copies, pipelines, and MMA operations |
-| `ctm-rs`            | Typed instruction-level CUDA primitives |
+| `cutlass-primitives`            | Typed instruction-level CUDA primitives |
 | `cuda-intrinsics`   | Generated low-level CUDA intrinsic declarations                           |
 | `cuda-host`         | Typed module loading, launch helpers, LTOIR loader                        |
 | `cuda-macros`       | Proc macros (`#[cuda_module]`, `#[kernel]`, `gpu_printf!`)                |
@@ -341,12 +348,16 @@ cargo oxide run gemm_sol_final
 
 | Crate                     | Description                                                    |
 |---------------------------|----------------------------------------------------------------|
+| `lean-exporter`           | Preview `dialect-mir` exporter for `oxide-proofs-preview/`     |
 | `cargo-oxide`             | Cargo subcommand (`cargo oxide run`, etc.)                     |
 | `cuda-intrinsics-gen`     | Extractor and deterministic source generator for the intrinsics |
 | `cuda-artifact-finalizer` | Driver-independent NVVM IR, LTOIR, and PTX finalization         |
+| `cuda-toolkit-discovery`  | Workspace-private CUDA Toolkit discovery for Linux and Windows |
 | `oxide-artifacts`         | Architecture-neutral embedded device artifact metadata         |
 | `oxide-tile-export`       | Export descriptions shared by `cuda-macros`, the backend and `cargo-oxide`; part of the Tile IR interop work, not released yet |
 | `oxide-tilebc`            | Tile IR bytecode writer for those export descriptions |
+| `oxide-tile-provider-sys` | Raw bindings to the Tile IR linkage provider C ABI, generated from the compiler's header at build time |
+| `oxide-tile-provider`     | Runtime of a tile library that is a linkage provider: answers the assembler's callbacks from embedded descriptions and device code |
 | `reserved-oxide-symbols`  | Workspace-private `cuda_oxide_*` symbol-name contract          |
 | `fuzzer`                  | Differential codegen fuzzer support (rustlantis adapter)       |
 | `ptx-schedule`            | PTX schedule-perturbation fuzzing (nanosleep injection campaigns) |
@@ -380,6 +391,8 @@ cargo oxide run gemm_sol_final
 **WIP:** 🚧 The **[cuda-oxide book](https://nvidia.github.io/cuda-rust/cuda-oxide/)** is the primary reference for the project. It covers SIMT kernel authoring in Rust, synchronous and asynchronous GPU programming, the compiler architecture, and more.
 
 To build and serve the book locally, see [cuda-oxide-book/README.md](cuda-oxide-book/README.md).
+
+The [Lean verification package](lean/README.md) contains the GPU access model, reusable proofs, and `#[verify(...)]` compiler workflow.
 
 ## Ecosystem
 

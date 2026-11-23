@@ -1,0 +1,7 @@
+error[E0133]: call to unsafe function `add_one` is unsafe and requires unsafe function or block
+  --> tests/ui/foreign_call_without_unsafe.rs:16:17
+   |
+16 |         x.store(add_one(t));
+   |                 ^^^^^^^^^^ call to unsafe function
+   |
+   = note: consult the function's documentation for information on how to avoid undefined behavior

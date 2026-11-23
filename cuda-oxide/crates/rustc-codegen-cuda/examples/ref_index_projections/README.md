@@ -12,7 +12,7 @@ which later optimisation could then fold into a single path.
 
 ## What the example does
 
-`src/main.rs` contains **32 kernels in four groups**. The first group's
+`src/main.rs` contains **38 kernels in five groups**. The first group's
 **14 variants** bisect the trigger conditions:
 
 | #  | Variant                              | Purpose                                        |
@@ -67,11 +67,40 @@ plus **6 DST slice-tail address regression kernels** for issue #881:
 | 31 | `test_slice_tail_write_padded`           | Padded `[u16]` tail, constant + runtime writes      |
 | 32 | `test_slice_tail_borrow_padded`          | Padded `[u16]` tail, constant + runtime borrows     |
 
+plus **6 enum-payload borrow regression kernels** for issue #1698:
+
+| #  | Variant                              | Shape pinned                                                         |
+|:---|:-------------------------------------|:---------------------------------------------------------------------|
+| 33 | `test_bool_payload_borrow`           | `if let Flag::Value(ref b) = flags[k] { r = b; }`, `r` read after    |
+| 34 | `test_bool_payload_borrow_slice`     | `if let Flag::Value(ref b) = values[0] { r = b; }` on a `&[Flag]`    |
+| 35 | `test_bool_payload_borrow_in_loop`   | The same borrow of `flags[j]` inside a `while` loop                  |
+| 36 | `test_bool_payload_borrow_not_final` | The borrow followed by another statement in its block                |
+| 37 | `test_bool_payload_addr_of`          | `addr_of!(*b)` of the borrowed payload, read through the raw pointer |
+| 38 | `test_shared_array_payload_borrow`   | Borrow of a `*mut SharedArray` (shared-memory pointer) payload       |
+
 Each kernel writes a difference (`r1 - r0`, or original-local readback for
 the write-through variants) for inputs chosen so a correct implementation
 must produce `+5.0` for every element. The harness prints `PASS` per kernel,
 tracks failures, prints a final `SUCCESS` marker when every kernel passes,
 and exits non-zero if any kernel reports a wrong diff.
+
+The issue #1698 kernels borrow an enum payload and keep the reference past
+the `if let`. `bool` is stored as an `i8` byte in enum storage, and a
+shared-memory pointer as a generic address, so the address walker declines to
+address either payload after it has already emitted the element address of
+`flags[k]` (or `values[0]`), and the importer borrows a copy instead. Before
+the fix those abandoned ops stayed in the block and landed after its `goto`,
+whether the borrow was the block's last statement, ran inside a loop, or was
+followed by another statement, and the kernel failed verification ("has a
+terminator that is not the last operation in the block"). The flag is true
+for every thread, and the borrowed shared array holds the `+5.0` difference,
+so every kernel reports `+5.0`.
+
+Rust has no syntax for `&raw const` of an enum payload place, so
+`test_bool_payload_addr_of` reaches `Rvalue::AddressOf` only as a raw
+reborrow of the payload borrow. `Rvalue::Ref` and `Rvalue::AddressOf` share
+`translate_place_address`, and the mir-importer unit test
+`abandoned_address_walk_erases_its_ops` checks that entry point directly.
 
 The direct slice-value regressions construct a `SliceTail<[f32; 2]>` and
 unsize it to `&SliceTail<[f32]>`. Deref of the fat struct reference must
@@ -155,7 +184,7 @@ the fix, the same MIR lowers to
 %v9 = load float, ptr %v8                                              ; correct
 ```
 
-and all 32 kernels report `PASS` (the harness prints a final `SUCCESS` marker
+and all 38 kernels report `PASS` (the harness prints a final `SUCCESS` marker
 and exits non-zero if any kernel reports a wrong diff).
 
 Issue #880 exposes a separate value-walker gap after the direct DST-tail

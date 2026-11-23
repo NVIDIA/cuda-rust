@@ -34,8 +34,8 @@ pub(super) fn tensor_method_name_from_path(path: &str) -> Option<&str> {
 
 /// Extract a method from the supported block-scaled tensor or GEMV implementation.
 pub(super) fn block_scaled_method_name_from_path(path: &str) -> Option<&str> {
-    method_in_module(path, "block_scaled::tensor")
-        .or_else(|| method_in_module(path, "block_scaled::gemv"))
+    method_in_module(path, "utils::blockscaled::tensor")
+        .or_else(|| method_in_module(path, "utils::blockscaled::gemv"))
 }
 
 /// Extract a method from the supported tiled-MMA or fragment implementation.
@@ -56,7 +56,7 @@ pub(super) fn classify_smem_mma_method_call(
     let destination_ty = destination.ty(body.locals()).ok();
     let operand_ty = |index: usize| args.get(index)?.ty(body.locals()).ok();
 
-    if smem_mma_method_name_from_path(path, "copy::tiled") == Some("from_raw_parts")
+    if smem_mma_method_name_from_path(path, "atom::tiled") == Some("from_raw_parts")
         && args.len() == 2
         && destination_ty
             .as_ref()
@@ -65,7 +65,7 @@ pub(super) fn classify_smem_mma_method_call(
         return Some(CuteFn::SharedTensorOverlay);
     }
 
-    let method = smem_mma_method_name_from_path(path, "mma::block_scaled::tiled")
+    let method = smem_mma_method_name_from_path(path, "nvgpu::warp::block_scaled::tiled")
         .filter(|method| {
             matches!(
                 *method,
@@ -73,7 +73,7 @@ pub(super) fn classify_smem_mma_method_call(
             )
         })
         .or_else(|| {
-            smem_mma_method_name_from_path(path, "mma::block_scaled::fragments")
+            smem_mma_method_name_from_path(path, "nvgpu::warp::block_scaled::fragments")
                 .filter(|method| matches!(*method, "zero" | "pairs_at_unchecked" | "gemm"))
         })?;
     match method {
@@ -157,7 +157,7 @@ pub(super) fn classify_epilogue_method_call(
     let operand_ty = |index: usize| args.get(index)?.ty(body.locals()).ok();
     let destination_ty = destination.ty(body.locals()).ok();
 
-    if let Some(method) = smem_mma_method_name_from_path(path, "epilogue::sm120") {
+    if let Some(method) = smem_mma_method_name_from_path(path, "nvgpu::warp::epilogue") {
         let tile_receiver = operand_ty(0)
             .as_ref()
             .is_some_and(|ty| epilogue::is_epilogue_tile_receiver(ty).unwrap_or(false));
@@ -190,7 +190,8 @@ pub(super) fn classify_epilogue_method_call(
         };
     }
 
-    if smem_mma_method_name_from_path(path, "mma::block_scaled::epilogue") == Some("store_tile")
+    if smem_mma_method_name_from_path(path, "nvgpu::warp::block_scaled::epilogue")
+        == Some("store_tile")
         && args.len() == 2
         && operand_ty(0)
             .as_ref()
@@ -225,7 +226,7 @@ pub(super) fn classify_epilogue_method_call(
 /// The impl-block spelling changes between rustc revisions. Exact scheduler
 /// and work-tile receiver types below provide the stable identity.
 pub(super) fn scheduler_method_name_from_path(path: &str) -> Option<&str> {
-    method_in_module(path, "scheduler")
+    method_in_module(path, "utils::scheduler")
 }
 
 /// Return an inherent method name from the exact pipeline module.
@@ -602,11 +603,11 @@ mod tests {
     #[test]
     fn nested_defining_modules_are_exact_not_reexport_paths() {
         for module in [
-            "block_scaled::tensor",
-            "block_scaled::gemv",
-            "mma::block_scaled::tiled",
-            "mma::block_scaled::fragments",
-            "mma::block_scaled::epilogue",
+            "utils::blockscaled::tensor",
+            "utils::blockscaled::gemv",
+            "nvgpu::warp::block_scaled::tiled",
+            "nvgpu::warp::block_scaled::fragments",
+            "nvgpu::warp::block_scaled::epilogue",
         ] {
             assert_eq!(
                 method_in_module(&format!("cute_rs::{module}::{{impl#7}}::method"), module),

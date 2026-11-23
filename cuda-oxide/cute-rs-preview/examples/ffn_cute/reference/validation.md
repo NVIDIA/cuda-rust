@@ -12,7 +12,7 @@ again. RMSNorm and residual addition belong to the surrounding decoder layer.
 
 ## Storage and execution
 
-The host-only `cute_rs::ffn` API carries gate/up/down roles and input/output
+The host-only `ffn` module (`examples/common/ffn.rs`) carries gate/up/down roles and input/output
 widths in Rust types. Weights borrow existing `DeviceBuffer<BFloat16>` allocations
 with `[output,input]` orientation. Dynamic shapes validate row strides, storage
 capacity, arithmetic overflow and addressable byte extents. Owned workspace

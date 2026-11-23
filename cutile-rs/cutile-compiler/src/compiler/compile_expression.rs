@@ -76,16 +76,51 @@ impl<'m> CUDATileFunctionCompiler<'m> {
     /// Used for static_params like `ftz::Enabled`, `rounding::NearestEven`.
     /// These carry no tile-ir value — they're compile-time constants
     /// consumed by `resolve_static_params` during op compilation.
-    fn make_zst_marker(path_expr: &syn::ExprPath) -> TileRustValue {
-        let path_ty: syn::Type = syn::Type::Path(syn::TypePath {
-            qself: None,
-            path: path_expr.path.clone(),
-        });
-        let type_instance = TypeInstance::UserType(TypeInstanceUserType {
-            maybe_generic_ty: path_ty,
-        });
-        let ty = TileRustType::new_string(type_instance);
+    fn make_zst_marker(
+        &self,
+        path_expr: &syn::ExprPath,
+        generic_vars: &GenericVars,
+    ) -> TileRustValue {
+        let ty = self.zst_marker_type(&path_expr.path, generic_vars);
         TileRustValue::new_string(Expr::Path(path_expr.clone()), ty)
+    }
+
+    /// The type of the ZST marker value `path`: the path as written, except
+    /// that a string tag is resolved in the current
+    /// module and spelled from its defining module (see
+    /// [`crate::compiler::_module::string_tag_path`]), and that an `i32`
+    /// const of the caller, such as `R` in `K::<R>`, is replaced by its
+    /// value: the type leaves the caller's scope, where `R` means something else.
+    pub(crate) fn zst_marker_type(
+        &self,
+        path: &syn::Path,
+        generic_vars: &GenericVars,
+    ) -> TileRustType {
+        let mut path = match self.modules.string_tag(path, &self.current_module()) {
+            Some(def) => crate::compiler::_module::string_tag_path(&def),
+            None => crate::syn_utils::path_without_node_ids(path),
+        };
+        for segment in path.segments.iter_mut() {
+            let syn::PathArguments::AngleBracketed(args) = &mut segment.arguments else {
+                continue;
+            };
+            for arg in args.args.iter_mut() {
+                let syn::GenericArgument::Type(syn::Type::Path(arg_path)) = arg else {
+                    continue;
+                };
+                let Some(name) = arg_path.path.get_ident().map(|i| i.to_string()) else {
+                    continue;
+                };
+                let Some(value) = generic_vars.inst_i32.get(&name) else {
+                    continue;
+                };
+                *arg = syn::GenericArgument::Const(syn::parse_str(&value.to_string()).unwrap());
+            }
+        }
+        let path_ty = syn::Type::Path(syn::TypePath { qself: None, path });
+        TileRustType::new_string(TypeInstance::UserType(TypeInstanceUserType {
+            maybe_generic_ty: path_ty,
+        }))
     }
 
     fn const_shape_macro_args(
@@ -178,7 +213,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 let res = self
                     .modules
                     .name_resolver
-                    .resolve_path(&path.path, &self.module_name);
+                    .resolve_path(&path.path, &self.current_module());
                 if let Res::Def(DefKind::Const, def_id) = res {
                     if self
                         .modules
@@ -1737,6 +1772,9 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         for acc in &token_accumulators {
             loop_carry_vars.push(acc.acc_var.clone());
         }
+        // The carried foreign-call token orders calls across iterations.
+        let ffi_before = super::compile_foreign::ffi_token(ctx);
+        super::compile_foreign::carry_ffi_token(ctx, &mut loop_carry_vars);
         let loop_carry_args = ctx.unpack_some_vars(&loop_carry_vars)?;
         let loop_carry_arg_tys = loop_carry_args
             .iter()
@@ -1752,6 +1790,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         let block_args: Vec<cutile_ir::ir::Value> = loop_block_args[1..].to_vec();
         for_variables.repack_some_vars(&loop_carry_vars, &block_args, true)?;
         self.bind_serialized_views(&token_accumulators, &mut for_variables);
+        self.join_ffi_token_into_views(module, loop_block_id, &mut for_variables, &for_expr.span());
         for_variables.carry_vars = Some(loop_carry_vars.clone());
         for_variables.default_terminator = Some(BlockTerminator::Continue);
         for_variables.innermost_loop = Some(LoopKind::For);
@@ -1918,6 +1957,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         }
         ctx.repack_some_vars(&loop_carry_vars, &result_values, true)?;
         self.finish_loop_token_accumulators(&token_accumulators, ctx);
+        self.publish_ffi_token(module, block_id, ctx, ffi_before, &for_expr.span());
         Ok(true)
     }
 
@@ -2173,6 +2213,9 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         for acc in &token_accumulators {
             loop_carry_vars.push(acc.acc_var.clone());
         }
+        // The carried foreign-call token orders calls across iterations.
+        let ffi_before = super::compile_foreign::ffi_token(ctx);
+        super::compile_foreign::carry_ffi_token(ctx, &mut loop_carry_vars);
         let loop_carry_args = ctx.unpack_some_vars(&loop_carry_vars)?;
         let loop_carry_arg_tys = loop_carry_args
             .iter()
@@ -2187,6 +2230,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         let block_args: Vec<cutile_ir::ir::Value> = loop_block_args[1..].to_vec();
         for_variables.repack_some_vars(&loop_carry_vars, &block_args, true)?;
         self.bind_serialized_views(&token_accumulators, &mut for_variables);
+        self.join_ffi_token_into_views(module, loop_block_id, &mut for_variables, &for_expr.span());
         if let Some(iterand_ident) = maybe_iterand_ident {
             let iterand_name = iterand_ident.ident.to_string();
             let i32_type = self
@@ -2262,6 +2306,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         }
         ctx.repack_some_vars(&loop_carry_vars, &result_values, true)?;
         self.finish_loop_token_accumulators(&token_accumulators, ctx);
+        self.publish_ffi_token(module, block_id, ctx, ffi_before, &for_expr.span());
         Ok(true)
     }
 
@@ -2437,9 +2482,12 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     // 3. Is loop-carried.
                     // 4. Is returned.
                     let for_iterand_type = module.value_type(lower_bound).clone();
-                    let loop_carry_vars = collect_mutated_variables(for_expr)?
+                    let mut loop_carry_vars = collect_mutated_variables(for_expr)?
                         .into_iter()
                         .collect::<Vec<_>>();
+                    // The carried foreign-call token orders calls across iterations.
+                    let ffi_before = super::compile_foreign::ffi_token(ctx);
+                    super::compile_foreign::carry_ffi_token(ctx, &mut loop_carry_vars);
                     let loop_carry_args = ctx.unpack_some_vars(&loop_carry_vars)?;
                     let loop_carry_arg_tys = loop_carry_args
                         .iter()
@@ -2458,6 +2506,12 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     // to the mutable variables accessed in this operation.
                     let block_args: Vec<cutile_ir::ir::Value> = loop_block_args[1..].to_vec();
                     for_variables.repack_some_vars(&loop_carry_vars, &block_args, true)?;
+                    self.join_ffi_token_into_views(
+                        module,
+                        loop_block_id,
+                        &mut for_variables,
+                        &for_expr.span(),
+                    );
                     if let Some(iterand_ident) = maybe_iterand_ident {
                         // maybe_iterand_ident is None if it is wild.
                         // If it's an ident, then add the iterand as a var.
@@ -2647,14 +2701,18 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                         );
                     }
                     ctx.repack_some_vars(&loop_carry_vars, &result_values, true)?;
+                    self.publish_ffi_token(module, block_id, ctx, ffi_before, &for_expr.span());
                     Ok(None)
                 }
                 Expr::While(while_expr) => {
                     // While loop: while condition { body }
                     // Convert to cuda_tile.loop - simpler approach: body then check
-                    let loop_carry_vars = collect_mutated_variables_while(while_expr)?
+                    let mut loop_carry_vars = collect_mutated_variables_while(while_expr)?
                         .into_iter()
                         .collect::<Vec<_>>();
+                    // The carried foreign-call token orders calls across iterations.
+                    let ffi_before = super::compile_foreign::ffi_token(ctx);
+                    super::compile_foreign::carry_ffi_token(ctx, &mut loop_carry_vars);
                     let loop_carry_args = ctx.unpack_some_vars(&loop_carry_vars)?;
                     let loop_carry_arg_tys = loop_carry_args
                         .iter()
@@ -2667,6 +2725,12 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     let mut loop_variables = ctx.clone();
                     let block_args: Vec<cutile_ir::ir::Value> = loop_block_args.clone();
                     loop_variables.repack_some_vars(&loop_carry_vars, &block_args, true)?;
+                    self.join_ffi_token_into_views(
+                        module,
+                        loop_block_id,
+                        &mut loop_variables,
+                        &while_expr.span(),
+                    );
                     loop_variables.carry_vars = Some(loop_carry_vars.clone());
                     loop_variables.default_terminator = Some(BlockTerminator::Continue);
                     loop_variables.innermost_loop = Some(LoopKind::Loop);
@@ -2755,14 +2819,18 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                         );
                     }
                     ctx.repack_some_vars(&loop_carry_vars, &result_values, true)?;
+                    self.publish_ffi_token(module, block_id, ctx, ffi_before, &while_expr.span());
                     Ok(None)
                 }
                 Expr::Loop(loop_expr) => {
                     // Infinite loop: loop { body }
                     // Same as while but without condition check
-                    let loop_carry_vars = collect_mutated_variables_loop(loop_expr)?
+                    let mut loop_carry_vars = collect_mutated_variables_loop(loop_expr)?
                         .into_iter()
                         .collect::<Vec<_>>();
+                    // The carried foreign-call token orders calls across iterations.
+                    let ffi_before = super::compile_foreign::ffi_token(ctx);
+                    super::compile_foreign::carry_ffi_token(ctx, &mut loop_carry_vars);
                     let loop_carry_args = ctx.unpack_some_vars(&loop_carry_vars)?;
                     let loop_carry_arg_tys = loop_carry_args
                         .iter()
@@ -2775,6 +2843,12 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     let mut loop_variables = ctx.clone();
                     let block_args: Vec<cutile_ir::ir::Value> = loop_block_args.clone();
                     loop_variables.repack_some_vars(&loop_carry_vars, &block_args, true)?;
+                    self.join_ffi_token_into_views(
+                        module,
+                        loop_block_id,
+                        &mut loop_variables,
+                        &loop_expr.span(),
+                    );
                     loop_variables.carry_vars = Some(loop_carry_vars.clone());
                     loop_variables.default_terminator = Some(BlockTerminator::Continue);
                     loop_variables.innermost_loop = Some(LoopKind::Loop);
@@ -2814,6 +2888,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                         );
                     }
                     ctx.repack_some_vars(&loop_carry_vars, &result_values, true)?;
+                    self.publish_ffi_token(module, block_id, ctx, ffi_before, &loop_expr.span());
                     Ok(None)
                 }
                 Expr::If(if_expr) => {
@@ -2833,6 +2908,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                             "failed to compile if-condition",
                         );
                     };
+                    let ffi_before = super::compile_foreign::ffi_token(ctx);
                     if let Some(bounds) = conditional_val.bounds {
                         if bounds.is_exact() {
                             // Emit the corresponding conditional, if it's defined.
@@ -2882,7 +2958,16 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                             // including facts established by its RHS — instead
                             // of reconstructing from the pre-branch templates
                             // and invalidating them (2026-08-12 review, P1).
+                            let mut carry_vars = carry_vars;
+                            super::compile_foreign::carry_ffi_token(ctx, &mut carry_vars);
                             ctx.replace_some_vars_from(&carry_vars, &block_vars)?;
+                            self.publish_ffi_token(
+                                module,
+                                block_id,
+                                ctx,
+                                ffi_before,
+                                &if_expr.span(),
+                            );
                             return Ok(res);
                         }
                     }
@@ -2911,6 +2996,16 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     } else {
                         [then_captured_vars.clone(), else_captured_vars.clone()].concat()
                     };
+                    // A string that neither branch assigns keeps its value:
+                    // carrying it would make it unknown after the `if`.
+                    if_captured_var_names.retain(|name| {
+                        then_captured_vars.contains(name)
+                            || else_captured_vars.contains(name)
+                            || ctx.vars.get(name).is_none_or(|v| v.kind != Kind::String)
+                    });
+                    // Each branch yields the carried foreign-call token; one
+                    // without a call passes the incoming token through.
+                    super::compile_foreign::carry_ffi_token(ctx, &mut if_captured_var_names);
                     dedup(&mut if_captured_var_names);
 
                     let Some(condition_val) = conditional_val.value else {
@@ -3022,13 +3117,19 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                         [if_captured_var_arg_tys, branch_result_type].concat()
                     };
 
-                    let (if_op_id, mut result_values) =
+                    let mut builder =
                         OpBuilder::new(Opcode::If, self.ir_location(&if_expr.cond.span()))
                             .operand(condition_val)
                             .results(if_result_types.iter().cloned())
                             .region(then_region_id)
-                            .region(else_region_id)
-                            .build(module);
+                            .region(else_region_id);
+                    if let Some(expected) = conditional_val.condition_likelihood {
+                        builder = builder.attr(
+                            "optimization_hints",
+                            super::optimization_hints::build_condition_hint(expected),
+                        );
+                    }
+                    let (if_op_id, mut result_values) = builder.build(module);
                     append_op(module, block_id, if_op_id);
 
                     if let Some(ty) = then_return_type {
@@ -3043,10 +3144,12 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                         }
                         let return_value = result_values.pop().unwrap();
                         ctx.repack_some_vars(&if_captured_var_names, &result_values, true)?;
+                        self.publish_ffi_token(module, block_id, ctx, ffi_before, &if_expr.span());
                         let tr_value = TileRustValue::new_value_kind_like(return_value, ty);
                         Ok(Some(tr_value))
                     } else {
                         ctx.repack_some_vars(&if_captured_var_names, &result_values, true)?;
+                        self.publish_ffi_token(module, block_id, ctx, ffi_before, &if_expr.span());
                         Ok(None)
                     }
                 }
@@ -3054,9 +3157,11 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     let mut inner_block_vars = ctx.clone();
                     inner_block_vars.default_terminator = None;
                     let outer_block_vars = ctx;
-                    let carry_vars = collect_mutated_variables_from_block(&block_expr.block)?
+                    let mut carry_vars = collect_mutated_variables_from_block(&block_expr.block)?
                         .into_iter()
                         .collect::<Vec<_>>();
+                    super::compile_foreign::carry_ffi_token(outer_block_vars, &mut carry_vars);
+                    let ffi_before = super::compile_foreign::ffi_token(outer_block_vars);
                     let result = self.compile_block(
                         module,
                         block_id,
@@ -3073,15 +3178,24 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                         outer_block_vars,
                         "token".to_string(),
                     );
+                    self.publish_ffi_token(
+                        module,
+                        block_id,
+                        outer_block_vars,
+                        ffi_before,
+                        &block_expr.span(),
+                    );
                     Ok(result)
                 }
                 Expr::Unsafe(block_expr) => {
                     let mut inner_block_vars = ctx.clone();
                     inner_block_vars.default_terminator = None;
                     let outer_block_vars = ctx;
-                    let carry_vars = collect_mutated_variables_from_block(&block_expr.block)?
+                    let mut carry_vars = collect_mutated_variables_from_block(&block_expr.block)?
                         .into_iter()
                         .collect::<Vec<_>>();
+                    super::compile_foreign::carry_ffi_token(outer_block_vars, &mut carry_vars);
+                    let ffi_before = super::compile_foreign::ffi_token(outer_block_vars);
                     let result = self.compile_block(
                         module,
                         block_id,
@@ -3097,6 +3211,13 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                         &mut inner_block_vars,
                         outer_block_vars,
                         "token".to_string(),
+                    );
+                    self.publish_ffi_token(
+                        module,
+                        block_id,
+                        outer_block_vars,
+                        ffi_before,
+                        &block_expr.span(),
                     );
                     Ok(result)
                 }
@@ -3498,11 +3619,11 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     let res = self
                         .modules
                         .name_resolver
-                        .resolve_path(&path_expr.path, &self.module_name);
+                        .resolve_path(&path_expr.path, &self.current_module());
                     match res {
                         Res::Def(DefKind::Struct, _) => {
                             // Known DSL struct — return as ZST marker placeholder.
-                            return Ok(Some(Self::make_zst_marker(path_expr)));
+                            return Ok(Some(self.make_zst_marker(path_expr, generic_vars)));
                         }
                         Res::Def(DefKind::Const, def_id) => {
                             let Some(const_item) = self.modules.name_resolver.get_const(&def_id)
@@ -3557,11 +3678,26 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                                 "associated const values are not supported in expression position; use a literal or pass supported element constants such as `T::ZERO` directly to a DSL operation that accepts them",
                             );
                         }
-                        return Ok(Some(Self::make_zst_marker(path_expr)));
+                        if let Some(message) = self
+                            .modules
+                            .name_resolver
+                            .unloaded_path_error(&path_expr.path, &self.current_module())
+                        {
+                            return self.jit_error_result(&path_expr.span(), &message);
+                        }
+                        return Ok(Some(self.make_zst_marker(path_expr, generic_vars)));
                     }
 
-                    // 4. Single-segment, not a local, not in resolver — error.
-                    let suggestion = self.modules.name_resolver.find_all_definitions(&var_name);
+                    // 4. Single-segment, not a local, not in resolver — error,
+                    //    naming the import the JIT cannot follow if there is one.
+                    if let Err(message) = self
+                        .modules
+                        .name_resolver
+                        .resolve_const(&var_name, &self.current_module())
+                    {
+                        return self.jit_error_result(&path_expr.span(), &message);
+                    }
+                    let suggestion = self.modules.name_resolver.modules_defining(&var_name, None);
                     if suggestion.is_empty() {
                         self.jit_error_result(
                             &path_expr.span(),
@@ -3637,24 +3773,48 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                                     option_type,
                                 )));
                             }
-                            if self
+                            // Resolved by its path in the scope of the module
+                            // whose source holds the call: see
+                            // `resolve_function`.
+                            let resolved = match self
                                 .modules
-                                .get_cuda_tile_op_attrs(ident.to_string().as_str())
-                                .is_some()
+                                .resolve_function(&path_expr.path, &self.current_module())
                             {
-                                Ok(self.compile_cuda_tile_op_call(
-                                    module,
-                                    block_id,
-                                    call_expr,
-                                    generic_vars,
-                                    ctx,
-                                    return_type,
-                                )?)
-                            } else if let Some((module_name, fn_item)) = self
-                                .modules
-                                .get_function_by_name(ident.to_string().as_str())
-                            {
-                                if let Some(compiler_op_attrs) =
+                                Ok(resolved) => resolved,
+                                Err(msg) => {
+                                    return self.jit_error_result(&call_expr.func.span(), &msg)
+                                }
+                            };
+                            if let Some((module_name, fn_item)) = resolved {
+                                if get_meta_list("cuda_tile :: op", &fn_item.attrs).is_some() {
+                                    let values_before = module.num_values();
+                                    let result = self.compile_cuda_tile_op_call(
+                                        module,
+                                        block_id,
+                                        call_expr,
+                                        fn_item,
+                                        generic_vars,
+                                        ctx,
+                                        return_type,
+                                    )?;
+                                    self.record_memory_accesses(
+                                        module,
+                                        block_id,
+                                        ctx,
+                                        values_before,
+                                    );
+                                    Ok(result)
+                                } else if crate::foreign_decl::is_foreign_fn(fn_item) {
+                                    Ok(self.compile_foreign_call(
+                                        module,
+                                        block_id,
+                                        &module_name,
+                                        fn_item,
+                                        call_expr,
+                                        generic_vars,
+                                        ctx,
+                                    )?)
+                                } else if let Some(compiler_op_attrs) =
                                     get_meta_list("cuda_tile :: compiler_op", &fn_item.attrs)
                                 {
                                     Ok(self.compile_compiler_op_call(
@@ -3672,7 +3832,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                                     Ok(self.inline_function_call(
                                         module,
                                         block_id,
-                                        module_name,
+                                        &module_name,
                                         fn_item,
                                         call_expr,
                                         generic_vars,
@@ -3681,10 +3841,16 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                                     )?)
                                 }
                             } else {
-                                self.jit_error_result(
-                                    &call_expr.func.span(),
-                                    &format!("call to `{}` is not supported", call_expr_func_str),
-                                )
+                                // A name a `use` brought in from a source the
+                                // JIT does not support gets a hint naming it.
+                                let primary =
+                                    format!("call to `{}` is not supported", call_expr_func_str);
+                                let msg =
+                                    match self.modules.unresolved_name_hint(&ident.to_string()) {
+                                        Some(hint) => format!("{primary}: {hint}"),
+                                        None => primary,
+                                    };
+                                self.jit_error_result(&call_expr.func.span(), &msg)
                             }
                         }
                         _ => self.jit_error_result(
@@ -3714,6 +3880,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     )? {
                         return Ok(Some(value));
                     }
+                    let values_before = module.num_values();
                     if let Some(value) = self.compile_global_method_call(
                         module,
                         block_id,
@@ -3722,6 +3889,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                         ctx,
                         return_type.clone(),
                     )? {
+                        self.record_memory_accesses(module, block_id, ctx, values_before);
                         return Ok(Some(value));
                     }
                     Ok(self.inline_method_call(
@@ -4253,6 +4421,35 @@ fn build_constant_op(
         .build(module);
     cutile_ir::builder::append_op(module, block_id, op_id);
     (results[0], result_ty)
+}
+
+/// The `value` attribute of a `cuda_tile.constant` that splats one `scalar`
+/// element (`data`, as [`encode_literal_bytes`] returns it) over a tile. The
+/// carrier type is a rank-0 tile of the element, except for f4E2M1FN: a
+/// scalar f4 tile is not a legal type, even as a constant-pool carrier, so
+/// the carrier is the result tile type (`tile_ty`, called only then) and
+/// both nibbles of the splat byte hold the value.
+pub(crate) fn splat_dense_elements(
+    scalar: ScalarType,
+    mut data: Vec<u8>,
+    tile_ty: impl FnOnce() -> Result<TileIrType, JITError>,
+) -> Result<cutile_ir::ir::DenseElements, JITError> {
+    let element_type = if scalar == ScalarType::F4E2M1FN {
+        if let Some(byte) = data.first_mut() {
+            *byte = (*byte & 15) * 17;
+        }
+        tile_ty()?
+    } else {
+        TileIrType::Tile(TileType {
+            shape: vec![],
+            element_type: TileElementType::Scalar(scalar),
+        })
+    };
+    Ok(cutile_ir::ir::DenseElements {
+        element_type,
+        shape: vec![],
+        data,
+    })
 }
 
 /// Encode a literal value string into bytes for a DenseElements attribute.

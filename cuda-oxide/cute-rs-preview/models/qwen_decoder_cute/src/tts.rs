@@ -11,6 +11,7 @@
 //! Greedy requests may use a persistent eager or captured predictor; seeded
 //! sampling retains host selection and independently derived model RNG streams.
 //! Prompt streaming layout does not imply incremental waveform delivery.
+use crate::decoder::TokenIds;
 use crate::{
     checkpoint::QwenWeights,
     checkpoint_validation::Reference,
@@ -21,7 +22,6 @@ use crate::{
 };
 use cuda_core::CudaContext;
 use cute_rs::BFloat16;
-use cute_rs::decoder::TokenIds;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{fs, io::Read, path::Path, sync::Arc, time::Instant};

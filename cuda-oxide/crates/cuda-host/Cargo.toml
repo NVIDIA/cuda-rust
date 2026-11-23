@@ -1,6 +1,6 @@
 [package]
 name = "cuda-host"
-version = "0.3.0"
+version = "0.4.0"
 edition.workspace = true
 description = "Host-side utilities for CUDA kernel development"
 readme = "README.md"

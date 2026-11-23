@@ -7,7 +7,7 @@ error[E0277]: the trait bound `f64: GlobalStoreElement` is not satisfied
   |             required by a bound introduced by this call
   |
 help: the following other types implement trait `GlobalStoreElement`
- --> src/copy/vector.rs
+ --> src/atom/vector.rs
   |
   | impl GlobalStoreElement for f16 {}
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `f16`
@@ -16,7 +16,7 @@ help: the following other types implement trait `GlobalStoreElement`
   | impl GlobalStoreElement for u32 {}
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `u32`
 note: required by a bound in `GlobalStoreTile`
- --> src/copy/vector.rs
+ --> src/atom/vector.rs
   |
   | pub struct GlobalStoreTile<T: GlobalStoreElement, const N: usize>(
   |                               ^^^^^^^^^^^^^^^^^^ required by this bound in `GlobalStoreTile`
@@ -28,7 +28,7 @@ error[E0277]: the trait bound `f64: GlobalStoreElement` is not satisfied
   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `GlobalStoreElement` is not implemented for `f64`
   |
 help: the following other types implement trait `GlobalStoreElement`
- --> src/copy/vector.rs
+ --> src/atom/vector.rs
   |
   | impl GlobalStoreElement for f16 {}
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `f16`
@@ -37,7 +37,7 @@ help: the following other types implement trait `GlobalStoreElement`
   | impl GlobalStoreElement for u32 {}
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `u32`
 note: required by a bound in `GlobalStoreTile`
- --> src/copy/vector.rs
+ --> src/atom/vector.rs
   |
   | pub struct GlobalStoreTile<T: GlobalStoreElement, const N: usize>(
   |                               ^^^^^^^^^^^^^^^^^^ required by this bound in `GlobalStoreTile`

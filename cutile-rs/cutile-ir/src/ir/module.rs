@@ -97,6 +97,16 @@ impl Module {
         self.values.len()
     }
 
+    /// The values allocated at or after `watermark` (see [`Self::num_values`]),
+    /// in allocation order.
+    pub fn values_since(&self, watermark: usize) -> impl Iterator<Item = (Value, &ValueData)> {
+        self.values
+            .iter()
+            .enumerate()
+            .skip(watermark)
+            .map(|(i, data)| (Value(i as u32), data))
+    }
+
     pub fn value_data(&self, v: Value) -> &ValueData {
         &self.values[v.0 as usize]
     }
@@ -157,6 +167,47 @@ impl Module {
 
     pub fn op_location(&self, id: OpId) -> &Location {
         &self.operations[id.0 as usize].location
+    }
+
+    // ------ Preview operations ------
+
+    /// Visits every operation reachable from the module's functions.
+    fn visit_reachable_ops(&self, visit: &mut impl FnMut(&Operation)) {
+        let mut stack: Vec<OpId> = self.functions.iter().rev().copied().collect();
+        while let Some(id) = stack.pop() {
+            let op = self.op(id);
+            visit(op);
+            for &region in op.regions.iter().rev() {
+                for &block in self.region(region).blocks.iter().rev() {
+                    stack.extend(self.block(block).ops.iter().rev());
+                }
+            }
+        }
+    }
+
+    /// Whether a reachable operation is a public-preview operation, which
+    /// requires the preview bytecode version and header bit.
+    pub fn uses_preview_ops(&self) -> bool {
+        let mut found = false;
+        self.visit_reachable_ops(&mut |op| found |= op.opcode.is_preview());
+        found
+    }
+
+    /// The callees of reachable foreign calls (`preview$call`), sorted and
+    /// de-duplicated.
+    pub fn foreign_callees(&self) -> Vec<String> {
+        let mut callees = std::collections::BTreeSet::new();
+        self.visit_reachable_ops(&mut |op| {
+            if op.opcode != crate::bytecode::Opcode::PreviewCall {
+                return;
+            }
+            for (name, attr) in &op.attributes {
+                if let ("callee", super::attr::Attribute::String(callee)) = (name.as_str(), attr) {
+                    callees.insert(callee.clone());
+                }
+            }
+        });
+        callees.into_iter().collect()
     }
 
     // ------ Verification ------

@@ -10,15 +10,15 @@
 //! it does not load a checkpoint or format a speech prompt. Host selection is
 //! supplied by a separately checked, vocabulary-typed sampler.
 
+use crate::decoder::{
+    BiasWeights, DecoderWeights, EmbeddingWeights, FinalNorm, NormWeights, TokenIds,
+};
+use crate::ffn::{InputProjection, Logits, ProjectionWeights, TextProjection1, TextProjection2};
 use crate::model::{Batch, DecoderCache, Runner};
 use crate::operator::Result;
 use crate::rotary::RotarySpec;
 use crate::sampling::{Sampler, SamplingConfig};
 use cute_rs::BFloat16;
-use cute_rs::decoder::{
-    BiasWeights, DecoderWeights, EmbeddingWeights, FinalNorm, NormWeights, TokenIds,
-};
-use cute_rs::ffn::{InputProjection, Logits, ProjectionWeights, TextProjection1, TextProjection2};
 
 /// Decoder layer count in the pinned 2048-wide Talker.
 pub const TALKER_LAYERS: usize = 28;

@@ -263,15 +263,32 @@ pub fn emit_rust_float_math_intrinsic(
     )
 }
 
+/// Extract the leading instruction text from a `rustc_public` `InlineAsm`
+/// template string.
+///
+/// `rustc_public` serializes `&[InlineAsmTemplatePiece]` via `Debug`
+/// (`[String("frintn "), Placeholder { ... }, ...]`), so this helper unwraps
+/// the leading `String("...")` piece when present and falls back to the
+/// trimmed template slice for plain-text unit tests.
+fn inline_asm_leading_text(template: &str) -> &str {
+    let trimmed = template.trim_start();
+    if let Some(rest) = trimmed.strip_prefix("[String(\"")
+        && let Some((head, _)) = rest.split_once("\")")
+    {
+        return head.trim_start();
+    }
+    trimmed
+}
+
 /// Match an architecture-specific `libm` inline-assembly template (`aarch64`
-/// `frintn` / `fsqrt` / `fmadd` or `x86` `sqrtss` / `sqrtsd`) that rustc
-/// MIR-inlined into a device function before call-site interception.
+/// `frintn` / `fsqrt` / `fmadd` or `x86` `sqrtss` / `sqrtsd` / `vfmadd*`) that
+/// rustc MIR-inlined into a device function before call-site interception.
 pub fn libm_inline_asm_intrinsic(
     template: &str,
     arity: usize,
     is_f64: bool,
 ) -> Option<RustFloatMathIntrinsic> {
-    let trimmed = template.trim_start();
+    let trimmed = inline_asm_leading_text(template);
     match arity {
         1 if trimmed.starts_with("frintn ") => Some(if is_f64 {
             RustFloatMathIntrinsic::RoundevenF64
@@ -290,6 +307,16 @@ pub fn libm_inline_asm_intrinsic(
         } else {
             RustFloatMathIntrinsic::FmaF32
         }),
+        3 if (trimmed.starts_with("vfmadd213ss ") || trimmed.starts_with("vfmaddss "))
+            && !is_f64 =>
+        {
+            Some(RustFloatMathIntrinsic::FmaF32)
+        }
+        3 if (trimmed.starts_with("vfmadd213sd ") || trimmed.starts_with("vfmaddsd "))
+            && is_f64 =>
+        {
+            Some(RustFloatMathIntrinsic::FmaF64)
+        }
         _ => None,
     }
 }
@@ -867,6 +894,54 @@ mod tests {
         assert_eq!(
             libm_inline_asm_intrinsic("fmadd {x:d}, {x:d}, {y:d}, {z:d}", 3, true),
             Some(RustFloatMathIntrinsic::FmaF64)
+        );
+        assert_eq!(
+            libm_inline_asm_intrinsic(
+                "[String(\"frintn \"), Placeholder { operand_idx: 0, modifier: Some('d'), span: aarch64.rs:46:21: 46:26 (#0) }, String(\", \"), Placeholder { operand_idx: 0, modifier: Some('d'), span: aarch64.rs:46:28: 46:33 (#0) }]",
+                1,
+                true,
+            ),
+            Some(RustFloatMathIntrinsic::RoundevenF64)
+        );
+        assert_eq!(
+            libm_inline_asm_intrinsic(
+                "[String(\"frintn \"), Placeholder { operand_idx: 0, modifier: Some('s'), span: aarch64.rs:61:21: 61:26 (#0) }, String(\", \"), Placeholder { operand_idx: 0, modifier: Some('s'), span: aarch64.rs:61:28: 61:33 (#0) }]",
+                1,
+                false,
+            ),
+            Some(RustFloatMathIntrinsic::RoundevenF32)
+        );
+        assert_eq!(
+            libm_inline_asm_intrinsic(
+                "[String(\"fsqrt \"), Placeholder { operand_idx: 0, modifier: Some('d'), span: aarch64.rs:89:20: 89:25 (#0) }]",
+                1,
+                true,
+            ),
+            Some(RustFloatMathIntrinsic::SqrtF64)
+        );
+        assert_eq!(
+            libm_inline_asm_intrinsic(
+                "[String(\"sqrtss \"), Placeholder { operand_idx: 0, modifier: None, span: x86.rs:13:21: 13:24 (#0) }]",
+                1,
+                false,
+            ),
+            Some(RustFloatMathIntrinsic::SqrtF32)
+        );
+        assert_eq!(
+            libm_inline_asm_intrinsic(
+                "[String(\"sqrtsd \"), Placeholder { operand_idx: 0, modifier: None, span: x86.rs:26:21: 26:24 (#0) }]",
+                1,
+                true,
+            ),
+            Some(RustFloatMathIntrinsic::SqrtF64)
+        );
+        assert_eq!(
+            libm_inline_asm_intrinsic(
+                "[String(\"fmadd \"), Placeholder { operand_idx: 0, modifier: Some('s'), span: aarch64.rs:23:20: 23:25 (#0) }]",
+                3,
+                false,
+            ),
+            Some(RustFloatMathIntrinsic::FmaF32)
         );
         assert_eq!(libm_inline_asm_intrinsic("nop", 1, false), None);
         assert_eq!(

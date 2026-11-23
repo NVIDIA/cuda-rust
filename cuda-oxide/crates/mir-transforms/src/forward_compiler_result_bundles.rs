@@ -83,6 +83,7 @@ struct ForwardingPlan {
     bundle_nodes: Vec<Ptr<Operation>>,
     projection_nodes: Vec<Ptr<Operation>>,
     loads: Vec<LoadForwarding>,
+    leaves: Vec<Value>,
     producer_block: Ptr<BasicBlock>,
     store_block: Ptr<BasicBlock>,
 }
@@ -94,22 +95,60 @@ pub fn forward_compiler_result_bundles(
     analyses: &mut AnalysisManager,
     verbose: bool,
 ) -> Result<usize> {
-    let mut operations = Vec::new();
-    collect_ops(ctx, module, &mut operations);
+    forward_bundles_inner(module, ctx, analyses, verbose, true)
+}
 
-    let mut plans = Vec::new();
-    for operation in operations {
-        let Some(plan) = analyze_marked_bundle(ctx, operation) else {
-            continue;
-        };
-        if domination_is_proven(module, ctx, analyses, &plan)? {
-            plans.push(plan);
-        }
-    }
+/// Forward single-store `MirConstruct*` aggregates whose reads are all constant
+/// field/element projections dominated by the store (such as `TmemFragment` and `RegisterTile`).
+pub fn forward_constant_projected_aggregates(
+    module: Ptr<Operation>,
+    ctx: &mut Context,
+    analyses: &mut AnalysisManager,
+    verbose: bool,
+) -> Result<usize> {
+    forward_bundles_inner(module, ctx, analyses, verbose, false)
+}
 
+fn forward_bundles_inner(
+    module: Ptr<Operation>,
+    ctx: &mut Context,
+    analyses: &mut AnalysisManager,
+    verbose: bool,
+    require_marker: bool,
+) -> Result<usize> {
     let mut forwarded_loads = 0;
-    for plan in plans {
-        forwarded_loads += rewrite_plan(ctx, plan);
+    for _ in 0..64 {
+        let collapsed = if require_marker {
+            0
+        } else {
+            collapse_element_populated_array_allocas(module, ctx)
+        };
+        let copied = if require_marker {
+            0
+        } else {
+            forward_single_store_aggregate_copies(module, ctx, analyses)?
+        };
+        let mut operations = Vec::new();
+        collect_ops(ctx, module, &mut operations);
+
+        let mut plans = Vec::new();
+        for operation in operations {
+            let Some(plan) = analyze_marked_bundle(ctx, operation, require_marker) else {
+                continue;
+            };
+            if domination_is_proven(module, ctx, analyses, &plan)? {
+                plans.push(plan);
+                if !require_marker {
+                    break;
+                }
+            }
+        }
+        if plans.is_empty() && copied == 0 && collapsed == 0 {
+            break;
+        }
+        for plan in plans {
+            forwarded_loads += rewrite_plan(ctx, plan);
+        }
     }
 
     if forwarded_loads > 0 && verbose {
@@ -118,6 +157,329 @@ pub fn forward_compiler_result_bundles(
         );
     }
     Ok(forwarded_loads)
+}
+
+fn collect_allocas(ctx: &Context, root: Ptr<Operation>, output: &mut Vec<Ptr<Operation>>) {
+    if Operation::get_op::<MirAllocaOp>(root, ctx).is_some() {
+        output.push(root);
+    }
+    let regions: Vec<_> = root.deref(ctx).regions().collect();
+    for region in regions {
+        let blocks: Vec<_> = region.deref(ctx).iter(ctx).collect();
+        for block in blocks {
+            let children: Vec<_> = block.deref(ctx).iter(ctx).collect();
+            for child in children {
+                collect_allocas(ctx, child, output);
+            }
+        }
+    }
+}
+
+/// Collapse an array `MirAllocaOp` populated by a same-block sequence of constant-index
+/// element stores (optionally preceded by a whole-array `MirConstructArrayOp` store, as in
+/// `let mut values = [first; N]; values[1] = ...;`) into a single `MirStoreOp` of one
+/// `MirConstructArrayOp` when all writes occur in the same block before any read.
+fn collapse_element_populated_array_allocas(module: Ptr<Operation>, ctx: &mut Context) -> usize {
+    let mut operations = Vec::new();
+    collect_allocas(ctx, module, &mut operations);
+    let mut collapsed = 0;
+
+    for operation in operations {
+        let root_pointer = operation.deref(ctx).get_result(0);
+        let ptr_ty = root_pointer.get_type(ctx);
+        let Some(pointee_ty) = ptr_ty
+            .deref(ctx)
+            .downcast_ref::<dialect_mir::types::MirPtrType>()
+            .map(|p| p.pointee)
+        else {
+            continue;
+        };
+        let Some(array_len) = pointee_ty
+            .deref(ctx)
+            .downcast_ref::<MirArrayType>()
+            .map(|a| a.size() as usize)
+        else {
+            continue;
+        };
+        if array_len == 0 || array_len > 128 {
+            continue;
+        }
+
+        let mut write_stores: FxHashSet<Ptr<Operation>> = FxHashSet::default();
+        let mut write_projs: Vec<Ptr<Operation>> = Vec::new();
+        let mut init_constructs: Vec<Ptr<Operation>> = Vec::new();
+        let mut read_anchors: Vec<Ptr<Operation>> = Vec::new();
+        let mut write_block: Option<Ptr<BasicBlock>> = None;
+        let mut valid = true;
+
+        for use_ref in root_pointer.uses(ctx) {
+            let user = use_ref.user_op();
+            if use_ref.find_index(ctx) != 0 {
+                valid = false;
+                break;
+            }
+            if let Some(store) = Operation::get_op::<MirStoreOp>(user, ctx) {
+                if store.is_volatile(ctx) {
+                    valid = false;
+                    break;
+                }
+                let val = user.deref(ctx).get_operand(1);
+                let Some(def_op) = val.defining_op() else {
+                    valid = false;
+                    break;
+                };
+                if Operation::get_op::<MirConstructArrayOp>(def_op, ctx).is_none()
+                    || def_op.deref(ctx).get_num_operands() != array_len
+                {
+                    valid = false;
+                    break;
+                }
+                let Some(bb) = user.deref(ctx).get_parent_block() else {
+                    valid = false;
+                    break;
+                };
+                if write_block.is_some_and(|wb| wb != bb) {
+                    valid = false;
+                    break;
+                }
+                write_block = Some(bb);
+                write_stores.insert(user);
+                init_constructs.push(def_op);
+            } else if Operation::get_op::<MirArrayElementAddrOp>(user, ctx).is_some() {
+                let idx_val = user.deref(ctx).get_operand(1);
+                let proj_res = user.deref(ctx).get_result(0);
+                if let Some(const_idx) = integer_constant_usize(ctx, idx_val)
+                    && const_idx < array_len
+                    && proj_res.num_uses(ctx) == 1
+                {
+                    let u = proj_res.uses(ctx).into_iter().next().unwrap();
+                    let u_op = u.user_op();
+                    if u.find_index(ctx) == 0
+                        && let Some(store) = Operation::get_op::<MirStoreOp>(u_op, ctx)
+                        && !store.is_volatile(ctx)
+                    {
+                        let Some(bb) = u_op.deref(ctx).get_parent_block() else {
+                            valid = false;
+                            break;
+                        };
+                        if user.deref(ctx).get_parent_block() != Some(bb)
+                            || write_block.is_some_and(|wb| wb != bb)
+                        {
+                            valid = false;
+                            break;
+                        }
+                        write_block = Some(bb);
+                        write_stores.insert(u_op);
+                        write_projs.push(user);
+                        continue;
+                    }
+                }
+                read_anchors.push(user);
+            } else if Operation::get_op::<MirLoadOp>(user, ctx).is_some() {
+                read_anchors.push(user);
+            } else {
+                valid = false;
+                break;
+            }
+        }
+
+        if !valid || write_stores.len() < 2 {
+            continue;
+        }
+        let Some(wb) = write_block else {
+            continue;
+        };
+
+        let mut elements: Vec<Option<Value>> = vec![None; array_len];
+        let mut seen_writes = 0usize;
+        let mut last_write_op: Option<Ptr<Operation>> = None;
+        let mut order_ok = true;
+        for op in wb.deref(ctx).iter(ctx) {
+            if read_anchors.contains(&op) && seen_writes < write_stores.len() {
+                order_ok = false;
+                break;
+            }
+            if write_stores.contains(&op) {
+                seen_writes += 1;
+                last_write_op = Some(op);
+                let addr = op.deref(ctx).get_operand(0);
+                let val = op.deref(ctx).get_operand(1);
+                if addr == root_pointer {
+                    let construct_op = val.defining_op().unwrap();
+                    for (slot, elem) in elements.iter_mut().enumerate().take(array_len) {
+                        *elem = Some(construct_op.deref(ctx).get_operand(slot));
+                    }
+                } else {
+                    let proj_op = addr.defining_op().unwrap();
+                    let idx_val = proj_op.deref(ctx).get_operand(1);
+                    let idx = integer_constant_usize(ctx, idx_val).unwrap();
+                    elements[idx] = Some(val);
+                }
+            }
+        }
+        if !order_ok || seen_writes != write_stores.len() || elements.iter().any(Option::is_none) {
+            continue;
+        }
+        let Some(anchor) = last_write_op else {
+            continue;
+        };
+        let loc = anchor.deref(ctx).loc().clone();
+        let operands: Vec<Value> = elements.into_iter().map(Option::unwrap).collect();
+        let new_construct = Operation::new(
+            ctx,
+            MirConstructArrayOp::get_concrete_op_info(),
+            vec![pointee_ty],
+            operands,
+            vec![],
+            0,
+        );
+        new_construct.deref_mut(ctx).set_loc(loc.clone());
+        new_construct.insert_before(ctx, anchor);
+        let new_arr_val = new_construct.deref(ctx).get_result(0);
+        let new_store = Operation::new(
+            ctx,
+            MirStoreOp::get_concrete_op_info(),
+            vec![],
+            vec![root_pointer, new_arr_val],
+            vec![],
+            0,
+        );
+        new_store.deref_mut(ctx).set_loc(loc);
+        new_store.insert_before(ctx, anchor);
+
+        let mut rewriter = IRRewriter::<Recorder>::default();
+        for store_op in write_stores {
+            rewriter.erase_operation(ctx, store_op);
+        }
+        for proj_op in write_projs {
+            if proj_op.deref(ctx).get_result(0).num_uses(ctx) == 0 {
+                rewriter.erase_operation(ctx, proj_op);
+            }
+        }
+        for init_op in init_constructs {
+            if init_op.deref(ctx).get_result(0).num_uses(ctx) == 0 {
+                rewriter.erase_operation(ctx, init_op);
+            }
+        }
+        collapsed += 1;
+    }
+
+    collapsed
+}
+
+/// Forward whole-aggregate `MirAllocaOp` slots that have a single non-volatile `MirStoreOp`
+/// and only non-volatile `MirLoadOp` readers dominated by that store (collapsing inlined return
+/// copy chains `_tmp1 -> _tmp2 -> dst` that `mem2reg` skips on struct/array types).
+fn forward_single_store_aggregate_copies(
+    module: Ptr<Operation>,
+    ctx: &mut Context,
+    analyses: &mut AnalysisManager,
+) -> Result<usize> {
+    let mut operations = Vec::new();
+    collect_allocas(ctx, module, &mut operations);
+    let mut forwarded = 0;
+
+    for operation in operations {
+        let root_pointer = operation.deref(ctx).get_result(0);
+        let mut store_op: Option<Ptr<Operation>> = None;
+        let mut load_ops: Vec<Ptr<Operation>> = Vec::new();
+        let mut valid = true;
+
+        for use_ref in root_pointer.uses(ctx) {
+            let user = use_ref.user_op();
+            let idx = use_ref.find_index(ctx);
+            if idx != 0 {
+                valid = false;
+                break;
+            }
+            if let Some(store) = Operation::get_op::<MirStoreOp>(user, ctx) {
+                if store.is_volatile(ctx) || store_op.is_some() {
+                    valid = false;
+                    break;
+                }
+                store_op = Some(user);
+            } else if let Some(load) = Operation::get_op::<MirLoadOp>(user, ctx) {
+                if load.is_volatile(ctx) {
+                    valid = false;
+                    break;
+                }
+                load_ops.push(user);
+            } else {
+                valid = false;
+                break;
+            }
+        }
+        if !valid || load_ops.is_empty() {
+            continue;
+        }
+        let Some(store_op) = store_op else {
+            continue;
+        };
+        let stored_value = store_op.deref(ctx).get_operand(1);
+        let Some(store_block) = store_op.deref(ctx).get_parent_block() else {
+            continue;
+        };
+        let Some(region) = store_block.deref(ctx).get_parent_region() else {
+            continue;
+        };
+        let mut dom_info = analyses.get_analysis_mut::<DomInfo>(module, ctx)?;
+        let dom = dom_info.get_dom_tree(ctx, region);
+
+        if let Some(val_op) = stored_value.defining_op() {
+            let Some(val_block) = val_op.deref(ctx).get_parent_block() else {
+                continue;
+            };
+            if val_block.deref(ctx).get_parent_region() != Some(region) {
+                continue;
+            }
+            if val_block == store_block {
+                if !operation_precedes(ctx, val_op, store_op) {
+                    continue;
+                }
+            } else if !dom.dominates(&val_block, &store_block) {
+                continue;
+            }
+        }
+
+        let mut all_dominated = true;
+        for &load_op in &load_ops {
+            if load_op.deref(ctx).get_result(0).get_type(ctx) != stored_value.get_type(ctx) {
+                all_dominated = false;
+                break;
+            }
+            let Some(load_block) = load_op.deref(ctx).get_parent_block() else {
+                all_dominated = false;
+                break;
+            };
+            if load_block.deref(ctx).get_parent_region() != Some(region) {
+                all_dominated = false;
+                break;
+            }
+            if load_block == store_block {
+                if !operation_precedes(ctx, store_op, load_op) {
+                    all_dominated = false;
+                    break;
+                }
+            } else if !dom.dominates(&store_block, &load_block) {
+                all_dominated = false;
+                break;
+            }
+        }
+        if !all_dominated {
+            continue;
+        }
+
+        let mut rewriter = IRRewriter::<Recorder>::default();
+        for load_op in load_ops {
+            let old_res = load_op.deref(ctx).get_result(0);
+            old_res.replace_all_uses_with(ctx, &stored_value);
+            rewriter.erase_operation(ctx, load_op);
+            forwarded += 1;
+        }
+        rewriter.erase_operation(ctx, store_op);
+    }
+
+    Ok(forwarded)
 }
 
 fn collect_ops(ctx: &Context, root: Ptr<Operation>, output: &mut Vec<Ptr<Operation>>) {
@@ -134,11 +496,21 @@ fn collect_ops(ctx: &Context, root: Ptr<Operation>, output: &mut Vec<Ptr<Operati
     }
 }
 
-fn analyze_marked_bundle(ctx: &Context, outer: Ptr<Operation>) -> Option<ForwardingPlan> {
+fn analyze_marked_bundle(
+    ctx: &Context,
+    outer: Ptr<Operation>,
+    require_marker: bool,
+) -> Option<ForwardingPlan> {
+    if !is_construct_op(ctx, outer) {
+        return None;
+    }
     let key = COMPILER_RESULT_BUNDLE_ATTR_KEY.try_into().ok()?;
-    let outer_ref = outer.deref(ctx);
-    let marker = outer_ref.attributes.get::<CompilerResultBundleAttr>(&key)?;
-    if !marker.0 || !is_construct_op(ctx, outer) {
+    let is_marked = outer
+        .deref(ctx)
+        .attributes
+        .get::<CompilerResultBundleAttr>(&key)
+        .is_some_and(|marker| marker.0);
+    if require_marker && !is_marked {
         return None;
     }
 
@@ -160,25 +532,32 @@ fn analyze_marked_bundle(ctx: &Context, outer: Ptr<Operation>) -> Option<Forward
     let mut bundle_nodes = Vec::new();
     let mut leaves = Vec::new();
     flatten_construct_tree(ctx, outer_value, &mut bundle_nodes, &mut leaves)?;
-    let first_leaf = *leaves.first()?;
-    let producer = first_leaf.defining_op()?;
-    if producer.deref(ctx).get_num_results() != leaves.len() || leaves.len() <= 1 {
+    if leaves.is_empty() {
         return None;
     }
-    for (index, leaf) in leaves.iter().enumerate() {
-        if *leaf != producer.deref(ctx).get_result(index)
-            || leaf.defining_op() != Some(producer)
-            || leaf.num_uses(ctx) != 1
-        {
+    let store_block = store_op.deref(ctx).get_parent_block()?;
+    let producer_block = if is_marked {
+        let first_leaf = *leaves.first()?;
+        let producer = first_leaf.defining_op()?;
+        if producer.deref(ctx).get_num_results() != leaves.len() || leaves.len() <= 1 {
             return None;
         }
-    }
-
-    let producer_block = producer.deref(ctx).get_parent_block()?;
-    let store_block = store_op.deref(ctx).get_parent_block()?;
-    if producer_block != store_block || !operation_precedes(ctx, producer, store_op) {
-        return None;
-    }
+        for (index, leaf) in leaves.iter().enumerate() {
+            if *leaf != producer.deref(ctx).get_result(index)
+                || leaf.defining_op() != Some(producer)
+                || leaf.num_uses(ctx) != 1
+            {
+                return None;
+            }
+        }
+        let pb = producer.deref(ctx).get_parent_block()?;
+        if pb != store_block || !operation_precedes(ctx, producer, store_op) {
+            return None;
+        }
+        pb
+    } else {
+        store_block
+    };
     if bundle_nodes.iter().any(|node| {
         node.deref(ctx).get_parent_block() != Some(store_block)
             || !operation_precedes(ctx, *node, store_op)
@@ -215,12 +594,20 @@ fn analyze_marked_bundle(ctx: &Context, outer: Ptr<Operation>) -> Option<Forward
     if loads.is_empty() {
         return None;
     }
+    if !is_marked
+        && loads
+            .iter()
+            .any(|l| matches!(l.replacement, LoadReplacement::BoundedArrayElement { .. }))
+    {
+        return None;
+    }
 
     Some(ForwardingPlan {
         store: store_op,
         bundle_nodes,
         projection_nodes,
         loads,
+        leaves,
         producer_block,
         store_block,
     })
@@ -512,6 +899,23 @@ fn domination_is_proven(
 
     let mut dom_info = analyses.get_analysis_mut::<DomInfo>(module, ctx)?;
     let dom = dom_info.get_dom_tree(ctx, region);
+    for &leaf in &plan.leaves {
+        if let Some(leaf_op) = leaf.defining_op() {
+            let Some(leaf_block) = leaf_op.deref(ctx).get_parent_block() else {
+                return Ok(false);
+            };
+            if leaf_block.deref(ctx).get_parent_region() != Some(region) {
+                return Ok(false);
+            }
+            if leaf_block == plan.store_block {
+                if !operation_precedes(ctx, leaf_op, plan.store) {
+                    return Ok(false);
+                }
+            } else if !dom.dominates(&leaf_block, &plan.store_block) {
+                return Ok(false);
+            }
+        }
+    }
     for load in &plan.loads {
         let Some(load_block) = load.load.deref(ctx).get_parent_block() else {
             return Ok(false);

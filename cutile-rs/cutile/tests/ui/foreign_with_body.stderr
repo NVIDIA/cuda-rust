@@ -1,0 +1,8 @@
+error: a `#[cutile::foreign]` function is a declaration of a tile-library function: end its signature with `;` instead of giving it a body
+  --> tests/ui/foreign_with_body.rs:8:91
+   |
+ 8 |       pub unsafe fn fft<const N: i32>(#[inout] x: Tile<f32, { [N] }>) -> Tile<f32, { [N] }> {
+   |  ___________________________________________________________________________________________^
+ 9 | |         x
+10 | |     }
+   | |_____^

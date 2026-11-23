@@ -39,16 +39,26 @@ const LAYOUT: &str = "cute_layout::markers::Layout";
 const ROW_MAJOR: &str = "cute_layout::markers::RowMajor";
 /// Exact defining path of `cute_layout::markers::ColMajor`; public reexports do not change it.
 const COL_MAJOR: &str = "cute_layout::markers::ColMajor";
-/// Exact defining path of `cute_rs::markers::CopyG2S`; public reexports do not change it.
-const COPY_G2S: &str = "cute_rs::markers::CopyG2S";
-/// Exact defining path of `cute_rs::markers::LeadingDim`; public reexports do not change it.
-const LEADING_DIM: &str = "cute_rs::markers::LeadingDim";
+/// Exact defining path of `cute_rs::layout::CopyG2S`; public reexports do not change it.
+const COPY_G2S: &str = "cute_rs::layout::CopyG2S";
+/// Exact defining path of `cute_rs::layout::LeadingDim`; public reexports do not change it.
+const LEADING_DIM: &str = "cute_rs::layout::LeadingDim";
 /// Exact defining path of `cute_layout::markers::Swizzle`; public reexports do not change it.
 const SWIZZLE: &str = "cute_layout::markers::Swizzle";
 /// Exact defining path of `cute_layout::markers::ComposedLayout`; public reexports do not change it.
 const COMPOSED: &str = "cute_layout::markers::ComposedLayout";
 /// Exact defining path of `cute_rs::numeric::BFloat16`; public reexports do not change it.
 const BFLOAT16: &str = "cute_rs::numeric::BFloat16";
+/// Exact defining path of `cute_rs::numeric::Float8E4M3FN`; public reexports do not change it.
+const FLOAT8_E4M3FN: &str = "cute_rs::numeric::Float8E4M3FN";
+/// Exact defining path of `cute_rs::nvgpu::tcgen05::mma::CollectorDiscard`.
+const COLLECTOR_DISCARD: &str = "cute_rs::nvgpu::tcgen05::mma::CollectorDiscard";
+/// Exact defining path of `cute_rs::nvgpu::tcgen05::mma::CollectorLastUse`.
+const COLLECTOR_LASTUSE: &str = "cute_rs::nvgpu::tcgen05::mma::CollectorLastUse";
+/// Exact defining path of `cute_rs::nvgpu::tcgen05::mma::CollectorFill`.
+const COLLECTOR_FILL: &str = "cute_rs::nvgpu::tcgen05::mma::CollectorFill";
+/// Exact defining path of `cute_rs::nvgpu::tcgen05::mma::CollectorUse`.
+const COLLECTOR_USE: &str = "cute_rs::nvgpu::tcgen05::mma::CollectorUse";
 
 /// Validated cooperative-copy instruction width.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,6 +127,10 @@ fn cooperative_element(ty: &Ty) -> Result<(i64, &'static str), String> {
         TyKind::RigidTy(RigidTy::Adt(def, args)) if canonical_adt_path(&def) == BFLOAT16 => {
             expect_schema(&args, &[], BFLOAT16)?;
             (2, "BFloat16")
+        }
+        TyKind::RigidTy(RigidTy::Adt(def, args)) if canonical_adt_path(&def) == FLOAT8_E4M3FN => {
+            expect_schema(&args, &[], FLOAT8_E4M3FN)?;
+            (1, "Float8E4M3FN")
         }
         _ => {
             return Err(format!(
@@ -413,6 +427,36 @@ pub(crate) fn decode_attention_layout(ty: &Ty) -> Result<(ComposedLayout, bool),
     ))
 }
 
+/// Decode a 16-bit `tcgen05` element marker (`f16` -> `false`, `BFloat16` -> `true`).
+pub(crate) fn decode_mma_half_is_bf16(ty: &Ty) -> Result<bool, String> {
+    match ty.kind() {
+        TyKind::RigidTy(RigidTy::Float(FloatTy::F16)) => Ok(false),
+        TyKind::RigidTy(RigidTy::Adt(def, args)) if canonical_adt_path(&def) == BFLOAT16 => {
+            expect_schema(&args, &[], BFLOAT16)?;
+            Ok(true)
+        }
+        _ => Err(format!(
+            "expected `f16` or `BFloat16` for 16-bit tcgen05 operation, found {ty:?}"
+        )),
+    }
+}
+
+/// Decode a type-level SM107 collector marker into `0..=3` (`Discard`, `LastUse`, `Fill`, `Use`).
+pub(crate) fn decode_collector_marker(ty: &Ty) -> Result<u32, String> {
+    let TyKind::RigidTy(RigidTy::Adt(def, args)) = ty.kind() else {
+        return Err(format!("collector marker must be an ADT, found {ty:?}"));
+    };
+    let path = canonical_adt_path(&def);
+    expect_schema(&args, &[], &path)?;
+    match path.as_str() {
+        COLLECTOR_DISCARD => Ok(0),
+        COLLECTOR_LASTUSE => Ok(1),
+        COLLECTOR_FILL => Ok(2),
+        COLLECTOR_USE => Ok(3),
+        _ => Err(format!("unsupported SM107 collector marker `{path}`")),
+    }
+}
+
 /// Decode the supported plain or composed shared-memory layout markers.
 pub(crate) fn decode_smem_layout(ty: &Ty) -> Result<ComposedLayout, String> {
     if let TyKind::RigidTy(RigidTy::Adt(def, args)) = ty.kind()
@@ -443,7 +487,7 @@ pub(crate) fn decode_cooperative_config(args: &GenericArgs) -> Result<Cooperativ
     expect_schema(
         args,
         &["Type", "Type", "Type", "Type", "Type", "Type", "Type"],
-        "cute_rs::copy::cooperative::copy_g2s",
+        "cute_rs::atom::cooperative::copy_g2s",
     )?;
     let atom = decode_atom(&type_arg(args, 0, "copy_g2s")?)?;
     let thread_layout = decode_layout(&type_arg(args, 1, "copy_g2s")?)?;
@@ -515,7 +559,11 @@ pub(crate) fn decode_load_matrix_callee(func: &mir::Operand) -> Result<MatrixLoa
     let TyKind::RigidTy(RigidTy::FnDef(_, args)) = constant.const_.ty().kind() else {
         return Err("load_matrix callee is not a FnDef".to_string());
     };
-    expect_schema(&args, &["Type", "Type"], "cute_rs::mma::load_matrix")?;
+    expect_schema(
+        &args,
+        &["Type", "Type"],
+        "cute_rs::nvgpu::warp::load_matrix",
+    )?;
     let element_type = type_arg(&args, 1, "load_matrix")?;
     let (element_bytes, _) = cooperative_element(&element_type)?;
     if element_bytes != 2 {
@@ -571,7 +619,11 @@ pub(crate) fn decode_copy_tma_callee(func: &mir::Operand) -> Result<TmaCopyConfi
     let TyKind::RigidTy(RigidTy::FnDef(_, args)) = constant.const_.ty().kind() else {
         return Err("copy_tma_2d callee is not a FnDef".to_string());
     };
-    expect_schema(&args, &["Type", "Type"], "cute_rs::copy::tma::copy_tma_2d")?;
+    expect_schema(
+        &args,
+        &["Type", "Type"],
+        "cute_rs::nvgpu::cpasync::copy_tma_2d",
+    )?;
     let element_type = type_arg(&args, 0, "copy_tma_2d")?;
     let (element_bytes, _) = cooperative_element(&element_type)?;
     let smem_layout = decode_smem_layout(&type_arg(&args, 1, "copy_tma_2d")?)?;
@@ -596,7 +648,7 @@ pub(crate) fn decode_copy_tma_s2g_callee(func: &mir::Operand) -> Result<TmaCopyC
     expect_schema(
         &args,
         &["Type", "Type"],
-        "cute_rs::copy::tma::copy_tma_s2g_2d",
+        "cute_rs::nvgpu::cpasync::copy_tma_s2g_2d",
     )?;
     let element_type = type_arg(&args, 0, "copy_tma_s2g_2d")?;
     let (element_bytes, _) = cooperative_element(&element_type)?;

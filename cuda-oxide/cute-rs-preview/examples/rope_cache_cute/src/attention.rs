@@ -4,10 +4,10 @@
  */
 //! Checked synchronous attention over borrowed, completed BF16 cache prefixes.
 use crate::attention_kernel::{PARTIAL_SHARED_BYTES, STATE_SIZE, kernels};
+use crate::attention_metadata::{AttentionShape, AttentionWindow};
 use crate::operator::{GUARD_LEN, Result};
 use cuda_core::{CudaStream, DeviceBuffer, LaunchConfig1D};
 use cute_rs::BFloat16;
-use cute_rs::attention::{AttentionShape, AttentionWindow};
 use std::sync::Arc;
 
 /// Host-checked launch sizes for the fixed 128-wide split-KV schedule.

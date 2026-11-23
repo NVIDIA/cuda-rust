@@ -1,6 +1,6 @@
 [package]
 name = "mir-importer"
-version = "0.3.0"
+version = "0.4.0"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -10,6 +10,7 @@ readme = "README.md"
 
 [dependencies]
 rustc-hash = { workspace = true }
+sha2 = { workspace = true }
 pliron = { workspace = true }
 pliron-derive = { workspace = true }
 llvm-export = { workspace = true }
@@ -19,6 +20,7 @@ dialect-nvvm = { workspace = true }
 dialect-cute = { workspace = true }
 cute-layout = { workspace = true }
 mir-lower = { workspace = true }
+cuda-artifact-finalizer = { workspace = true }
 oxide-artifacts = { workspace = true }
 cuda-oxide-codegen = { workspace = true }
 reserved-oxide-symbols = { workspace = true }

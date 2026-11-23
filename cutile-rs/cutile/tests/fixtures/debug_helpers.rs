@@ -15,7 +15,9 @@ pub mod debug_helpers {
 
     pub fn generated<const VALUES: [i32; 2], const FLAG: bool>(x: i32) -> i32 {
         if FLAG {
-            x + VALUES[0] + VALUES[1]
+            // Keep a distinct runtime operation in this helper. An addition-only
+            // chain folds into the outer helper's add, merging source locations.
+            (x / VALUES[0]) + VALUES[1]
         } else {
             x
         }

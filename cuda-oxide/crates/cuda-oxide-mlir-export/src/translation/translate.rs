@@ -71,6 +71,8 @@ pub struct TranslationSession<'a> {
     blocks: HashMap<Ptr<BasicBlock>, MlirBlockId>,
     next_value: u64,
     next_block: u64,
+    pub(crate) smem_desc_cache: HashMap<(MlirValueId, i128), MlirValueUse>,
+    pub(crate) idesc_cache: HashMap<(MlirValueId, u32), MlirValueUse>,
 }
 
 impl<'a> TranslationSession<'a> {
@@ -160,6 +162,8 @@ pub fn translate_module(
         blocks: HashMap::new(),
         next_value: 0,
         next_block: 0,
+        smem_desc_cache: HashMap::new(),
+        idesc_cache: HashMap::new(),
     };
     let mut next_block = 0;
     index_operation(module.get_operation(), ctx, &mut session, &mut next_block);
@@ -423,6 +427,8 @@ fn translate_region(
         }
         let operations = block_ref.iter(ctx).collect::<Vec<_>>();
         drop(block_ref);
+        session.smem_desc_cache.clear();
+        session.idesc_cache.clear();
         let mut translated_operations = vec![];
         for operation in operations {
             translated_operations.extend(translate_operation(operation, session)?);

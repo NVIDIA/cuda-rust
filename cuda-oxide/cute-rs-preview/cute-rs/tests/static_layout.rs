@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 //! Static offset-span validation, including layouts with a tiny logical extent.
-use cute_rs::markers::{C, ComposedLayout, Layout, RowMajor, Swizzle};
+use cute_rs::layout::{C, ComposedLayout, Layout, RowMajor, Swizzle};
 use cute_rs::static_layout::StaticLayout;
 
 #[test]

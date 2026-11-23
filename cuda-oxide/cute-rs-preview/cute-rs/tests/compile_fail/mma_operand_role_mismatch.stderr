@@ -9,7 +9,7 @@ error[E0308]: mismatched types
    = note: expected reference `&SharedTensor<Mxf4E2M1, f16, (), Mkl>`
               found reference `&SharedTensor<Mxf4E2M1, f16, (), Nkl>`
 note: method defined here
-  --> src/mma/block_scaled/tiled.rs
+  --> src/nvgpu/warp/block_scaled/tiled.rs
    |
    |     pub unsafe fn load_a(
    |                   ^^^^^^

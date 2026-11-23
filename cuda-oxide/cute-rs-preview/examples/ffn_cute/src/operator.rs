@@ -3,13 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 //! Checked composition using existing buffer ownership and typed weight roles.
+use crate::ffn::{FfnShape, FfnWeights};
 use crate::kernel::kernels;
 use cuda_core::LaunchConfig;
 use cuda_core::{CudaStream, DeviceBuffer};
-use cute_rs::{
-    BFloat16,
-    ffn::{FfnShape, FfnWeights},
-};
+use cute_rs::BFloat16;
 use std::sync::Arc;
 
 /// Host result carrying CUDA failures and rejected shape or context contracts.

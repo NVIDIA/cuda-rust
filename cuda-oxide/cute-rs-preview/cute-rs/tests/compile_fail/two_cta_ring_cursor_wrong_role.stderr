@@ -9,7 +9,7 @@ error[E0308]: mismatched types
    = note: expected struct `RingCursor<15, Producer>`
               found struct `RingCursor<15, Consumer>`
 note: method defined here
-  --> src/attention/sm100/pipeline.rs
+  --> src/pipeline/sm100.rs
    |
    |     pub unsafe fn acquire_cursor(self, cursor: RingCursor<STAGES, Producer>) {
    |                   ^^^^^^^^^^^^^^
@@ -25,7 +25,7 @@ error[E0308]: mismatched types
    = note: expected struct `RingCursor<15, Consumer>`
               found struct `RingCursor<15, Producer>`
 note: method defined here
-  --> src/attention/sm100/pipeline.rs
+  --> src/pipeline/sm100.rs
    |
    |     pub unsafe fn wait_cursor(self, cursor: RingCursor<STAGES, Consumer>) {
    |                   ^^^^^^^^^^^
@@ -41,7 +41,7 @@ error[E0308]: mismatched types
    = note: expected struct `RingCursor<15, Producer>`
               found struct `RingCursor<15, Consumer>`
 note: method defined here
-  --> src/attention/sm100/pipeline.rs
+  --> src/pipeline/sm100.rs
    |
    |     pub unsafe fn mma_full_cursor(self, cursor: RingCursor<STAGES, Producer>)
    |                   ^^^^^^^^^^^^^^^
@@ -57,7 +57,7 @@ error[E0308]: mismatched types
    = note: expected struct `RingCursor<15, Consumer>`
               found struct `RingCursor<15, Producer>`
 note: method defined here
-  --> src/attention/sm100/pipeline.rs
+  --> src/pipeline/sm100.rs
    |
    |     pub unsafe fn mma_empty_cursor(self, cursor: RingCursor<STAGES, Consumer>)
    |                   ^^^^^^^^^^^^^^^^

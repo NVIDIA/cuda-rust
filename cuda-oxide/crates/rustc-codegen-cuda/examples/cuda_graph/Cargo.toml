@@ -1,0 +1,19 @@
+[package]
+name = "cuda_graph"
+version = "0.1.0"
+edition = "2024"
+authors = ["Vyncint Ng <115854244+vyncint@users.noreply.github.com>"]
+license = "Apache-2.0"
+
+# Mark as standalone crate (not part of parent workspace)
+[workspace]
+
+# This example captures SIMT kernel launches into a replayable CUDA graph.
+# Build with:
+#   cargo oxide run cuda_graph
+
+[dependencies]
+cuda-device = { path = "../../../cuda-device" }
+cuda-host = { path = "../../../cuda-host", features = ["async"] }
+cuda-core = { path = "../../../../../cuda-core" }
+cuda-async = { path = "../../../../../cuda-async" }

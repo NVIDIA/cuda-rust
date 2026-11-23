@@ -24,7 +24,7 @@
 use dialect_mir::types::{MirPtrType, address_space};
 use pliron::builtin::{
     op_interfaces::{NOpdsInterface, NResultsInterface, OneOpdInterface, OneResultInterface},
-    types::{IntegerType, Signedness},
+    types::{FP32Type, IntegerType, Signedness},
 };
 use pliron::common_traits::Verify;
 use pliron::context::{Context, Ptr};
@@ -33,8 +33,8 @@ use pliron::operation::Operation;
 use pliron::result::Error;
 use pliron::r#type::{TypeHandle, Typed};
 use pliron::value::Value;
-use pliron::verify_err;
-use pliron_derive::pliron_op;
+use pliron::{verify_err, verify_err_noloc};
+use pliron_derive::{pliron_attr, pliron_op};
 
 use crate::attributes::{
     CuteAlignmentAttr, CuteTensorAccessAttr, CuteTensorAddressSpaceAttr, CuteTensorLayoutAttr,
@@ -786,6 +786,729 @@ impl Verify for CuteTensorStoreElementAbsOp {
             return verify_err!(
                 op.loc(),
                 "cute.tensor_store_element_abs value must match the tensor logical type"
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Convert one `f32` scalar to one 16-bit `BFloat16` word (`u16`) with round-to-nearest-even
+/// (CuTeDSL `val.to(cutlass.BFloat16)`).
+#[pliron_op(
+    name = "cute.convert_f32_to_bf16",
+    format,
+    interfaces = [NOpdsInterface<1>, NResultsInterface<1>, OneOpdInterface, OneResultInterface]
+)]
+pub struct CuteConvertF32ToBf16Op;
+
+impl CuteConvertF32ToBf16Op {
+    /// Build a detached `f32 -> BFloat16 (u16)` conversion op.
+    pub fn new(ctx: &mut Context, value: Value) -> Self {
+        let result_ty = IntegerType::get(ctx, 16, Signedness::Unsigned).into();
+        Self {
+            op: Operation::new(
+                ctx,
+                Self::get_concrete_op_info(),
+                vec![result_ty],
+                vec![value],
+                vec![],
+                0,
+            ),
+        }
+    }
+
+    /// View an existing operation through this wrapper without allocating or verifying it.
+    pub fn wrap(op: Ptr<Operation>) -> Self {
+        Self { op }
+    }
+}
+
+impl Verify for CuteConvertF32ToBf16Op {
+    fn verify(&self, ctx: &Context) -> Result<(), Error> {
+        let op = self.get_operation().deref(ctx);
+        if op.get_num_operands() != 1 || op.get_num_results() != 1 {
+            return verify_err!(
+                op.loc(),
+                "cute.convert_f32_to_bf16 needs 1 operand and 1 result"
+            );
+        }
+        if op.get_operand(0).get_type(ctx) != FP32Type::get(ctx).into() {
+            return verify_err!(op.loc(), "cute.convert_f32_to_bf16 operand must be f32");
+        }
+        if op.get_result(0).get_type(ctx) != IntegerType::get(ctx, 16, Signedness::Unsigned).into()
+        {
+            return verify_err!(op.loc(), "cute.convert_f32_to_bf16 result must be u16");
+        }
+        Ok(())
+    }
+}
+
+/// Convert one `f32` scalar to one 8-bit `Float8E4M3FN` byte (`u8`) with nearest-even saturation
+/// (CuTeDSL `val.to(cutlass.Float8E4M3FN)`).
+#[pliron_op(
+    name = "cute.convert_f32_to_e4m3",
+    format,
+    interfaces = [NOpdsInterface<1>, NResultsInterface<1>, OneOpdInterface, OneResultInterface]
+)]
+pub struct CuteConvertF32ToE4m3Op;
+
+impl CuteConvertF32ToE4m3Op {
+    /// Build a detached `f32 -> Float8E4M3FN (u8)` conversion op.
+    pub fn new(ctx: &mut Context, value: Value) -> Self {
+        let result_ty = IntegerType::get(ctx, 8, Signedness::Unsigned).into();
+        Self {
+            op: Operation::new(
+                ctx,
+                Self::get_concrete_op_info(),
+                vec![result_ty],
+                vec![value],
+                vec![],
+                0,
+            ),
+        }
+    }
+
+    /// View an existing operation through this wrapper without allocating or verifying it.
+    pub fn wrap(op: Ptr<Operation>) -> Self {
+        Self { op }
+    }
+}
+
+impl Verify for CuteConvertF32ToE4m3Op {
+    fn verify(&self, ctx: &Context) -> Result<(), Error> {
+        let op = self.get_operation().deref(ctx);
+        if op.get_num_operands() != 1 || op.get_num_results() != 1 {
+            return verify_err!(
+                op.loc(),
+                "cute.convert_f32_to_e4m3 needs 1 operand and 1 result"
+            );
+        }
+        if op.get_operand(0).get_type(ctx) != FP32Type::get(ctx).into() {
+            return verify_err!(op.loc(), "cute.convert_f32_to_e4m3 operand must be f32");
+        }
+        if op.get_result(0).get_type(ctx) != IntegerType::get(ctx, 8, Signedness::Unsigned).into() {
+            return verify_err!(op.loc(), "cute.convert_f32_to_e4m3 result must be u8");
+        }
+        Ok(())
+    }
+}
+
+/// Widen one 8-bit `Float8E4M3FN` byte (`u8`) to `f32` (CuTeDSL `val.to(cutlass.Float32)`).
+#[pliron_op(
+    name = "cute.convert_e4m3_to_f32",
+    format,
+    interfaces = [NOpdsInterface<1>, NResultsInterface<1>, OneOpdInterface, OneResultInterface]
+)]
+pub struct CuteConvertE4m3ToF32Op;
+
+impl CuteConvertE4m3ToF32Op {
+    /// Build a detached `Float8E4M3FN (u8) -> f32` widening op.
+    pub fn new(ctx: &mut Context, bits: Value) -> Self {
+        let result_ty = FP32Type::get(ctx).into();
+        Self {
+            op: Operation::new(
+                ctx,
+                Self::get_concrete_op_info(),
+                vec![result_ty],
+                vec![bits],
+                vec![],
+                0,
+            ),
+        }
+    }
+
+    /// View an existing operation through this wrapper without allocating or verifying it.
+    pub fn wrap(op: Ptr<Operation>) -> Self {
+        Self { op }
+    }
+}
+
+impl Verify for CuteConvertE4m3ToF32Op {
+    fn verify(&self, ctx: &Context) -> Result<(), Error> {
+        let op = self.get_operation().deref(ctx);
+        if op.get_num_operands() != 1 || op.get_num_results() != 1 {
+            return verify_err!(
+                op.loc(),
+                "cute.convert_e4m3_to_f32 needs 1 operand and 1 result"
+            );
+        }
+        if op.get_operand(0).get_type(ctx) != IntegerType::get(ctx, 8, Signedness::Unsigned).into()
+        {
+            return verify_err!(op.loc(), "cute.convert_e4m3_to_f32 operand must be u8");
+        }
+        if op.get_result(0).get_type(ctx) != FP32Type::get(ctx).into() {
+            return verify_err!(op.loc(), "cute.convert_e4m3_to_f32 result must be f32");
+        }
+        Ok(())
+    }
+}
+
+/// Convert 8 `f32` values into 8 packed 4-bit `Float4E2M1FN` nibbles in one `u32`
+/// (CuTeDSL `vec.to(cutlass.Float4E2M1FN)`).
+#[pliron_op(
+    name = "cute.convert_f32x8_to_e2m1x8",
+    format,
+    interfaces = [NOpdsInterface<8>, NResultsInterface<1>, OneResultInterface]
+)]
+pub struct CuteConvertF32x8ToE2m1x8Op;
+
+impl CuteConvertF32x8ToE2m1x8Op {
+    /// Build a detached `8 × f32 -> packed e2m1x8 (u32)` conversion op.
+    pub fn new(ctx: &mut Context, values: Vec<Value>) -> Self {
+        let result_ty = IntegerType::get(ctx, 32, Signedness::Unsigned).into();
+        Self {
+            op: Operation::new(
+                ctx,
+                Self::get_concrete_op_info(),
+                vec![result_ty],
+                values,
+                vec![],
+                0,
+            ),
+        }
+    }
+
+    /// View an existing operation through this wrapper without allocating or verifying it.
+    pub fn wrap(op: Ptr<Operation>) -> Self {
+        Self { op }
+    }
+}
+
+impl Verify for CuteConvertF32x8ToE2m1x8Op {
+    fn verify(&self, ctx: &Context) -> Result<(), Error> {
+        let op = self.get_operation().deref(ctx);
+        if op.get_num_operands() != 8 || op.get_num_results() != 1 {
+            return verify_err!(
+                op.loc(),
+                "cute.convert_f32x8_to_e2m1x8 needs 8 operands and 1 result"
+            );
+        }
+        let f32_ty = FP32Type::get(ctx).into();
+        for i in 0..8 {
+            if op.get_operand(i).get_type(ctx) != f32_ty {
+                return verify_err!(
+                    op.loc(),
+                    "cute.convert_f32x8_to_e2m1x8 operands must all be f32"
+                );
+            }
+        }
+        if op.get_result(0).get_type(ctx) != IntegerType::get(ctx, 32, Signedness::Unsigned).into()
+        {
+            return verify_err!(op.loc(), "cute.convert_f32x8_to_e2m1x8 result must be u32");
+        }
+        Ok(())
+    }
+}
+
+/// Static opcode and offset metadata for `RegisterTile` (`TensorSSA`) vector operations.
+#[pliron_attr(name = "cute.vector_op", format = "`<` $kind `,` $extra `>`")]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CuteVectorOpAttr {
+    /// Operation variant selector (`Add`/`Sub`/`Mul`/`Div`/`Max`, `Neg`/`Abs`, `ReductionOp`, or `CastKind`).
+    pub kind: u64,
+    /// Auxiliary static parameter (such as slice `OFFSET`).
+    pub extra: u64,
+}
+
+impl Verify for CuteVectorOpAttr {
+    fn verify(&self, _ctx: &Context) -> Result<(), Error> {
+        if self.kind > 16 {
+            return verify_err_noloc!("invalid cute.vector_op kind");
+        }
+        Ok(())
+    }
+}
+
+/// Broadcast one scalar into an `N`-lane register vector (`vector.broadcast : T to vector<NxT>`).
+#[pliron_op(name = "cute.vector_broadcast", format)]
+pub struct CuteVectorBroadcastOp;
+
+impl CuteVectorBroadcastOp {
+    /// Build a detached `1 -> N` scalar broadcast op.
+    pub fn new(ctx: &mut Context, value: Value, lane_ty: TypeHandle, lanes: usize) -> Self {
+        Self {
+            op: Operation::new(
+                ctx,
+                Self::get_concrete_op_info(),
+                vec![lane_ty; lanes],
+                vec![value],
+                vec![],
+                0,
+            ),
+        }
+    }
+
+    /// View an existing operation through this wrapper without allocating or verifying it.
+    pub fn wrap(op: Ptr<Operation>) -> Self {
+        Self { op }
+    }
+}
+
+impl Verify for CuteVectorBroadcastOp {
+    fn verify(&self, ctx: &Context) -> Result<(), Error> {
+        let op = self.get_operation().deref(ctx);
+        if op.get_num_operands() != 1 || op.get_num_results() == 0 {
+            return verify_err!(
+                op.loc(),
+                "cute.vector_broadcast needs 1 operand and >= 1 results"
+            );
+        }
+        let ty = op.get_operand(0).get_type(ctx);
+        for i in 0..op.get_num_results() {
+            if op.get_result(i).get_type(ctx) != ty {
+                return verify_err!(
+                    op.loc(),
+                    "cute.vector_broadcast result types must match operand type"
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Elementwise binary operation on two `N`-lane register vectors (`vector<NxT>`).
+///
+/// `kind`: `0 = Add`, `1 = Sub`, `2 = Mul`, `3 = Div`.
+#[pliron_op(
+    name = "cute.vector_binary",
+    format,
+    attributes = (vec_bin_op: CuteVectorOpAttr)
+)]
+pub struct CuteVectorBinaryOp;
+
+impl CuteVectorBinaryOp {
+    /// Build a detached `2*N -> N` vector binary op.
+    pub fn new(
+        ctx: &mut Context,
+        operands: Vec<Value>,
+        lane_ty: TypeHandle,
+        lanes: usize,
+        kind: u64,
+    ) -> Self {
+        let op = Self {
+            op: Operation::new(
+                ctx,
+                Self::get_concrete_op_info(),
+                vec![lane_ty; lanes],
+                operands,
+                vec![],
+                0,
+            ),
+        };
+        op.set_attr_vec_bin_op(ctx, CuteVectorOpAttr { kind, extra: 0 });
+        op
+    }
+
+    /// View an existing operation through this wrapper without allocating or verifying it.
+    pub fn wrap(op: Ptr<Operation>) -> Self {
+        Self { op }
+    }
+}
+
+impl Verify for CuteVectorBinaryOp {
+    fn verify(&self, ctx: &Context) -> Result<(), Error> {
+        let op = self.get_operation().deref(ctx);
+        let n = op.get_num_results();
+        if n == 0 || op.get_num_operands() != 2 * n {
+            return verify_err!(
+                op.loc(),
+                "cute.vector_binary needs 2*N operands and N >= 1 results"
+            );
+        }
+        let ty = op.get_result(0).get_type(ctx);
+        for i in 0..2 * n {
+            if op.get_operand(i).get_type(ctx) != ty {
+                return verify_err!(op.loc(), "cute.vector_binary operand types must match");
+            }
+        }
+        for i in 0..n {
+            if op.get_result(i).get_type(ctx) != ty {
+                return verify_err!(op.loc(), "cute.vector_binary result types must match");
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Elementwise binary operation between an `N`-lane register vector and a broadcast scalar
+/// (`vector.broadcast` + `arith.*` on `vector<NxT>`).
+///
+/// `kind`: `0 = Add`, `1 = Sub`, `2 = Mul`, `3 = Div`, `4 = Max`.
+#[pliron_op(
+    name = "cute.vector_scalar",
+    format,
+    attributes = (vec_scalar_op: CuteVectorOpAttr)
+)]
+pub struct CuteVectorScalarOp;
+
+impl CuteVectorScalarOp {
+    /// Build a detached `(N + 1) -> N` vector-scalar op.
+    pub fn new(
+        ctx: &mut Context,
+        operands: Vec<Value>,
+        lane_ty: TypeHandle,
+        lanes: usize,
+        kind: u64,
+    ) -> Self {
+        let op = Self {
+            op: Operation::new(
+                ctx,
+                Self::get_concrete_op_info(),
+                vec![lane_ty; lanes],
+                operands,
+                vec![],
+                0,
+            ),
+        };
+        op.set_attr_vec_scalar_op(ctx, CuteVectorOpAttr { kind, extra: 0 });
+        op
+    }
+
+    /// View an existing operation through this wrapper without allocating or verifying it.
+    pub fn wrap(op: Ptr<Operation>) -> Self {
+        Self { op }
+    }
+}
+
+impl Verify for CuteVectorScalarOp {
+    fn verify(&self, ctx: &Context) -> Result<(), Error> {
+        let op = self.get_operation().deref(ctx);
+        let n = op.get_num_results();
+        if n == 0 || op.get_num_operands() != n + 1 {
+            return verify_err!(
+                op.loc(),
+                "cute.vector_scalar needs N+1 operands and N >= 1 results"
+            );
+        }
+        let ty = op.get_result(0).get_type(ctx);
+        for i in 0..=n {
+            if op.get_operand(i).get_type(ctx) != ty {
+                return verify_err!(op.loc(), "cute.vector_scalar operand types must match");
+            }
+        }
+        for i in 0..n {
+            if op.get_result(i).get_type(ctx) != ty {
+                return verify_err!(op.loc(), "cute.vector_scalar result types must match");
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Elementwise unary operation on an `N`-lane register vector (`arith.negf` / `math.absf` on `vector<NxT>`).
+///
+/// `kind`: `0 = Neg`, `1 = Abs`.
+#[pliron_op(
+    name = "cute.vector_unary",
+    format,
+    attributes = (vec_unary_op: CuteVectorOpAttr)
+)]
+pub struct CuteVectorUnaryOp;
+
+impl CuteVectorUnaryOp {
+    /// Build a detached `N -> N` vector unary op.
+    pub fn new(
+        ctx: &mut Context,
+        operands: Vec<Value>,
+        lane_ty: TypeHandle,
+        lanes: usize,
+        kind: u64,
+    ) -> Self {
+        let op = Self {
+            op: Operation::new(
+                ctx,
+                Self::get_concrete_op_info(),
+                vec![lane_ty; lanes],
+                operands,
+                vec![],
+                0,
+            ),
+        };
+        op.set_attr_vec_unary_op(ctx, CuteVectorOpAttr { kind, extra: 0 });
+        op
+    }
+
+    /// View an existing operation through this wrapper without allocating or verifying it.
+    pub fn wrap(op: Ptr<Operation>) -> Self {
+        Self { op }
+    }
+}
+
+impl Verify for CuteVectorUnaryOp {
+    fn verify(&self, ctx: &Context) -> Result<(), Error> {
+        let op = self.get_operation().deref(ctx);
+        let n = op.get_num_results();
+        if n == 0 || op.get_num_operands() != n {
+            return verify_err!(
+                op.loc(),
+                "cute.vector_unary needs N operands and N >= 1 results"
+            );
+        }
+        let ty = op.get_result(0).get_type(ctx);
+        for i in 0..n {
+            if op.get_operand(i).get_type(ctx) != ty || op.get_result(i).get_type(ctx) != ty {
+                return verify_err!(op.loc(), "cute.vector_unary lane types must match");
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Horizontal reduction over an `N`-lane `f32` register vector (`vector.reduction` on `vector<Nxf32>`).
+///
+/// `kind`: `0 = Add`, `1 = Mul`, `2 = Max`, `3 = Min`.
+#[pliron_op(
+    name = "cute.vector_reduce",
+    format,
+    interfaces = [NResultsInterface<1>, OneResultInterface],
+    attributes = (vec_reduce_op: CuteVectorOpAttr)
+)]
+pub struct CuteVectorReduceOp;
+
+impl CuteVectorReduceOp {
+    /// Build a detached `(N + 1) -> 1` vector reduction op (`operands[0..N]` = lanes, `operands[N]` = init).
+    pub fn new(ctx: &mut Context, operands: Vec<Value>, kind: u64) -> Self {
+        let f32_ty = FP32Type::get(ctx).into();
+        let op = Self {
+            op: Operation::new(
+                ctx,
+                Self::get_concrete_op_info(),
+                vec![f32_ty],
+                operands,
+                vec![],
+                0,
+            ),
+        };
+        op.set_attr_vec_reduce_op(ctx, CuteVectorOpAttr { kind, extra: 0 });
+        op
+    }
+
+    /// View an existing operation through this wrapper without allocating or verifying it.
+    pub fn wrap(op: Ptr<Operation>) -> Self {
+        Self { op }
+    }
+}
+
+impl Verify for CuteVectorReduceOp {
+    fn verify(&self, ctx: &Context) -> Result<(), Error> {
+        let op = self.get_operation().deref(ctx);
+        if op.get_num_operands() < 2 || op.get_num_results() != 1 {
+            return verify_err!(
+                op.loc(),
+                "cute.vector_reduce needs >= 2 operands (N lanes + init) and 1 result"
+            );
+        }
+        let f32_ty = FP32Type::get(ctx).into();
+        for i in 0..op.get_num_operands() {
+            if op.get_operand(i).get_type(ctx) != f32_ty {
+                return verify_err!(op.loc(), "cute.vector_reduce operands must be f32");
+            }
+        }
+        if op.get_result(0).get_type(ctx) != f32_ty {
+            return verify_err!(op.loc(), "cute.vector_reduce result must be f32");
+        }
+        Ok(())
+    }
+}
+
+/// Elementwise numeric conversion on an `N`-lane register vector (`arith.truncf` / `arith.extf`).
+///
+/// `kind`:
+/// - `0`: `f32 -> BFloat16 (u16)`
+/// - `1`: `BFloat16 (u16) -> f32`
+/// - `2`: `f32 -> Float8E4M3FN (u8)`
+/// - `3`: `Float8E4M3FN (u8) -> f32`
+/// - `4`: `f32 -> f16`
+/// - `5`: `f16 -> f32`
+#[pliron_op(
+    name = "cute.vector_cast",
+    format,
+    attributes = (vec_cast_op: CuteVectorOpAttr)
+)]
+pub struct CuteVectorCastOp;
+
+impl CuteVectorCastOp {
+    /// Build a detached `N -> N` vector numeric conversion op.
+    pub fn new(
+        ctx: &mut Context,
+        operands: Vec<Value>,
+        dst_lane_ty: TypeHandle,
+        lanes: usize,
+        kind: u64,
+    ) -> Self {
+        let op = Self {
+            op: Operation::new(
+                ctx,
+                Self::get_concrete_op_info(),
+                vec![dst_lane_ty; lanes],
+                operands,
+                vec![],
+                0,
+            ),
+        };
+        op.set_attr_vec_cast_op(ctx, CuteVectorOpAttr { kind, extra: 0 });
+        op
+    }
+
+    /// View an existing operation through this wrapper without allocating or verifying it.
+    pub fn wrap(op: Ptr<Operation>) -> Self {
+        Self { op }
+    }
+}
+
+impl Verify for CuteVectorCastOp {
+    fn verify(&self, ctx: &Context) -> Result<(), Error> {
+        let op = self.get_operation().deref(ctx);
+        let n = op.get_num_results();
+        if n == 0 || op.get_num_operands() != n {
+            return verify_err!(
+                op.loc(),
+                "cute.vector_cast needs N operands and N >= 1 results"
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Bit-preserving reinterpretation of an `N`-lane register vector as an `M`-lane register vector
+/// (`vector.bitcast : vector<NxSrc> to vector<MxDst>`).
+#[pliron_op(name = "cute.vector_bitcast", format)]
+pub struct CuteVectorBitcastOp;
+
+impl CuteVectorBitcastOp {
+    /// Build a detached `N -> M` vector bitcast op.
+    pub fn new(
+        ctx: &mut Context,
+        operands: Vec<Value>,
+        dst_lane_ty: TypeHandle,
+        dst_lanes: usize,
+    ) -> Self {
+        Self {
+            op: Operation::new(
+                ctx,
+                Self::get_concrete_op_info(),
+                vec![dst_lane_ty; dst_lanes],
+                operands,
+                vec![],
+                0,
+            ),
+        }
+    }
+
+    /// View an existing operation through this wrapper without allocating or verifying it.
+    pub fn wrap(op: Ptr<Operation>) -> Self {
+        Self { op }
+    }
+}
+
+impl Verify for CuteVectorBitcastOp {
+    fn verify(&self, ctx: &Context) -> Result<(), Error> {
+        let op = self.get_operation().deref(ctx);
+        if op.get_num_operands() == 0 || op.get_num_results() == 0 {
+            return verify_err!(
+                op.loc(),
+                "cute.vector_bitcast needs >= 1 operands and >= 1 results"
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Contiguous sub-vector extraction (`vector.extract_strided_slice : vector<NxT> to vector<MxT>`).
+#[pliron_op(
+    name = "cute.vector_slice",
+    format,
+    attributes = (vec_slice_op: CuteVectorOpAttr)
+)]
+pub struct CuteVectorSliceOp;
+
+impl CuteVectorSliceOp {
+    /// Build a detached `N -> M` strided slice op starting at `offset`.
+    pub fn new(
+        ctx: &mut Context,
+        operands: Vec<Value>,
+        lane_ty: TypeHandle,
+        dst_lanes: usize,
+        offset: u64,
+    ) -> Self {
+        let op = Self {
+            op: Operation::new(
+                ctx,
+                Self::get_concrete_op_info(),
+                vec![lane_ty; dst_lanes],
+                operands,
+                vec![],
+                0,
+            ),
+        };
+        op.set_attr_vec_slice_op(
+            ctx,
+            CuteVectorOpAttr {
+                kind: 0,
+                extra: offset,
+            },
+        );
+        op
+    }
+
+    /// View an existing operation through this wrapper without allocating or verifying it.
+    pub fn wrap(op: Ptr<Operation>) -> Self {
+        Self { op }
+    }
+}
+
+impl Verify for CuteVectorSliceOp {
+    fn verify(&self, ctx: &Context) -> Result<(), Error> {
+        let op = self.get_operation().deref(ctx);
+        let n = op.get_num_operands();
+        let m = op.get_num_results();
+        let offset = self
+            .get_attr_vec_slice_op(ctx)
+            .map_or(0, |a| a.extra as usize);
+        if m == 0 || offset + m > n {
+            return verify_err!(
+                op.loc(),
+                "cute.vector_slice requires M >= 1 and OFFSET + M <= N"
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Concatenate two `N`-lane register vectors into one `2*N`-lane register vector
+/// (`vector.shuffle : vector<NxT>, vector<NxT> to vector<2NxT>`).
+#[pliron_op(name = "cute.vector_concat", format)]
+pub struct CuteVectorConcatOp;
+
+impl CuteVectorConcatOp {
+    /// Build a detached `2*N -> 2*N` vector concat op.
+    pub fn new(ctx: &mut Context, operands: Vec<Value>, lane_ty: TypeHandle, lanes: usize) -> Self {
+        Self {
+            op: Operation::new(
+                ctx,
+                Self::get_concrete_op_info(),
+                vec![lane_ty; lanes],
+                operands,
+                vec![],
+                0,
+            ),
+        }
+    }
+
+    /// View an existing operation through this wrapper without allocating or verifying it.
+    pub fn wrap(op: Ptr<Operation>) -> Self {
+        Self { op }
+    }
+}
+
+impl Verify for CuteVectorConcatOp {
+    fn verify(&self, ctx: &Context) -> Result<(), Error> {
+        let op = self.get_operation().deref(ctx);
+        let m = op.get_num_results();
+        if m == 0 || !m.is_multiple_of(2) || op.get_num_operands() != m {
+            return verify_err!(
+                op.loc(),
+                "cute.vector_concat requires 2*N operands and 2*N results"
             );
         }
         Ok(())

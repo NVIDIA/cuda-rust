@@ -301,6 +301,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         block_id: BlockId,
         call_expr: &ExprCall,
         path_expr: &ExprPath,
+        fn_item: &ItemFn,
         generic_vars: &GenericVars,
         ctx: &mut CompilerContext,
         return_type: Option<TileRustType>,
@@ -316,7 +317,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             );
         }
 
-        let ident = get_ident_from_path_expr(path_expr).to_string();
+        let ident = fn_item.sig.ident.to_string();
         let is_pack = match ident.as_str() {
             "__pack_f4e2m1fnx2_tile" => true,
             "__unpack_f4e2m1fnx2_tile" => false,
@@ -515,7 +516,8 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         return_type: Option<TileRustType>,
     ) -> Result<Option<TileRustValue>, JITError> {
         let call_expr_func_str = call_expr.func.to_token_stream().to_string();
-        let ident = get_ident_from_path_expr(path_expr);
+        // The resolved function's name, not the call's: imports can rename.
+        let ident = &fn_item.sig.ident;
         let Some(compiler_op_name) = compiler_op_attrs.parse_string("name") else {
             return self.jit_error_result(
                 &call_expr.span(),
@@ -523,6 +525,36 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             );
         };
         match compiler_op_name.as_str() {
+            "likely" => {
+                if call_expr.args.len() != 1 {
+                    return self
+                        .jit_error_result(&call_expr.span(), "likely expects one bool condition");
+                }
+                if let Some(caps) = &self.target_capabilities {
+                    cutile_ir::requirements::Feature::ControlFlowHints
+                        .requirement()
+                        .check(caps, "likely", &self.ir_location(&call_expr.span()))
+                        .map_err(JITError::from)?;
+                }
+                let expected =
+                    super::optimization_hints::condition_likelihood_arg(call_expr, generic_vars)?;
+                let mut args =
+                    self.compile_call_args(module, block_id, &call_expr.args, generic_vars, ctx)?;
+                let mut condition = args.remove(0);
+                if condition
+                    .ty
+                    .get_instantiated_rust_element_type(self.modules.primitives())
+                    .as_deref()
+                    != Some("bool")
+                {
+                    return self.jit_error_result(
+                        &call_expr.span(),
+                        "likely requires a bool or boolean Tile",
+                    );
+                }
+                condition.condition_likelihood = Some(expected);
+                Ok(Some(condition))
+            }
             "mma" => {
                 let mut operands =
                     self.compile_call_args(module, block_id, &call_expr.args, generic_vars, ctx)?;
@@ -653,6 +685,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 block_id,
                 call_expr,
                 path_expr,
+                fn_item,
                 generic_vars,
                 ctx,
                 return_type,
@@ -1929,6 +1962,14 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                         }
                     }
                     "tile_to_pointer" => {
+                        // The value's Rust type can still name the caller's
+                        // generic parameters (`PointerTile<*mut E, {[]}>`
+                        // from a generic helper); its instance names the
+                        // concrete element type.
+                        let old_type = match &new_value.ty.type_instance {
+                            TypeInstance::StructuredType(inst) => inst.instance_ty.clone(),
+                            _ => old_type,
+                        };
                         let Some(element_type) =
                             get_element_type_structured(&old_type, self.modules.primitives())
                         else {
@@ -2197,6 +2238,139 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     ),
                 }
             }
+            "tensor_layout" => {
+                // `get_static_extent(shape, axis)`: the static extent of
+                // `axis` of a `Shape<S>` type (the tile a mutable tensor's
+                // `load` and `store` reach). `get_tensor_stride(tensor, axis)`:
+                // the stride of `axis`, in elements, a constant when the
+                // view's type fixes it and else the dynamic stride the view
+                // carries.
+                if call_expr.args.len() != 2 {
+                    return self.jit_error_result(
+                        &call_expr.span(),
+                        &format!("`{ident}` expects a value and an axis"),
+                    );
+                }
+                let axis = self
+                    .compile_expression(
+                        module,
+                        block_id,
+                        &call_expr.args[1],
+                        generic_vars,
+                        ctx,
+                        None,
+                    )?
+                    .and_then(|v| v.bounds)
+                    .filter(|b| b.is_exact() && b.start >= 0)
+                    .map(|b| b.start as usize)
+                    .ok_or_else(|| {
+                        self.jit_error(
+                            &call_expr.args[1].span(),
+                            "the axis must be a non-negative compile-time constant",
+                        )
+                    })?;
+                let Some(tensor) = self.compile_expression(
+                    module,
+                    block_id,
+                    &call_expr.args[0],
+                    generic_vars,
+                    ctx,
+                    None,
+                )?
+                else {
+                    return self
+                        .jit_error_result(&call_expr.args[0].span(), "failed to compile value");
+                };
+                match ident.to_string().as_str() {
+                    "get_static_extent" => {
+                        let shape = match &tensor.ty.type_instance {
+                            TypeInstance::StructuredType(inst) => Some(inst.shape.clone()),
+                            _ => get_cga_from_type(&tensor.ty.rust_ty, generic_vars),
+                        };
+                        let Some(shape) = shape else {
+                            return self.jit_error_result(
+                                &call_expr.args[0].span(),
+                                &format!(
+                                    "`{}` is not a shape with a known rank",
+                                    tensor.ty.rust_ty.to_token_stream()
+                                ),
+                            );
+                        };
+                        match shape.get(axis) {
+                            Some(&extent) if extent > 0 => self
+                                .compile_constant(module, block_id, generic_vars, extent)
+                                .map(Some),
+                            Some(_) => self.jit_error_result(
+                                &call_expr.args[0].span(),
+                                &format!(
+                                    "axis {axis} of `{}` has no static extent",
+                                    tensor.ty.rust_ty.to_token_stream()
+                                ),
+                            ),
+                            None => self.jit_error_result(
+                                &call_expr.args[1].span(),
+                                &format!(
+                                    "axis {axis} is out of range for a rank-{} shape",
+                                    shape.len()
+                                ),
+                            ),
+                        }
+                    }
+                    "get_tensor_stride" => {
+                        let Some(Type::TensorView(view)) = &tensor.ty.tile_ir_ty else {
+                            return self.jit_error_result(
+                                &call_expr.args[0].span(),
+                                "expected a tensor view",
+                            );
+                        };
+                        let Some(&stride) = view.strides.get(axis) else {
+                            return self.jit_error_result(
+                                &call_expr.args[1].span(),
+                                &format!(
+                                    "axis {axis} is out of range for a rank-{} tensor",
+                                    view.strides.len()
+                                ),
+                            );
+                        };
+                        if stride != cutile_ir::ir::DYNAMIC {
+                            let stride = i32::try_from(stride).map_err(|_| {
+                                self.jit_error(
+                                    &call_expr.span(),
+                                    &format!("stride {stride} does not fit in i32"),
+                                )
+                            })?;
+                            return self
+                                .compile_constant(module, block_id, generic_vars, stride)
+                                .map(Some);
+                        }
+                        // The view carries its dynamic strides in order.
+                        let dynamic_index = view.strides[..axis]
+                            .iter()
+                            .filter(|s| **s == cutile_ir::ir::DYNAMIC)
+                            .count();
+                        let dynamic = tensor
+                            .type_meta
+                            .as_ref()
+                            .and_then(|meta| meta.fields.get("strides"))
+                            .and_then(|strides| strides.fields.as_ref())
+                            .and_then(|fields| fields.get("dims"))
+                            .and_then(|dims| dims.values.as_ref())
+                            .and_then(|values| values.get(dynamic_index))
+                            .cloned();
+                        match dynamic {
+                            Some(value) => Ok(Some(value)),
+                            None => self.jit_error_result(
+                                &call_expr.args[0].span(),
+                                &format!("the dynamic stride of axis {axis} is not available"),
+                            ),
+                        }
+                    }
+                    other => self.jit_error_result(
+                        &call_expr.span(),
+                        &format!("unsupported tensor_layout compiler_op `{other}`"),
+                    ),
+                }
+            }
             "return_type_meta_field" => {
                 let Some(type_meta_field) = compiler_op_attrs.parse_string("type_meta_field")
                 else {
@@ -2372,6 +2546,8 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     // collect_mutated_variables_from_block, carrying token SSA
                     // values through blocks, branches and loops uniformly. Then
                     // remove the immutable-token metadata copy-back workaround.
+                    // Foreign calls already order through regions with the
+                    // carried token of `compile_foreign::FFI_TOKEN_VAR`.
                     if ctx.inside_for || ctx.innermost_loop.is_some() || ctx.token_update_in_region
                     {
                         return self.jit_error_result(

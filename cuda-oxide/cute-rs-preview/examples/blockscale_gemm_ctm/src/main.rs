@@ -7,13 +7,14 @@
 #![feature(f16)]
 mod kernel;
 mod physical;
-use ctm_rs::host::tma::{EncodeOptions, L2Promotion, create_tensor_map_tiled};
-use ctm_rs::{
+use cuda_core::{CudaContext, LaunchConfig1D};
+use cutlass_primitives as prims;
+use kernel::{DYNAMIC_SMEM_BYTES, K, K_STAGES, KB, M, N, THREADS, TOTAL_TILES, kernels};
+use prims::host::tma::{EncodeOptions, L2Promotion, create_tensor_map_tiled};
+use prims::{
     memory::{F16Tile128, Mxf4ScaleTile, Mxf4Tile128},
     tma::TensorMap,
 };
-use cuda_core::{CudaContext, LaunchConfig1D};
-use kernel::{DYNAMIC_SMEM_BYTES, K, K_STAGES, KB, M, N, THREADS, TOTAL_TILES, kernels};
 
 /// The eight non-negative e2m1 values, indexed by nibble 0x0..=0x7;
 /// nibbles 0x8..=0xF are their negations (0x8 is -0.0).

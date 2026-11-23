@@ -13,20 +13,21 @@
 //!   in milliseconds without requiring an external 16 GB download.
 
 use crate::config::{HEAD_DIM, HIDDEN, INTERMEDIATE, KV_WIDTH, Q_WIDTH};
-use crate::nvfp4::Nvfp4Projection;
-use crate::operator::Result;
-use ctm_rs::memory::DisjointSlice;
-use ctm_rs::{cuda_module, kernel, thread};
-use cuda_core::LaunchConfig;
-use cuda_core::{CudaStream, DeviceBuffer};
-use cute_rs::BFloat16;
-use cute_rs::decoder::{
+use crate::decoder::{
     AttentionWeights, DecoderWeights, FinalNorm, InputNorm, KeyNorm, NormWeights,
     PostAttentionNorm, QueryNorm,
 };
-use cute_rs::ffn::{
+use crate::ffn::{
     AttentionOutput, Down, FfnWeights, Gate, Key, ProjectionWeights, Query, Up, Value,
 };
+use crate::nvfp4::Nvfp4Projection;
+use crate::operator::Result;
+use cuda_core::LaunchConfig;
+use cuda_core::{CudaStream, DeviceBuffer};
+use cute_rs::BFloat16;
+use cutlass_primitives as prims;
+use prims::memory::DisjointSlice;
+use prims::{cuda_module, kernel, thread};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -98,7 +99,7 @@ pub struct OwnedBf16Layer {
 }
 
 impl OwnedBf16Layer {
-    /// Borrow this layer's buffers as a role-checked `cute_rs::decoder::DecoderWeights` view.
+    /// Borrow this layer's buffers as a role-checked [`DecoderWeights`] view.
     pub fn view(
         &self,
     ) -> Result<DecoderWeights<'_, HIDDEN, INTERMEDIATE, Q_WIDTH, KV_WIDTH, HEAD_DIM>> {

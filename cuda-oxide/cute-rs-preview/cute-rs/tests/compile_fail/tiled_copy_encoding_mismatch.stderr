@@ -9,7 +9,7 @@ error[E0308]: mismatched types
    = note: expected mutable reference `&mut SharedTensor<Mxf4E2M1, f16, _, Mkl>`
               found mutable reference `&mut SharedTensor<f16, f16, (), Mkl>`
 note: method defined here
-  --> src/copy/tiled.rs
+  --> src/atom/tiled.rs
    |
    |     pub unsafe fn copy<
    |                   ^^^^

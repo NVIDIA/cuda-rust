@@ -13,7 +13,7 @@
 /// Public operations occupy the range `0x000 ..= 0xFFF` and public-preview
 /// operations the range `0x4000 ..= 0x4FFF`. Each variant's discriminant is
 /// the on-wire opcode value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, num_derive::FromPrimitive)]
 #[repr(u16)]
 pub enum Opcode {
     AbsF = 0x00,
@@ -263,120 +263,9 @@ impl Opcode {
     }
 
     /// Construct an opcode from its raw u16 value (inverse of [`as_u16`](Self::as_u16)).
+    /// Derived from the `#[repr(u16)]` discriminants.
     pub fn from_u16(value: u16) -> Option<Self> {
-        let op = match value {
-            0x00 => Self::AbsF,
-            0x01 => Self::AbsI,
-            0x02 => Self::AddF,
-            0x03 => Self::AddI,
-            0x04 => Self::AndI,
-            0x05 => Self::Assert,
-            0x06 => Self::Assume,
-            0x07 => Self::AtomicCAS,
-            0x08 => Self::AtomicRMW,
-            0x09 => Self::Bitcast,
-            0x0A => Self::Break,
-            0x0B => Self::Broadcast,
-            0x0C => Self::Cat,
-            0x0D => Self::Ceil,
-            0x0E => Self::CmpF,
-            0x0F => Self::CmpI,
-            0x10 => Self::Constant,
-            0x11 => Self::Continue,
-            0x12 => Self::Cos,
-            0x13 => Self::CosH,
-            0x14 => Self::DivF,
-            0x15 => Self::DivI,
-            0x16 => Self::Entry,
-            0x17 => Self::Exp,
-            0x18 => Self::Exp2,
-            0x25 => Self::ExtI,
-            0x26 => Self::Extract,
-            0x27 => Self::Floor,
-            0x28 => Self::Fma,
-            0x29 => Self::For,
-            0x2A => Self::FToF,
-            0x2B => Self::FToI,
-            0x2C => Self::GetGlobal,
-            0x2D => Self::GetIndexSpaceShape,
-            0x2E => Self::GetNumTileBlocks,
-            0x2F => Self::GetTensorShape,
-            0x30 => Self::GetTileBlockId,
-            0x31 => Self::Global,
-            0x32 => Self::If,
-            0x33 => Self::IntToPtr,
-            0x3A => Self::Iota,
-            0x3B => Self::IToF,
-            0x3C => Self::JoinTokens,
-            0x3D => Self::LoadPtrTko,
-            0x3E => Self::LoadViewTko,
-            0x3F => Self::Log,
-            0x40 => Self::Log2,
-            0x41 => Self::Loop,
-            0x42 => Self::MakePartitionView,
-            0x43 => Self::MakeTensorView,
-            0x44 => Self::MakeToken,
-            0x45 => Self::MaxF,
-            0x46 => Self::MaxI,
-            0x47 => Self::MinF,
-            0x48 => Self::MinI,
-            0x49 => Self::MmaF,
-            0x4A => Self::MmaI,
-            0x4B => Self::Module,
-            0x4C => Self::MulF,
-            0x4D => Self::MulhiI,
-            0x4E => Self::MulI,
-            0x4F => Self::NegF,
-            0x50 => Self::NegI,
-            0x51 => Self::Offset,
-            0x52 => Self::OrI,
-            0x53 => Self::Permute,
-            0x54 => Self::Pow,
-            0x55 => Self::Print,
-            0x56 => Self::PtrToInt,
-            0x57 => Self::PtrToPtr,
-            0x58 => Self::Reduce,
-            0x59 => Self::RemF,
-            0x5A => Self::RemI,
-            0x5B => Self::Reshape,
-            0x5C => Self::Return,
-            0x5D => Self::Rsqrt,
-            0x5E => Self::Scan,
-            0x5F => Self::Select,
-            0x60 => Self::ShLI,
-            0x61 => Self::ShRI,
-            0x62 => Self::Sin,
-            0x63 => Self::SinH,
-            0x64 => Self::Sqrt,
-            0x65 => Self::StorePtrTko,
-            0x66 => Self::StoreViewTko,
-            0x67 => Self::SubF,
-            0x68 => Self::SubI,
-            0x69 => Self::Tan,
-            0x6A => Self::TanH,
-            0x6B => Self::TruncI,
-            0x6C => Self::XOrI,
-            0x6D => Self::Yield,
-            0x6E => Self::Atan2,
-            0x6F => Self::Pack,
-            0x70 => Self::Unpack,
-            0x71 => Self::Alloca,
-            0x72 => Self::MmaFScaled,
-            0x73 => Self::MakeGatherScatterView,
-            0x74 => Self::MakeStridedView,
-            0x75 => Self::AtomicRedViewTko,
-            0x76 => Self::Insert,
-            0x77 => Self::GdcLaunchDependentsTko,
-            0x78 => Self::GdcWaitTko,
-            0x79 => Self::FPowI,
-            0x7A => Self::MemoryFenceAliasTko,
-            0x7B => Self::MultimemLoadReduceViewTko,
-            0x7C => Self::MultimemReduceViewTko,
-            0x7D => Self::MultimemStoreViewTko,
-            0x4002 => Self::PreviewCall,
-            _ => return None,
-        };
-        Some(op)
+        <Self as num_traits::FromPrimitive>::from_u16(value)
     }
 
     /// Return the fixed result count if this op uses a fixed count in the
@@ -500,6 +389,27 @@ impl Opcode {
             Alloca => Some(1),
             // Entry has 0 results but is function-like (handled in func section, not here)
             Entry => Some(0),
+        }
+    }
+}
+
+#[cfg(test)]
+mod opcode_from_u16_tests {
+    use super::Opcode;
+
+    #[test]
+    fn from_u16_is_the_exact_inverse_of_as_u16() {
+        let mut decoded = 0;
+        for v in 0..=u16::MAX {
+            if let Some(op) = Opcode::from_u16(v) {
+                assert_eq!(op.as_u16(), v, "from_u16({v:#x}) -> {op:?}");
+                decoded += 1;
+            }
+        }
+        // Bump deliberately when an opcode is added.
+        assert_eq!(decoded, 109, "expected 109 opcodes to decode");
+        for gap in [0x19u16, 0x24, 0x34, 0x39, 0x7E, 0x1000, 0x4001, 0x4003] {
+            assert!(Opcode::from_u16(gap).is_none(), "{gap:#x} should be a gap");
         }
     }
 }

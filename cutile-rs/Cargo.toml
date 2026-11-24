@@ -58,6 +58,7 @@ prettyplease = "0.2.35"
 half = { version = "2" }
 itertools = "0.14.0"
 num-traits = { version = "0" }
+num-derive = { version = "0.4" }
 anyhow = "1"
 stacker = "0.1"
 libloading = "0.8"

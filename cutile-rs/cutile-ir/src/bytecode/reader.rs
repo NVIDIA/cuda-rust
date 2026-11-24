@@ -541,7 +541,8 @@ impl DebugSection {
     /// The per-function id list for 1-based `func_idx`, or `None` if the
     /// function has no debug info.
     fn func_ids(&self, func_idx: u64) -> Option<&[u64]> {
-        let i = (func_idx as usize) - 1;
+        // Index 0 means the function carries no debug info at all.
+        let i = (func_idx as usize).checked_sub(1)?;
         let start = *self.index_offsets.get(i)?;
         let end = self
             .index_offsets
@@ -1819,7 +1820,11 @@ impl ReaderState {
                 let result_types = self.read_results_fixed(r, 1)?;
                 let flags = r.read_varint()?;
                 let rounding_mode = read_inline_int(r)?;
-                let count = if opcode == Fma { 3 } else { 2 };
+                let count = match opcode {
+                    Fma => 3,
+                    Sqrt => 1,
+                    _ => 2,
+                };
                 let operands = self.read_operands_fixed(r, count)?;
                 let mut attributes = vec![("rounding_mode".into(), rounding_mode)];
                 if flags & 1 != 0 {

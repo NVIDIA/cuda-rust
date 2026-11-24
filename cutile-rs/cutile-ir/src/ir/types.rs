@@ -194,8 +194,6 @@ pub struct StridedViewType {
 }
 
 /// Padding value for out-of-bounds accesses in a partition view.
-///
-/// Writer serializes `value as u8` and the reader decodes with [`PaddingValue::from_u8`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum PaddingValue {

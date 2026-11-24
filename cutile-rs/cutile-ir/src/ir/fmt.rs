@@ -2511,7 +2511,7 @@ fn print_dense_constant(de: &super::attr::DenseElements, result_types: &[Type], 
     if let Some(sc) = scalar {
         if total == 1 {
             // Single value.
-            write!(out, "{}", decode_scalar(sc, &de.data, 0)).unwrap();
+            write!(out, "{}", element_at(sc, &de.data, 0)).unwrap();
         } else {
             // Multi-element: print as flat list or nested.
             print_dense_elements_array(&de.shape, sc, &de.data, out);
@@ -2667,7 +2667,37 @@ fn format_float(v: f64) -> String {
 
 /// Print a (possibly nested) array of dense elements.
 fn print_dense_elements_array(shape: &[i64], sc: ScalarType, data: &[u8], out: &mut String) {
-    let bw = sc.byte_width();
+    print_dense_elements_from(shape, sc, data, 0, out)
+}
+
+/// One element of a dense payload. `i1` is bit-packed (one bit per element,
+/// LSB-first within each byte); every other type is one `byte_width()` chunk.
+fn element_at(sc: ScalarType, data: &[u8], i: usize) -> String {
+    if sc == ScalarType::I1 {
+        let set = data.get(i / 8).is_some_and(|b| (b >> (i % 8)) & 1 != 0);
+        return if set { "true" } else { "false" }.to_string();
+    }
+    decode_scalar(sc, data, i * sc.byte_width())
+}
+
+/// Bytes a dense payload of `count` elements occupies.
+fn packed_byte_len(sc: ScalarType, count: usize) -> usize {
+    if sc == ScalarType::I1 {
+        count.div_ceil(8)
+    } else {
+        count * sc.byte_width()
+    }
+}
+
+/// Print `shape`'s elements starting at element index `base`. Indices are in
+/// elements, not bytes, so sub-byte types address their own bits correctly.
+fn print_dense_elements_from(
+    shape: &[i64],
+    sc: ScalarType,
+    data: &[u8],
+    base: usize,
+    out: &mut String,
+) {
     let total: i64 = shape.iter().product();
 
     if shape.len() <= 1 {
@@ -2678,46 +2708,42 @@ fn print_dense_elements_array(shape: &[i64], sc: ScalarType, data: &[u8], out: &
             shape[0] as usize
         };
         // Check if all elements are the same (splat).
-        if count > 1 && is_splat(sc, data, count) {
-            write!(out, "{}", decode_scalar(sc, data, 0)).unwrap();
+        if count > 1 && is_splat(sc, data, base, count) {
+            write!(out, "{}", element_at(sc, data, base)).unwrap();
         } else {
             for i in 0..count {
                 if i > 0 {
                     write!(out, ", ").unwrap();
                 }
-                write!(out, "{}", decode_scalar(sc, data, i * bw)).unwrap();
+                write!(out, "{}", element_at(sc, data, base + i)).unwrap();
             }
         }
     } else {
         // Multi-dimensional: recurse.
-        let inner_size: i64 = shape[1..].iter().product();
-        let inner_bytes = inner_size as usize * bw;
+        let inner_size = shape[1..].iter().product::<i64>() as usize;
         let n = shape[0] as usize;
 
         // Check splat at top level.
-        if n > 1 && total > 1 && is_splat(sc, data, total as usize) {
-            write!(out, "{}", decode_scalar(sc, data, 0)).unwrap();
+        if n > 1 && total > 1 && is_splat(sc, data, base, total as usize) {
+            write!(out, "{}", element_at(sc, data, base)).unwrap();
         } else {
             write!(out, "[").unwrap();
             for i in 0..n {
                 if i > 0 {
                     write!(out, ", ").unwrap();
                 }
-                let start = i * inner_bytes;
-                let end = start + inner_bytes;
-                let slice = &data[start..end.min(data.len())];
+                let inner_base = base + i * inner_size;
                 if shape.len() == 2 {
                     write!(out, "[").unwrap();
-                    let count = shape[1] as usize;
-                    for j in 0..count {
+                    for j in 0..shape[1] as usize {
                         if j > 0 {
                             write!(out, ", ").unwrap();
                         }
-                        write!(out, "{}", decode_scalar(sc, slice, j * bw)).unwrap();
+                        write!(out, "{}", element_at(sc, data, inner_base + j)).unwrap();
                     }
                     write!(out, "]").unwrap();
                 } else {
-                    print_dense_elements_array(&shape[1..], sc, slice, out);
+                    print_dense_elements_from(&shape[1..], sc, data, inner_base, out);
                 }
             }
             write!(out, "]").unwrap();
@@ -2725,14 +2751,18 @@ fn print_dense_elements_array(shape: &[i64], sc: ScalarType, data: &[u8], out: &
     }
 }
 
-/// Check if all elements are the same value.
-fn is_splat(sc: ScalarType, data: &[u8], count: usize) -> bool {
-    let bw = sc.byte_width();
-    if data.len() < count * bw {
+/// Check if the `count` elements starting at element `base` are all equal.
+fn is_splat(sc: ScalarType, data: &[u8], base: usize, count: usize) -> bool {
+    if data.len() < packed_byte_len(sc, base + count) {
         return false;
     }
-    let first = &data[..bw];
-    for i in 1..count {
+    if sc == ScalarType::I1 {
+        let first = element_at(sc, data, base);
+        return (1..count).all(|i| element_at(sc, data, base + i) == first);
+    }
+    let bw = sc.byte_width();
+    let first = &data[base * bw..(base + 1) * bw];
+    for i in base + 1..base + count {
         if &data[i * bw..(i + 1) * bw] != first {
             return false;
         }

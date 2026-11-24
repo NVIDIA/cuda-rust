@@ -620,6 +620,8 @@ version = "0.6.0"
 dependencies = [
  "half",
  "indexmap",
+ "num-derive",
+ "num-traits",
  "thiserror 1.0.69",
  "uuid",
 ]
@@ -1406,6 +1408,17 @@ checksum = "73f88a1307638156682bada9d7604135552957b7818057dcef22705b4d509495"
 dependencies = [
  "bytemuck",
  "num-traits",
+]
+
+[[package]]
+name = "num-derive"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed3955f1a9c7c0c15e092f9c887db08b1fc683305fdf6eb6684f22555355e202"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

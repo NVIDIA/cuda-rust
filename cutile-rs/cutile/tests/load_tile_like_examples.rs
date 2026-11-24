@@ -10,6 +10,7 @@
 //! JIT path without requiring a CUDA device.
 
 use cutile_compiler::compiler::utils::CompileOptions;
+use cutile_compiler::specialization::{compute_spec, SpecializationBits};
 
 mod common;
 
@@ -88,13 +89,22 @@ mod load_tile_like_examples_module {
 use load_tile_like_examples_module::__module_ast_self;
 
 fn compile(kernel: &str, generics: &[String], strides: &[(&str, &[i32])]) -> String {
+    compile_with_specs(kernel, generics, strides, &[])
+}
+
+fn compile_with_specs(
+    kernel: &str,
+    generics: &[String],
+    strides: &[(&str, &[i32])],
+    specs: &[(&str, &SpecializationBits)],
+) -> String {
     let mlir = common::compile_to_ir(
         __module_ast_self,
         "load_tile_like_examples_module",
         kernel,
         generics,
         strides,
-        &[],
+        specs,
         &[],
         None,
         &CompileOptions::default(),
@@ -176,6 +186,55 @@ fn compiles_saxpy_style_2d_inference() {
         assert!(
             !store_line.contains("padding_value = zero"),
             "Tensor::store for mutable outputs should use padding::None.\nStore line:\n{store_line}\nMLIR:\n{mlir}"
+        );
+    });
+}
+
+/// `saxpy_like` with `y` bound as a partition whose slabs fill `full_slab` axes.
+fn compile_saxpy_with_slabs(full_slab: [bool; 2]) -> String {
+    let y = SpecializationBits {
+        full_slab: full_slab.to_vec(),
+        ..compute_spec(0, &[4, 8], &[8, 1], 4)
+    };
+    compile_with_specs(
+        "saxpy_like",
+        &[2.to_string(), 4.to_string()],
+        &[("y", &[4, 1]), ("x", &[4, 1])],
+        &[("y", &y)],
+    )
+}
+
+#[test]
+fn full_slab_output_extent_is_static() {
+    common::with_test_stack(|| {
+        let mlir = compile_saxpy_with_slabs([true, true]);
+        assert!(
+            mlir.contains(" offset "),
+            "Mutable output entry lowering should offset the output pointer to the block's slab.\nMLIR:\n{mlir}"
+        );
+        assert!(
+            !mlir.contains("mini"),
+            "A slab that is full on every axis should not be clipped per block.\nMLIR:\n{mlir}"
+        );
+        assert!(
+            mlir.contains("tensor_view<2x4xf32"),
+            "A full slab's view should keep the static slab shape.\nMLIR:\n{mlir}"
+        );
+    });
+}
+
+#[test]
+fn only_ragged_slab_axes_are_clipped() {
+    common::with_test_stack(|| {
+        let mlir = compile_saxpy_with_slabs([true, false]);
+        assert_eq!(
+            mlir.matches("mini").count(),
+            1,
+            "Only the ragged axis should be clipped per block.\nMLIR:\n{mlir}"
+        );
+        assert!(
+            mlir.contains("tensor_view<2x?xf32"),
+            "The full axis should stay static beside the clipped one.\nMLIR:\n{mlir}"
         );
     });
 }

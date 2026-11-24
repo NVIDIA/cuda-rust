@@ -100,6 +100,7 @@ fn spec_bits_div_16_produces_div_by_16() {
             stride_one: vec![true],
             base_ptr_div: dh(16),
             elements_disjoint: true,
+            full_slab: vec![],
         };
         let mlir = compile_with_spec("simple_kernel", &[("output", &[1])], &[("output", &spec)]);
         println!("{mlir}");
@@ -119,6 +120,7 @@ fn spec_bits_div_8_produces_div_by_8() {
             stride_one: vec![true],
             base_ptr_div: dh(8),
             elements_disjoint: true,
+            full_slab: vec![],
         };
         let mlir = compile_with_spec("simple_kernel", &[("output", &[1])], &[("output", &spec)]);
         println!("{mlir}");
@@ -150,6 +152,7 @@ fn spec_bits_div_1_no_div_by() {
             stride_one: vec![true],
             base_ptr_div: dh(1),
             elements_disjoint: true,
+            full_slab: vec![],
         };
         let mlir = compile_with_spec("simple_kernel", &[("output", &[1])], &[("output", &spec)]);
         println!("{mlir}");
@@ -172,6 +175,7 @@ fn different_spec_bits_different_cache_keys() {
         stride_one: vec![true],
         base_ptr_div: dh(16),
         elements_disjoint: true,
+        full_slab: vec![],
     };
     let spec_b = SpecializationBits {
         shape_div: vec![dh(8)],
@@ -179,6 +183,7 @@ fn different_spec_bits_different_cache_keys() {
         stride_one: vec![true],
         base_ptr_div: dh(8),
         elements_disjoint: true,
+        full_slab: vec![],
     };
 
     let key_a = TileFunctionKey::builder("m", "f")
@@ -214,6 +219,7 @@ fn entry_max_divisibility_caps_inferred_div() {
             stride_one: vec![true],
             base_ptr_div: dh(16),
             elements_disjoint: true,
+            full_slab: vec![],
         };
         let mlir = compile_with_spec("capped_kernel", &[("output", &[1])], &[("output", &spec)]);
         println!("{mlir}");
@@ -239,6 +245,7 @@ fn entry_max_divisibility_does_not_inflate() {
             stride_one: vec![true],
             base_ptr_div: dh(4),
             elements_disjoint: true,
+            full_slab: vec![],
         };
         let mlir = compile_with_spec("capped_kernel", &[("output", &[1])], &[("output", &spec)]);
         println!("{mlir}");
@@ -264,6 +271,7 @@ fn runtime_max_divisibility_overrides_entry_hint() {
             stride_one: vec![true],
             base_ptr_div: dh(16),
             elements_disjoint: true,
+            full_slab: vec![],
         };
         let options = CompileOptions::default().max_divisibility(4);
         let mlir = compile_with_spec_and_options(

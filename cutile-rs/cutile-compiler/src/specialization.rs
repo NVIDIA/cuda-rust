@@ -102,6 +102,10 @@ pub struct SpecializationBits {
     pub base_ptr_div: DivHint,
     /// True if elements are non-overlapping (strides are non-aliasing).
     pub elements_disjoint: bool,
+    /// Per-dimension, for a tensor bound as a partition: whether the
+    /// partition shape divides `shape[i]`, so every block's slab is full on
+    /// that axis. Empty for a tensor not bound as a partition.
+    pub full_slab: Vec<bool>,
 }
 
 /// Returns the largest power-of-2 that divides `val`.
@@ -162,6 +166,7 @@ pub fn compute_spec(
         stride_one: Vec::with_capacity(ndim),
         base_ptr_div: DivHint::from_ptr(base_ptr),
         elements_disjoint: true,
+        full_slab: Vec::new(),
     };
     for i in 0..ndim {
         spec.shape_div.push(DivHint::from_value(shape[i]));

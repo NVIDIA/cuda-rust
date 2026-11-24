@@ -22,7 +22,7 @@ use std::process::Command;
 use std::sync::Arc;
 
 use cutile::api;
-use cutile::tensor::{IntoPartition, ToHostVec};
+use cutile::tensor::{IntoPartition, KernelOutputStored, ToHostVec};
 use cutile::tile_kernel::{DeviceOp, TileKernel};
 
 mod common;
@@ -493,6 +493,15 @@ fn assert_pair_tile_lands_in_slab(root: usize, slab: usize, local_tile: usize) {
         .expect("pair tile store");
         let actual = result.unpartition().to_host_vec().sync().expect("to_host");
         assert_matrix_eq(&actual, &expected, 1, root, "pair tile in slab");
+    });
+}
+
+#[test]
+fn partition_records_which_axes_its_slabs_fill() {
+    common::with_test_stack(|| {
+        let out = api::zeros::<f32>(&[6, 10]).sync().expect("out alloc");
+        let out = out.partition([3, 4]);
+        assert_eq!(KernelOutputStored::spec(&out).full_slab, vec![true, false]);
     });
 }
 

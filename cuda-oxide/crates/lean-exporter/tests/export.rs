@@ -27,6 +27,7 @@ const ASYNC_COPY_FIXTURE: &str = include_str!("../fixtures/async_copy_stage.mir"
 const TCGEN05_MATMUL_FIXTURE: &str = include_str!("../fixtures/tcgen05_matmul.mir");
 const WARP_RING_FIXTURE: &str = include_str!("../fixtures/warp_ring_stage.mir");
 const CLUSTER_CLC_FIXTURE: &str = include_str!("../fixtures/cluster_clc_stage.mir");
+const DIVERGENT_UNIFORMITY_FIXTURE: &str = include_str!("../fixtures/divergent_uniformity.mir");
 
 fn export(source: &str) -> String {
     export_named_source(source, "global_index").expect("valid scalar MIR")
@@ -2798,4 +2799,81 @@ fn ensure_lean_library_built_succeeds_on_valid_package_and_fails_closed_on_inval
         err.to_string().contains("`lake build` failed"),
         "unexpected error from broken lakefile.toml: {err}"
     );
+}
+
+/// Return the `controlFlowCfg` definition of an exported kernel.
+fn control_flow_cfg_section(lean: &str) -> &str {
+    let start = lean
+        .find("def controlFlowCfg")
+        .expect("kernel exports a controlFlowCfg");
+    let end = lean[start..]
+        .find("cfg_def_state_map")
+        .map_or(lean.len(), |e| start + e);
+    &lean[start..end]
+}
+
+#[test]
+fn rejects_barrier_loops_bounded_by_divergent_joins_and_spin_counts() {
+    // Sync dependence: `n = if tid < 16 { 1 } else { 3 }` arrives through two `goto`s
+    // carrying constants, so no operand of `i < n` is divergent, yet `n` is.
+    let join_lean = export_named_source(DIVERGENT_UNIFORMITY_FIXTURE, "sync_dep_barrier")
+        .expect("exports the sync-dependent barrier loop");
+    let join_cfg = control_flow_cfg_section(&join_lean);
+    assert!(
+        join_cfg.contains("(.unknown, ") && !join_cfg.contains("(.uniform, "),
+        "barrier loop bounded by a divergent join must not be labelled uniform:\n{join_cfg}"
+    );
+
+    // Control: the same shape on `blockIdx.x` (CTA-uniform) keeps its uniform labels.
+    let uniform_join = DIVERGENT_UNIFORMITY_FIXTURE.replacen(
+        "tx = nvvm.read_ptx_sreg_tid_x () [] []",
+        "tx = nvvm.read_ptx_sreg_ctaid_x () [] []",
+        1,
+    );
+    let uniform_join_lean = export_named_source(&uniform_join, "sync_dep_barrier")
+        .expect("exports the CTA-uniform barrier loop");
+    assert!(
+        !control_flow_cfg_section(&uniform_join_lean).contains("(.unknown, "),
+        "a join of a CTA-uniform branch must stay uniform"
+    );
+
+    // Temporal divergence: the spin counter leaves the `mbarrier_try_wait_parity` loop with
+    // a per-thread value; its exit edge is `mbarReady`, so no guard covers what follows.
+    let spin_lean = export_named_source(DIVERGENT_UNIFORMITY_FIXTURE, "spin_count_barrier")
+        .expect("exports the spin-count barrier loop");
+    let spin_cfg = control_flow_cfg_section(&spin_lean);
+    assert!(
+        spin_cfg.contains("(.unknown, "),
+        "barrier loop bounded by a spin count must not be labelled uniform:\n{spin_cfg}"
+    );
+
+    // Control: a constant trip count after the same spin loop stays uniform.
+    let uniform_spin = DIVERGENT_UNIFORMITY_FIXTURE.replacen(
+        "more = mir.lt (k, spins) [] []",
+        "more = mir.lt (k, k_bound) [] []",
+        1,
+    )
+    .replacen(
+        "      ^bar_head(k: builtin.integer ui32):\n",
+        "      ^bar_head(k: builtin.integer ui32):\n        k_bound = mir.constant () [] [value: builtin.integer <2: ui32>]: <() -> (builtin.integer ui32)>;\n",
+        1,
+    );
+    let uniform_spin_lean = export_named_source(&uniform_spin, "spin_count_barrier")
+        .expect("exports the constant-trip barrier loop");
+    assert!(
+        !control_flow_cfg_section(&uniform_spin_lean).contains("(.unknown, "),
+        "a constant trip count after a spin loop must stay uniform"
+    );
+
+    let Some(lean_dir) = lean_package_dir_if_available() else {
+        return;
+    };
+    lean_exporter::runner::check_generated_lean(&join_lean, &lean_dir)
+        .expect_err("Lean 4 must reject a barrier loop bounded by a divergent join");
+    lean_exporter::runner::check_generated_lean(&spin_lean, &lean_dir)
+        .expect_err("Lean 4 must reject a barrier loop bounded by a spin count");
+    lean_exporter::runner::check_generated_lean(&uniform_join_lean, &lean_dir)
+        .expect("Lean 4 accepts the CTA-uniform barrier loop");
+    lean_exporter::runner::check_generated_lean(&uniform_spin_lean, &lean_dir)
+        .expect("Lean 4 accepts the constant-trip barrier loop");
 }

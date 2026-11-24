@@ -79,12 +79,6 @@ impl BlockGraph {
         }
     }
 
-    /// Return the total number of basic blocks in the function region.
-    /// Entry block is always index `0` when non-empty.
-    pub(super) fn len(&self) -> usize {
-        self.blocks.len()
-    }
-
     /// Look up the 0-based block index of `target` in `self.blocks`.
     /// Returns `None` if `target` is outside this function region.
     pub(super) fn idx_of(&self, target: Ptr<BasicBlock>) -> Option<usize> {

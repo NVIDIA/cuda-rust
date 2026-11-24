@@ -27,6 +27,7 @@ use pliron::{
 
 use super::{
     TranslatedFunction,
+    divergence::DivergenceStructure,
     ir_utils::{
         BlockGraph, attribute_field_index, decode_int_constant, decode_tcgen05_idesc_shape,
         int_attr_u64, is_mbarrier_shared_alloc, mir_type_elem_bytes, op_name,
@@ -624,9 +625,13 @@ pub(super) fn translate_mir_program(
             }
         }
     }
+    // Block arguments can also differ across threads with uniform operands: at the join of a
+    // divergent branch (sync dependence) and after a loop that threads leave in different
+    // iterations (temporal divergence). `DivergenceStructure` taints those arguments each round.
+    let divergence = DivergenceStructure::build(ctx, &graph, &rpo_old);
     let mut divergent_vals: HashSet<Value> = HashSet::new();
-    for _ in 0..graph.len() + 2 {
-        let mut changed = false;
+    loop {
+        let mut changed = divergence.taint_block_args(ctx, &graph, &mut divergent_vals);
         for &old_idx in &rpo_old {
             let b_ptr = graph.blocks[old_idx];
             let blk = b_ptr.deref(ctx);
@@ -757,8 +762,8 @@ pub(super) fn translate_mir_program(
         }
     }
     let mut lane_divergent_vals: HashSet<Value> = HashSet::new();
-    for _ in 0..graph.len() + 2 {
-        let mut changed = false;
+    loop {
+        let mut changed = divergence.taint_block_args(ctx, &graph, &mut lane_divergent_vals);
         for &old_idx in &rpo_old {
             let b_ptr = graph.blocks[old_idx];
             let blk = b_ptr.deref(ctx);

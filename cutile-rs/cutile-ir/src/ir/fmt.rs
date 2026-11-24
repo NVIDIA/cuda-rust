@@ -2270,7 +2270,8 @@ fn format_scalar(s: ScalarType) -> String {
     .into()
 }
 
-fn format_attr(attr: &Attribute) -> String {
+/// Format an attribute value for display (used by dumps and error messages).
+pub fn format_attr(attr: &Attribute) -> String {
     match attr {
         Attribute::Integer(v, _) => v.to_string(),
         Attribute::Float(v, _) => format!("{v}"),

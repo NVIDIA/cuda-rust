@@ -11,7 +11,7 @@
 
 mod attr;
 mod block;
-mod fmt;
+pub mod fmt;
 mod location;
 mod module;
 mod op;

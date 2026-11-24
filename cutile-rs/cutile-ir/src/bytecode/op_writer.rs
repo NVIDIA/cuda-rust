@@ -1020,9 +1020,7 @@ fn write_inbounds(
 }
 
 fn find_op_attr<'a>(op: &'a Operation, name: &str) -> Option<&'a Attribute> {
-    op.attributes
-        .iter()
-        .find_map(|(k, v)| if k == name { Some(v) } else { None })
+    super::writer::find_attr(&op.attributes, name)
 }
 
 fn flag_if_present(op: &Operation, attr_name: &str, bit: u32) -> u64 {

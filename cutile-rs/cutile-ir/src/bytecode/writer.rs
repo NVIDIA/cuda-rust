@@ -233,37 +233,14 @@ fn write_section_header(out: &mut Vec<u8>, section_id: Section, length: usize, a
         id_byte |= 0x80;
     }
     out.push(id_byte);
-    // Write length as varint inline.
-    {
-        let mut v = length as u64;
-        loop {
-            let mut byte = (v & 0x7F) as u8;
-            v >>= 7;
-            if v != 0 {
-                byte |= 0x80;
-            }
-            out.push(byte);
-            if v == 0 {
-                break;
-            }
-        }
-    }
+    // Length (and, for aligned sections, the alignment) as varints.
+    let mut w = EncodingWriter::new();
+    w.write_varint(length as u64);
     if alignment > 1 {
-        // Write alignment varint.
-        {
-            let mut v = alignment;
-            loop {
-                let mut byte = (v & 0x7F) as u8;
-                v >>= 7;
-                if v != 0 {
-                    byte |= 0x80;
-                }
-                out.push(byte);
-                if v == 0 {
-                    break;
-                }
-            }
-        }
+        w.write_varint(alignment);
+    }
+    out.extend_from_slice(w.as_bytes());
+    if alignment > 1 {
         // Pad to alignment relative to overall stream position.
         let pos = out.len() as u64;
         let padding = (alignment - (pos % alignment)) % alignment;
@@ -271,6 +248,23 @@ fn write_section_header(out: &mut Vec<u8>, section_id: Section, length: usize, a
             out.push(super::enums::ALIGNMENT_BYTE);
         }
     }
+}
+
+/// Patch a reserved u32 offset table in place and emit the finished section
+/// (shared by the string and type sections).
+fn emit_u32_offset_section(
+    mut w: EncodingWriter,
+    out: &mut Vec<u8>,
+    section: Section,
+    offsets_pos: usize,
+    offsets: &[u32],
+) {
+    for (i, &offset) in offsets.iter().enumerate() {
+        patch_u32(w.buf_mut(), offsets_pos + i * 4, offset);
+    }
+    let buf = w.into_bytes();
+    write_section_header(out, section, buf.len(), 4);
+    out.extend_from_slice(&buf);
 }
 
 // =========================================================================
@@ -322,14 +316,7 @@ fn write_string_section(out: &mut Vec<u8>, strings: &StringManager) -> Result<()
         running += s.len() as u32;
     }
 
-    // Patch offsets.
-    for (i, offset) in offsets.iter().enumerate() {
-        patch_u32(w.buf_mut(), offsets_pos + i * 4, *offset);
-    }
-
-    let buf = w.into_bytes();
-    write_section_header(out, Section::String, buf.len(), 4);
-    out.extend_from_slice(&buf);
+    emit_u32_offset_section(w, out, Section::String, offsets_pos, &offsets);
     Ok(())
 }
 
@@ -619,14 +606,7 @@ fn write_type_section(
         running += (w.tell() - before) as u32;
     }
 
-    // Patch offsets.
-    for (i, offset) in offsets.iter().enumerate() {
-        patch_u32(w.buf_mut(), offsets_pos + i * 4, *offset);
-    }
-
-    let buf = w.into_bytes();
-    write_section_header(out, Section::Type, buf.len(), 4);
-    out.extend_from_slice(&buf);
+    emit_u32_offset_section(w, out, Section::Type, offsets_pos, &offsets);
     Ok(())
 }
 
@@ -1233,7 +1213,7 @@ impl DebugInfoCollector {
         use crate::ir::Location;
         self.current_scope = match loc {
             Location::FileLineCol { filename, line, .. } => {
-                let (dir, base) = split_file_path(filename);
+                let (dir, base) = super::debug_info::split_file_path(filename);
                 let file = self.attrs.file(strings, base, dir);
                 let cu = self.attrs.compile_unit(file);
                 self.attrs.subprogram(
@@ -1267,14 +1247,6 @@ impl DebugInfoCollector {
         if let Some(list) = self.per_function.last_mut() {
             list.push(attr);
         }
-    }
-}
-
-/// Splits a path into (directory, basename) for DIFile encoding.
-fn split_file_path(path: &str) -> (&str, &str) {
-    match path.rfind('/') {
-        Some(i) => (&path[..i], &path[i + 1..]),
-        None => ("", path),
     }
 }
 
@@ -1535,16 +1507,10 @@ fn find_type_attr(attrs: &[(String, Attribute)], name: &str) -> Option<Type> {
     })
 }
 
-fn find_attr<'a>(attrs: &'a [(String, Attribute)], name: &str) -> Option<&'a Attribute> {
+pub(crate) fn find_attr<'a>(attrs: &'a [(String, Attribute)], name: &str) -> Option<&'a Attribute> {
     attrs
         .iter()
         .find_map(|(k, v)| if k == name { Some(v) } else { None })
-}
-
-/// Attributes that are encoded in the function header, not per-operation.
-#[allow(dead_code)]
-fn is_function_level_attr(name: &str) -> bool {
-    matches!(name, "sym_name" | "function_type" | "optimization_hints")
 }
 
 #[cfg(test)]

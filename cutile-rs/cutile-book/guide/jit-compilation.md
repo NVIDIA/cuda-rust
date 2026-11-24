@@ -169,6 +169,7 @@ match TileFunctionKey {
             stride_one,
             base_ptr_div,
             elements_disjoint,
+            full_slab,
         }),
         ...
     ],
@@ -194,7 +195,7 @@ match TileFunctionKey {
 | `module_name`, `function_name` | The `#[cutile::module]` module and `#[cutile::entry]` function being launched. |
 | `function_generics` | Type and const generic arguments for the entry function, including tile shapes such as `BM`, `BN`, and `BK` when they are part of the signature. |
 | `stride_args` | The stride-one pattern recorded for tensor arguments. |
-| `spec_args` | Tensor specialization hints. Today this includes per-dimension shape divisibility, per-dimension stride divisibility, whether each stride is exactly `1`, base-pointer divisibility, and a stride-derived non-overlap bit. |
+| `spec_args` | Tensor specialization hints. Today this includes per-dimension shape divisibility, per-dimension stride divisibility, whether each stride is exactly `1`, base-pointer divisibility, a stride-derived non-overlap bit, and, for a partitioned output, whether the partition divides each axis so every block's slab is full there. |
 | `scalar_hints` | `DivHint` values derived from integer scalar parameters and raw pointer parameters. Integer hints are based on value divisibility; pointer hints are based on pointer alignment. |
 | `grid` | `Some((x, y, z))` only when `.const_grid(...)` is used. Runtime `.grid(...)` leaves this as `None`. |
 | `compile_options` | Per-launch compile options such as occupancy, architecture-specific scheduling settings, and divisibility limits. |

@@ -254,16 +254,29 @@ impl TensorInput {
         self.mutable && self.param_kind == TensorParamKind::Tensor
     }
 
+    /// Whether every block's slab is full on `axis`: the host saw the
+    /// partition divide the tensor there.
+    fn is_full_slab(&self, axis: usize) -> bool {
+        self.spec
+            .as_ref()
+            .is_some_and(|spec| spec.full_slab.get(axis) == Some(&true))
+    }
+
     /// Binds `{var}_slab_ptr` and `{var}_slab_shape`: the slab of the current
-    /// tile block, in elements. Each axis starts at `pid * slab` and is clipped
-    /// to the root extent, so a ragged last slab ends where the tensor does.
+    /// tile block, in elements. Each axis starts at `pid * slab`. A full axis
+    /// keeps the slab extent, static when the kernel declares it; a ragged
+    /// axis is clipped to the root extent, so the last slab ends where the
+    /// tensor does.
     fn slab_view_statements(&self) -> Vec<Stmt> {
         let var_name = &self.var_name;
         let element_type = &self.element_type;
         let axes = 0..self.rank as usize;
-        let slab_extent = |axis: usize| match self.input_tensor_shape.shape[axis].as_str() {
-            "-1" | "- 1" => format!("{var_name}_partition_dim_{axis}"),
-            extent => extent.to_string(),
+        let static_slab = |axis: usize| match self.input_tensor_shape.shape[axis].as_str() {
+            "-1" | "- 1" => None,
+            extent => Some(extent.to_string()),
+        };
+        let slab_extent = |axis: usize| {
+            static_slab(axis).unwrap_or_else(|| format!("{var_name}_partition_dim_{axis}"))
         };
         let stride = |axis: usize| match self.static_strides[axis].as_str() {
             "-1" | "- 1" => format!("{var_name}_stride_{axis}"),
@@ -273,14 +286,27 @@ impl TensorInput {
         let mut lines = vec![format!(
             "let {var_name}_pid: (i32, i32, i32) = get_tile_block_id();"
         )];
+        let mut slab_shape = vec![];
+        let mut dynamic_extents = vec![];
         for axis in axes.clone() {
             let slab = slab_extent(axis);
             lines.push(format!(
                 "let {var_name}_origin_{axis}: i32 = {var_name}_pid.{axis} * {slab};"
             ));
-            lines.push(format!(
-                "let {var_name}_extent_{axis}: i32 = min({slab}, {var_name}_dim_{axis} - {var_name}_origin_{axis});"
-            ));
+            match (self.is_full_slab(axis), static_slab(axis)) {
+                (true, Some(extent)) => slab_shape.push(extent),
+                (true, None) => {
+                    slab_shape.push("-1".to_string());
+                    dynamic_extents.push(slab);
+                }
+                (false, _) => {
+                    slab_shape.push("-1".to_string());
+                    dynamic_extents.push(format!("{var_name}_extent_{axis}"));
+                    lines.push(format!(
+                        "let {var_name}_extent_{axis}: i32 = min({slab}, {var_name}_dim_{axis} - {var_name}_origin_{axis});"
+                    ));
+                }
+            }
             for (term, value) in [
                 ("origin", format!("{var_name}_origin_{axis}")),
                 ("stride", stride(axis)),
@@ -301,12 +327,8 @@ impl TensorInput {
             .map(|axis| format!("{var_name}_offset_{axis}"))
             .collect::<Vec<_>>()
             .join(" + ");
-        let extents = axes
-            .clone()
-            .map(|axis| format!("{var_name}_extent_{axis}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let dynamic_shape = format!("{{[{}]}}", vec!["-1"; self.rank as usize].join(","));
+        let slab_shape = format!("{{[{}]}}", slab_shape.join(","));
+        let dynamic_extents = dynamic_extents.join(", ");
         lines.push(format!(
             "let {var_name}_slab_offset: Tile<i64, {{[]}}> = {offset_sum};"
         ));
@@ -314,7 +336,7 @@ impl TensorInput {
             "let {var_name}_slab_ptr: PointerTile<*mut {element_type}, {{[]}}> = addptr_tile({var_name}_ptr, {var_name}_slab_offset);"
         ));
         lines.push(format!(
-            "let {var_name}_slab_shape: Shape<{dynamic_shape}> = Shape::<{dynamic_shape}> {{ dims: &[{extents}] }};"
+            "let {var_name}_slab_shape: Shape<{slab_shape}> = Shape::<{slab_shape}> {{ dims: &[{dynamic_extents}] }};"
         ));
         lines
             .iter()

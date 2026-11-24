@@ -214,6 +214,7 @@ use cuda_async::device_operation::{
 use cuda_async::error::DeviceError;
 use cuda_core::sys::CUdeviceptr;
 use cuda_core::{DType, DTypeId};
+use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::mem::{align_of, size_of, MaybeUninit};
@@ -265,9 +266,40 @@ pub struct Partition<T> {
     /// it. Launched blocks embed identically; blocks beyond the launch grid
     /// are simply never visited (they keep their prior contents).
     pub(crate) prefix_coverage: bool,
+    /// The tensor's specialization bits, plus which axes its slabs fill.
+    spec: SpecializationBits,
 }
 
 impl<T> Partition<T> {
+    fn new<E: DType>(object: T, partition_shape: &[usize]) -> Self
+    where
+        T: Borrow<Tensor<E>>,
+    {
+        let tensor = object.borrow();
+        // `&mut` proves exclusivity of this handle, not of the storage — an
+        // `Arc<Tensor>` alias produced by reshape_shared/reinterpret/
+        // into_shared_alias can still be a live kernel input.
+        tensor.assert_unique_storage();
+        let partition_strides = tensor.strides.iter().map(|&s| s as usize).collect();
+        let full_slab = tensor
+            .shape
+            .iter()
+            .zip(partition_shape)
+            .map(|(&dim, &slab)| (dim as usize).is_multiple_of(slab))
+            .collect();
+        let spec = SpecializationBits {
+            full_slab,
+            ..tensor.spec.clone()
+        };
+        Partition {
+            object,
+            partition_shape: partition_shape.to_vec(),
+            partition_strides,
+            prefix_coverage: false,
+            spec,
+        }
+    }
+
     /// Opts this binding into partial coverage: the launch grid may be a
     /// per-axis PREFIX of the inferred block grid (`launch <= inferred` on
     /// every axis) instead of equal to it. Launched blocks map to exactly
@@ -1593,30 +1625,14 @@ impl<T: DType> IntoPartitionArc for Tensor<T> {
         self: Arc<Tensor<T>>,
         partition_shape: [usize; RANK],
     ) -> Partition<Tensor<T>> {
-        let partition_shape = partition_shape.to_vec();
-        let partition_strides: Vec<usize> = self.strides.iter().map(|&s| s as usize).collect();
         let tensor = Arc::try_unwrap(self).expect("Failed to convert Arc to Partition.");
-        tensor.assert_unique_storage();
-        Partition::<Tensor<T>> {
-            object: tensor,
-            partition_shape,
-            partition_strides,
-            prefix_coverage: false,
-        }
+        Partition::new(tensor, &partition_shape)
     }
 }
 
 impl<T: DType> IntoPartition for Tensor<T> {
     fn partition<const RANK: usize>(self, partition_shape: [usize; RANK]) -> Partition<Tensor<T>> {
-        let partition_shape = partition_shape.to_vec();
-        let partition_strides: Vec<usize> = self.strides.iter().map(|&s| s as usize).collect();
-        self.assert_unique_storage();
-        Partition::<Tensor<T>> {
-            object: self,
-            partition_shape,
-            partition_strides,
-            prefix_coverage: false,
-        }
+        Partition::new(self, &partition_shape)
     }
 }
 
@@ -1648,19 +1664,7 @@ impl<'a, T: DType> PartitionMut<'a, T> for &'a mut Tensor<T> {
         self,
         partition_shape: [usize; RANK],
     ) -> Partition<&'a mut Tensor<T>> {
-        let partition_shape = partition_shape.to_vec();
-        let partition_strides: Vec<usize> = self.strides.iter().map(|&s| s as usize).collect();
-        // Same invariant as the owned `IntoPartition` path: `&mut` proves
-        // exclusivity of this handle, not of the storage — an `Arc<Tensor>`
-        // alias produced by reshape_shared/reinterpret/into_shared_alias can
-        // still be a live kernel input.
-        self.assert_unique_storage();
-        Partition {
-            object: self,
-            partition_shape,
-            partition_strides,
-            prefix_coverage: false,
-        }
+        Partition::new(self, &partition_shape)
     }
 }
 
@@ -1951,7 +1955,7 @@ impl<T: DType> KernelOutputStored<T> for Partition<Tensor<T>> {
             .collect()
     }
     fn spec(&self) -> &SpecializationBits {
-        &self.object.spec
+        &self.spec
     }
     fn shape_as_i32(&self) -> Vec<i32> {
         self.object.shape.clone()
@@ -2009,7 +2013,7 @@ impl<T: DType> KernelOutputStored<T> for Partition<&mut Tensor<T>> {
             .collect()
     }
     fn spec(&self) -> &SpecializationBits {
-        &self.object.spec
+        &self.spec
     }
     fn shape_as_i32(&self) -> Vec<i32> {
         self.object.shape.clone()

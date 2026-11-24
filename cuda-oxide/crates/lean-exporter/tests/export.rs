@@ -2392,3 +2392,88 @@ mir.func @vecadd_rev: builtin.function <(mir.slice <builtin.fp32 ,mutable:false,
         "unexpected domain=2 error: {dom2_err}"
     );
 }
+
+/// `a.as_ptr().add(idx + 1_000_000)` on a slice parameter named in `#[verify]`: slice -> raw slice
+/// -> thin pointer casts, then `mir.ptr_offset` and `mir.load`. The model tracks no access on it.
+fn with_raw_far_read(fixture: &str) -> String {
+    fixture
+        .replacen(
+            "    b_ptr = mir.extract_field (b)",
+            concat!(
+                "    raw_slice = mir.cast (a) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority RawAddress]: <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>) -> (mir.slice <builtin.fp32 ,mutable:false,kind:RawConst>)>;\n",
+                "    raw_ptr = mir.cast (raw_slice) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority RustCast]: <(mir.slice <builtin.fp32 ,mutable:false,kind:RawConst>) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:RawConst>)>;\n",
+                "    far = mir.constant () [] [value: builtin.integer <1000000: ui64>]: <() -> (builtin.integer ui64)>;\n",
+                "    far_idx = mir.add (idx, far) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;\n",
+                "    far_elem = mir.ptr_offset (raw_ptr, far_idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:RawConst>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:RawConst>)>;\n",
+                "    far_val = mir.load (far_elem) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:RawConst>) -> (builtin.fp32)>;\n",
+                "    b_ptr = mir.extract_field (b)",
+            ),
+            1,
+        )
+        .replacen(
+            "    mir.store (c_elem, sum) [] []:",
+            "    sum_far = mir.add (sum, far_val) [] []: <(builtin.fp32, builtin.fp32) -> (builtin.fp32)>;\n    mir.store (c_elem, sum_far) [] []:",
+            1,
+        )
+}
+
+#[test]
+fn rejects_raw_pointer_read_of_a_verified_slice_parameter() {
+    // A checked read of `a` plus `a.as_ptr().add(idx + 1_000_000)`: the raw load is not an access
+    // the model tracks, so `no_oob_idx(a)` would be reported as proven. It must fail closed instead.
+    let raw_read = with_raw_far_read(VECADD_FIXTURE);
+    let read_err = export_named_source(&raw_read, "vecadd")
+        .expect_err("raw pointer read of a verified slice parameter must fail closed");
+    let read_msg = read_err.to_string();
+    assert!(
+        read_msg.contains("verified slice parameter 0 of kernel `vecadd`")
+            && read_msg.contains("raw pointer"),
+        "unexpected raw-read error: {read_msg}"
+    );
+}
+
+#[test]
+fn rejects_raw_pointer_store_through_a_verified_mut_slice_parameter() {
+    // A `&mut [u32]` parameter named in `no_oob_idx` and `disjoint_writes`: a checked store through
+    // the modeled pointer, then a store far past it through `as_mut_ptr`.
+    let raw_store = r#"
+builtin.module @raw_store_test {
+  ^entry():
+    mir.func @raw_store_k: builtin.function <(mir.slice <builtin.integer ui32 ,mutable:true,kind:UniqueRef>) -> ()>
+      [gpu_kernel: builtin.string "true", launch_contract_domain: builtin.integer <1: ui32>, reqntid_x: builtin.integer <256: ui32>, reqntid_y: builtin.integer <1: ui32>, reqntid_z: builtin.integer <1: ui32>, verify_no_oob_idx: builtin.string "0", verify_disjoint_writes: builtin.string "0"]
+    {
+      ^entry(c: mir.slice <builtin.integer ui32 ,mutable:true,kind:UniqueRef>):
+        one = mir.constant () [] [value: builtin.integer <1: ui32>]: <() -> (builtin.integer ui32)>;
+        c_ptr = mir.extract_field (c) [] [index: mir.field_index 0]: <(mir.slice <builtin.integer ui32 ,mutable:true,kind:UniqueRef>) -> (mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:0,kind:Erased>)>;
+        mir.store (c_ptr, one) [] []: <(mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:0,kind:Erased>, builtin.integer ui32) -> ()>;
+        raw_slice = mir.cast (c) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority RawAddress]: <(mir.slice <builtin.integer ui32 ,mutable:true,kind:UniqueRef>) -> (mir.slice <builtin.integer ui32 ,mutable:true,kind:RawMut>)>;
+        raw_ptr = mir.cast (raw_slice) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority RustCast]: <(mir.slice <builtin.integer ui32 ,mutable:true,kind:RawMut>) -> (mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:0,kind:RawMut>)>;
+        far = mir.constant () [] [value: builtin.integer <1000000: ui64>]: <() -> (builtin.integer ui64)>;
+        far_elem = mir.ptr_offset (raw_ptr, far) [] []: <(mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:0,kind:RawMut>, builtin.integer ui64) -> (mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:0,kind:RawMut>)>;
+        mir.store (far_elem, one) [] []: <(mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:0,kind:RawMut>, builtin.integer ui32) -> ()>;
+        mir.return () [] []: <() -> ()>
+    }
+}
+"#;
+    let store_err = export_named_source(raw_store, "raw_store_k")
+        .expect_err("raw pointer store through a verified `&mut [T]` parameter must fail closed");
+    let store_msg = store_err.to_string();
+    assert!(
+        store_msg.contains("verified slice parameter 0 of kernel `raw_store_k`")
+            && store_msg.contains("raw pointer"),
+        "unexpected raw-store error: {store_msg}"
+    );
+}
+
+#[test]
+fn accepts_raw_pointer_read_of_a_slice_parameter_no_verify_clause_names() {
+    // `a` appears only in `requires`, so no clause makes a bounds claim about it and a raw read of it
+    // stays accepted: the rejection is for the parameters a clause names.
+    let unnamed = with_raw_far_read(VECADD_FIXTURE).replacen(
+        "verify_no_oob_idx: builtin.string \"0,1,2\"",
+        "verify_no_oob_idx: builtin.string \"1,2\"",
+        1,
+    );
+    export_named_source(&unnamed, "vecadd")
+        .expect("raw read of a slice parameter that no verify clause names stays accepted");
+}

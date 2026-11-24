@@ -39,6 +39,7 @@ use crate::{
         CfgBranchCond, CfgOpItem, GuardExpr, IdxExpr, TranscribedCfgBlock,
         TranscribedControlFlowCfg,
     },
+    symbol_name,
 };
 
 /// Parameter kind in a transcribed [`MirProgramData`].
@@ -389,6 +390,13 @@ pub(super) fn translate_mir_program(
             || spec.mutable_slice_params.contains(&p)
             || spec.requires_len_ge.iter().any(|&(l, r)| l == p || r == p)
     };
+    // Parameters a `#[verify]` clause makes a claim about (the `mir.call` escape check uses the same set).
+    let is_claimed_param = |p: usize| -> bool {
+        spec.no_oob_idx.contains(&p)
+            || spec.disjoint_writes.contains(&p)
+            || spec.mutable_slice_params.contains(&p)
+    };
+    let kernel_name = symbol_name(ctx, function).unwrap_or_else(|_| "<kernel>".to_string());
     for (idx, arg) in graph.blocks[0].deref(ctx).arguments().enumerate() {
         let arg_vid = *val_ids.entry(arg).or_insert_with(|| {
             let id = next_var_id;
@@ -3063,6 +3071,28 @@ pub(super) fn translate_mir_program(
                         || cast_str.contains("PointerWithExposedProvenance")
                         || cast_str.contains("PointerCoercionMutToConst")
                     {
+                        // `as_ptr` / `as_mut_ptr`: the thin pointer would carry the slice tag, but loads, stores
+                        // and offsets on it have no model, so a claimed parameter must not reach one.
+                        if let Some(LocalTag::SliceParam(p, true)) = tags.get(&src).copied()
+                            && is_claimed_param(p)
+                            && src
+                                .get_type(ctx)
+                                .deref(ctx)
+                                .downcast_ref::<MirSliceType>()
+                                .is_some()
+                            && res
+                                .get_type(ctx)
+                                .deref(ctx)
+                                .downcast_ref::<MirSliceType>()
+                                .is_none()
+                        {
+                            return Err(reject(
+                                "mir.cast",
+                                format!(
+                                    "verified slice parameter {p} of kernel `{kernel_name}` cannot be converted to a raw pointer (`as_ptr`, `as_mut_ptr`): accesses through it are not modeled; index the slice or remove `#[verify]`"
+                                ),
+                            ));
+                        }
                         if let Some(&t) = tags.get(&src) {
                             tags.insert(res, t);
                         }

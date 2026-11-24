@@ -91,9 +91,10 @@
 //! Launch grid dimensions are automatically inferred from partitioned tensors.
 //! If multiple partitions exist, their grids must match.
 
-use cutile_compiler::kernel_naming::KernelNaming;
-use cutile_compiler::syn_utils::*;
-use cutile_compiler::types::get_ptr_type;
+use cutile_expand::error::{Error, SpannedError};
+use cutile_frontend::kernel_naming::KernelNaming;
+use cutile_frontend::syn_utils::*;
+use cutile_frontend::types::get_ptr_type;
 use proc_macro2::Ident;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{quote, ToTokens};
@@ -103,8 +104,6 @@ use syn::{
     GenericParam, Generics, ImplItemFn, ItemFn, Lit, PatType, Stmt, Type, TypeParam, TypeReference,
     WherePredicate,
 };
-
-use crate::error::{Error, SpannedError};
 
 /// Classification of generic parameter types.
 ///
@@ -602,12 +601,12 @@ pub fn generate_kernel_launcher(
                 }
                 builder_statements.push(parse_stmt(format!("kernel_launch.push_arg({var_name});")));
                 // For integer scalar params, auto-compute DivHint at launch time.
-                if cutile_compiler::specialization::is_integer_scalar(&type_name) {
+                if cutile_frontend::specialization::is_integer_scalar(&type_name) {
                     scalar_hint_exprs.push(format!(
-                        r#"("{var_name}".to_string(), {tile_rust_crate_root}::cutile_compiler::specialization::DivHint::from_value({var_name} as i32))"#
+                        r#"("{var_name}".to_string(), {tile_rust_crate_root}::cutile_frontend::specialization::DivHint::from_value({var_name} as i32))"#
                     ));
                     scalar_hint_value_exprs.push(format!(
-                        "{tile_rust_crate_root}::cutile_compiler::specialization::DivHint::from_value({var_name} as i32)"
+                        "{tile_rust_crate_root}::cutile_frontend::specialization::DivHint::from_value({var_name} as i32)"
                     ));
                 }
                 param_element_types.push(None);
@@ -644,10 +643,10 @@ pub fn generate_kernel_launcher(
                     "unsafe {{ kernel_launch.push_device_ptr({var_name}.cu_deviceptr()); }}"
                 )));
                 scalar_hint_exprs.push(format!(
-                    r#"("{var_name}".to_string(), {tile_rust_crate_root}::cutile_compiler::specialization::DivHint::from_ptr({var_name}.cu_deviceptr()))"#
+                    r#"("{var_name}".to_string(), {tile_rust_crate_root}::cutile_frontend::specialization::DivHint::from_ptr({var_name}.cu_deviceptr()))"#
                 ));
                 scalar_hint_value_exprs.push(format!(
-                    "{tile_rust_crate_root}::cutile_compiler::specialization::DivHint::from_ptr({var_name}.cu_deviceptr())"
+                    "{tile_rust_crate_root}::cutile_frontend::specialization::DivHint::from_ptr({var_name}.cu_deviceptr())"
                 ));
                 // The specialization's pointee type must be the `DevicePointer<T>`
                 // element type: a user `.generics(..)` list can widen `T`, and the
@@ -660,7 +659,7 @@ pub fn generate_kernel_launcher(
                                 panic!("Unexpected validator type {:#?}", &validator.params[#i]);
                             };
                             let given_dtype = <#pointee_ty as DType>::DTYPE.as_str();
-                            let compiled_dtype = #tile_rust_crate_root::cutile_compiler::types::get_ptr_type(&pointer_validator.element_type)
+                            let compiled_dtype = #tile_rust_crate_root::cutile_frontend::types::get_ptr_type(&pointer_validator.element_type)
                                 .map(|(_, pointee)| pointee)
                                 .unwrap_or_else(|| pointer_validator.element_type.clone());
                             kernel_launch_assert_with(compiled_dtype == given_dtype, || format!("{} element type mismatch: the kernel was specialized for a `*{}` pointer but the launch passes a `DevicePointer<{}>` (check the `.generics(..)` list)", #var_name, compiled_dtype, given_dtype))?;
@@ -918,7 +917,7 @@ pub fn generate_kernel_launcher(
         .stmts
         .push(stride_args_stmt.clone());
     let spec_args_stmt = parse_stmt(format!(
-        "let spec_args: Vec<(String, {tile_rust_crate_root}::cutile_compiler::specialization::SpecializationBits)> = vec![{}];",
+        "let spec_args: Vec<(String, {tile_rust_crate_root}::cutile_frontend::specialization::SpecializationBits)> = vec![{}];",
         spec_args.join(",")
     ));
     specialization_method
@@ -928,7 +927,7 @@ pub fn generate_kernel_launcher(
 
     // Emit scalar_hints (populated for integer scalar and raw pointer params).
     let scalar_hints_stmt = parse_stmt(format!(
-        "let scalar_hints: Vec<(String, {tile_rust_crate_root}::cutile_compiler::specialization::DivHint)> = vec![{}];",
+        "let scalar_hints: Vec<(String, {tile_rust_crate_root}::cutile_frontend::specialization::DivHint)> = vec![{}];",
         scalar_hint_exprs.join(",")
     ));
     specialization_method
@@ -943,12 +942,12 @@ pub fn generate_kernel_launcher(
     // Fixed-size arrays: the probe borrows them, so a steady-state launch
     // allocates nothing here.
     launcher_method.block.stmts.push(parse_stmt(format!(
-        "let __specs: [&{tile_rust_crate_root}::cutile_compiler::specialization::SpecializationBits; {}] = [{}];",
+        "let __specs: [&{tile_rust_crate_root}::cutile_frontend::specialization::SpecializationBits; {}] = [{}];",
         spec_ref_exprs.len(),
         spec_ref_exprs.join(",")
     )));
     launcher_method.block.stmts.push(parse_stmt(format!(
-        "let __hint_vals: [{tile_rust_crate_root}::cutile_compiler::specialization::DivHint; {}] = [{}];",
+        "let __hint_vals: [{tile_rust_crate_root}::cutile_frontend::specialization::DivHint; {}] = [{}];",
         scalar_hint_value_exprs.len(),
         scalar_hint_value_exprs.join(",")
     )));
@@ -970,10 +969,10 @@ pub fn generate_kernel_launcher(
             __hit
         }} else {{
             let stride_args: Vec<(String, Vec<i32>)> = vec![{strides}];
-            let spec_args: Vec<(String, {root}::cutile_compiler::specialization::SpecializationBits)> = vec![{specs}];
-            let scalar_hints: Vec<(String, {root}::cutile_compiler::specialization::DivHint)> = vec![{hints}];
+            let spec_args: Vec<(String, {root}::cutile_frontend::specialization::SpecializationBits)> = vec![{specs}];
+            let scalar_hints: Vec<(String, {root}::cutile_frontend::specialization::DivHint)> = vec![{hints}];
             let __generics_snapshot = function_generics.clone();
-            let __specs_snapshot: Vec<{root}::cutile_compiler::specialization::SpecializationBits> =
+            let __specs_snapshot: Vec<{root}::cutile_frontend::specialization::SpecializationBits> =
                 spec_args.iter().map(|(_, s)| s.clone()).collect();
             let __hints_snapshot = __hint_vals.to_vec();
             let __options_snapshot = __compile_options.clone();
@@ -1519,7 +1518,7 @@ fn parse_precondition(binary: &syn::ExprBinary) -> Result<Precondition, Error> {
             };
             let divisor = int_lit
                 .base10_parse::<i64>()
-                .map_err(|err| crate::error::syn_err(int_lit.span(), &err.to_string()))?;
+                .map_err(|err| cutile_expand::error::syn_err(int_lit.span(), &err.to_string()))?;
             if divisor < 1 {
                 return rem.right.err(&format!(
                     "a `%` precondition divisor must be >= 1, got {divisor}"
@@ -1608,7 +1607,7 @@ fn parse_precondition_axis_arg(expr: &Expr) -> Result<usize, Error> {
     };
     lit_int
         .base10_parse::<usize>()
-        .map_err(|err| crate::error::syn_err(lit_int.span(), &err.to_string()))
+        .map_err(|err| cutile_expand::error::syn_err(lit_int.span(), &err.to_string()))
 }
 
 fn precondition_shape_expr(name: &str, kind: TensorParamKind) -> TokenStream2 {
@@ -1633,7 +1632,7 @@ fn metadata_precondition_validation_stmts(
                 divisor,
             } => {
                 let Some(&kind) = tensor_param_kinds.get(tensor) else {
-                    return Err(crate::error::syn_err(
+                    return Err(cutile_expand::error::syn_err(
                         Span::call_site(),
                         &format!("precondition references unknown tensor parameter `{tensor}`"),
                     ));
@@ -1662,7 +1661,7 @@ fn metadata_precondition_validation_stmts(
             }
         };
         let Some(&lhs_kind) = tensor_param_kinds.get(&precondition.lhs) else {
-            return Err(crate::error::syn_err(
+            return Err(cutile_expand::error::syn_err(
                 Span::call_site(),
                 &format!(
                     "precondition references unknown tensor parameter `{}`",
@@ -1671,7 +1670,7 @@ fn metadata_precondition_validation_stmts(
             ));
         };
         let Some(&rhs_kind) = tensor_param_kinds.get(&precondition.rhs) else {
-            return Err(crate::error::syn_err(
+            return Err(cutile_expand::error::syn_err(
                 Span::call_site(),
                 &format!(
                     "precondition references unknown tensor parameter `{}`",

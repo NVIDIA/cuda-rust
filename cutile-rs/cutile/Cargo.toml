@@ -27,6 +27,7 @@ cuda-core = { workspace = true }
 # Explicit path lets trybuild normalize diagnostics from this external workspace.
 cuda-async = { path = "../../cuda-async", version = "=0.5.0" }
 cutile-compiler = { workspace = true }
+cutile-dsl = { workspace = true }
 cutile-macro = { workspace = true }
 cutile-ir = { workspace = true }
 linkme = { workspace = true }

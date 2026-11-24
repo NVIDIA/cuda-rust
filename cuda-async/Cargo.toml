@@ -12,6 +12,7 @@ description = "Safe Async CUDA support via Async Rust."
 [dependencies]
 # Sibling paths, not the root workspace entries; see cuda-core/Cargo.toml.
 cuda-core = { version = "=0.5.0", path = "../cuda-core" }
+cuda-obligation = { version = "=0.5.0", path = "../cuda-obligation" }
 rustc-hash = "2.0"
 cuda-bindings = { version = "=0.5.0", path = "../cuda-bindings" }
 half = { version = "2" }

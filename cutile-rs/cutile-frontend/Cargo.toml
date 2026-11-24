@@ -1,0 +1,26 @@
+[package]
+name = "cutile-frontend"
+description = "cuTile Rust compiler frontend: Rust DSL to Tile IR."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+half = { workspace = true }
+linkme = { workspace = true }
+prettyplease = { workspace = true }
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+regex = { workspace = true }
+stacker = { workspace = true }
+syn = { workspace = true }
+cutile-ir = { workspace = true }
+cuda-obligation = { workspace = true }
+sha2 = { workspace = true }
+
+[lints]
+workspace = true

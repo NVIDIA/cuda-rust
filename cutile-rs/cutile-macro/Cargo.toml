@@ -22,7 +22,8 @@ proc-macro2 = { workspace = true }
 quote = { workspace = true }
 itertools = { workspace = true }
 convert_case = { workspace = true }
-cutile-compiler = { workspace = true }
+cutile-frontend = { workspace = true }
+cutile-expand = { workspace = true }
 sha2 = { workspace = true }
 
 [lints]

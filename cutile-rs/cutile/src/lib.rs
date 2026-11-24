@@ -42,7 +42,7 @@
 //! #[cutile::module]
 //! mod kernels {
 //!     use cutile::core::*;
-//!     
+//!
 //!     #[cutile::entry]
 //!     fn vector_add<T: ElementType, const N: i32>(
 //!         z: &mut Tensor<T, {[N]}>,
@@ -163,11 +163,8 @@
 //! For tutorials, the DSL reference, and the execution model, see the
 //! [cuTile Rust Book](https://nvidia.github.io/cuda-rust/cutile/).
 
-pub mod _core;
-pub mod _tileir;
 pub mod error;
-pub use _core::core;
-pub use _tileir::tileir;
+pub use cutile_dsl::{_core, _tileir, core, tileir};
 
 // LINKING Phase B: register an additional registry entry at the public
 // `cutile::core` path so kernel `use cutile::core::*` statements resolve

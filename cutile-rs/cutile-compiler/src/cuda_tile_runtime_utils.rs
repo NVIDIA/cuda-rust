@@ -10,6 +10,9 @@ use crate::compile_control::{CompileControl, CompileInterrupted};
 use crate::error::JITError;
 use crate::hints::CodegenMode;
 use cuda_core::{get_device_sm_name, Context};
+pub use cutile_frontend::env::{env_flag_enabled, jit_hoist_log_enabled};
+pub use cutile_frontend::hints::DEFAULT_OPT_LEVEL;
+use cutile_frontend::tile_library::TileLibrary;
 use cutile_ir::bytecode::{write_bytecode_version, BytecodeVersion};
 use std::collections::HashMap;
 use std::env;
@@ -101,14 +104,6 @@ pub fn get_compiler_version() -> String {
 // ablation switches are resolved once per compile into a
 // [`crate::check_optimizations::CheckOptimizations`] (see `from_env` there);
 // the compiler consults that policy, never the environment.
-
-/// `CUTILE_JIT_LOG` (`1`/`true`/`yes`/`on`, like every other on/off switch
-/// of the crate and of `cutile`) also reports every bounds check that stays
-/// inside a loop body with the reason it could not hoist.
-pub fn jit_hoist_log_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| env_flag_enabled("CUTILE_JIT_LOG"))
-}
 
 /// Queries the CUDA driver to determine the SM architecture name (e.g. `"sm_90"`) for a device.
 ///
@@ -521,11 +516,6 @@ fn negotiate_bytecode_version(
         .map_err(|error| JITError::Generic(error.to_string()))
 }
 
-/// Default `--opt-level` for optimized code.
-/// Numeric, not a string: the disk-cache key and entry header store it as one
-/// byte.
-pub const DEFAULT_OPT_LEVEL: u8 = 3;
-
 /// A path removed when dropped, so the error paths clean up too.
 struct ScopedTempFile(Option<PathBuf>);
 
@@ -663,8 +653,6 @@ pub(crate) fn current_l2_key_for_module(
     Ok(current_l2_key_for_bytecode(&bytecode, bytecode_version, gpu_name, opts).0)
 }
 
-use crate::tile_library::TileLibrary;
-
 /// Flags forwarded to the `tileiras` invocation.
 ///
 /// These are the complete stage-2 inputs besides the bytecode, the target
@@ -693,7 +681,7 @@ impl Default for TileirasOptions {
 }
 
 impl TileirasOptions {
-    /// The stage-2 subset of the launch-facing [`crate::hints::CompileOptions`].
+    /// The stage-2 subset of the launch-facing [`CompileOptions`].
     pub fn from_compile_options(options: &crate::hints::CompileOptions) -> Self {
         Self {
             codegen: options.codegen,
@@ -1370,19 +1358,6 @@ fn cuda_version_from_header(cuda_h: &Path) -> Result<u32, String> {
 
 fn format_cuda_version(version: u32) -> String {
     format!("{}.{}", version / 1000, (version % 1000) / 10)
-}
-
-/// Returns whether the environment variable `var` is set to a truthy value
-/// (`1` / `true` / `yes` / `on`, case-insensitive, surrounding whitespace ignored).
-///
-/// Shared by the crate's on/off diagnostic env vars so they all parse the same way.
-pub fn env_flag_enabled(var: &str) -> bool {
-    env::var(var).is_ok_and(|value| {
-        matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )
-    })
 }
 
 fn setup_diagnostics_enabled() -> bool {
@@ -2431,5 +2406,159 @@ printf 'fake cubin\n' > "$out"
             .write_all(format!("#!/bin/sh\nset -eu\n{body}").as_bytes())
             .unwrap();
         assert!(writer.wait().unwrap().success());
+    }
+
+    use crate::hints::{CodegenMode, CompileOptions, DebugInfoLevel};
+
+    /// `(opt_level, device_debug, lineinfo)` as `tileiras` gets them.
+    fn tileiras(options: &CompileOptions) -> (u8, bool, bool) {
+        let flags = TileirasOptions::from_compile_options(options);
+        let device_debug = flags.codegen == CodegenMode::Debug;
+        let lineinfo = matches!(flags.codegen, CodegenMode::Optimized { lineinfo: true, .. });
+        (flags.codegen.opt_level(), device_debug, lineinfo)
+    }
+
+    #[test]
+    fn every_setter_sequence_yields_flags_tileiras_accepts() {
+        let setters: Vec<fn(CompileOptions) -> CompileOptions> = vec![
+            |o| o.debug_info(DebugInfoLevel::None),
+            |o| o.debug_info(DebugInfoLevel::Line),
+            |o| o.debug_info(DebugInfoLevel::Full),
+            |o| o.opt_level(0),
+            |o| o.opt_level(3),
+        ];
+        for first in &setters {
+            for second in &setters {
+                for third in &setters {
+                    let options = third(second(first(CompileOptions::new())));
+                    let (opt_level, device_debug, lineinfo) = tileiras(&options);
+                    assert!(
+                        !device_debug || (opt_level == 0 && !lineinfo),
+                        "{options:?} resolves to an invalid tileiras combination"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_last_setter_decides_between_debug_and_optimized_code() {
+        let full = DebugInfoLevel::Full;
+        assert_eq!(
+            tileiras(&CompileOptions::new().debug_info(full).opt_level(3)),
+            (3, false, false)
+        );
+        assert_eq!(
+            tileiras(&CompileOptions::new().opt_level(3).debug_info(full)),
+            (0, true, false)
+        );
+    }
+
+    #[test]
+    fn optimized_code_keeps_its_level_and_line_info_across_setters() {
+        let line = DebugInfoLevel::Line;
+        assert_eq!(
+            tileiras(&CompileOptions::new().opt_level(2).debug_info(line)),
+            (2, false, true)
+        );
+        assert_eq!(
+            tileiras(&CompileOptions::new().debug_info(line).opt_level(1)),
+            (1, false, true)
+        );
+        assert_eq!(
+            tileiras(
+                &CompileOptions::new()
+                    .debug_info(DebugInfoLevel::Full)
+                    .debug_info(DebugInfoLevel::None)
+            ),
+            (3, false, false)
+        );
+    }
+
+    #[test]
+    fn cache_bytes_match_the_previous_encoding() {
+        let full = DebugInfoLevel::Full;
+        let line = DebugInfoLevel::Line;
+        for (options, opt_level, flags) in [
+            (
+                CompileOptions::new().debug_info(DebugInfoLevel::None),
+                3,
+                0b000,
+            ),
+            (CompileOptions::new().debug_info(line), 3, 0b010),
+            (CompileOptions::new().debug_info(full), 0, 0b001),
+            (
+                CompileOptions::new().opt_level(1).debug_info(line),
+                1,
+                0b010,
+            ),
+            (
+                CompileOptions::new()
+                    .debug_info(full)
+                    .sanitize_memcheck(true),
+                0,
+                0b101,
+            ),
+            (
+                CompileOptions::new()
+                    .debug_info(DebugInfoLevel::None)
+                    .opt_level(0)
+                    .sanitize_memcheck(true),
+                0,
+                0b100,
+            ),
+        ] {
+            let tileiras = TileirasOptions::from_compile_options(&options);
+            assert_eq!(
+                (tileiras.codegen.opt_level(), tileiras.flags_byte()),
+                (opt_level, flags),
+                "{options:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn full_debug_compiles_at_level_zero() {
+        let debug = TileirasOptions::from_compile_options(
+            &CompileOptions::new().debug_info(DebugInfoLevel::Full),
+        );
+        assert_eq!(debug.codegen, CodegenMode::Debug);
+        assert_eq!(debug.codegen.opt_level(), 0);
+
+        let release = TileirasOptions::from_compile_options(
+            &CompileOptions::new().debug_info(DebugInfoLevel::None),
+        );
+        assert_eq!(release.codegen.opt_level(), DEFAULT_OPT_LEVEL);
+        assert_eq!(release, TileirasOptions::default());
+    }
+
+    #[test]
+    fn flags_byte_is_injective_over_the_flag_combinations() {
+        let mut seen = std::collections::BTreeSet::new();
+        for codegen in [
+            CodegenMode::Debug,
+            CodegenMode::Optimized {
+                level: 3,
+                lineinfo: false,
+            },
+            CodegenMode::Optimized {
+                level: 3,
+                lineinfo: true,
+            },
+        ] {
+            for sanitize_memcheck in [false, true] {
+                let o = TileirasOptions {
+                    codegen,
+                    sanitize_memcheck,
+                    tilelibs: Vec::new(),
+                };
+                assert!(seen.insert(o.flags_byte()), "flags_byte collision");
+            }
+        }
+        assert_eq!(
+            TileirasOptions::default().flags_byte(),
+            0,
+            "release flags must encode as 0, matching the byte old cache entries carry"
+        );
     }
 }

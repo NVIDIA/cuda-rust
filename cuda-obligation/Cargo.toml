@@ -1,0 +1,11 @@
+[package]
+name = "cuda-obligation"
+version = "0.5.0"
+edition = "2021"
+rust-version = "1.89"
+license = "Apache-2.0"
+authors = ["Melih Elibol"]
+repository = "https://github.com/NVIDIA/cuda-rust"
+description = "Staged obligation vocabulary shared by the compiler and the host launcher"
+
+[dependencies]

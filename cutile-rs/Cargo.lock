@@ -485,6 +485,7 @@ dependencies = [
  "anyhow",
  "cuda-bindings",
  "cuda-core",
+ "cuda-obligation",
  "dashmap",
  "futures",
  "half",
@@ -513,6 +514,7 @@ dependencies = [
  "bytemuck",
  "cuda-bindings",
  "cuda-core-derive",
+ "cuda-dtype",
  "cuda-repr",
  "half",
  "oxide-artifacts",
@@ -526,6 +528,18 @@ dependencies = [
  "quote",
  "syn",
 ]
+
+[[package]]
+name = "cuda-dtype"
+version = "0.5.0"
+dependencies = [
+ "bytemuck",
+ "half",
+]
+
+[[package]]
+name = "cuda-obligation"
+version = "0.5.0"
 
 [[package]]
 name = "cuda-repr"
@@ -547,6 +561,7 @@ dependencies = [
  "cuda-async",
  "cuda-core",
  "cutile-compiler",
+ "cutile-dsl",
  "cutile-ir",
  "cutile-macro",
  "dashmap",
@@ -584,6 +599,7 @@ dependencies = [
  "anyhow",
  "cuda-async",
  "cuda-core",
+ "cutile-frontend",
  "cutile-ir",
  "half",
  "linkme",
@@ -595,6 +611,17 @@ dependencies = [
  "stacker",
  "syn",
  "uuid",
+]
+
+[[package]]
+name = "cutile-dsl"
+version = "0.6.0"
+dependencies = [
+ "cuda-dtype",
+ "cutile-frontend",
+ "cutile-macro",
+ "half",
+ "linkme",
 ]
 
 [[package]]
@@ -612,6 +639,34 @@ dependencies = [
  "cutile-kernels",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "cutile-expand"
+version = "0.6.0"
+dependencies = [
+ "cutile-frontend",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "cutile-frontend"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "cuda-obligation",
+ "cutile-ir",
+ "half",
+ "linkme",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "regex",
+ "sha2",
+ "stacker",
+ "syn",
 ]
 
 [[package]]
@@ -638,7 +693,8 @@ name = "cutile-macro"
 version = "0.6.0"
 dependencies = [
  "convert_case",
- "cutile-compiler",
+ "cutile-expand",
+ "cutile-frontend",
  "itertools 0.14.0",
  "proc-macro2",
  "quote",

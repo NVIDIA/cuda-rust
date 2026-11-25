@@ -12,7 +12,7 @@
 //! Build and run with:
 //!   cargo oxide run helper_fn
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, device, kernel, thread};
 use cuda_host::cuda_module;

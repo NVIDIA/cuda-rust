@@ -15,7 +15,7 @@
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use cuda_async::device_operation::DeviceOp;
-use cuda_core::Device;
+use cuda_core::Context;
 use cutile::api;
 use cutile::core::f16;
 use cutile::tensor::{IntoPartition, Partition, Tensor};
@@ -63,7 +63,7 @@ fn launch_overhead(c: &mut Criterion) {
             .measurement_time(Duration::from_millis(2000));
     }
 
-    let device = Device::new(0).expect("Failed to get device.");
+    let device = Context::new(0).expect("Failed to get device.");
     let stream = device.new_stream().expect("Failed to get stream.");
 
     let n: usize = 1024;
@@ -100,17 +100,17 @@ fn launch_overhead(c: &mut Criterion) {
             z = local_z;
         }
     }
-    unsafe { stream.synchronize() }.expect("Failed.");
+    stream.synchronize().expect("Failed.");
     std::thread::sleep(Duration::from_millis(200));
 
-    // 1. sync_on: execute + unsafe { stream.synchronize() }, no callbacks.
+    // 1. sync_on: execute + stream.synchronize(), no callbacks.
     group.bench_function(BenchmarkId::new("mode", "sync_on"), |b| {
         b.iter_custom(|iters| {
             let mut z: Partition<Tensor<f16>> = api::zeros::<f16>(&[n, n])
                 .sync_on(&stream)
                 .expect("Failed.")
                 .partition([bm, bn]);
-            unsafe { stream.synchronize() }.expect("Failed.");
+            stream.synchronize().expect("Failed.");
             let start = Instant::now();
             for _ in 0..iters {
                 let (local_z, _, _, _) = unsafe {
@@ -146,7 +146,7 @@ fn launch_overhead(c: &mut Criterion) {
             }
         });
     }
-    unsafe { stream.synchronize() }.expect("Failed.");
+    stream.synchronize().expect("Failed.");
     std::thread::sleep(Duration::from_millis(200));
 
     // 2. await: execute on first poll + cuLaunchHostFunc callback.
@@ -157,7 +157,7 @@ fn launch_overhead(c: &mut Criterion) {
                     .sync_on(&stream)
                     .expect("Failed.")
                     .partition([bm, bn]);
-                unsafe { stream.synchronize() }.expect("Failed.");
+                stream.synchronize().expect("Failed.");
                 let start = Instant::now();
                 for _ in 0..iters {
                     let (local_z, _, _, _) = unsafe {
@@ -188,7 +188,7 @@ fn launch_overhead(c: &mut Criterion) {
             }
         }
     }
-    unsafe { stream.synchronize() }.expect("Failed.");
+    stream.synchronize().expect("Failed.");
     std::thread::sleep(Duration::from_millis(200));
 
     // 3. async_on: execute only, single synchronize at end.
@@ -198,7 +198,7 @@ fn launch_overhead(c: &mut Criterion) {
                 .sync_on(&stream)
                 .expect("Failed.")
                 .partition([bm, bn]);
-            unsafe { stream.synchronize() }.expect("Failed.");
+            stream.synchronize().expect("Failed.");
             let start = Instant::now();
             for _ in 0..iters {
                 unsafe {
@@ -209,7 +209,7 @@ fn launch_overhead(c: &mut Criterion) {
                     z = local_z;
                 }
             }
-            unsafe { stream.synchronize() }.expect("Failed.");
+            stream.synchronize().expect("Failed.");
             start.elapsed()
         });
     });

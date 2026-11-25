@@ -186,7 +186,7 @@ mod execution {
 
 fn verify_launch_packets() -> Result<(), Box<dyn std::error::Error>> {
     use cuda_core::{DeviceBuffer, LaunchConfig1D};
-    use cuda_host::cuda_async::simt::{
+    use cuda_host::cuda_async::{
         device_context::{init_device_contexts, with_cuda_context},
         device_operation::DeviceOperation,
     };

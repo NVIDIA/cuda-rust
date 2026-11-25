@@ -43,7 +43,7 @@ mod my_module {
     }
 }
 
-fn gemm<T1: DType, T2: DType>(
+fn gemm<T1: DType + cuda_core::DeviceCopy, T2: DType>(
     x: Arc<Tensor<T2>>,
     y: Arc<Tensor<T2>>,
 ) -> impl DeviceOp<Output = Tensor<T1>> {

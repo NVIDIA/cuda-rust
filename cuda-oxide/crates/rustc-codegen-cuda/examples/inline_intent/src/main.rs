@@ -24,7 +24,7 @@
 //! reaches LLVM as its own definition. Otherwise rustc folds the small ones
 //! into the kernel before any attribute could be observed.
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, cuda_module, device, kernel};
 

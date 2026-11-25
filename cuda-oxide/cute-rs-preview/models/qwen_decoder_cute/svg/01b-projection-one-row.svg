@@ -1,0 +1,80 @@
+<svg class="qtts" xmlns="http://www.w3.org/2000/svg" width="680" height="440" viewBox="0 0 680 440" role="img" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif">
+<title>One token's row passing through the text projection</title>
+<style>.qtts .th { font-size:14px; font-weight:600; fill:#1e1e1e } .qtts .t { font-size:13px; fill:#2b2b2b } .qtts .ts { font-size:12px; fill:#5c5c5c } .qtts .k-box { fill:#f7f6f3; stroke:#c8c5be } .qtts .tx-box { fill:#1e1e1e } .qtts .k-purple { fill:#ebe9fb; stroke:#7f77dd } .qtts .tx-purple { fill:#3a3490 } .qtts .k-teal { fill:#dff3ec; stroke:#3aa47f } .qtts .tx-teal { fill:#1f5c47 } .qtts .k-coral { fill:#fde7e2; stroke:#e0735c } .qtts .tx-coral { fill:#7d2f1f } .qtts .k-amber { fill:#fdeed3; stroke:#ef9f27 } .qtts .tx-amber { fill:#6b4100 } .qtts .k-gray { fill:#eeedea; stroke:#a9a69f } .qtts .tx-gray { fill:#333 } .qtts .dash { fill:none; stroke:#c8c5be; stroke-dasharray:4 3 } .qtts .hair { stroke:#9c9c9c } .qtts .arr { fill:none; stroke:#7b7b7b; stroke-width:1.5 } .qtts .arrhead { fill:none; stroke:#7b7b7b; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round } .qtts .cell-e { fill:none; stroke:#9c9c9c; stroke-width:.5; opacity:.4 } @media (prefers-color-scheme: dark) { .qtts .th { fill: #f2f2f2 } .qtts .t { fill: #e6e6e6 } .qtts .ts { fill: #b8b8b8 } .qtts .k-box { fill: #2a2a2e; stroke: #4a4a50 } .qtts .tx-box { fill: #f2f2f2 } .qtts .dash { stroke: #55555c } .qtts .hair { stroke: #7a7a7a } .qtts .arr, .qtts .arrhead { stroke: #a3a3a3 } .qtts .k-purple { fill: #3a3490; stroke: #9a93ea } .qtts .tx-purple { fill: #e9e7fb } .qtts .k-teal { fill: #1f5c47; stroke: #5fc6a0 } .qtts .tx-teal { fill: #dff3ec } .qtts .k-coral { fill: #7d2f1f; stroke: #f08b76 } .qtts .tx-coral { fill: #fde7e2 } .qtts .k-amber { fill: #6b4100; stroke: #f3b65a } .qtts .tx-amber { fill: #fdeed3 } .qtts .k-gray { fill: #3a3a3e; stroke: #77777d } .qtts .tx-gray { fill: #e6e6e6 } .qtts .cell-e { stroke: #8a8a8a } }</style>
+<defs><marker id="arrow-01b-projection-one-row" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="arrhead" d="M2 1L8 5L2 9"/></marker></defs>
+<rect class="k-purple" x="136" y="40" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-purple" x="156" y="55" text-anchor="middle" dominant-baseline="central">0.3</text>
+<rect class="k-purple" x="182" y="40" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-purple" x="202" y="55" text-anchor="middle" dominant-baseline="central">-1.2</text>
+<rect class="k-purple" x="228" y="40" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-purple" x="248" y="55" text-anchor="middle" dominant-baseline="central">2.0</text>
+<rect class="k-purple" x="274" y="40" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-purple" x="294" y="55" text-anchor="middle" dominant-baseline="central">0.1</text>
+<rect class="k-purple" x="320" y="40" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-purple" x="340" y="55" text-anchor="middle" dominant-baseline="central">…</text>
+<rect class="k-purple" x="366" y="40" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-purple" x="386" y="55" text-anchor="middle" dominant-baseline="central">-0.7</text>
+<rect class="k-purple" x="412" y="40" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-purple" x="432" y="55" text-anchor="middle" dominant-baseline="central">1.4</text>
+<rect class="k-purple" x="458" y="40" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-purple" x="478" y="55" text-anchor="middle" dominant-baseline="central">0.0</text>
+<rect class="k-purple" x="504" y="40" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-purple" x="524" y="55" text-anchor="middle" dominant-baseline="central">0.9</text>
+<rect class="k-teal" x="136" y="150" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-teal" x="156" y="165" text-anchor="middle" dominant-baseline="central">-0.6</text>
+<rect class="k-teal" x="182" y="150" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-teal" x="202" y="165" text-anchor="middle" dominant-baseline="central">0.8</text>
+<rect class="k-teal" x="228" y="150" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-teal" x="248" y="165" text-anchor="middle" dominant-baseline="central">1.7</text>
+<rect class="k-teal" x="274" y="150" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-teal" x="294" y="165" text-anchor="middle" dominant-baseline="central">-2.1</text>
+<rect class="k-teal" x="320" y="150" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-teal" x="340" y="165" text-anchor="middle" dominant-baseline="central">…</text>
+<rect class="k-teal" x="366" y="150" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-teal" x="386" y="165" text-anchor="middle" dominant-baseline="central">0.4</text>
+<rect class="k-amber" x="412" y="150" width="40" height="30" rx="3" stroke-width="1"/><text class="ts tx-amber" x="432" y="165" text-anchor="middle" dominant-baseline="central">2.3</text>
+<rect class="k-teal" x="458" y="150" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-teal" x="478" y="165" text-anchor="middle" dominant-baseline="central">-0.3</text>
+<rect class="k-teal" x="504" y="150" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-teal" x="524" y="165" text-anchor="middle" dominant-baseline="central">1.1</text>
+<rect class="k-teal" x="136" y="230" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-teal" x="156" y="245" text-anchor="middle" dominant-baseline="central">-0.21</text>
+<rect class="k-teal" x="182" y="230" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-teal" x="202" y="245" text-anchor="middle" dominant-baseline="central">0.55</text>
+<rect class="k-teal" x="228" y="230" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-teal" x="248" y="245" text-anchor="middle" dominant-baseline="central">1.44</text>
+<rect class="k-teal" x="274" y="230" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-teal" x="294" y="245" text-anchor="middle" dominant-baseline="central">-0.23</text>
+<rect class="k-teal" x="320" y="230" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-teal" x="340" y="245" text-anchor="middle" dominant-baseline="central">…</text>
+<rect class="k-teal" x="366" y="230" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-teal" x="386" y="245" text-anchor="middle" dominant-baseline="central">0.24</text>
+<rect class="k-teal" x="412" y="230" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-teal" x="432" y="245" text-anchor="middle" dominant-baseline="central">2.09</text>
+<rect class="k-teal" x="458" y="230" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-teal" x="478" y="245" text-anchor="middle" dominant-baseline="central">-0.13</text>
+<rect class="k-teal" x="504" y="230" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-teal" x="524" y="245" text-anchor="middle" dominant-baseline="central">0.83</text>
+<rect class="k-teal" x="136" y="340" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-teal" x="156" y="355" text-anchor="middle" dominant-baseline="central">1.2</text>
+<rect class="k-teal" x="182" y="340" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-teal" x="202" y="355" text-anchor="middle" dominant-baseline="central">-0.4</text>
+<rect class="k-teal" x="228" y="340" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-teal" x="248" y="355" text-anchor="middle" dominant-baseline="central">0.9</text>
+<rect class="k-teal" x="274" y="340" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-teal" x="294" y="355" text-anchor="middle" dominant-baseline="central">0.3</text>
+<rect class="k-teal" x="320" y="340" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-teal" x="340" y="355" text-anchor="middle" dominant-baseline="central">…</text>
+<rect class="k-teal" x="366" y="340" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-teal" x="386" y="355" text-anchor="middle" dominant-baseline="central">-1.5</text>
+<rect class="k-amber" x="412" y="340" width="40" height="30" rx="3" stroke-width="1"/><text class="ts tx-amber" x="432" y="355" text-anchor="middle" dominant-baseline="central">0.6</text>
+<rect class="k-teal" x="458" y="340" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-teal" x="478" y="355" text-anchor="middle" dominant-baseline="central">2.2</text>
+<rect class="k-teal" x="504" y="340" width="40" height="30" rx="3" stroke-width="0.5"/><text class="ts tx-teal" x="524" y="355" text-anchor="middle" dominant-baseline="central">-0.8</text>
+<line x1="156" y1="70" x2="432" y2="150" stroke="#ef9f27" stroke-width="1" opacity="0.7"/>
+<line x1="156" y1="180" x2="156" y2="230" stroke="#7f77dd" stroke-width="1" opacity="0.7"/>
+<line x1="156" y1="260" x2="432" y2="340" stroke="#ef9f27" stroke-width="1" opacity="0.7"/>
+<line x1="202" y1="70" x2="432" y2="150" stroke="#ef9f27" stroke-width="1" opacity="0.7"/>
+<line x1="202" y1="180" x2="202" y2="230" stroke="#7f77dd" stroke-width="1" opacity="0.7"/>
+<line x1="202" y1="260" x2="432" y2="340" stroke="#ef9f27" stroke-width="1" opacity="0.7"/>
+<line x1="248" y1="70" x2="432" y2="150" stroke="#ef9f27" stroke-width="1" opacity="0.7"/>
+<line x1="248" y1="180" x2="248" y2="230" stroke="#7f77dd" stroke-width="1" opacity="0.7"/>
+<line x1="248" y1="260" x2="432" y2="340" stroke="#ef9f27" stroke-width="1" opacity="0.7"/>
+<line x1="294" y1="70" x2="432" y2="150" stroke="#ef9f27" stroke-width="1" opacity="0.7"/>
+<line x1="294" y1="180" x2="294" y2="230" stroke="#7f77dd" stroke-width="1" opacity="0.7"/>
+<line x1="294" y1="260" x2="432" y2="340" stroke="#ef9f27" stroke-width="1" opacity="0.7"/>
+<line x1="340" y1="70" x2="432" y2="150" stroke="#ef9f27" stroke-width="1" opacity="0.7"/>
+<line x1="340" y1="180" x2="340" y2="230" stroke="#7f77dd" stroke-width="1" opacity="0.7"/>
+<line x1="340" y1="260" x2="432" y2="340" stroke="#ef9f27" stroke-width="1" opacity="0.7"/>
+<line x1="386" y1="70" x2="432" y2="150" stroke="#ef9f27" stroke-width="1" opacity="0.7"/>
+<line x1="386" y1="180" x2="386" y2="230" stroke="#7f77dd" stroke-width="1" opacity="0.7"/>
+<line x1="386" y1="260" x2="432" y2="340" stroke="#ef9f27" stroke-width="1" opacity="0.7"/>
+<line x1="432" y1="70" x2="432" y2="150" stroke="#ef9f27" stroke-width="1" opacity="0.7"/>
+<line x1="432" y1="180" x2="432" y2="230" stroke="#7f77dd" stroke-width="1" opacity="0.7"/>
+<line x1="432" y1="260" x2="432" y2="340" stroke="#ef9f27" stroke-width="1" opacity="0.7"/>
+<line x1="478" y1="70" x2="432" y2="150" stroke="#ef9f27" stroke-width="1" opacity="0.7"/>
+<line x1="478" y1="180" x2="478" y2="230" stroke="#7f77dd" stroke-width="1" opacity="0.7"/>
+<line x1="478" y1="260" x2="432" y2="340" stroke="#ef9f27" stroke-width="1" opacity="0.7"/>
+<line x1="524" y1="70" x2="432" y2="150" stroke="#ef9f27" stroke-width="1" opacity="0.7"/>
+<line x1="524" y1="180" x2="524" y2="230" stroke="#7f77dd" stroke-width="1" opacity="0.7"/>
+<line x1="524" y1="260" x2="432" y2="340" stroke="#ef9f27" stroke-width="1" opacity="0.7"/>
+<text class="th" x="126" y="48" text-anchor="end" dominant-baseline="central">input row</text>
+<text class="ts" x="126" y="64" text-anchor="end" dominant-baseline="central">2048 numbers</text>
+<text class="th" x="126" y="102" text-anchor="end" dominant-baseline="central">Dense 1</text>
+<text class="ts" x="126" y="118" text-anchor="end" dominant-baseline="central">× W₁ + b₁</text>
+<text class="th" x="126" y="197" text-anchor="end" dominant-baseline="central">SiLU</text>
+<text class="ts" x="126" y="213" text-anchor="end" dominant-baseline="central">per number</text>
+<text class="th" x="126" y="292" text-anchor="end" dominant-baseline="central">Dense 2</text>
+<text class="ts" x="126" y="308" text-anchor="end" dominant-baseline="central">× W₂ + b₂</text>
+<text class="th" x="126" y="348" text-anchor="end" dominant-baseline="central">output row</text>
+<text class="ts" x="126" y="364" text-anchor="end" dominant-baseline="central">2048 numbers</text>
+<text class="ts" x="340" y="394" text-anchor="middle" dominant-baseline="central">Fan = a dense layer: every output mixes all 2048 inputs</text>
+<text class="ts" x="340" y="414" text-anchor="middle" dominant-baseline="central">Straight lines = SiLU: each number is squashed on its own</text>
+</svg>

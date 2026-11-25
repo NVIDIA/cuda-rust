@@ -145,14 +145,29 @@ fn reject_dropped_debug_info(
     ))
 }
 
+/// What `opt` must know about the module it optimizes.
+struct OptimizationInput<'a> {
+    ll_path: &'a Path,
+    public_symbols: &'a [String],
+    /// The resolved `llc -mcpu` target, e.g. `sm_120`.
+    target_sm: &'a str,
+    /// Whether libdevice was linked into `ll_path`.
+    libdevice_linked: bool,
+}
+
 fn optimize_ll(
-    ll_path: &Path,
-    public_symbols: &[String],
+    input: OptimizationInput<'_>,
     toolchain: &LlvmToolchain,
     opts: &BackendOptions,
     strict: bool,
     debug_kind: DebugKind,
 ) -> Result<(Option<PathBuf>, Vec<String>), PipelineError> {
+    let OptimizationInput {
+        ll_path,
+        public_symbols,
+        target_sm,
+        libdevice_linked,
+    } = input;
     if opts.no_opt {
         return Ok((None, Vec::new()));
     }
@@ -167,7 +182,7 @@ fn optimize_ll(
         return Ok((None, Vec::new()));
     };
 
-    let optimization_args = optimization_args(public_symbols)?;
+    let optimization_args = optimization_args(public_symbols, target_sm, libdevice_linked)?;
 
     let opt_ll = ll_path.with_extension("opt.ll");
     match std::process::Command::new(&opt.path)
@@ -253,14 +268,15 @@ fn optimize_ll(
 ///
 /// Why this appeared with LLVM 23, and why the flag is permanent:
 ///
-/// - `opt` decides "is the table trick worth it?" from its target GPU. We
-///   pass no `-mcpu`, so the built-in default decides: LLVM 22 assumed
-///   sm_30 (trick off); LLVM 23 assumes sm_75 (trick on) after
+/// - `opt` decides "is the table trick worth it?" from its target GPU.
+///   Without `-mcpu` the built-in default decides: LLVM 22 assumed sm_30
+///   (trick off); LLVM 23 assumes sm_75 (trick on) after
 ///   llvm/llvm-project PR #176021 (commit 9fc5fd0ad689).
 /// - The bug was always latent, not new: LLVM 22 with an explicit modern
 ///   `-mcpu` builds the same bad tables, because upstream's
-///   `validLookupTableConstant` never checks address spaces. So passing a
-///   real `-mcpu` would make things worse, not better.
+///   `validLookupTableConstant` never checks address spaces. `opt` now gets
+///   the real `-mcpu` (see [`optimization_args`]), so this flag is what keeps
+///   the tables out.
 /// - This cl::opt is the supported control, accepted identically by every
 ///   `opt` we support (LLVM 21+), and it stays even after upstream learns
 ///   to reject shared-space table constants: our LLVM floor spans the
@@ -333,6 +349,7 @@ fn base_llc_args(target: &str) -> Vec<String> {
     vec![
         "-march=nvptx64".to_string(),
         format!("-mcpu={target}"),
+        "--nvptx-short-ptr".to_string(),
         DISABLE_BRANCH_FOLD.to_string(),
         DISABLE_BLOCK_PLACEMENT.to_string(),
     ]
@@ -370,6 +387,29 @@ fn ptx_isa_with_debug_floor(
     }
 }
 
+/// libdevice precision selections, matching nvcc's defaults.
+///
+/// libdevice selects between correctly-rounded and approximate
+/// implementations by reading these through `__nvvm_reflect`, and LLVM
+/// resolves an unset reflect variable to 0, which is the approximate branch.
+/// nvcc defaults `-prec-sqrt=true` and `-prec-div=true`, so 0 diverges from it
+/// silently and in the direction of lower accuracy. `__CUDA_FTZ` is left unset
+/// deliberately: nvcc defaults `-ftz=false`, which 0 already matches.
+///
+/// Not every libdevice build branches division on `__CUDA_PREC_DIV`; current
+/// libdevice builds define no such reflect name, so here the argument matches
+/// no `__nvvm_reflect` call and has no effect. It stays because
+/// `NVVMReflectPass` silently drops a name absent from the module, emitting
+/// neither a warning nor a failure, and any libdevice build that does branch
+/// on `__CUDA_PREC_DIV` needs the same nvcc-matching value.
+///
+/// Both `opt` and `llc` take these: whichever runs `NVVMReflectPass` first
+/// folds the calls, so the two must never disagree.
+const LIBDEVICE_PRECISION_REFLECT_ARGS: [&str; 2] = [
+    "--nvvm-reflect-add=__CUDA_PREC_SQRT=1",
+    "--nvvm-reflect-add=__CUDA_PREC_DIV=1",
+];
+
 /// Build the middle-end arguments for a self-contained PTX module.
 ///
 /// The LLVM exporter returns the module's externally consumed definitions as
@@ -379,25 +419,37 @@ fn ptx_isa_with_debug_floor(
 /// Once ordinary inlining has copied a non-root helper into every caller,
 /// internalization lets GlobalDCE remove it instead of asking `llc` to emit an
 /// unreachable `.visible .func` body.
-fn optimization_args(public_symbols: &[String]) -> Result<Vec<String>, PipelineError> {
-    if public_symbols.is_empty() {
-        return Ok(vec![
-            "-O2".to_string(),
-            DISABLE_SWITCH_LOOKUP_TABLES.to_string(),
-        ]);
+///
+/// Passing `-mcpu` ensures NVPTX adds `NVVMReflectPass` to the start of `opt`'s
+/// pipeline. Without it every inlined libdevice body keeps both its
+/// `__CUDA_FTZ` arms (an FTZ and a non-FTZ copy of each `fma`/`fabs`, joined
+/// by `select`) until `llc` folds them, which is after the unroller has
+/// already priced the loop at roughly twice its real size. A four-step
+/// `libm::erff` loop then stays rolled and its array goes to `.local`.
+fn optimization_args(
+    public_symbols: &[String],
+    target_sm: &str,
+    libdevice_linked: bool,
+) -> Result<Vec<String>, PipelineError> {
+    let mut args = if public_symbols.is_empty() {
+        vec!["-O2".to_string()]
+    } else {
+        if let Some(symbol) = public_symbols.iter().find(|symbol| symbol.contains(',')) {
+            return Err(PipelineError::Optimization(format!(
+                "external symbol `{symbol}` cannot be represented in LLVM's comma-separated internalization API list"
+            )));
+        }
+        vec![
+            "-passes=internalize,default<O2>".to_string(),
+            format!("-internalize-public-api-list={}", public_symbols.join(",")),
+        ]
+    };
+    args.push(format!("-mcpu={target_sm}"));
+    args.push(DISABLE_SWITCH_LOOKUP_TABLES.to_string());
+    if libdevice_linked {
+        args.extend(LIBDEVICE_PRECISION_REFLECT_ARGS.map(str::to_string));
     }
-
-    if let Some(symbol) = public_symbols.iter().find(|symbol| symbol.contains(',')) {
-        return Err(PipelineError::Optimization(format!(
-            "external symbol `{symbol}` cannot be represented in LLVM's comma-separated internalization API list"
-        )));
-    }
-
-    Ok(vec![
-        "-passes=internalize,default<O2>".to_string(),
-        format!("-internalize-public-api-list={}", public_symbols.join(",")),
-        DISABLE_SWITCH_LOOKUP_TABLES.to_string(),
-    ])
+    Ok(args)
 }
 
 /// Legacy rustc-pipeline result, including messages the CLI should print.
@@ -666,8 +718,12 @@ fn generate_ptx_impl(
         None
     } else {
         let (optimized, mut opt_diagnostics) = optimize_ll(
-            post_link_input,
-            module.public_symbols,
+            OptimizationInput {
+                ll_path: post_link_input,
+                public_symbols: module.public_symbols,
+                target_sm: &target.sm(),
+                libdevice_linked: linked.is_some(),
+            },
             toolchain,
             opts,
             strict_optimization,
@@ -761,26 +817,11 @@ fn generate_ptx_impl(
     if !opts.no_fma {
         llc_cmd.arg("-fp-contract=fast");
     }
-    // Match nvcc's precision defaults when libdevice is in the module.
-    // libdevice selects between correctly-rounded and approximate
-    // implementations by reading these through `__nvvm_reflect`, and LLVM
-    // resolves an unset reflect variable to 0, which is the approximate
-    // branch. nvcc defaults `-prec-sqrt=true` and `-prec-div=true`, so 0
-    // diverges from it silently and in the direction of lower accuracy.
-    // `__CUDA_FTZ` is left unset deliberately: nvcc defaults `-ftz=false`,
-    // which 0 already matches.
-    //
-    // Not every libdevice build branches division on `__CUDA_PREC_DIV`;
-    // current libdevice builds define no such reflect name, so here the
-    // argument matches no `__nvvm_reflect` call and has no effect. It stays
-    // because `NVVMReflectPass` silently drops a name absent from the
-    // module, emitting neither a warning nor a failure, and any libdevice
-    // build that does branch on `__CUDA_PREC_DIV` needs the same
-    // nvcc-matching value.
+    // Match nvcc's precision defaults when libdevice is in the module. `opt`
+    // normally folds the reflect calls first; this covers the unoptimized
+    // routes (`no_opt`, full debug) where llc's own reflect pass is the only one
     if linked.is_some() {
-        llc_cmd
-            .arg("--nvvm-reflect-add=__CUDA_PREC_SQRT=1")
-            .arg("--nvvm-reflect-add=__CUDA_PREC_DIV=1");
+        llc_cmd.args(LIBDEVICE_PRECISION_REFLECT_ARGS);
     }
     let result = llc_cmd.arg(llc_input).arg("-o").arg(module.output).output();
 
@@ -1097,6 +1138,17 @@ mod tests {
             .push(message.to_string());
     }
 
+    /// An `opt` input with no public roots and no libdevice, for the tests
+    /// that only exercise how `optimize_ll` handles the tool's outcome
+    fn test_opt_input(ll_path: &Path) -> OptimizationInput<'_> {
+        OptimizationInput {
+            ll_path,
+            public_symbols: &[],
+            target_sm: "sm_80",
+            libdevice_linked: false,
+        }
+    }
+
     /// Locates a POSIX utility the tests drive as a stand-in for a real tool.
     ///
     /// The location is not portable: Linux ships `true` and `false` in `/bin`,
@@ -1130,12 +1182,25 @@ mod tests {
         let opts = BackendOptions::default();
         let input = Path::new("unused.ll");
 
-        let (optimized, diagnostics) =
-            optimize_ll(input, &[], &toolchain, &opts, false, DebugKind::Off).unwrap();
+        let (optimized, diagnostics) = optimize_ll(
+            test_opt_input(input),
+            &toolchain,
+            &opts,
+            false,
+            DebugKind::Off,
+        )
+        .unwrap();
         assert!(optimized.is_none());
         assert!(diagnostics[0].contains("continuing with unoptimized IR"));
 
-        let error = optimize_ll(input, &[], &toolchain, &opts, true, DebugKind::Off).unwrap_err();
+        let error = optimize_ll(
+            test_opt_input(input),
+            &toolchain,
+            &opts,
+            true,
+            DebugKind::Off,
+        )
+        .unwrap_err();
         assert!(matches!(&error, PipelineError::Optimization(_)));
         assert!(
             error
@@ -1148,10 +1213,11 @@ mod tests {
     fn ptx_optimization_internalizes_helpers_but_preserves_public_roots() {
         let symbols = vec!["constant_data".into(), "first_kernel".into()];
         assert_eq!(
-            optimization_args(&symbols).unwrap(),
+            optimization_args(&symbols, "sm_120", false).unwrap(),
             [
                 "-passes=internalize,default<O2>",
                 "-internalize-public-api-list=constant_data,first_kernel",
+                "-mcpu=sm_120",
                 "-switch-to-lookup=false",
             ]
         );
@@ -1160,9 +1226,21 @@ mod tests {
     #[test]
     fn modules_without_public_roots_keep_the_existing_optimization_pipeline() {
         assert_eq!(
-            optimization_args(&[]).unwrap(),
-            ["-O2", "-switch-to-lookup=false"]
+            optimization_args(&[], "sm_80", false).unwrap(),
+            ["-O2", "-mcpu=sm_80", "-switch-to-lookup=false"]
         );
+    }
+
+    /// `-mcpu` makes `opt` fold `__nvvm_reflect` itself, before llc sees the
+    /// module, so it must be given the same precision values llc gets or
+    /// libdevice silently falls back to its approximate branches
+    #[test]
+    fn opt_folds_libdevice_reflect_with_llc_precision_values() {
+        let args = optimization_args(&["kernel".into()], "sm_90", true).unwrap();
+        assert!(args.contains(&"-mcpu=sm_90".to_string()), "{args:?}");
+        for reflect in LIBDEVICE_PRECISION_REFLECT_ARGS {
+            assert!(args.iter().any(|arg| arg == reflect), "{args:?}");
+        }
     }
 
     /// Full-debug DWARF uses label-difference expressions (a PTX ISA 7.5
@@ -1222,6 +1300,7 @@ mod tests {
             [
                 "-march=nvptx64",
                 "-mcpu=sm_90",
+                "--nvptx-short-ptr",
                 "-disable-branch-fold",
                 "-disable-block-placement",
             ]
@@ -1333,7 +1412,7 @@ mod tests {
 
     #[test]
     fn unrepresentable_public_root_is_rejected() {
-        let error = optimization_args(&["invalid,root".into()]).unwrap_err();
+        let error = optimization_args(&["invalid,root".into()], "sm_80", false).unwrap_err();
         assert!(matches!(error, PipelineError::Optimization(_)));
         assert!(error.to_string().contains("invalid,root"));
     }
@@ -1350,15 +1429,10 @@ mod tests {
         let ptx_path = root.join("module.ptx");
         let llc_path = root.join("llc-999");
         std::fs::write(&ll_path, "define void @kernel() { ret void }\n").unwrap();
-        std::fs::write(
+        write_tool(
             &llc_path,
             "#!/bin/sh\nif [ \"${1:-}\" = \"--version\" ]; then echo 'LLVM version 999.0.0'; exit 0; fi\necho 'deliberate llc failure' >&2\nexit 1\n",
-        )
-        .unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        let mut permissions = std::fs::metadata(&llc_path).unwrap().permissions();
-        permissions.set_mode(0o700);
-        std::fs::set_permissions(&llc_path, permissions).unwrap();
+        );
 
         LEGACY_DIAGNOSTICS
             .lock()
@@ -1409,13 +1483,9 @@ mod tests {
     /// on stderr that it discarded the module's debug metadata.
     #[cfg(unix)]
     fn write_debug_dropping_tool(path: &Path, artifact: &str) {
-        // Publish the executable only after its writable handle is closed.
-        // GitHub's Linux runners can otherwise race exec with the filesystem
-        // releasing that handle and return ETXTBSY ("Text file busy").
-        let staging_path = path.with_extension("staging");
-        std::fs::write(
-            &staging_path,
-            format!(
+        write_tool(
+            path,
+            &format!(
                 "#!/bin/sh\n\
                  if [ \"${{1:-}}\" = \"--version\" ]; then echo 'LLVM version 23.1.0'; exit 0; fi\n\
                  out=''\n\
@@ -1424,13 +1494,33 @@ mod tests {
                  echo 'warning: ignoring invalid debug info in module.ll' >&2\n\
                  exit 0\n"
             ),
-        )
-        .unwrap();
+        );
+    }
+
+    /// Writes `script` to `path` as an executable that tests can run at once.
+    ///
+    /// A test that writes the tool itself holds a writable handle to it for a
+    /// moment. Another test that spawns a process in that moment hands its
+    /// child a copy of the handle, and the kernel refuses to execute a file
+    /// with a writer (ETXTBSY, "Text file busy") until that child execs or
+    /// exits. Renaming a staging file does not help, because the copied handle
+    /// refers to the same file. Here `cp` creates the tool, so the only process
+    /// that ever opens it for writing has exited before this returns
+    #[cfg(unix)]
+    fn write_tool(path: &Path, script: &str) {
         use std::os::unix::fs::PermissionsExt;
-        let mut permissions = std::fs::metadata(&staging_path).unwrap().permissions();
-        permissions.set_mode(0o700);
-        std::fs::set_permissions(&staging_path, permissions).unwrap();
-        std::fs::rename(staging_path, path).unwrap();
+
+        let staging_path = path.with_added_extension("staging");
+        std::fs::write(&staging_path, script).unwrap();
+        let status = std::process::Command::new("cp")
+            .arg(&staging_path)
+            .arg(path)
+            .status()
+            .unwrap();
+        assert!(status.success(), "cp {} failed: {status}", path.display());
+        std::fs::remove_file(staging_path).unwrap();
+        // cp masks the mode with the umask; chmod opens no writable handle
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
 
     /// llc exits 0 after LLVM's verifier strips a malformed debug graph, so
@@ -1523,8 +1613,7 @@ mod tests {
         let opts = BackendOptions::default();
 
         let error = optimize_ll(
-            &ll_path,
-            &[],
+            test_opt_input(&ll_path),
             &toolchain,
             &opts,
             false,
@@ -1537,8 +1626,14 @@ mod tests {
             "{error}"
         );
 
-        let (optimized, _) =
-            optimize_ll(&ll_path, &[], &toolchain, &opts, false, DebugKind::Off).unwrap();
+        let (optimized, _) = optimize_ll(
+            test_opt_input(&ll_path),
+            &toolchain,
+            &opts,
+            false,
+            DebugKind::Off,
+        )
+        .unwrap();
         assert!(
             optimized.is_some(),
             "debug-off optimization keeps opt's output"

@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/compile_fail/primitives_mma_b_shape.rs:14:45
+   |
+14 |  unsafe { mma::<L,collector_a::Discard>(d,a,b,&InstructionDescriptor::new(),false) };
+   |           -----------------------------     ^ expected `96`, found `80`
+   |           |
+   |           arguments to this function are incorrect
+   |
+   = note: expected reference `&SmemOperand<'_, OperandB, Swizzled2D<96, 64, Swizzle128>>`
+              found reference `&SmemOperand<'_, OperandB, Swizzled2D<80, 64, Swizzle128>>`
+note: function defined here
+  --> src/tcgen05/mma.rs
+   |
+   | pub unsafe fn mma<S, U>(
+   |               ^^^

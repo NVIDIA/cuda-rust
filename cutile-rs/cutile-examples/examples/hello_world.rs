@@ -5,7 +5,7 @@
 #![allow(unused_variables)]
 
 use cuda_async::device_operation::DeviceOp;
-use cuda_core::Device;
+use cuda_core::Context;
 use cutile::error::Error;
 use cutile::tile_kernel::TileKernel;
 
@@ -41,7 +41,7 @@ fn main() -> Result<(), Error> {
         return Ok(());
     }
 
-    let device = Device::new(0)?;
+    let device = Context::new(0)?;
     let stream = device.new_stream()?;
     let launcher = hello_world_kernel();
     launcher.grid((1, 1, 1)).sync_on(&stream)?;

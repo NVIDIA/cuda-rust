@@ -184,8 +184,13 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "cuda-bindings",
+ "cuda-repr",
  "half",
 ]
+
+[[package]]
+name = "cuda-repr"
+version = "0.5.0"
 
 [[package]]
 name = "cutile"

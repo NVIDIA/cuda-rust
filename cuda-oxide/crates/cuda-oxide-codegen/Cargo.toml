@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 [package]
 name = "cuda-oxide-codegen"
-version = "0.1.0"
+version = "0.4.0"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -16,8 +16,11 @@ pliron = { workspace = true }
 ptx-parse = { workspace = true }
 thiserror = { workspace = true }
 dialect-mir = { workspace = true }
+lean-exporter = { workspace = true }
 dialect-iket = { workspace = true }
 dialect-nvvm = { workspace = true }
+dialect-cute = { workspace = true }
+cuda-oxide-mlir-export = { workspace = true }
 iket-lower = { workspace = true }
 mir-lower = { workspace = true }
 mir-transforms = { workspace = true }
@@ -26,3 +29,7 @@ libnvvm-sys = { workspace = true }
 nvvm-transforms = { workspace = true }
 tempfile = { workspace = true }
 rustc-demangle = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+libloading = { workspace = true }
+object = { workspace = true }

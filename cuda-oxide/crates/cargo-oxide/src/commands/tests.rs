@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::*;
+use crate::cutlass_toolchain;
 use std::ffi::OsStr;
 
 /// The concatenated sources of every module under `commands/`, standing in
@@ -27,6 +28,7 @@ const COMMANDS_SOURCE: &str = concat!(
     include_str!("fmt.rs"),
     include_str!("host_cargo.rs"),
     include_str!("interop.rs"),
+    include_str!("lean_export.rs"),
     include_str!("ltoir.rs"),
     include_str!("materialize.rs"),
     include_str!("passthrough.rs"),
@@ -67,6 +69,40 @@ fn is_sha256(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+#[test]
+fn managed_cutlass_compiler_sets_only_the_library_env() {
+    let resolved = cutlass_toolchain::ResolvedCutlass {
+        install_dir: PathBuf::from("/managed/cutlass"),
+        compiler_library: PathBuf::from("/managed/cutlass/lib/libCutlassCompiler.so"),
+        compiler_library_sha256: "fixture-digest".into(),
+    };
+    let mut cmd = Command::new("cargo");
+    apply_resolved_cutlass_compiler(&mut cmd, Some(&resolved), false);
+    assert_eq!(
+        command_env(&cmd, cutlass_toolchain::CUTLASS_COMPILER_ENV).as_deref(),
+        Some("/managed/cutlass/lib/libCutlassCompiler.so")
+    );
+}
+
+#[test]
+fn explicit_cutlass_compiler_outranks_managed_resolution() {
+    let resolved = cutlass_toolchain::ResolvedCutlass {
+        install_dir: PathBuf::from("/managed/cutlass"),
+        compiler_library: PathBuf::from("/managed/cutlass/lib/libCutlassCompiler.so"),
+        compiler_library_sha256: "fixture-digest".into(),
+    };
+    let mut cmd = Command::new("cargo");
+    cmd.env(
+        cutlass_toolchain::CUTLASS_COMPILER_ENV,
+        "/explicit/libCutlassCompiler.so",
+    );
+    apply_resolved_cutlass_compiler(&mut cmd, Some(&resolved), true);
+    assert_eq!(
+        command_env(&cmd, cutlass_toolchain::CUTLASS_COMPILER_ENV).as_deref(),
+        Some("/explicit/libCutlassCompiler.so")
+    );
 }
 
 fn strings(args: &[&str]) -> Vec<String> {
@@ -159,19 +195,36 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
     std::env::temp_dir().join(format!("{}_{}_{}", prefix, std::process::id(), unique))
 }
 
+/// Writes `script` to `path` as an executable that tests can run at once.
+///
+/// A test that writes the tool itself holds a writable handle to it for a
+/// moment. Another test that spawns a process in that moment hands its child
+/// a copy of the handle, and the kernel refuses to execute a file with a
+/// writer (ETXTBSY, "Text file busy") until that child execs or exits. Here
+/// `cp` creates the tool, so the only process that ever opens it for writing
+/// has exited before this returns
 #[cfg(unix)]
-fn doctor_clang_fixture(root: &Path, name: &str, resource_response: &str) -> String {
+fn write_tool(path: &Path, script: &str) {
     use std::os::unix::fs::PermissionsExt;
 
+    let staging = path.with_added_extension("staging");
+    fs::write(&staging, script).unwrap();
+    let status = Command::new("cp").arg(&staging).arg(path).status().unwrap();
+    assert!(status.success(), "cp {} failed: {status}", path.display());
+    fs::remove_file(staging).unwrap();
+    // cp masks the mode with the umask; chmod opens no writable handle
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[cfg(unix)]
+fn doctor_clang_fixture(root: &Path, name: &str, resource_response: &str) -> String {
     let path = root.join(name);
-    fs::write(
+    write_tool(
         &path,
-        format!(
+        &format!(
             "#!/bin/sh\ncase \"$1\" in\n--version) echo clang; exit 0;;\n-print-resource-dir) {resource_response};;\nesac\nexit 1\n"
         ),
-    )
-    .unwrap();
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    );
     path.to_string_lossy().into_owned()
 }
 
@@ -516,48 +569,69 @@ edition = "2024"
 }
 
 #[test]
-fn workspace_clean_removes_root_backend_and_example_targets() {
-    let root = unique_temp_dir("cargo_oxide_clean_workspace");
-    let codegen_crate = root.join("crates/rustc-codegen-cuda");
-    let examples_dir = codegen_crate.join("examples");
-    let example_dir = examples_dir.join("demo");
-
-    std::fs::create_dir_all(root.join("target/debug")).unwrap();
-    std::fs::create_dir_all(codegen_crate.join("target/debug")).unwrap();
-    std::fs::create_dir_all(example_dir.join("target/debug")).unwrap();
-
-    std::fs::write(
-        example_dir.join("Cargo.toml"),
-        r#"
-[package]
-name = "demo"
-version = "0.1.0"
-edition = "2024"
-"#,
-    )
-    .unwrap();
-
-    std::fs::write(example_dir.join("demo.ptx"), b"generated").unwrap();
-
-    let ctx = Context {
-        workspace_root: root.clone(),
-        codegen_crate: codegen_crate.clone(),
-        examples_dir,
-        backend_so: root.join("unused-backend.so"),
-        is_workspace: true,
-        config: OxideConfig::default(),
-    };
-
-    let summary = clean_context(&ctx).unwrap();
-
-    assert_eq!(summary.removed_directories, 3);
-    assert_eq!(summary.removed_files, 1);
-    assert!(!root.join("target").exists());
-    assert!(!codegen_crate.join("target").exists());
-    assert!(!example_dir.join("target").exists());
-    assert!(!example_dir.join("demo.ptx").exists());
-
-    std::fs::remove_dir_all(root).unwrap();
+fn workspace_clean_covers_example_and_model_roots_in_flat_and_nested_layouts() {
+    for nested in [false, true] {
+        let root = unique_temp_dir("cargo_oxide_clean_workspace");
+        let component = if nested {
+            root.join("cuda-oxide")
+        } else {
+            root.clone()
+        };
+        let codegen_crate = component.join("crates/rustc-codegen-cuda");
+        let examples_dir = codegen_crate.join("examples");
+        let example_dir = examples_dir.join("demo");
+        let cute_root = component.join("cute-rs-preview/examples");
+        let cute_dir = cute_root.join("tiled");
+        let models_root = component.join("cute-rs-preview/models");
+        let model_dir = models_root.join("decoder");
+        for dir in [
+            &root,
+            &component,
+            &codegen_crate,
+            &example_dir,
+            &cute_dir,
+            &model_dir,
+        ] {
+            std::fs::create_dir_all(dir.join("target/debug")).unwrap();
+        }
+        write_list_example(&examples_dir, "demo", None, None);
+        write_list_example(&cute_root, "tiled", None, None);
+        write_list_example(&models_root, "decoder", None, None);
+        std::fs::write(example_dir.join("demo.ptx"), b"generated").unwrap();
+        std::fs::write(cute_dir.join("tiled.cubin"), b"generated").unwrap();
+        std::fs::write(model_dir.join("decoder.cubin"), b"generated").unwrap();
+        std::fs::write(cute_dir.join("other.cubin"), b"preserve").unwrap();
+        let ctx = Context {
+            workspace_root: root.clone(),
+            codegen_crate: codegen_crate.clone(),
+            examples_dir,
+            backend_so: root.join("unused-backend.so"),
+            is_workspace: true,
+            config: OxideConfig::default(),
+        };
+        let summary = clean_context(&ctx).unwrap();
+        assert_eq!(summary.removed_directories, if nested { 6 } else { 5 });
+        assert_eq!(summary.removed_files, 3);
+        for dir in [
+            &root,
+            &component,
+            &codegen_crate,
+            &example_dir,
+            &cute_dir,
+            &model_dir,
+        ] {
+            assert!(!dir.join("target").exists());
+        }
+        assert!(!example_dir.join("demo.ptx").exists());
+        assert!(!cute_dir.join("tiled.cubin").exists());
+        assert!(!model_dir.join("decoder.cubin").exists());
+        assert_eq!(
+            std::fs::read(cute_dir.join("other.cubin")).unwrap(),
+            b"preserve"
+        );
+        assert_eq!(clean_context(&ctx).unwrap(), CleanSummary::default());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[cfg(unix)]
@@ -713,7 +787,11 @@ path = "src/main.rs"
     .unwrap();
 
     let mut cmd = Command::new("cargo");
-    cmd.args(["build", "--release"]).current_dir(&root);
+    // CARGO_TARGET_DIR takes precedence over build.target-dir, so an
+    // inherited value would bypass the configured directory under test.
+    cmd.args(["build", "--release"])
+        .current_dir(&root)
+        .env_remove("CARGO_TARGET_DIR");
     let binary = run_cargo_build_for_executable(&mut cmd, &root, None).unwrap();
 
     assert!(binary.exists());
@@ -3557,6 +3635,117 @@ fn passthrough_fingerprint_tracks_output_affecting_settings() {
 }
 
 #[test]
+fn passthrough_fingerprint_tracks_the_managed_cutlass_library_digest() {
+    let ctx = test_context(OxideConfig::default());
+    let opts = CargoPassthroughOptions {
+        verbose: false,
+        emit_nvvm_ir: false,
+        arch: Some("sm_120a"),
+        features: None,
+        cargo_target_dir: None,
+        device_codegen_crate: None,
+        device_cfgs: &[],
+        no_fmad: false,
+        unchecked_indexing: false,
+        materialize_cubin: false,
+        device_debug: DeviceDebug::Off,
+        debug_assertions: false,
+    };
+    let mut environment = BTreeMap::from([
+        (DEVICE_BACKEND_ENV.to_owned(), b"cutlass-mlir".to_vec()),
+        (
+            cutlass_toolchain::CUTLASS_COMPILER_ENV.to_owned(),
+            b"/managed/libCutlassCompiler.so".to_vec(),
+        ),
+        (
+            CUTLASS_DIGEST_FINGERPRINT_ENV.to_owned(),
+            b"digest-a".to_vec(),
+        ),
+    ]);
+    let fingerprint = |environment: &BTreeMap<String, Vec<u8>>| {
+        passthrough_codegen_fingerprint_with_env(
+            &ctx,
+            &opts,
+            None,
+            Some("sm_120a"),
+            &MaterializationMode::default(),
+            environment,
+        )
+    };
+    environment.insert(
+        "CUDA_OXIDE_MLIR_PROFILE".into(),
+        b"cutlass-full-cute-mlir22".to_vec(),
+    );
+    let full_profile = fingerprint(&environment);
+    environment.insert(
+        "CUDA_OXIDE_MLIR_PROFILE".into(),
+        b"cutlass-primitives-mlir22".to_vec(),
+    );
+    let primitives_profile = fingerprint(&environment);
+    assert_ne!(
+        full_profile, primitives_profile,
+        "changing only the profile must rebuild device code"
+    );
+    assert_eq!(primitives_profile, fingerprint(&environment));
+    let before = fingerprint(&environment);
+    environment.insert(
+        CUTLASS_DIGEST_FINGERPRINT_ENV.to_owned(),
+        b"digest-b".to_vec(),
+    );
+
+    assert_ne!(before, fingerprint(&environment));
+}
+
+#[test]
+fn passthrough_fingerprint_tracks_explicit_cutlass_library_content() {
+    let root = unique_temp_dir("cargo_oxide_explicit_cutlass_fingerprint");
+    fs::create_dir_all(&root).unwrap();
+    let compiler = root.join("libCutlassCompiler.so");
+    fs::write(&compiler, b"compiler-a").unwrap();
+
+    let ctx = test_context(OxideConfig::default());
+    let opts = CargoPassthroughOptions {
+        verbose: false,
+        emit_nvvm_ir: false,
+        arch: Some("sm_120a"),
+        features: None,
+        cargo_target_dir: None,
+        device_codegen_crate: None,
+        device_cfgs: &[],
+        no_fmad: false,
+        unchecked_indexing: false,
+        materialize_cubin: false,
+        device_debug: DeviceDebug::Off,
+        debug_assertions: false,
+    };
+    let base_environment = BTreeMap::from([
+        (DEVICE_BACKEND_ENV.to_owned(), b"cutlass-mlir".to_vec()),
+        (
+            cutlass_toolchain::CUTLASS_COMPILER_ENV.to_owned(),
+            compiler.as_os_str().as_encoded_bytes().to_vec(),
+        ),
+    ]);
+    let fingerprint = |environment: &mut BTreeMap<String, Vec<u8>>| {
+        augment_env_with_cutlass_compiler_identity(&ctx, environment, Some(compiler.as_path()));
+        passthrough_codegen_fingerprint_with_env(
+            &ctx,
+            &opts,
+            None,
+            Some("sm_120a"),
+            &MaterializationMode::default(),
+            environment,
+        )
+    };
+
+    let before = fingerprint(&mut base_environment.clone());
+    fs::write(&compiler, b"compiler-b").unwrap();
+    let after = fingerprint(&mut base_environment.clone());
+    fs::remove_dir_all(&root).unwrap();
+
+    assert_ne!(before, after, "same-path compiler replacement must rebuild");
+}
+
+#[test]
 fn passthrough_fingerprint_tracks_non_unicode_presence_switch_bytes() {
     let ctx = test_context(OxideConfig::default());
     let opts = CargoPassthroughOptions {
@@ -3891,17 +4080,23 @@ fn format_sm_arch_uses_cuda_target_spelling() {
     assert_eq!(format_sm_arch((10, 1)), "sm_101a");
     assert_eq!(format_sm_arch((10, 3)), "sm_103a");
     assert_eq!(format_sm_arch((12, 0)), "sm_120a"); // consumer Blackwell
+    assert_eq!(format_sm_arch((12, 1)), "sm_121a"); // GB10 / DGX Spark
 }
 
 #[test]
 fn parse_compute_cap_accepts_real_nvidia_smi_output() {
     assert_eq!(parse_compute_cap("12.0\n"), Some((12, 0)));
+    assert_eq!(parse_compute_cap("12.1\n"), Some((12, 1)));
     assert_eq!(parse_compute_cap("7.5\n"), Some((7, 5)));
     assert_eq!(parse_compute_cap("10.3"), Some((10, 3)));
     // End-to-end with format_sm_arch: the values the backend sees.
     assert_eq!(
         format_sm_arch(parse_compute_cap("12.0\n").unwrap()),
         "sm_120a"
+    );
+    assert_eq!(
+        format_sm_arch(parse_compute_cap("12.1\n").unwrap()),
+        "sm_121a"
     );
     assert_eq!(format_sm_arch(parse_compute_cap("7.5\n").unwrap()), "sm_75");
 }
@@ -4231,6 +4426,113 @@ fn plan_update_selects_advise_setup_or_cache_refresh() {
     assert_eq!(plan_update(false, true), UpdatePlan::RefreshCache);
 }
 
+/// Inside the workspace, setup resolves the context without building and
+/// then builds and publishes the local source. The fixture's backend crate
+/// cannot build, so an eager build during resolution would exit the test
+/// process instead of returning a context
+#[test]
+fn setup_in_the_workspace_builds_the_local_source_after_a_build_free_resolution() {
+    let root = unique_temp_dir("cargo_oxide_setup_workspace");
+    let codegen_crate = root.join("crates/rustc-codegen-cuda");
+    fs::create_dir_all(&codegen_crate).unwrap();
+    fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
+    fs::write(codegen_crate.join("Cargo.toml"), "not a manifest [").unwrap();
+
+    let ctx = setup_context_in(&root.join("crates")).expect("fixture is a workspace");
+    assert!(ctx.is_workspace);
+    assert_eq!(ctx.workspace_root, root);
+    assert_eq!(ctx.codegen_crate, codegen_crate);
+    // an exported `CUDA_OXIDE_BACKEND` wins, as in discovery
+    match std::env::var_os("CUDA_OXIDE_BACKEND") {
+        Some(env_backend) => assert_eq!(ctx.backend_so, PathBuf::from(env_backend)),
+        None => assert!(
+            ctx.backend_so.starts_with(codegen_crate.join("target")),
+            "{}",
+            ctx.backend_so.display()
+        ),
+    }
+    assert!(!codegen_crate.join("target").exists());
+
+    // a pin outranks the cache for other projects, but publishing the local
+    // build is still what setup is for inside the workspace
+    for backend_env in [None, Some("/tmp/env-backend.so".into())] {
+        assert_eq!(
+            plan_setup_with_env(&ctx, backend_env),
+            SetupPlan::BuildAndPublish {
+                codegen_crate: codegen_crate.clone()
+            }
+        );
+    }
+
+    fs::remove_dir_all(&root).unwrap();
+}
+
+/// Outside the workspace `codegen_crate` is the user's project, and building
+/// it as the backend fails (#1688). Setup rebuilds from the project's
+/// cuda-oxide dependency through `update`'s refresh instead, and resolution
+/// must not build first or a cold cache builds twice. The fixture pins a
+/// backend that does not exist, which eager resolution exits on
+#[test]
+fn setup_outside_the_workspace_refreshes_from_the_dependency_after_a_build_free_resolution() {
+    let root = unique_temp_dir("cargo_oxide_setup_standalone");
+    fs::create_dir_all(root.join(".cargo")).unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join(".cargo/cuda-oxide.toml"),
+        "backend = \"missing/librustc_codegen_cuda.so\"\n",
+    )
+    .unwrap();
+    let pinned = root.join(".cargo/missing/librustc_codegen_cuda.so");
+
+    let mut ctx = setup_context_in(&root).expect("fixture is a standalone project");
+    assert!(!ctx.is_workspace);
+    assert_eq!(ctx.workspace_root, root);
+    assert_eq!(ctx.config.backend.as_deref(), Some(pinned.as_path()));
+    // an exported `CUDA_OXIDE_BACKEND` wins, as in discovery
+    let expected = std::env::var_os("CUDA_OXIDE_BACKEND")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| pinned.clone());
+    assert_eq!(ctx.backend_so, expected);
+    // the fixture's pin must stay missing, or eager resolution would not exit
+    assert!(!pinned.exists(), "{}", pinned.display());
+
+    // a pinned backend outranks the cache the refresh would rebuild
+    let SetupPlan::RefusePinned(refusal) = plan_setup_with_env(&ctx, None) else {
+        panic!("a config pin must refuse standalone setup");
+    };
+    assert!(refusal.contains("`cargo oxide setup`"), "{refusal}");
+    assert!(refusal.contains(&pinned.display().to_string()), "{refusal}");
+    let SetupPlan::RefusePinned(refusal) =
+        plan_setup_with_env(&ctx, Some("/tmp/env-backend.so".into()))
+    else {
+        panic!("an exported CUDA_OXIDE_BACKEND must refuse standalone setup");
+    };
+    assert!(refusal.contains("CUDA_OXIDE_BACKEND is set"), "{refusal}");
+
+    ctx.config.backend = None;
+    assert_eq!(
+        plan_setup_with_env(&ctx, None),
+        SetupPlan::RefreshFromDependency {
+            project_dir: root.clone()
+        }
+    );
+
+    // the project directory is the refresh input, never `codegen_crate`
+    let unpinned = test_context(OxideConfig::default());
+    assert_eq!(
+        plan_setup_with_env(&unpinned, None),
+        SetupPlan::RefreshFromDependency {
+            project_dir: unpinned.workspace_root.clone()
+        }
+    );
+
+    fs::remove_dir_all(&root).unwrap();
+}
+
 /// A `.cargo/cuda-oxide.toml` backend pin outranks the shared cache, so
 /// `update` must refuse just like it does for `CUDA_OXIDE_BACKEND`.
 #[test]
@@ -4243,15 +4545,15 @@ fn update_refuses_when_the_config_pins_a_backend() {
     // the real one would let an exported value produce the env refusal for
     // both inputs, including the unpinned case asserted to be `None`.
     let refusal =
-        update_pin_refusal_with_env(&pinned, None).expect("config pin must refuse update");
+        pin_refusal_with_env("update", &pinned, None).expect("config pin must refuse update");
     assert!(refusal.contains("pins the backend"), "{refusal}");
     assert!(refusal.contains("/tmp/pinned-backend.so"), "{refusal}");
 
     let unpinned = test_context(OxideConfig::default());
-    assert_eq!(update_pin_refusal_with_env(&unpinned, None), None);
+    assert_eq!(pin_refusal_with_env("update", &unpinned, None), None);
 
     // The env var outranks the project pin: set, it refuses even unpinned.
-    let from_env = update_pin_refusal_with_env(&unpinned, Some("/tmp/env-backend.so".into()))
+    let from_env = pin_refusal_with_env("update", &unpinned, Some("/tmp/env-backend.so".into()))
         .expect("exported CUDA_OXIDE_BACKEND must refuse update");
     assert!(from_env.contains("CUDA_OXIDE_BACKEND is set"), "{from_env}");
 }
@@ -4723,6 +5025,100 @@ fn example_discovery_is_sorted_and_uses_manifest_fallback() {
     assert_eq!(examples[0].description, "README description.");
     assert_eq!(examples[1].description, "Manifest fallback description");
 
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn example_discovery_combines_roots_and_rejects_duplicate_names() {
+    let root = unique_temp_dir("cargo_oxide_list_multi_root");
+    let standard = root.join("standard");
+    let cute = root.join("cute");
+    std::fs::create_dir_all(&standard).unwrap();
+    std::fs::create_dir_all(&cute).unwrap();
+
+    write_list_example(&standard, "zeta", None, None);
+    write_list_example(&cute, "alpha", None, None);
+    let examples = discover_examples_from_roots(&[standard.clone(), cute.clone()]).unwrap();
+    assert_eq!(
+        examples
+            .iter()
+            .map(|example| example.name.as_str())
+            .collect::<Vec<_>>(),
+        ["alpha", "zeta"]
+    );
+
+    write_list_example(&cute, "zeta", None, None);
+    let error = discover_examples_from_roots(&[standard, cute]).unwrap_err();
+    assert!(error.contains("example name `zeta` exists in more than one example root"));
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn workspace_example_roots_follow_the_selected_backend_in_each_layout() {
+    for (nested, from_component) in [(false, false), (true, false), (true, true)] {
+        let root = unique_temp_dir("cargo_oxide_cute_example_root");
+        let component = if nested {
+            root.join("cuda-oxide")
+        } else {
+            root.clone()
+        };
+        let codegen = component.join("crates/rustc-codegen-cuda");
+        let standard = codegen.join("examples");
+        let cute = component.join("cute-rs-preview/examples");
+        let models = component.join("cute-rs-preview/models");
+        std::fs::create_dir_all(&standard).unwrap();
+        std::fs::create_dir_all(&cute).unwrap();
+        write_list_example(&standard, "native", None, None);
+        write_list_example(&cute, "tiled", None, None);
+        write_list_example(&models, "qwen_decoder_cute", None, None);
+        if nested {
+            // A leftover root tree must never shadow the selected component.
+            for path in ["cute-rs-preview/examples", "cute-rs-preview/models"] {
+                write_list_example(&root.join(path), "stale", None, None);
+            }
+        }
+        let mut ctx = test_context(OxideConfig::default());
+        ctx.workspace_root = if from_component {
+            component
+        } else {
+            root.clone()
+        };
+        ctx.codegen_crate = codegen;
+        ctx.examples_dir = standard.clone();
+        ctx.is_workspace = true;
+        let examples = discover_examples_from_roots(&example_roots(&ctx)).unwrap();
+        assert_eq!(
+            examples.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+            ["native", "qwen_decoder_cute", "tiled"]
+        );
+        assert_eq!(resolve_example_dir(&ctx, "tiled"), cute.join("tiled"));
+        assert_eq!(
+            resolve_example_dir(&ctx, "qwen_decoder_cute"),
+            models.join("qwen_decoder_cute")
+        );
+        // Duplicate names still fail instead of choosing one source tree.
+        write_list_example(&models, "native", None, None);
+        assert!(
+            discover_examples_from_roots(&example_roots(&ctx))
+                .unwrap_err()
+                .contains("more than one example root")
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn standalone_example_roots_do_not_discover_neighboring_cute_trees() {
+    let root = unique_temp_dir("cargo_oxide_standalone_cute_root");
+    for path in ["cute-rs-preview/examples", "cute-rs-preview/models"] {
+        std::fs::create_dir_all(root.join(path)).unwrap();
+    }
+    let mut ctx = test_context(OxideConfig::default());
+    ctx.workspace_root = root.clone();
+    ctx.codegen_crate = root.clone();
+    ctx.examples_dir = root.clone();
+    assert_eq!(example_roots(&ctx).as_slice(), std::slice::from_ref(&root));
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -5387,16 +5783,15 @@ fn scaffold_async_template_keeps_async_deps_and_docs() {
     assert!(files.main_rs.contains("vecadd_async"));
     assert!(files.main_rs.contains("use cuda_host::cuda_module;"));
     assert!(!files.main_rs.contains("use cuda_device::{cuda_module"));
-    // Shared host runtime from the same git source as cuda-host; the SIMT
-    // surface lives under simt::.
+    // Shared host runtime from the same git source as cuda-host.
     assert!(files.cargo_toml.contains("cuda-async = { git = \""));
     assert!(!files.cargo_toml.contains("cuda-async = \""));
     assert!(!files.cargo_toml.contains("cuda-bindings"));
-    assert!(files.main_rs.contains("use cuda_core::simt::LaunchConfig;"));
+    assert!(files.main_rs.contains("use cuda_core::LaunchConfig;"));
     assert!(
         files
             .main_rs
-            .contains("use cuda_async::simt::device_operation::DeviceOperation;")
+            .contains("use cuda_async::device_operation::DeviceOperation;")
     );
 }
 
@@ -5480,6 +5875,8 @@ fn scaffold_names_the_canonical_repository() {
                 .contains("git = \"https://github.com/NVIDIA/cuda-rust.git\"")
         );
         assert!(!files.cargo_toml.contains("NVlabs"));
+        assert!(files.cargo_config_toml.contains("[env]"));
+        assert!(files.cargo_config_toml.contains("RUSTC_BOOTSTRAP = \"1\""));
     }
 }
 
@@ -5567,6 +5964,7 @@ fn full_device_debug_applies_only_the_targeted_debug_controls() {
             "base",
             "--cfg",
             FULL_DEBUG_GET_MUT_OUTLINE_CFG,
+            "-Cdebuginfo=2",
             "-Zmir-enable-passes=-ScalarReplacementOfAggregates,-SingleUseConsts"
         ]
     );
@@ -5590,6 +5988,7 @@ fn numeric_full_debug_alias_selects_the_same_rustc_controls() {
             "base",
             "--cfg",
             FULL_DEBUG_GET_MUT_OUTLINE_CFG,
+            "-Cdebuginfo=2",
             "-Zmir-enable-passes=-ScalarReplacementOfAggregates,-SingleUseConsts"
         ]
     );
@@ -5773,7 +6172,7 @@ fn tilelib_relu_descriptions() -> Vec<oxide_tile_export::TileExportDesc> {
             version: oxide_tile_export::CURRENT_VERSION,
             decl: "relu".into(),
             symbol: "relu_impl".into(),
-            shape: vec![128],
+            shape: Some(vec![128]),
             params: vec![
                 param("x", TileAccess::In, true),
                 param("relu_out", TileAccess::Out, false),
@@ -5785,7 +6184,7 @@ fn tilelib_relu_descriptions() -> Vec<oxide_tile_export::TileExportDesc> {
             version: oxide_tile_export::CURRENT_VERSION,
             decl: "scale_in_place".into(),
             symbol: "scale_in_place_impl".into(),
-            shape: vec![128],
+            shape: Some(vec![128]),
             params: vec![
                 param("x", TileAccess::InOut, false),
                 param("factor", TileAccess::In, true),
@@ -5797,7 +6196,7 @@ fn tilelib_relu_descriptions() -> Vec<oxide_tile_export::TileExportDesc> {
             version: oxide_tile_export::CURRENT_VERSION,
             decl: "warp_sum".into(),
             symbol: "warp_sum_impl".into(),
-            shape: vec![128],
+            shape: Some(vec![128]),
             params: vec![
                 param("x", TileAccess::In, true),
                 param("warp_sum_out", TileAccess::Out, false),
@@ -5902,7 +6301,7 @@ cuda_tile.module @tilelib_relu {
 
 #[test]
 fn tilelib_relu_descriptions_print_as_the_upstream_modules() {
-    let library = TileLibrary::from_descriptions(&tilelib_relu_descriptions())
+    let library = TileLibrary::from_descriptions(&tilelib_relu_descriptions(), false)
         .unwrap()
         .library("tilelib_relu");
     library.verify().unwrap();
@@ -5941,36 +6340,36 @@ fn fragmaps_follow_the_synchronization_and_the_footprint() {
     // One invocation per element; a footprint of F gives N/F invocations of
     // F contiguous elements.
     assert_eq!(
-        fragmap(TileSync::None, 128, 1).unwrap(),
+        oxide_tilebc::describe::fragmap(TileSync::None, 128.into(), 1).unwrap(),
         Layout::flat(&[128, 1, 1], &[1, 0, 0])
     );
     assert_eq!(
-        fragmap(TileSync::None, 128, 4).unwrap(),
+        oxide_tilebc::describe::fragmap(TileSync::None, 128.into(), 4).unwrap(),
         Layout::flat(&[32, 1, 4], &[4, 0, 1])
     );
     // A warp per invocation: 32 participants, one element each, or F
     // contiguous elements each with adjacent lanes adjacent in the tile.
     assert_eq!(
-        fragmap(TileSync::Warp, 128, 1).unwrap(),
+        oxide_tilebc::describe::fragmap(TileSync::Warp, 128.into(), 1).unwrap(),
         Layout::flat(&[4, 32, 1], &[32, 1, 0])
     );
     assert_eq!(
-        fragmap(TileSync::Warp, 256, 4).unwrap(),
+        oxide_tilebc::describe::fragmap(TileSync::Warp, 256.into(), 4).unwrap(),
         Layout::flat(&[2, 32, 4], &[128, 4, 1])
     );
     // The footprint must divide the tile size.
     assert!(
-        fragmap(TileSync::None, 128, 3)
+        oxide_tilebc::describe::fragmap(TileSync::None, 128.into(), 3)
             .unwrap_err()
             .contains("does not divide")
     );
     assert!(
-        fragmap(TileSync::Warp, 64, 4)
+        oxide_tilebc::describe::fragmap(TileSync::Warp, 64.into(), 4)
             .unwrap_err()
             .contains("multiple of 128")
     );
     assert!(
-        fragmap(TileSync::None, 128, 0)
+        oxide_tilebc::describe::fragmap(TileSync::None, 128.into(), 0)
             .unwrap_err()
             .contains("positive")
     );
@@ -5984,7 +6383,7 @@ fn fragmaps_follow_the_synchronization_and_the_footprint() {
         param.footprint = 4;
         param.by_value = false;
     }
-    let library = TileLibrary::from_descriptions(&descriptions)
+    let library = TileLibrary::from_descriptions(&descriptions, false)
         .unwrap()
         .library("lib");
     library.verify().unwrap();
@@ -6009,7 +6408,7 @@ fn fragmaps_follow_the_synchronization_and_the_footprint() {
     // description is refused before the verifier would reject the fragmaps.
     descriptions[1].params[1].footprint = 1;
     descriptions[1].params[1].by_value = true;
-    let error = TileLibrary::from_descriptions(&descriptions).unwrap_err();
+    let error = TileLibrary::from_descriptions(&descriptions, false).unwrap_err();
     assert!(
         error.contains("`x` (footprint 4) and `factor` (footprint 1) differ"),
         "{error}"
@@ -6026,14 +6425,14 @@ fn a_bf16_scalar_passed_by_value_adds_the_frontend_abi_entry() {
     for param in &mut relu.params {
         param.elem = TileElem::BF16;
     }
-    let (_, implementation) = describe_export(relu).unwrap();
+    let (_, implementation) = oxide_tilebc::describe::export(relu).unwrap();
     assert_eq!(
         implementation.frontend_abi,
         vec![("bf16".to_string(), "i16".to_string())]
     );
     // No `sync` means no clause at all, not an explicit `synchronization<none>`.
     assert_eq!(implementation.synchronization, None);
-    let library = TileLibrary::from_descriptions(&descriptions[..1])
+    let library = TileLibrary::from_descriptions(&descriptions[..1], false)
         .unwrap()
         .library("lib");
     library.verify().unwrap();
@@ -6047,7 +6446,7 @@ fn a_bf16_scalar_passed_by_value_adds_the_frontend_abi_entry() {
     // A bf16 behind a pointer travels as a pointer and needs no entry.
     let scale = &mut descriptions[1];
     scale.params[0].elem = TileElem::BF16;
-    let (_, implementation) = describe_export(scale).unwrap();
+    let (_, implementation) = oxide_tilebc::describe::export(scale).unwrap();
     assert!(implementation.frontend_abi.is_empty());
 
     // Unsigned Rust integers are the signless Tile IR integers.
@@ -6055,7 +6454,7 @@ fn a_bf16_scalar_passed_by_value_adds_the_frontend_abi_entry() {
     for param in &mut warp_sum.params {
         param.elem = TileElem::U32;
     }
-    let (func, implementation) = describe_export(warp_sum).unwrap();
+    let (func, implementation) = oxide_tilebc::describe::export(warp_sum).unwrap();
     assert_eq!(func.args[0].ty.element, oxide_tilebc::ScalarType::I32);
     assert_eq!(
         implementation.args[1].fragment.element,
@@ -6246,14 +6645,12 @@ fn implementation_symbols_are_checked_against_the_abi_table() {
 fn tileiras_capability_follows_the_listed_bytecode_versions() {
     use super::tilelib::list_bytecode_versions;
     use oxide_tilebc::BytecodeVersion;
-    use std::os::unix::fs::PermissionsExt;
 
     let root = unique_temp_dir("cargo_oxide_tileiras");
     fs::create_dir_all(&root).unwrap();
     let stand_in = |name: &str, body: &str| -> PathBuf {
         let path = root.join(name);
-        fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        write_tool(&path, &format!("#!/bin/sh\n{body}\n"));
         path
     };
 
@@ -6412,4 +6809,206 @@ fn the_smoketest_greps_the_summary_markers_this_command_prints() {
     assert!(!DESCRIPTIONS_WRITTEN_MARKER.contains(LIBRARY_WRITTEN_MARKER));
     assert!(!DESCRIPTIONS_WRITTEN_MARKER.contains(LIBRARY_SKIPPED_MARKER));
     assert!(!LIBRARY_WRITTEN_MARKER.contains(LIBRARY_SKIPPED_MARKER));
+}
+
+/// Unset, empty, or `default` values leave rustc's default host linker untouched.
+#[test]
+fn test_host_linker_unset_or_default_keeps_rustc_linker() {
+    for value in [None, Some(""), Some("default"), Some("  default  ")] {
+        let flags = host_linker_rustflags_for(value.map(OsStr::new), || {
+            panic!("wild lookup must not run for {value:?}")
+        });
+        assert_eq!(flags, Ok(Vec::new()), "value {value:?}");
+    }
+}
+
+/// `CUDA_OXIDE_LINKER=wild` emits `-Clinker=clang` and `-Clink-arg=--ld-path=<wild>`.
+#[test]
+fn test_host_linker_wild_uses_clang_ld_path() {
+    let flags = host_linker_rustflags_for(Some(OsStr::new(" wild ")), || {
+        Some(PathBuf::from("/opt/bin/wild"))
+    });
+    assert_eq!(
+        flags,
+        Ok(vec![
+            "-Clinker=clang".to_string(),
+            "-Clink-arg=--ld-path=/opt/bin/wild".to_string(),
+        ])
+    );
+}
+
+/// Requesting `wild` when `wild` is absent from `PATH` returns an actionable install error.
+#[test]
+fn test_host_linker_wild_missing_is_an_error() {
+    let err = host_linker_rustflags_for(Some(OsStr::new("wild")), || None).unwrap_err();
+    assert!(err.contains("`wild` was not found on PATH"), "{err}");
+    assert!(err.contains("cargo install wild-linker"), "{err}");
+}
+
+/// Unsupported `CUDA_OXIDE_LINKER` values fail before probing `PATH` for `wild`.
+#[test]
+fn test_host_linker_rejects_unsupported_value() {
+    let err = host_linker_rustflags_for(Some(OsStr::new("mold")), || {
+        panic!("wild lookup must not run for an unsupported value")
+    })
+    .unwrap_err();
+    assert!(err.contains("unsupported CUDA_OXIDE_LINKER value"), "{err}");
+}
+
+/// Explicit host-linker flags follow user `RUSTFLAGS` so `CUDA_OXIDE_LINKER=wild` wins.
+#[test]
+fn test_host_linker_flags_follow_user_rustflags() {
+    let linker = host_linker_rustflags_for(Some(OsStr::new("wild")), || {
+        Some(PathBuf::from("/opt/bin/wild"))
+    })
+    .unwrap();
+    let rustflags = build_encoded_rustflags_with_existing(
+        Path::new("/tmp/librustc_codegen_cuda.so"),
+        CargoPassthroughSubcommand::Test.codegen_profile(false),
+        &[],
+        &linker,
+        None,
+        Some("-Clinker=gcc"),
+    );
+    let flags = decoded_rustflags(&rustflags);
+    let user = flags
+        .iter()
+        .position(|flag| *flag == "-Clinker=gcc")
+        .unwrap();
+    let ours = flags
+        .iter()
+        .position(|flag| *flag == "-Clinker=clang")
+        .unwrap();
+    assert!(user < ours, "{flags:?}");
+}
+
+/// Host-only Cargo invocations leave `CARGO_ENCODED_RUSTFLAGS` untouched when `wild` is not active,
+/// and append the `wild` flags after project and user rustflags when active.
+#[test]
+fn test_apply_host_linker_rustflags_with_existing_preserves_precedence() {
+    let mut default_cmd = Command::new("cargo");
+    apply_host_linker_rustflags_with_existing(
+        &mut default_cmd,
+        &["-Ctarget-cpu=native".to_string()],
+        &[],
+        None,
+        Some("-Clinker=gcc"),
+    );
+    assert!(
+        command_env(&default_cmd, "CARGO_ENCODED_RUSTFLAGS").is_none(),
+        "default linker must not override host cargo rustflags"
+    );
+
+    let linker = host_linker_rustflags_for(Some(OsStr::new("wild")), || {
+        Some(PathBuf::from("/opt/bin/wild"))
+    })
+    .unwrap();
+    let mut wild_cmd = Command::new("cargo");
+    apply_host_linker_rustflags_with_existing(
+        &mut wild_cmd,
+        &["-Ctarget-cpu=native".to_string()],
+        &linker,
+        None,
+        Some("-Clinker=gcc"),
+    );
+    let encoded = command_env(&wild_cmd, "CARGO_ENCODED_RUSTFLAGS")
+        .expect("wild linker must set CARGO_ENCODED_RUSTFLAGS on host cargo");
+    let flags = decoded_rustflags(&encoded);
+    assert_eq!(
+        flags,
+        vec![
+            "-Ctarget-cpu=native",
+            "-Clinker=gcc",
+            "-Clinker=clang",
+            "-Clink-arg=--ld-path=/opt/bin/wild",
+        ]
+    );
+}
+
+/// Invalid `CUDA_OXIDE_LINKER` in `.cargo/cuda-oxide.toml` `[env]` returns `Err` instead of
+/// aborting the process.
+#[test]
+fn test_host_linker_reads_project_config_env_and_returns_err() {
+    let ctx = test_context(OxideConfig {
+        env: vec![("CUDA_OXIDE_LINKER".to_string(), "mold".to_string())],
+        ..Default::default()
+    });
+    let err = host_linker_rustflags(&ctx).unwrap_err();
+    assert!(err.contains("unsupported CUDA_OXIDE_LINKER value"), "{err}");
+}
+
+// =============================================================================
+// cargo oxide tilelib --provider
+// =============================================================================
+
+#[test]
+fn a_static_library_leaves_parametric_exports_out_and_says_so() {
+    let mut descriptions = tilelib_relu_descriptions();
+    descriptions[0].shape = None;
+    let library = TileLibrary::from_descriptions(&descriptions, false).unwrap();
+    assert_eq!(library.funcs.len(), 2);
+    assert_eq!(library.skipped, vec!["relu".to_string()]);
+    // The provider form ships every export, the parametric one as such.
+    let library = TileLibrary::from_descriptions(&descriptions, true).unwrap();
+    assert_eq!(library.funcs.len(), 3);
+    assert!(library.skipped.is_empty());
+    let text = library.library("lib").interface_text();
+    assert!(text.contains("@relu<[N: index]>"), "{text}");
+    assert!(
+        text.contains("@scale_in_place(%x: !cuda_tile.tile<128xf32>"),
+        "{text}"
+    );
+    // Nothing left for a static library is an error that names the way out.
+    for description in &mut descriptions {
+        description.shape = None;
+    }
+    let error = TileLibrary::from_descriptions(&descriptions, false).unwrap_err();
+    assert!(error.contains("--provider"), "{error}");
+}
+
+#[test]
+fn the_generated_provider_crate_names_everything_it_needs() {
+    let manifest = provider_manifest("tilelib_relu", Path::new("/ws/crates/oxide-tile-provider"));
+    for needle in [
+        "name = \"tilelib_relu-provider\"",
+        "name = \"tilelib_relu_provider\"",
+        "crate-type = [\"cdylib\"]",
+        "oxide-tile-provider = { path = \"/ws/crates/oxide-tile-provider\" }",
+        "[workspace]",
+    ] {
+        assert!(manifest.contains(needle), "{needle}\n{manifest}");
+    }
+    let source = provider_lib_source(
+        "tilelib_relu",
+        oxide_tilebc::BytecodeVersion::new(13, 6),
+        true,
+    );
+    for needle in [
+        "oxide_tile_provider::define_provider! {",
+        "name: \"tilelib_relu\",",
+        "descriptions: include_str!(\"../tilelib_relu.tileexports.json\"),",
+        "bytecode_version: (13, 6),",
+        "nvvm_ir: include_str!(\"../tilelib_relu.ll\"),",
+        "fma_contraction: true,",
+    ] {
+        assert!(source.contains(needle), "{needle}\n{source}");
+    }
+    assert_eq!(provider_lib_name("my-lib"), "my_lib_provider");
+    let paths = TileLibraryPaths::new(Path::new("/crate"), "my-lib", None);
+    assert_eq!(
+        provider_tile_lib_command(
+            Path::new("/opt/cuda/bin/tileiras"),
+            &paths,
+            Path::new("/crate/target/oxide-provider/my_lib/target/release/libmy_lib_provider.so"),
+        ),
+        vec![
+            "/opt/cuda/bin/tileiras".to_string(),
+            "--preview-create-tile-lib".to_string(),
+            "--preview-interface=/crate/my_lib.iface.tilebc".to_string(),
+            "--preview-implementation=/crate/target/oxide-provider/my_lib/target/release/libmy_lib_provider.so"
+                .to_string(),
+            "-o".to_string(),
+            "/crate/my_lib.tilelib".to_string(),
+        ]
+    );
 }

@@ -9,7 +9,7 @@
 //! read-only methods. Runtime indexing into its small array fields must not
 //! force the aggregate into NVPTX local memory.
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, kernel, thread};
 use cuda_host::cuda_module;

@@ -37,7 +37,7 @@
 #     surface in the same way and stay out.
 #
 # rustfmt comes from rust-toolchain.toml's component list, through the rustup
-# proxy, so the order checked here is the order the pinned nightly writes.
+# proxy, so the order checked here is the order the pinned toolchain writes.
 # `--edition 2024` matches the edition `cargo oxide new` scaffolds; under 2021
 # rustfmt keeps the old case-insensitive order and this guard would say
 # nothing. A `use` line rustfmt cannot parse is reported too: a reader pastes

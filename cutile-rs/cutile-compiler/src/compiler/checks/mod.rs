@@ -170,7 +170,11 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 // Rung 1/3: axis provenance — a same-view iterand, or a
                 // foreign iterand whose axis a declared root-dimension
                 // equality relates to this one.
-                if self.discharge_by_axis_provenance(&axis_goals, &partition_value) {
+                if self.discharge_by_axis_provenance(
+                    &axis_goals,
+                    &partition_value,
+                    &call_expr.span(),
+                ) {
                     self.count_discharged();
                     continue;
                 }
@@ -195,7 +199,11 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 // grid-bounded by the execution model; the residual
                 // grid-vs-tile-count claim moves to a launch check
                 // (goals.rs, discharge_by_block_id_axiom).
-                if self.discharge_by_block_id_axiom(&axis_goals, &partition_value) {
+                if self.discharge_by_block_id_axiom(
+                    &axis_goals,
+                    &partition_value,
+                    &call_expr.span(),
+                ) {
                     self.count_discharged();
                     continue;
                 }
@@ -208,7 +216,11 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             // undischarged checks are compile errors rather than device
             // placements.
             if self.check_opts.relocate_to_launch
-                && self.hoist_zero_coordinate_nonempty_extent(&axis_goals, &partition_value)
+                && self.hoist_zero_coordinate_nonempty_extent(
+                    &axis_goals,
+                    &partition_value,
+                    &call_expr.span(),
+                )
             {
                 self.count_discharged();
                 continue;
@@ -346,7 +358,11 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             }
             // Rung 3/4: a constant `[0, 0]` coordinate against a dynamic
             // extent reduces to `extent > 0`, a launch-known predicate.
-            if self.hoist_zero_coordinate_nonempty_extent(&axis_goals, &partition) {
+            if self.hoist_zero_coordinate_nonempty_extent(
+                &axis_goals,
+                &partition,
+                &call_expr.span(),
+            ) {
                 self.count_discharged();
                 continue;
             }

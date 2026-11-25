@@ -48,7 +48,7 @@ fn then_closure_cannot_nest_execution() {
 fn then_unchecked_closure_can_nest_sync_sync_on_and_await() {
     on_fresh_thread(|| {
         init_device_contexts(0, 1).expect("init failed (requires GPU)");
-        let device = cuda_core::Device::new(0).unwrap();
+        let device = cuda_core::Context::new(0).unwrap();
         let other_stream = device.new_stream().unwrap();
 
         let chain = unsafe {
@@ -140,7 +140,7 @@ fn panic_inside_future_poll_releases_lock() {
 #[test]
 fn panic_inside_scope_releases_lock() {
     on_fresh_thread(|| {
-        let device = cuda_core::Device::new(0).unwrap();
+        let device = cuda_core::Context::new(0).unwrap();
         let stream = device.new_stream().unwrap();
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             CudaGraph::scope(&stream, |_s| panic!("intentional panic in scope"))

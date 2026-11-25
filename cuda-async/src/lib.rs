@@ -7,6 +7,7 @@
 //! and device memory management.
 
 pub mod cuda_graph;
+pub mod device_box;
 pub mod device_buffer;
 pub mod device_context;
 pub mod device_future;
@@ -23,9 +24,6 @@ pub mod prelude;
 #[cfg(not(loom))]
 mod reactor;
 pub mod scheduling_policies;
-/// SIMT-model async surface, copied from cuda-oxide for the shared
-/// host-crate migration. Not re-exported at the root; see the module docs.
-pub mod simt;
 mod slot_table;
 mod submission;
 

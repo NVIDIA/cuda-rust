@@ -96,6 +96,7 @@ file:
 | `debug`       | Debug and profiling intrinsics                                              |
 | `exact_div`   | Rust compiler `exact_div` intrinsic                                         |
 | `float_math`  | Rust compiler floating-point math intrinsics                                |
+| `float_to_int` | Rust compiler `float_to_int_unchecked` intrinsic                           |
 | `generated`   | Generated raw/compatibility path dispatch for CUDA intrinsics               |
 | `iket`        | Translation of `cuda_device::iket` compiler markers                         |
 | `indexing`    | Thread and block indexing intrinsics                                        |

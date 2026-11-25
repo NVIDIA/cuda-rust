@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-# Verify the example classification assumptions and the full-debug route in
-# scripts/smoketest.sh. Most classification failures are otherwise only
+# Verify the example classification assumptions, WGMMA verdicts, and full-debug
+# route in scripts/smoketest.sh. Most classification failures are otherwise only
 # discoverable by running the suite on a GPU:
 #
 #   1. Every name in a *_EXAMPLES array is a real example directory.  These
@@ -75,6 +75,201 @@ import tomllib
 
 smoketest, examples_root = sys.argv[1], sys.argv[2]
 source = open(smoketest, encoding="utf-8").read()
+
+# Exercise the real verdict with controlled logs/artifacts, without a toolkit
+# or GPU. A fallback message must not hide a failed run or missing/empty PTX.
+with tempfile.TemporaryDirectory(prefix="smoketest-wgmma-") as temp:
+    root = pathlib.Path(temp)
+    functions = []
+    for name in ("ptxas_verify", "grep_failure_markers", "verdict_wgmma"):
+        match = re.search(rf"^{name}\(\) \{{\n.*?^\}}", source, re.M | re.S)
+        if match is None:
+            sys.exit(f"parse self-test failed: could not isolate {name}")
+        functions.append(match.group())
+    harness = root / "verdict.sh"
+    harness.write_text("set -uo pipefail\n" + "\n".join(functions) + '''
+PTXAS_BIN="$1"
+PTXAS_NOTE=""
+verdict_wgmma wgmma "$2" "$3"
+''')
+    ptx = root / "crates/rustc-codegen-cuda/examples/wgmma/wgmma.ptx"
+    ptx.parent.mkdir(parents=True)
+    assembler = root / "ptxas"
+    assembler.write_text('''#!/usr/bin/env bash
+[[ "$*" == "-arch=sm_90a crates/rustc-codegen-cuda/examples/wgmma/wgmma.ptx -o /dev/null" ]] || exit 99
+case "$SMOKETEST_TEST_PTXAS" in
+    ok) exit 0 ;;
+    old) echo "ptxas fatal : Unsupported .version 8.0"; exit 1 ;;
+    reject) echo "ptxas fatal : syntax error"; exit 1 ;;
+    *) exit 99 ;;
+esac
+''')
+    assembler.chmod(0o755)
+    log = root / "wgmma.log"
+    fallback = "WGMMA is Hopper-only (sm_90).\nChecking loose PTX artifact: wgmma.ptx\n"
+    valid_ptx = ".version 8.0\n.target sm_90a\n.address_size 64\n"
+    cases = [
+        # name, cargo status, PTX contents, log, ptxas mode, verdict status
+        ("failed run without PTX", 1, None, fallback, "ok", 1),
+        ("failed run with stale PTX", 1, valid_ptx, fallback, "ok", 1),
+        ("signal termination", 139, valid_ptx, fallback, "ok", 1),
+        ("missing PTX", 0, None, fallback, "ok", 1),
+        ("empty PTX", 0, "", fallback, "ok", 1),
+        ("missing PTX without ptxas", 0, None, fallback, "missing", 1),
+        ("valid PTX", 0, valid_ptx, fallback, "ok", 0),
+        ("valid PTX without ptxas", 0, valid_ptx, fallback, "missing", 0),
+        ("valid PTX with old ptxas", 0, valid_ptx, fallback, "old", 0),
+        ("ptxas rejection", 0, valid_ptx, fallback, "reject", 1),
+        ("expected non-Hopper load failure", 0, valid_ptx, fallback +
+         'PTX load failed (expected on non-Hopper): DriverError(1, "invalid argument")\n', "ok", 0),
+        ("successful execution", 0, None, "SUCCESS\n", "ok", 0),
+        ("execution with failure marker", 0, None, "FAIL: verification\nSUCCESS\n", "ok", 1),
+    ]
+    for name, status, artifact, output, mode, expected in cases:
+        ptx.unlink(missing_ok=True)
+        if artifact is not None:
+            ptx.write_text(artifact)
+        log.write_text(output)
+        env = dict(os.environ, SMOKETEST_TEST_PTXAS=mode)
+        result = subprocess.run(
+            ["bash", str(harness), "" if mode == "missing" else str(assembler),
+             str(log), str(status)],
+            cwd=root, env=env, capture_output=True, text=True,
+        )
+        marker = "PASS (" if expected == 0 else "FAIL ("
+        if result.returncode != expected or not result.stdout.startswith(marker):
+            sys.exit(f"WGMMA verdict failed for {name}: "
+                     f"{result.returncode}, {result.stdout!r}, {result.stderr!r}")
+
+    # The original false PASS also made the whole suite exit 0. Exercise the
+    # runner and summary in an isolated checkout with only external tools faked.
+    simt = root / "cuda-oxide"
+    (simt / "scripts").mkdir(parents=True)
+    script = simt / "scripts/smoketest.sh"
+    script.write_text(source)
+    (root / "Cargo.toml").touch()
+    example = simt / "crates/rustc-codegen-cuda/examples/wgmma"
+    example.mkdir(parents=True)
+    (example / "Cargo.toml").touch()
+    bin_dir = root / "bin"
+    bin_dir.mkdir()
+    mocks = {
+        "nvidia-smi": '#!/usr/bin/env bash\necho "Mock RTX 5060 Ti, 12.0"\n',
+        "cargo": '''#!/usr/bin/env bash
+case "$*" in
+    "oxide --help"|"oxide setup") exit 0 ;;
+    "oxide __debug-policy") echo unset; exit 0 ;;
+    "oxide run wgmma")
+        echo 'WGMMA is Hopper-only (sm_90).'
+        echo 'Checking loose PTX artifact: wgmma.ptx'
+        echo 'Error: loose PTX artifact not found' >&2
+        exit 1 ;;
+    *) exit 99 ;;
+esac
+''',
+    }
+    for name, contents in mocks.items():
+        tool = bin_dir / name
+        tool.write_text(contents)
+        tool.chmod(0o755)
+    env = dict(os.environ, PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+               CUDA_OXIDE_PTXAS=str(assembler), CUDA_OXIDE_BACKEND="mock-backend.so",
+               SMOKETEST_LOG_DIR=str(root / "logs"), CARGO_TARGET_DIR=str(root / "target"))
+    result = subprocess.run(
+        ["bash", str(script), "--only", "^wgmma$", "--no-color"],
+        cwd=root, env=env, capture_output=True, text=True,
+    )
+    if (result.returncode != 1 or "FAIL (wgmma, exit=1)" not in result.stdout
+            or not re.search(r"^Pass:\s+0 / 1$", result.stdout, re.M)
+            or not re.search(r"^Fail:\s+1 / 1$", result.stdout, re.M)):
+        sys.exit(f"WGMMA runner accepted a failed example: "
+                 f"{result.returncode}, {result.stdout!r}, {result.stderr!r}")
+    print(f"OK: {len(cases)} WGMMA verdict cases and failed-run summary/exit status.")
+
+    # On R100 (compute capability 10.7), NVVM_VERIFY_EXAMPLES with a
+    # verify-code-shape.sh gate must run `cargo oxide build <ex>` without
+    # passing the NVVM-only `sm_107` target into the NVPTX prebuild, while
+    # keeping `--arch=sm_107` for `emit-ltoir` (NVBug 7084024).
+    for ex_name in ("kernel_reference_validity", "promoted_ref_return"):
+        ex_dir = simt / f"crates/rustc-codegen-cuda/examples/{ex_name}"
+        ex_dir.mkdir(parents=True, exist_ok=True)
+        (ex_dir / "Cargo.toml").touch()
+        shape = ex_dir / "verify-code-shape.sh"
+        shape.write_text("#!/usr/bin/env bash\ntest -s \"$(dirname \"$0\")/" + ex_name + ".ptx\"\n")
+        shape.chmod(0o755)
+    (bin_dir / "nvidia-smi").write_text('#!/usr/bin/env bash\necho "NVIDIA Graphics Device, 10.7"\n')
+    (bin_dir / "cargo").write_text('''#!/usr/bin/env bash
+case "$*" in
+    "oxide --help"|"oxide setup") exit 0 ;;
+    "oxide __debug-policy") echo unset; exit 0 ;;
+    "oxide build kernel_reference_validity"|"oxide build promoted_ref_return")
+        ex="$3"
+        printf '.version 8.0\n.target sm_80\n.address_size 64\n' > "crates/rustc-codegen-cuda/examples/${ex}/${ex}.ptx"
+        exit 0 ;;
+    "oxide emit-ltoir kernel_reference_validity --arch=sm_107"|"oxide emit-ltoir promoted_ref_return --arch=sm_107")
+        ex="$3"
+        rm -f "crates/rustc-codegen-cuda/examples/${ex}/${ex}.ptx"
+        printf '; ModuleID = %s\n' "${ex}" > "crates/rustc-codegen-cuda/examples/${ex}/${ex}.ll"
+        printf 'ltoir' > "crates/rustc-codegen-cuda/examples/${ex}/${ex}.ltoir"
+        exit 0 ;;
+    *)
+        echo "unexpected cargo invocation: $*" >&2
+        exit 99 ;;
+esac
+''')
+    r100_result = subprocess.run(
+        ["bash", str(script), "--compile-only", "--only", "^(kernel_reference_validity|promoted_ref_return)$", "--no-color"],
+        cwd=root, env=env, capture_output=True, text=True,
+    )
+    if (r100_result.returncode != 0
+            or not re.search(r"^Pass:\s+2 / 2$", r100_result.stdout, re.M)
+            or not re.search(r"^Fail:\s+0 / 2$", r100_result.stdout, re.M)):
+        sys.exit(f"R100 compile-only NVVM code-shape prebuild failed: "
+                 f"{r100_result.returncode}, {r100_result.stdout!r}, {r100_result.stderr!r}")
+    print("OK: R100 (sm_107) compile-only NVVM code-shape prebuild omits --arch on build and passes --arch=sm_107 to emit-ltoir.")
+
+    # On GB10 (compute capability 12.1), blackwell-mma examples must run via
+    # `cargo oxide run <ex>` without forcing `--arch=sm_120a`, so cargo-oxide's
+    # detected `sm_121a` hint reaches the backend and the module JIT-loads on
+    # `sm_121` instead of failing with DriverError 218 (NVBug 7101256).
+    gb10_ex = simt / "crates/rustc-codegen-cuda/examples/mma_mxf8f6f4"
+    gb10_ex.mkdir(parents=True, exist_ok=True)
+    (gb10_ex / "Cargo.toml").touch()
+    (bin_dir / "nvidia-smi").write_text('#!/usr/bin/env bash\necho "NVIDIA GB10, 12.1"\n')
+    (bin_dir / "cargo").write_text('''#!/usr/bin/env bash
+case "$*" in
+    "oxide --help"|"oxide setup") exit 0 ;;
+    "oxide __debug-policy") echo unset; exit 0 ;;
+    "oxide run mma_mxf8f6f4")
+        echo "GPU Compute Capability: sm_121"
+        echo "SUCCESS"
+        exit 0 ;;
+    "oxide build mma_mxf8f6f4")
+        printf '.version 8.7\n.target sm_120a\n.address_size 64\n' > "crates/rustc-codegen-cuda/examples/mma_mxf8f6f4/mma_mxf8f6f4.ptx"
+        exit 0 ;;
+    *)
+        echo "unexpected cargo invocation: $*" >&2
+        exit 99 ;;
+esac
+''')
+    gb10_assembler = root / "ptxas-gb10"
+    gb10_assembler.write_text('''#!/usr/bin/env bash
+[[ "$*" == "-arch=sm_120a crates/rustc-codegen-cuda/examples/mma_mxf8f6f4/mma_mxf8f6f4.ptx -o /dev/null" ]] || exit 99
+exit 0
+''')
+    gb10_assembler.chmod(0o755)
+    gb10_env = dict(env, CUDA_OXIDE_PTXAS=str(gb10_assembler))
+    for extra_flags, mode_label in (([], "runtime"), (["--compile-only"], "compile-only")):
+        gb10_result = subprocess.run(
+            ["bash", str(script), *extra_flags, "--only", "^mma_mxf8f6f4$", "--no-color"],
+            cwd=root, env=gb10_env, capture_output=True, text=True,
+        )
+        if (gb10_result.returncode != 0
+                or not re.search(r"^Pass:\s+1 / 1$", gb10_result.stdout, re.M)
+                or not re.search(r"^Fail:\s+0 / 1$", gb10_result.stdout, re.M)):
+            sys.exit(f"GB10 {mode_label} blackwell-mma smoketest failed: "
+                     f"{gb10_result.returncode}, {gb10_result.stdout!r}, {gb10_result.stderr!r}")
+    print("OK: GB10 (sm_121) blackwell-mma runtime and compile-only smoketest omit forced --arch=sm_120a.")
 
 # Exercise the actual CLI/preflight without building or launching an example.
 # The Rust parser owns aliases and normalization; this checks that the shell

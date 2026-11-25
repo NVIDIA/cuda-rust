@@ -161,6 +161,11 @@ while i < 8 {
 The pass gives the eight copies counter values `0` through `7`. Constant
 propagation can then fold expressions derived from those literals.
 
+The bound does not have to be a literal. The pass folds integer arithmetic on
+constants before it reads the trip count, so `while i < N / 8` unrolls in each
+instantiation of a function with a const generic `N`. Casts and
+overflow-checked arithmetic in the bound are not yet folded.
+
 ### Partial unrolling
 
 `#[unroll(4)]` also works when the limit is a runtime value:
@@ -255,11 +260,15 @@ The source attribute travels through the compiler in six stages:
    and inserts an internal marker call at the start of that loop.
 2. `mir-importer` recognizes the call and emits a `mir.unroll_hint` operation.
    The marker produces no runtime code.
-3. `LoopInfo` finds the enclosing loop, while induction analysis finds its
-   counter, start, step, bound, and—when possible—trip count.
-4. The pass normalizes supported control flow. It joins multiple `continue`
-   paths into one path back to the loop header and routes supported
-   loop-carried values out of a fully unrolled loop.
+3. Constant propagation folds constant expressions, such as a bound written
+   `N / 8`. `LoopInfo` then finds the enclosing loop, while induction analysis
+   finds its counter, start, step, bound, and—when possible—trip count.
+4. The pass normalizes supported control flow. It removes branches to blocks
+   that only reach `mir.unreachable`, such as the arm rustc adds to a `match`
+   on an enum for discriminants it cannot have, so they do not count as loop
+   exits. It joins multiple `continue` paths into one path back to the loop
+   header and routes supported loop-carried values out of a fully unrolled
+   loop.
 5. The transform clones and reconnects the body for full or partial unrolling.
 6. A cleanup phase folds constants, simplifies branches, and removes dead or
    unreachable code.
@@ -275,10 +284,12 @@ unroll; the loop continues with the same behavior.
 The current pass intentionally recognizes a conservative set of loop shapes.
 A counted `while` loop and a range `for` loop (`for i in a..b` and
 `(a..b).rev()`, over any integer counter including `isize`) need a counter the
-pass can follow: a compile-time-constant starting value, the same fixed step
-on every path back to the header, and a simple, side-effect-free test that
-directly compares the counter with its bound. The loop must also have one
-ordinary entry before its header. For unusual or irreducible control flow, the
+pass can follow: the same step on every path back to the header and a simple,
+side-effect-free test that directly compares the counter with its bound. Full
+unrolling also needs a compile-time-constant starting value and step. Partial
+unrolling accepts a runtime starting value and a step that is a runtime value
+fixed for the whole loop, such as `blockDim_x()` in a block-stride loop. The
+loop must also have one ordinary entry before its header. For unusual or irreducible control flow, the
 compiler warns and does not unroll the loop.
 
 | Shape | Current behavior |
@@ -288,13 +299,23 @@ compiler warns and does not unroll the loop.
 | Other iterator `for` loops (`a..=b`, `.step_by(k)`, `.iter()`) | Not yet recognized; warns |
 | Constant trip count with `#[unroll]` | Fully unrolled |
 | Runtime, loop-invariant limit with `#[unroll(N)]` | Partially unrolled |
+| Block-stride loop (`i = threadIdx_x(); while i < n { ..; i += blockDim_x() }`) with `#[unroll(N)]` | Partially unrolled |
 | Several `continue` paths with the same counter step | Joined and unrolled |
 | Early `break` or multiple exits with `#[unroll]` | Supported |
 | Early `break` or another exit with `#[unroll(N)]` | Warns; partial unroll is skipped |
+| A `match` on an enum in the body, such as `opt.unwrap_or(x)` | Not an exit; its `unreachable` arm is removed |
 | Nested loops | Only the annotated loop is unrolled |
 
-Partial unrolling also requires `N >= 2`, a positive counter step, a `<` or
-`<=` comparison, and a limit that does not change inside the loop.
+Partial unrolling also requires `N >= 2`, a `<` or `<=` comparison, and a
+limit that does not change inside the loop. A compile-time-constant step must
+be positive. A runtime step, and a limit the loop recomputes on every
+iteration (such as `n as usize` in `while i < n as usize`), must be computed
+only from values set before the loop, constants, launch-geometry reads such as
+`blockDim_x()` or `threadIdx_x()`, integer casts, and `+`, `-`, or `*`. With a runtime step the
+unrolled loop runs a group of `N` iterations only when the loop's own test
+passes for every counter value in the group, computed with the same wrapping
+arithmetic as the loop; otherwise the remaining iterations run one at a time in
+the original loop.
 
 When an annotated outer loop contains an unannotated inner loop, each outer
 copy receives an intact clone of that inner loop; the inner loop remains a
@@ -304,9 +325,10 @@ first.
 To bound compile time and memory, one annotation may create at most 1,024 body
 copies, 8,192 cloned basic blocks, and 65,536 cloned operations. A request over
 one of those limits warns and is not unrolled. Every warning about a loop that
-was not unrolled names the `#[unroll]` attribute it refers to as
-`file:line:column` on a `-->` line, so a kernel with several annotated loops
-shows which one was left alone.
+was not unrolled is an ordinary compiler warning that points at the `#[unroll]`
+attribute it refers to: rustc prints its `file:line:column` on a `-->` line and
+underlines it, so a kernel with several annotated loops shows which one was left
+alone.
 
 For the complete kernel-author reference, see {ref}`Loop unrolling <loop-unrolling>`.
 
@@ -328,6 +350,40 @@ instruction cache.
 Choose a factor that matches the structure of the algorithm—often a pipeline
 depth or another small natural group—and benchmark the result. Removing
 `#[unroll]` should always remain an easy comparison.
+
+---
+
+## Keeping a loop rolled with `#[nounroll]`
+
+The unroll pass only acts on `#[unroll]` requests, but LLVM, libNVVM, and ptxas
+have their own unrollers. ptxas in particular fully unrolls small
+constant-trip-count loops even when the PTX keeps them rolled. `#[nounroll]`
+asks all three to leave a loop alone. It does not go through the unroll pass:
+
+1. The macro inserts a different marker, and `mir-importer` emits a
+   `mir.nounroll_hint` operation inside the loop.
+2. The hint survives MIR preparation. The unroll pass ignores it, so unrolling
+   an enclosing loop copies the hint along with the inner loop.
+3. Just before lowering, after the last transform that can reshape loops, each
+   hint is mapped to its innermost loop. The loop's back-edges are joined
+   through one latch block, and the hint is removed.
+4. Lowering marks that latch's branch, and the LLVM IR exporter attaches
+   `!llvm.loop` metadata with `llvm.loop.unroll.disable` to it. The NVPTX
+   backend prints `.pragma "nounroll";` at the loop header; libNVVM reads the
+   same metadata.
+
+Step 3 also runs in full-debug builds, which skip MIR preparation. A hint that
+is not inside any loop is dropped with a warning that names the attribute's
+`file:line:column`. A hint in unreachable code is dropped silently. WGMMA
+counted-loop fusion replaces a K loop with one operation that generates its own
+PTX loop. It moves a `#[nounroll]` request onto that operation, whose loop
+header then starts with `.pragma "nounroll";`, and leaves the original blocks
+unreachable.
+
+Like `#[unroll]`, the hint is mapped to the innermost loop around it. A loop
+whose body never repeats, such as `loop { ...; break; }`, produces no loop in
+MIR. If it sits inside another loop, the request applies to that enclosing
+loop.
 
 To inspect the pass's analysis, build verbosely:
 

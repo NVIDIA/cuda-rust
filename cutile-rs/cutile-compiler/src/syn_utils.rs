@@ -50,6 +50,15 @@ pub fn user_method_call_tokens(method_call_expr: &ExprMethodCall) -> String {
     user_expr_tokens(&Expr::MethodCall(method_call_expr.clone()))
 }
 
+/// `path` without the internal node-id attributes on the expressions in its
+/// generic arguments, so a value path such as `Axis::<1>` reads as a type.
+pub fn path_without_node_ids(path: &syn::Path) -> syn::Path {
+    let mut path = path.clone();
+    let mut stripper = UserHiddenAttrStripper;
+    stripper.visit_path_mut(&mut path);
+    path
+}
+
 fn strip_user_hidden_expr_attrs(expr: &mut Expr) {
     let mut stripper = UserHiddenAttrStripper;
     stripper.visit_expr_mut(expr);

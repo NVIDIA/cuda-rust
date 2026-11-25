@@ -210,6 +210,15 @@ html {
     text-rendering: optimizeLegibility;
 }
 
+html:not([data-theme]),
+html[data-theme="light"] {
+    color-scheme: light;
+}
+
+html[data-theme="dark"] {
+    color-scheme: dark;
+}
+
 /* Make sidebar text render with proper weight */
 .bd-sidebar-primary {
     -webkit-font-smoothing: subpixel-antialiased;

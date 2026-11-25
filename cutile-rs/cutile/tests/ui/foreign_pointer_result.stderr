@@ -1,0 +1,5 @@
+error: a foreign function cannot return a pointer; pass the memory as a pointer parameter instead
+  --> tests/ui/foreign_pointer_result.rs:14:54
+   |
+14 |     pub unsafe fn scratch(x: Tile<f32, { [32] }>) -> *mut u8;
+   |                                                      ^

@@ -45,8 +45,9 @@ pub fn debug_kernel(data: &[f32], mut out: DisjointSlice<f32>) {
     if idx.get() < 4 {
         gpu_printf!("Thread {} sees value {}\n", idx.get(), data[idx.get()]);
     }
+    let i = idx.get();
     if let Some(out_elem) = out.get_mut(idx) {
-        *out_elem = data[idx.get()] * 2.0;
+        *out_elem = data[i] * 2.0;
     }
 }
 ```
@@ -81,7 +82,7 @@ the GPU. `gpu_printf!` bypasses all of this by lowering directly to a CUDA
 For fatal error checking on the device, use `gpu_assert!` or `debug::trap()`:
 
 ```rust
-use cuda_device::{DisjointSlice, debug, gpu_assert, kernel, thread};
+use cuda_device::{DisjointSlice, gpu_assert, kernel, thread};
 
 #[kernel]
 pub fn checked_kernel(data: &[f32], len: u32, mut out: DisjointSlice<f32>) {
@@ -96,8 +97,9 @@ pub fn checked_kernel(data: &[f32], len: u32, mut out: DisjointSlice<f32>) {
         "expected non-negative input"
     );
 
+    let i = idx.get();
     if let Some(out_elem) = out.get_mut(idx) {
-        *out_elem = data[idx.get()];
+        *out_elem = data[i];
     }
 }
 ```
@@ -158,7 +160,7 @@ The async path (`{kernel}_async` / `DeviceOperation`) uses `DeviceError`,
 which wraps driver errors alongside context and scheduling failures:
 
 ```rust
-use cuda_async::simt::error::DeviceError;
+use cuda_async::error::DeviceError;
 
 let result: Result<Vec<f32>, DeviceError> = operation.sync();
 ```
@@ -471,9 +473,11 @@ It keeps ordinary multiply and add/subtract operations separate, with one
 rounding per operation. Explicit fused operations such as `f32::mul_add`
 remain fused.
 
-NVVM IR and LTOIR builds also produce `.options` and versioned `.target`
-sidecars. Keep both files with the artifact so later libNVVM and nvJitLink
-steps preserve the same FMA policy.
+NVVM IR and LTOIR builds also produce `.options`, `.kernels` and versioned
+`.target` sidecars. Keep them with the artifact: later libNVVM and nvJitLink
+steps preserve the same FMA policy, and check that the finalized image still
+defines every kernel listed in `.kernels` (nvJitLink can report success while
+dropping a module's kernels).
 
 Run `memcheck` first when investigating memory safety. The other tools are
 complementary and do not perform full memory-access checking.
@@ -488,19 +492,20 @@ cargo oxide doctor
 
 Doctor checks:
 
-| Check           | What it verifies                               |
-|:----------------|:-----------------------------------------------|
-| Rust toolchain  | Nightly compiler with required components      |
-| Codegen backend | `librustc_codegen_cuda.so` built               |
-| CUDA headers    | `cuda.h` present under the toolkit root        |
-| CUDA toolkit    | `nvcc` found and version compatible            |
-| libNVVM         | `libnvvm.so` loadable (libdevice math kernels) |
-| nvJitLink       | `libnvJitLink.so` loadable (same)              |
-| libdevice       | `libdevice.10.bc` discoverable (same)          |
-| LLVM            | `llc` (21+) available for PTX generation       |
-| Driver / GPU    | `nvidia-smi` reports a GPU and its compute cap |
-| cuda-gdb        | Optional; only needed for `cargo oxide debug`  |
-| compute-sanitizer | Optional; only needed for `cargo oxide sanitize` |
+| Check             | What it verifies                                     |
+|:------------------|:-----------------------------------------------------|
+| Rust toolchain    | Pinned compiler (`1.99.1`) with required components  |
+| Codegen backend   | `librustc_codegen_cuda.so` built                     |
+| CUDA headers      | `cuda.h` present under the toolkit root              |
+| CUDA toolkit      | `nvcc` found and version compatible                  |
+| libNVVM           | `libnvvm.so` loadable (libdevice math kernels)       |
+| nvJitLink         | `libnvJitLink.so` loadable (same)                    |
+| libdevice         | `libdevice.10.bc` discoverable (same)                |
+| LLVM              | `llc` (21+) available for PTX generation             |
+| Driver / GPU      | `nvidia-smi` reports a GPU and its compute cap       |
+| cuda-gdb          | Optional; only needed for `cargo oxide debug`        |
+| compute-sanitizer | Optional; only needed for `cargo oxide sanitize`     |
+| wild linker       | Optional; only needed for `CUDA_OXIDE_LINKER=wild`   |
 
 The libNVVM / nvJitLink / libdevice checks fire only when a kernel calls
 CUDA libdevice math (`sin`, `cos`, `exp`, `pow`, `sqrt`, ...). If your
@@ -535,7 +540,7 @@ output mode is active in the environment (`CUDA_OXIDE_MATERIALIZE_CUBIN` or
 
 `clean` deletes project-local Cargo `target/` directories and generated
 cuda-oxide device artifacts (`.ptx`, `.ll`, `.opt.ll`, `.ltoir`, `.cubin`,
-plus the `.target` / `.options` / `.cubin.target` sidecars) under the current
+plus the `.target` / `.options` / `.kernels` / `.cubin.target` sidecars) under the current
 workspace or standalone project. It refuses (with an error) to remove a
 symlinked `target/` directory or artifact, and it does **not** wipe the
 shared codegen backend cache at `~/.cargo/cuda-oxide/`.
@@ -565,12 +570,13 @@ This prints the full pipeline output:
 
 For more targeted inspection:
 
-| Variable                       | Effect                            |
-|:-------------------------------|:----------------------------------|
-| `CUDA_OXIDE_VERBOSE=1`         | Verbose compiler output           |
-| `CUDA_OXIDE_SHOW_RUSTC_MIR=1`  | Dump the rustc MIR before import  |
-| `CUDA_OXIDE_DEBUG=line-tables` | Emit source line-table metadata   |
-| `CUDA_OXIDE_DEBUG=full`        | Emit full metadata for basic locals and args |
+| Variable                       | Effect                                        |
+|:-------------------------------|:----------------------------------------------|
+| `CUDA_OXIDE_VERBOSE=1`         | Verbose compiler output                       |
+| `CUDA_OXIDE_SHOW_RUSTC_MIR=1`  | Dump the rustc MIR before import              |
+| `CUDA_OXIDE_DEBUG=line-tables` | Emit source line-table metadata               |
+| `CUDA_OXIDE_DEBUG=full`        | Emit full metadata for basic locals and args  |
+| `CUDA_OXIDE_LINKER=wild`       | Link host crates with the `wild` ELF linker   |
 
 ## Profiling with Nsight Compute
 

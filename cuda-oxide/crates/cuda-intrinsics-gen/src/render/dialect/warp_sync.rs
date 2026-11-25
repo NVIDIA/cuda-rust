@@ -784,7 +784,8 @@ fn verify_mbarrier_extended(
                 "PointerU32ToU64",
                 "    pub fn build(ctx: &mut Context, barrier: Value, bytes: Value) -> Ptr<Operation> {\n        let token_ty = IntegerType::get(ctx, 64, Signedness::Unsigned);\n        Operation::new(ctx, Self::get_concrete_op_info(), vec![token_ty.into()], vec![barrier, bytes], vec![], 0)\n    }\n",
             ),
-            MbarrierExtendedOperation::ArriveRemoteCluster => (
+            MbarrierExtendedOperation::ArriveRemoteCluster
+            | MbarrierExtendedOperation::ArriveRemoteClusterRelaxed => (
                 1,
                 0,
                 "RawU64ToVoid",
@@ -797,7 +798,8 @@ fn verify_mbarrier_extended(
                 "    pub fn build(ctx: &mut Context, barrier: Value, token: Value) -> Ptr<Operation> {\n        let result_ty = IntegerType::get(ctx, 1, Signedness::Signless);\n        Operation::new(ctx, Self::get_concrete_op_info(), vec![result_ty.into()], vec![barrier, token], vec![], 0)\n    }\n",
             ),
             MbarrierExtendedOperation::TryWaitParityCta
-            | MbarrierExtendedOperation::TryWaitParityCluster => (
+            | MbarrierExtendedOperation::TryWaitParityCluster
+            | MbarrierExtendedOperation::TryWaitParityClusterRelaxed => (
                 2,
                 1,
                 "PointerU32ToI1",
@@ -805,6 +807,7 @@ fn verify_mbarrier_extended(
             ),
             MbarrierExtendedOperation::FenceProxyAsyncSharedCta
             | MbarrierExtendedOperation::FenceMbarrierInitReleaseCluster
+            | MbarrierExtendedOperation::FenceAcquireSharedClusterCluster
             | MbarrierExtendedOperation::FenceProxyAsyncGenericReleaseSharedCtaCluster
             | MbarrierExtendedOperation::FenceProxyAsyncGenericAcquireSharedClusterCluster => (
                 0,

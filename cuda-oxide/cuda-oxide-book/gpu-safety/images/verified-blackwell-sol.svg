@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 350" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <style>
+    :root, svg {
+      --bg: #ffffff;
+      --bg-stroke: #e2e8f0;
+      --panel: #f8fafc;
+      --panel-stroke: #cbd5e1;
+      --box: #ffffff;
+      --box-stroke: #cbd5e1;
+      --fg: #0f172a;
+      --text: #334155;
+      --sub: #475569;
+      --muted: #64748b;
+      --green: #15803d;
+      --green-text: #14532d;
+      --green-soft: #f0fdf4;
+      --green-border: #86efac;
+      --blue-text: #1e3a8a;
+      --blue-soft: #eff6ff;
+      --blue-border: #93c5fd;
+      --purple-text: #581c87;
+      --purple-soft: #faf5ff;
+      --purple-border: #d8b4fe;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root, svg {
+        --bg: #161b22;
+        --bg-stroke: #30363d;
+        --panel: #1e242c;
+        --panel-stroke: #3d444d;
+        --box: #13171d;
+        --box-stroke: #3d444d;
+        --fg: #f0f6fc;
+        --text: #c9d1d9;
+        --sub: #b1bac4;
+        --muted: #8b949e;
+        --green: #3fb950;
+        --green-text: #7ee787;
+        --green-soft: #12261e;
+        --green-border: #2ea043;
+        --blue-text: #a5d6ff;
+        --blue-soft: #132238;
+        --blue-border: #388bfd;
+        --purple-text: #d2a8ff;
+        --purple-soft: #221633;
+        --purple-border: #8957e5;
+      }
+    }
+  </style>
+  <defs>
+    <marker id="arrow-sol" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M 0 0.8 L 7.5 4 L 0 7.2 Z" style="fill: var(--green)"/>
+    </marker>
+  </defs>
+
+  <rect width="1080" height="350" rx="14" style="fill: var(--bg); stroke: var(--bg-stroke)" stroke-width="1.5"/>
+
+  <text x="40" y="40" font-size="18" font-weight="700" style="fill: var(--fg)">Verified 2-CTA Blackwell GEMM Pipeline (safe_gemm_sol_final)</text>
+  <text x="40" y="62" font-size="13" style="fill: var(--muted)">6 warps per CTA x 2 CTAs: Lean 4 proves all 224 KiB SMEM, 11 mbarriers, DSMEM, CLC, and 512-column TMEM.</text>
+
+  <!-- Warp 4 Producer -->
+  <g transform="translate(36, 88)">
+    <rect width="312" height="196" rx="10" style="fill: var(--blue-soft); stroke: var(--blue-border)" stroke-width="1.5"/>
+    <text x="156" y="28" text-anchor="middle" font-size="13.5" font-weight="700" style="fill: var(--blue-text)">Warp 4: TMA Ring + CLC Steal</text>
+    <rect x="16" y="44" width="280" height="62" rx="6" style="fill: var(--box); stroke: var(--box-stroke)"/>
+    <text x="28" y="67" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--fg)">SMEM_BUF (7 stages, 224 KiB)</text>
+    <text x="28" y="88" font-family="'Roboto Mono', monospace" font-size="10.5" style="fill: var(--muted)">TMA_BAR[0..7] &lt;-&gt; MMA_BAR[0..7]</text>
+    <rect x="16" y="116" width="280" height="62" rx="6" style="fill: var(--box); stroke: var(--box-stroke)"/>
+    <text x="28" y="139" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--fg)">CLC_RESPONSE + TILE_INFO[16]</text>
+    <text x="28" y="160" font-family="'Roboto Mono', monospace" font-size="10.5" style="fill: var(--green)">Proved: no_oob_idx + no_data_race</text>
+  </g>
+
+  <line x1="348" y1="186" x2="380" y2="186" style="stroke: var(--green)" stroke-width="2" marker-end="url(#arrow-sol)"/>
+
+  <!-- Warp 5 MMA -->
+  <g transform="translate(384, 88)">
+    <rect width="312" height="196" rx="10" style="fill: var(--panel); stroke: var(--panel-stroke)" stroke-width="1.5"/>
+    <text x="156" y="28" text-anchor="middle" font-size="13.5" font-weight="700" style="fill: var(--fg)">Warp 5: 2-CTA tcgen05.mma</text>
+    <rect x="16" y="44" width="280" height="62" rx="6" style="fill: var(--box); stroke: var(--box-stroke)"/>
+    <text x="156" y="67" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--fg)">TMEM_0 (0..256) | TMEM_1 (256..512)</text>
+    <text x="156" y="88" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="10.5" style="fill: var(--muted)">cta_group::2 ping-pong stages</text>
+    <rect x="16" y="116" width="280" height="62" rx="6" style="fill: var(--box); stroke: var(--box-stroke)"/>
+    <text x="156" y="139" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--fg)">ACCUM_FULL0/1 &lt;-&gt; ACCUM_EMPTY0/1</text>
+    <text x="156" y="160" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="10.5" style="fill: var(--green)">Proved: tmem_lifecycle + 512 cols</text>
+  </g>
+
+  <line x1="696" y1="186" x2="728" y2="186" style="stroke: var(--green)" stroke-width="2" marker-end="url(#arrow-sol)"/>
+
+  <!-- Warps 0..3 Epilogue -->
+  <g transform="translate(732, 88)">
+    <rect width="312" height="196" rx="10" style="fill: var(--green-soft); stroke: var(--green)" stroke-width="1.8"/>
+    <text x="156" y="28" text-anchor="middle" font-size="13.5" font-weight="700" style="fill: var(--green-text)">Warps 0..3: Register Epilogue</text>
+    <rect x="16" y="44" width="280" height="62" rx="6" style="fill: var(--box); stroke: var(--green-border)"/>
+    <text x="28" y="67" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--fg)">tcgen05.ld (32-lane slice / warp)</text>
+    <text x="28" y="88" font-family="'Roboto Mono', monospace" font-size="10.5" style="fill: var(--muted)">map_shared_rank(0) DSMEM arrive</text>
+    <rect x="16" y="116" width="280" height="62" rx="6" style="fill: var(--box); stroke: var(--green-border)"/>
+    <text x="28" y="139" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--green-text)">2.118 PFLOP/s on NVIDIA B200</text>
+    <text x="28" y="160" font-family="'Roboto Mono', monospace" font-size="10.5" style="fill: var(--green)">27 checks elided | 0 B spills</text>
+  </g>
+
+  <text x="540" y="318" text-anchor="middle" font-size="12.5" style="fill: var(--sub)">Matches 100%+ of the unsafe --unchecked-indexing baseline across 4096^3, 8192^3, and 16384^3.</text>
+</svg>

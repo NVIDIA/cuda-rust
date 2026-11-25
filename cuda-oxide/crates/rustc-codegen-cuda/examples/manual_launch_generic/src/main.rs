@@ -9,7 +9,7 @@
 //! instead of `#[cuda_module]`. It keeps the explicit API covered while the
 //! typed embedded-module API is the preferred ergonomic path.
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, kernel, thread};
 use cuda_host::{cuda_launch, load_kernel_module};

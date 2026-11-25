@@ -176,6 +176,16 @@ macro_rules! define_integer_atomic {
         // All operations go through atomic instructions emitted by the compiler.
         unsafe impl Sync for $Name {}
 
+        // SAFETY: `$Name` is `#[repr(transparent)]` over `UnsafeCell<$ty>`,
+        // which is itself `#[repr(transparent)]` over `$ty`, with no other
+        // fields, so it has the layout and the valid values of `$ty`. This
+        // lets a `DeviceBuffer<$ty>` be viewed as `DeviceBuffer<$Name>` with
+        // cuda-core's `DeviceBuffer::wrap_elem` and turned back with
+        // `peel_elem` so the host can read the result. Neither type needs
+        // destruction or owns resources. DeviceRepr exposes no reference
+        // conversions: &integer and &atomic have different aliasing rules.
+        unsafe impl cuda_repr::DeviceRepr<$ty> for $Name {}
+
         impl $Name {
             /// Create a new atomic with the given initial value.
             pub const fn new(val: $ty) -> Self {
@@ -372,6 +382,16 @@ macro_rules! define_float_atomic {
         // All operations go through atomic instructions emitted by the compiler.
         unsafe impl Sync for $Name {}
 
+        // SAFETY: `$Name` is `#[repr(transparent)]` over `UnsafeCell<$ty>`,
+        // which is itself `#[repr(transparent)]` over `$ty`, with no other
+        // fields, so it has the layout and the valid values of `$ty`. This
+        // lets a `DeviceBuffer<$ty>` be viewed as `DeviceBuffer<$Name>` with
+        // cuda-core's `DeviceBuffer::wrap_elem` and turned back with
+        // `peel_elem` so the host can read the result. Neither type needs
+        // destruction or owns resources. DeviceRepr exposes no reference
+        // conversions: &float and &atomic have different aliasing rules.
+        unsafe impl cuda_repr::DeviceRepr<$ty> for $Name {}
+
         impl $Name {
             /// Create a new atomic with the given initial value.
             pub const fn new(val: $ty) -> Self {
@@ -494,7 +514,7 @@ define_float_atomic! {
     ///
     /// `swap` lowers to hardware `atom.exch.b32`; this API does not expose
     /// `compare_exchange` for floats. `fetch_add` uses LLVM `atomicrmw fadd`.
-    /// With the pinned `nightly-2026-10-11` toolchain's LLVM 23 NVPTX defaults,
+    /// With the pinned `1.99.1` toolchain's LLVM 23 NVPTX defaults,
     /// global and generic `f32` adds use a compare-and-swap loop; shared `f32`
     /// and `f64` adds still use native instructions on supported targets.
     ///

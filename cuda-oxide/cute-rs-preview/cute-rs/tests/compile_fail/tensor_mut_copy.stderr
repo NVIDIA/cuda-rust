@@ -1,0 +1,11 @@
+error[E0277]: the trait bound `TensorMut<'static, f32, Contiguous1D>: Copy` is not satisfied
+  --> tests/compile_fail/tensor_mut_copy.rs:16:20
+   |
+16 |     require_copy::<TensorMut<'static, f32, Contiguous1D>>();
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Copy` is not implemented for `TensorMut<'static, f32, Contiguous1D>`
+   |
+note: required by a bound in `require_copy`
+  --> tests/compile_fail/tensor_mut_copy.rs:11:20
+   |
+11 | fn require_copy<T: Copy>() {}
+   |                    ^^^^ required by this bound in `require_copy`

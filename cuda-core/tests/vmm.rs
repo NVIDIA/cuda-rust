@@ -13,7 +13,7 @@
 //!
 //! Skips when no GPU is present.
 
-use cuda_core::{vmm, Device, IntoResult};
+use cuda_core::{vmm, Context, IntoResult};
 use std::mem::MaybeUninit;
 
 #[test]
@@ -58,7 +58,7 @@ fn vmm_single_gpu_roundtrip() {
         return;
     }
 
-    let device = Device::new(0).expect("GPU 0 device");
+    let device = Context::new(0).expect("GPU 0 device");
     let cu_device = device.cu_device();
 
     let granularity = vmm::allocation_granularity(cu_device).expect("allocation granularity query");

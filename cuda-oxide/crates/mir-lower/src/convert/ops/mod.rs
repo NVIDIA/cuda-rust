@@ -11,22 +11,23 @@
 //!
 //! # Module Organization
 //!
-//! | Module           | Operations                         | Description                  |
-//! |------------------|------------------------------------|------------------------------|
-//! | [`aggregate`]    | Struct, tuple, enum ops            | Composite type manipulation  |
-//! | [`arithmetic`]   | Binary ops, comparisons, shifts    | Math and logic operations    |
-//! | [`call`]         | Function calls                     | With argument flattening     |
-//! | [`cast`]         | Type conversions                   | All cast variants            |
+//! | Module           | Operations                          | Description                 |
+//! |------------------|-------------------------------------|-----------------------------|
+//! | [`aggregate`]    | Struct, tuple, enum ops             | Composite type manipulation |
+//! | [`arithmetic`]   | Binary ops, comparisons, shifts     | Math and logic operations   |
+//! | [`call`]         | Function calls                      | With argument flattening    |
+//! | [`cast`]         | Type conversions                    | All cast variants           |
 //! | [`constants`]    | `mir.constant`, `mir.float_constant`| Literal values              |
-//! | [`control_flow`] | Return, goto, branch, assert       | Block terminators            |
-//! | [`memory`]       | Load, store, ref, ptr_offset       | Memory access operations     |
+//! | [`control_flow`] | Return, goto, branch, assert        | Block terminators           |
+//! | [`float_math`]   | Float math intrinsic placeholders   | LLVM and libdevice lowering |
+//! | [`memory`]       | Load, store, ref, ptr_offset        | Memory access operations    |
 //!
 //! # Common Patterns
 //!
 //! All converters receive `(ctx, rewriter, op, operands_info)` from the
 //! `DialectConversion` framework:
 //!
-//! - **Operands** are already type-converted — read them directly from `op`.
+//! - **Operands** are already type-converted: read them directly from `op`.
 //! - Use `rewriter.insert_operation` to emit new LLVM ops.
 //! - Use `rewriter.replace_operation` to map results and erase the MIR op.
 //! - Use `operands_info` to recover pre-conversion types when needed.
@@ -37,6 +38,7 @@ pub mod call;
 pub mod cast;
 pub mod constants;
 pub mod control_flow;
+pub mod float_math;
 pub mod memory;
 
 #[cfg(test)]

@@ -10,8 +10,9 @@
 
 /// Bytecode opcode for a single CUDA Tile operation.
 ///
-/// Public operations occupy the range `0x000 ..= 0xFFF`.
-/// Each variant's discriminant is the on-wire opcode value.
+/// Public operations occupy the range `0x000 ..= 0xFFF` and public-preview
+/// operations the range `0x4000 ..= 0x4FFF`. Each variant's discriminant is
+/// the on-wire opcode value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u16)]
 pub enum Opcode {
@@ -120,6 +121,11 @@ pub enum Opcode {
     GdcWaitTko = 0x78,
     FPowI = 0x79,
     MemoryFenceAliasTko = 0x7A,
+    MultimemLoadReduceViewTko = 0x7B,
+    MultimemReduceViewTko = 0x7C,
+    MultimemStoreViewTko = 0x7D,
+    /// `preview$call`: call to an extern function supplied by a tile library.
+    PreviewCall = 0x4002,
 }
 
 impl Opcode {
@@ -127,6 +133,9 @@ impl Opcode {
     pub const fn name(self) -> &'static str {
         use Opcode::*;
         match self {
+            MultimemLoadReduceViewTko => "multimem_load_reduce_view_tko",
+            MultimemReduceViewTko => "multimem_reduce_view_tko",
+            MultimemStoreViewTko => "multimem_store_view_tko",
             AbsF => "absf",
             AbsI => "absi",
             AddF => "addf",
@@ -232,7 +241,14 @@ impl Opcode {
             GdcWaitTko => "gdc_wait_tko",
             FPowI => "fpowi",
             MemoryFenceAliasTko => "memory_fence_alias_tko",
+            PreviewCall => "preview$call",
         }
+    }
+
+    /// Whether this is a public-preview operation. A module containing one
+    /// is written with the header preview bit at [`super::BytecodeVersion::V13_5`].
+    pub const fn is_preview(self) -> bool {
+        matches!(self, Opcode::PreviewCall)
     }
 
     /// Minimum supported wire version for this opcode. Operand types and
@@ -256,9 +272,28 @@ impl Opcode {
         use Opcode::*;
         match self {
             // Ops that write varint numResults (from Bytecode.inc audit):
-            Break | Continue | Extract | Insert | For | GetIndexSpaceShape | GetTensorShape
-            | If | JoinTokens | LoadViewTko | Loop | MakeTensorView | Print | Reduce | Return
-            | Scan | StoreViewTko | Yield => None,
+            Break
+            | Continue
+            | Extract
+            | Insert
+            | For
+            | GetIndexSpaceShape
+            | GetTensorShape
+            | If
+            | JoinTokens
+            | LoadViewTko
+            | Loop
+            | MakeTensorView
+            | Print
+            | Reduce
+            | Return
+            | Scan
+            | StoreViewTko
+            | Yield
+            | MultimemLoadReduceViewTko
+            | MultimemReduceViewTko
+            | MultimemStoreViewTko
+            | PreviewCall => None,
 
             // Fixed-count ops (from Ops.td):
             // 0 results

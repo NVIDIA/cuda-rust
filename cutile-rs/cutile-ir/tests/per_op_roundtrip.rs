@@ -1149,8 +1149,7 @@ fn roundtrip_store_ptr_tko() {
     assert_roundtrip(&module);
 }
 
-#[test]
-fn roundtrip_load_view_tko() {
+fn load_view_kernel() -> (Module, OpId) {
     let pv = Type::PartitionView(PartitionViewType {
         tile_shape: vec![128],
         tensor_view: TensorViewType {
@@ -1161,7 +1160,8 @@ fn roundtrip_load_view_tko() {
         dim_map: vec![0],
         padding_value: None,
     });
-    let module = build_kernel("lvt", &[pv.clone(), scalar_i32(), token()], |m, b, args| {
+    let mut load = None;
+    let module = build_kernel("lvt", &[pv, scalar_i32(), token()], |m, b, args| {
         let (op, _) = OpBuilder::new(Opcode::LoadViewTko, Location::Unknown)
             .operand(args[0])
             .operand(args[1])
@@ -1179,8 +1179,55 @@ fn roundtrip_load_view_tko() {
             )
             .build(m);
         append_op(m, b, op);
+        load = Some(op);
     });
+    (module, load.unwrap())
+}
+
+#[test]
+fn roundtrip_load_view_tko() {
+    let (module, _) = load_view_kernel();
     assert_roundtrip(&module);
+}
+
+#[test]
+fn unsupported_load_valid_check_is_rejected_instead_of_encoded_or_ignored() {
+    use cutile_ir::bytecode::{write_bytecode_version, BytecodeVersion};
+    use cutile_ir::capabilities::TargetCapabilities;
+
+    let (mut module, load) = load_view_kernel();
+    for version in [
+        BytecodeVersion::V13_2,
+        BytecodeVersion::V13_3,
+        BytecodeVersion::V13_4,
+        BytecodeVersion::V13_5,
+    ] {
+        let target = TargetCapabilities::new(version, "sm_100");
+        target.validate_module(&module).unwrap();
+        let bytes = write_bytecode_version(&module, version).unwrap();
+        cutile_ir::decode_bytecode(&bytes).unwrap();
+
+        for value in [false, true] {
+            module
+                .op_mut(load)
+                .attributes
+                .push(("valid_check".into(), Attribute::Bool(value)));
+            let error = target.validate_module(&module).unwrap_err().to_string();
+            assert!(
+                error.contains("do not support the valid_check attribute"),
+                "{error}"
+            );
+            // Raw IR clients can call the writer without target validation.
+            let error = write_bytecode_version(&module, version)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("does not support the valid_check attribute"),
+                "{error}"
+            );
+            module.op_mut(load).attributes.pop();
+        }
+    }
 }
 
 #[test]

@@ -8,7 +8,7 @@
 //! See the PTX ISA's "Matrix Fragments for sparse mma.m16n8k64" for the layout.
 //! `--probe` additionally compares candidate layouts on the current GPU.
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, cuda_module, kernel, thread, wmma};
 

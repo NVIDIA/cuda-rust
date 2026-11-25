@@ -9,7 +9,7 @@
 //! example checks SwiGLU plus `sin`, `exp`, `sqrt`, `atan`, `atan2`, `acos`,
 //! and `tan` on both legacy and modern NVVM targets.
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, kernel, thread};
 use cuda_host::cuda_module;

@@ -1,0 +1,21 @@
+[package]
+name = "float_minmax"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[workspace]
+
+# f32 `max`/`min` lower to the native PTX `max.f32` / `min.f32`.
+# Checks Rust's NaN contract (a numeric operand wins over a quiet or
+# signaling NaN in either position) and that subnormals survive.
+#
+# Run with:
+#   cargo oxide run float_minmax
+#   cargo oxide inspect float_minmax    # PTX has max.f32 / min.f32, no setp/selp
+
+[dependencies]
+cuda-device = { path = "../../../cuda-device" }
+cuda-host = { path = "../../../cuda-host" }
+cuda-core = { path = "../../../../../cuda-core" }
+libm = "0.2"

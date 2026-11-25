@@ -12,12 +12,14 @@
 //!
 //! The switch-side reduction semantics can only be exercised from device
 //! code (`multimem.ld_reduce` / `multimem.st`); that lives in the
-//! `nvls_all_reduce` example. Host code must not dereference the multicast
-//! mapping, so this test only establishes and tears it down.
+//! `nvls_all_reduce` example at
+//! `cuda-oxide/crates/rustc-codegen-cuda/examples/nvls_all_reduce/`
+//! (relative to the repository root). Host code must not dereference the
+//! multicast mapping, so this test only establishes and tears it down.
 //!
 //! Requires an NVLink-switch system (e.g. HGX H100/B200); skips elsewhere.
 
-use cuda_core::{vmm, Device, IntoResult};
+use cuda_core::{vmm, Context, IntoResult};
 use std::mem::MaybeUninit;
 
 fn gpu_count() -> Result<usize, cuda_core::DriverError> {
@@ -37,8 +39,8 @@ fn multicast_two_gpu_team_roundtrip() {
         return;
     }
 
-    let ctx0 = Device::new(0).expect("GPU 0 device");
-    let ctx1 = Device::new(1).expect("GPU 1 device");
+    let ctx0 = Context::new(0).expect("GPU 0 device");
+    let ctx1 = Context::new(1).expect("GPU 1 device");
     let devices = [ctx0.cu_device(), ctx1.cu_device()];
 
     for (i, &dev) in devices.iter().enumerate() {

@@ -17,6 +17,7 @@ use cutile::prelude::*;
 use cutile_compiler::ast::Module;
 use cutile_compiler::compiler::utils::CompileOptions;
 use cutile_compiler::error::JITError;
+use cutile_compiler::hints::DebugInfoLevel;
 
 /// Compiles one kernel of `module_ast_fn`'s module for `sm_120` and returns
 /// its IR text and placement counts.
@@ -33,7 +34,7 @@ pub fn compile<F: Fn() -> Module>(
         .strides(strides)
         // These audits pin optimized placement, independent of Cargo's
         // development-profile device-debug default.
-        .options(CompileOptions::default().device_debug(false))
+        .options(CompileOptions::default().debug_info(DebugInfoLevel::None))
         .compile()
         .map(|artifacts| (artifacts.ir_text(), artifacts.check_counts()))
 }

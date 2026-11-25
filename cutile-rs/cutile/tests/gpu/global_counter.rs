@@ -45,7 +45,7 @@ mod atomic_counter_kernels {
 fn atomic_global_increments_are_unique_across_tile_programs() {
     common::with_test_stack(|| {
         const N: usize = 1024;
-        let device = cuda_core::Device::new(0).expect("device");
+        let device = cuda_core::Context::new(0).expect("device");
         let stream = device.new_stream().expect("stream");
         let mut out = api::zeros::<i32>(&[N]).sync_on(&stream).expect("zeros");
         // Same specialization twice: test uniqueness under contention and
@@ -66,7 +66,7 @@ use global_kernels::update_counter_ordered;
 #[test]
 fn smoke_global_counter_ordered() {
     common::with_test_stack(|| {
-        let device = cuda_core::Device::new(0).expect("device");
+        let device = cuda_core::Context::new(0).expect("device");
         let stream = device.new_stream().expect("stream");
 
         let mut first = api::zeros::<i32>(&[1]).sync_on(&stream).expect("zeros");

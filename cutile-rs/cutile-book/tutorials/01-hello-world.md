@@ -41,7 +41,7 @@ mod hello_world_module {
 use hello_world_module::hello_world_kernel;
 
 fn main() -> Result<(), Error> {
-    let device = Device::new(0)?;
+    let device = Context::new(0)?;
     let stream = device.new_stream()?;
     let launcher = hello_world_kernel();
     launcher.grid((2, 2, 1)).sync_on(&stream)?;
@@ -90,7 +90,7 @@ The following host-side code will launch the device-side code:
 
 ```rust
 fn main() -> Result<(), Error> {
-    let device = Device::new(0)?;             // Connect to GPU
+    let device = Context::new(0)?;             // Connect to GPU
     let stream = device.new_stream()?;             // Create a work queue
     let launcher = hello_world_kernel();   // Get the kernel launcher
     launcher.grid((2, 2, 1)).sync_on(&stream)?; // Launch 2×2×1 = 4 programs

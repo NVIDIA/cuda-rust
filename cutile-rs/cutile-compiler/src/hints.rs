@@ -8,7 +8,9 @@
 //! Pure Rust — no melior or tile-ir dependency.
 
 use crate::ast::SourceLocation;
+use crate::cuda_tile_runtime_utils::DEFAULT_OPT_LEVEL;
 use crate::error::{JITError, SpannedJITError};
+pub use crate::tile_library::TileLibrarySpec;
 use quote::ToTokens;
 use std::collections::BTreeMap;
 use syn::{Expr, Lit};
@@ -23,6 +25,7 @@ pub struct SMHints {
     pub occupancy: Option<i32>,
     pub max_divisibility: Option<i32>,
     pub num_worker_warps_per_cta: Option<i32>,
+    pub min_ctas_per_sm: Option<i32>,
 }
 
 impl SMHints {
@@ -33,6 +36,7 @@ impl SMHints {
             occupancy: None,
             max_divisibility: None,
             num_worker_warps_per_cta: None,
+            min_ctas_per_sm: None,
         }
     }
 
@@ -51,6 +55,15 @@ impl SMHints {
                 .jit_error_result("occupancy hint has already been set");
         }
         self.occupancy = Some(get_int_hint(hint)?);
+        Ok(())
+    }
+
+    pub fn set_min_ctas_per_sm(&mut self, hint: &Expr) -> Result<(), JITError> {
+        if self.min_ctas_per_sm.is_some() {
+            return SourceLocation::unknown()
+                .jit_error_result("min_ctas_per_sm hint has already been set");
+        }
+        self.min_ctas_per_sm = Some(get_int_hint(hint)?);
         Ok(())
     }
 
@@ -99,6 +112,64 @@ pub enum DebugInfoLevel {
     Full,
 }
 
+const BUILD_DEBUG_INFO: DebugInfoLevel = match env!("CUTILE_BUILD_DEBUG_INFO").as_bytes() {
+    b"full" => DebugInfoLevel::Full,
+    b"line" => DebugInfoLevel::Line,
+    _ => DebugInfoLevel::None,
+};
+
+/// How both compile stages generate device code.
+///
+/// Debugging owns level 0 because `tileiras` accepts `--device-debug` at no
+/// other level, so every value maps to flags `tileiras` accepts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CodegenMode {
+    /// `--opt-level 0 --device-debug`. The frontend also stops hoisting
+    /// bounds checks out of loops, so every check that runs on the device
+    /// sits at the source line that wrote it. Checks the compiler discharged
+    /// by proof or moved to launch time never reach device code in any mode.
+    Debug,
+    /// `--opt-level <level>`, plus `--lineinfo` for profiler correlation.
+    Optimized { level: u8, lineinfo: bool },
+}
+
+impl CodegenMode {
+    pub const RELEASE: Self = Self::Optimized {
+        level: DEFAULT_OPT_LEVEL,
+        lineinfo: false,
+    };
+
+    pub fn opt_level(self) -> u8 {
+        match self {
+            Self::Debug => 0,
+            Self::Optimized { level, .. } => level,
+        }
+    }
+
+    fn with_debug_info(self, debug_info: DebugInfoLevel) -> Self {
+        let level = match self {
+            Self::Debug => DEFAULT_OPT_LEVEL,
+            Self::Optimized { level, .. } => level,
+        };
+        match debug_info {
+            DebugInfoLevel::Full => Self::Debug,
+            DebugInfoLevel::Line => Self::Optimized {
+                level,
+                lineinfo: true,
+            },
+            DebugInfoLevel::None => Self::Optimized {
+                level,
+                lineinfo: false,
+            },
+        }
+    }
+
+    fn with_opt_level(self, level: u8) -> Self {
+        let lineinfo = matches!(self, Self::Optimized { lineinfo: true, .. });
+        Self::Optimized { level, lineinfo }
+    }
+}
+
 /// Runtime compile options for kernel JIT compilation.
 ///
 /// These options control kernel-level compilation hints that can vary between
@@ -111,29 +182,25 @@ pub enum DebugInfoLevel {
 /// `Full` for `debug = "line-tables-only"` or `"limited"`, not `Line`.
 /// `CUDA_RUST_DEBUG=none|line|full` overrides this default at build time;
 /// changing it when running an already-built app has no effect. Use
-/// [`Self::debug_info`] to override the default for one compilation.
+/// [`Self::debug_info`] to override the default for one compilation. At run
+/// time, the `CUTILE_JIT_*` variables in [`crate::jit_env`] override what the
+/// code selected.
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
 pub struct CompileOptions {
     pub occupancy: Option<i32>,
     pub num_cta_in_cga: Option<i32>,
     pub max_divisibility: Option<i32>,
     pub num_worker_warps_per_cta: Option<i32>,
-    /// `tileiras` optimization level (`--opt-level`). `None` means the
-    /// default: 3, or 0 when `device_debug` is set.
-    pub opt_level: Option<u8>,
-    /// Compile for debugging (`tileiras --device-debug`): the frontend stops
-    /// hoisting bounds checks out of loops, so every check that runs on the
-    /// device sits at the source line that wrote it, and the backend
-    /// generates debug information. Checks the compiler discharged by proof
-    /// or moved to launch time never reach device code in any mode. Implies
-    /// `--opt-level 0` unless `opt_level` is set explicitly.
-    pub device_debug: bool,
-    /// Emit line-number information (`tileiras --lineinfo`) for profiler
-    /// correlation, without the rest of the debug contract.
-    pub lineinfo: bool,
+    /// CUDA 13.5 minimum resident CTAs per SM (0–32); zero disables the constraint.
+    pub min_ctas_per_sm: Option<i32>,
+    pub codegen: CodegenMode,
     /// Instrument memory accesses for Compute Sanitizer's memcheck tool
     /// (`tileiras --sanitize=memcheck`).
     pub sanitize_memcheck: bool,
+    /// Tile libraries this launch links in addition to the process-wide
+    /// defaults ([`crate::tile_library::set_default_tile_libraries`]); see
+    /// [`Self::tile_library`].
+    pub tile_libraries: Vec<TileLibrarySpec>,
 }
 
 impl Default for CompileOptions {
@@ -143,10 +210,10 @@ impl Default for CompileOptions {
             num_cta_in_cga: None,
             max_divisibility: None,
             num_worker_warps_per_cta: None,
-            opt_level: None,
-            device_debug: env!("CUTILE_BUILD_DEBUG_INFO") == "full",
-            lineinfo: env!("CUTILE_BUILD_DEBUG_INFO") == "line",
+            min_ctas_per_sm: None,
+            codegen: CodegenMode::RELEASE.with_debug_info(BUILD_DEBUG_INFO),
             sanitize_memcheck: false,
+            tile_libraries: Vec::new(),
         }
     }
 }
@@ -156,14 +223,11 @@ impl CompileOptions {
         Self::default()
     }
 
-    /// Selects exactly one debug-info mode, replacing both debug flags.
-    ///
-    /// Other options, including an explicitly set optimization level, are
-    /// preserved. With no explicit optimization level, `Full` uses level 0
-    /// and `None` / `Line` use level 3.
+    /// Selects the debug-info mode. `Full` selects [`CodegenMode::Debug`];
+    /// `None` and `Line` select optimized code at the current level, or at
+    /// level 3 when leaving debug mode.
     pub fn debug_info(mut self, level: DebugInfoLevel) -> Self {
-        self.device_debug = level == DebugInfoLevel::Full;
-        self.lineinfo = level == DebugInfoLevel::Line;
+        self.codegen = self.codegen.with_debug_info(level);
         self
     }
 
@@ -187,23 +251,40 @@ impl CompileOptions {
         self
     }
 
+    /// Set the CUDA 13.5 minimum-residency hint. Zero disables the constraint.
+    pub fn min_ctas_per_sm(mut self, min_ctas_per_sm: i32) -> Self {
+        self.min_ctas_per_sm = Some(min_ctas_per_sm);
+        self
+    }
+
+    /// Selects optimized code at `opt_level`, keeping line info. This leaves
+    /// debug mode, which `tileiras` supports only at level 0.
     pub fn opt_level(mut self, opt_level: u8) -> Self {
-        self.opt_level = Some(opt_level);
-        self
-    }
-
-    pub fn device_debug(mut self, device_debug: bool) -> Self {
-        self.device_debug = device_debug;
-        self
-    }
-
-    pub fn lineinfo(mut self, lineinfo: bool) -> Self {
-        self.lineinfo = lineinfo;
+        self.codegen = self.codegen.with_opt_level(opt_level);
         self
     }
 
     pub fn sanitize_memcheck(mut self, sanitize_memcheck: bool) -> Self {
         self.sanitize_memcheck = sanitize_memcheck;
+        self
+    }
+
+    /// Links `library` into this launch's kernel, in addition to the
+    /// process-wide defaults. A kernel that calls a `#[cutile::foreign]`
+    /// function needs the library implementing it here or in the defaults.
+    pub fn tile_library(mut self, library: TileLibrarySpec) -> Self {
+        self.tile_libraries.push(library);
+        self
+    }
+
+    /// These options with the process-wide default tile libraries put
+    /// before this launch's own: the libraries the kernel links.
+    pub fn with_default_tile_libraries(mut self) -> Self {
+        let mut libraries = crate::tile_library::default_tile_libraries();
+        if !libraries.is_empty() {
+            libraries.append(&mut self.tile_libraries);
+            self.tile_libraries = libraries;
+        }
         self
     }
 }
@@ -253,7 +334,7 @@ impl OptimizationHints {
         for sm_key_val in &opt_hints.elems {
             let (opt_key, opt_value) = Self::parse_key_value(sm_key_val)?;
             {
-                if !opt_key.starts_with("sm_") {
+                if opt_key != "default" && !opt_key.starts_with("sm_") {
                     return SourceLocation::unknown().jit_error_result(&format!(
                         "Unexpected optimization hint {}.",
                         sm_key_val.to_token_stream()
@@ -274,6 +355,7 @@ impl OptimizationHints {
                         "num_worker_warps_per_cta" => {
                             sm_hints_result.set_num_worker_warps_per_cta(&hints)?
                         }
+                        "min_ctas_per_sm" => sm_hints_result.set_min_ctas_per_sm(&hints)?,
                         "allow_tma" | "latency" => {
                             return SourceLocation::unknown().jit_error_result(&format!(
                                     "'{key}' is a per-op hint and cannot be set at the entry level. \
@@ -311,6 +393,7 @@ impl OptimizationHints {
             && options.num_cta_in_cga.is_none()
             && options.max_divisibility.is_none()
             && options.num_worker_warps_per_cta.is_none()
+            && options.min_ctas_per_sm.is_none()
         {
             return;
         }
@@ -331,8 +414,124 @@ impl OptimizationHints {
         if let Some(max_divisibility) = options.max_divisibility {
             sm_hints.max_divisibility = Some(max_divisibility);
         }
+        if let Some(min_ctas_per_sm) = options.min_ctas_per_sm {
+            sm_hints.min_ctas_per_sm = Some(min_ctas_per_sm);
+        }
         if let Some(num_worker_warps_per_cta) = options.num_worker_warps_per_cta {
             sm_hints.num_worker_warps_per_cta = Some(num_worker_warps_per_cta);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cuda_tile_runtime_utils::TileirasOptions;
+
+    /// `(opt_level, device_debug, lineinfo)` as `tileiras` gets them.
+    fn tileiras(options: &CompileOptions) -> (u8, bool, bool) {
+        let flags = TileirasOptions::from_compile_options(options);
+        let device_debug = flags.codegen == CodegenMode::Debug;
+        let lineinfo = matches!(flags.codegen, CodegenMode::Optimized { lineinfo: true, .. });
+        (flags.codegen.opt_level(), device_debug, lineinfo)
+    }
+
+    #[test]
+    fn every_setter_sequence_yields_flags_tileiras_accepts() {
+        let setters: Vec<fn(CompileOptions) -> CompileOptions> = vec![
+            |o| o.debug_info(DebugInfoLevel::None),
+            |o| o.debug_info(DebugInfoLevel::Line),
+            |o| o.debug_info(DebugInfoLevel::Full),
+            |o| o.opt_level(0),
+            |o| o.opt_level(3),
+        ];
+        for first in &setters {
+            for second in &setters {
+                for third in &setters {
+                    let options = third(second(first(CompileOptions::new())));
+                    let (opt_level, device_debug, lineinfo) = tileiras(&options);
+                    assert!(
+                        !device_debug || (opt_level == 0 && !lineinfo),
+                        "{options:?} resolves to an invalid tileiras combination"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_last_setter_decides_between_debug_and_optimized_code() {
+        let full = DebugInfoLevel::Full;
+        assert_eq!(
+            tileiras(&CompileOptions::new().debug_info(full).opt_level(3)),
+            (3, false, false)
+        );
+        assert_eq!(
+            tileiras(&CompileOptions::new().opt_level(3).debug_info(full)),
+            (0, true, false)
+        );
+    }
+
+    #[test]
+    fn optimized_code_keeps_its_level_and_line_info_across_setters() {
+        let line = DebugInfoLevel::Line;
+        assert_eq!(
+            tileiras(&CompileOptions::new().opt_level(2).debug_info(line)),
+            (2, false, true)
+        );
+        assert_eq!(
+            tileiras(&CompileOptions::new().debug_info(line).opt_level(1)),
+            (1, false, true)
+        );
+        assert_eq!(
+            tileiras(
+                &CompileOptions::new()
+                    .debug_info(DebugInfoLevel::Full)
+                    .debug_info(DebugInfoLevel::None)
+            ),
+            (3, false, false)
+        );
+    }
+
+    #[test]
+    fn cache_bytes_match_the_previous_encoding() {
+        let full = DebugInfoLevel::Full;
+        let line = DebugInfoLevel::Line;
+        for (options, opt_level, flags) in [
+            (
+                CompileOptions::new().debug_info(DebugInfoLevel::None),
+                3,
+                0b000,
+            ),
+            (CompileOptions::new().debug_info(line), 3, 0b010),
+            (CompileOptions::new().debug_info(full), 0, 0b001),
+            (
+                CompileOptions::new().opt_level(1).debug_info(line),
+                1,
+                0b010,
+            ),
+            (
+                CompileOptions::new()
+                    .debug_info(full)
+                    .sanitize_memcheck(true),
+                0,
+                0b101,
+            ),
+            (
+                CompileOptions::new()
+                    .debug_info(DebugInfoLevel::None)
+                    .opt_level(0)
+                    .sanitize_memcheck(true),
+                0,
+                0b100,
+            ),
+        ] {
+            let tileiras = TileirasOptions::from_compile_options(&options);
+            assert_eq!(
+                (tileiras.codegen.opt_level(), tileiras.flags_byte()),
+                (opt_level, flags),
+                "{options:?}"
+            );
         }
     }
 }

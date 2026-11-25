@@ -46,8 +46,9 @@ use cuda_device::{DisjointSlice, kernel, thread};
 #[kernel]
 pub fn vecadd(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>) {
     let idx = thread::index_1d();
+    let i = idx.get();
     if let Some(c_elem) = c.get_mut(idx) {
-        *c_elem = a[idx.get()] + b[idx.get()];
+        *c_elem = a[i] + b[i];
     }
 }
 ```
@@ -160,7 +161,7 @@ for architecture-specific SM resource limits and occupancy calculations.
 On the host side, `LaunchConfig` tells the runtime how to shape the grid:
 
 ```rust
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 
 // Quick 1D launch: 256 threads per block, enough blocks to cover N elements
 let cfg = LaunchConfig::for_num_elems(N as u32);
@@ -238,8 +239,9 @@ returns `None` for out-of-bounds indices, so those threads simply do nothing:
 #[kernel]
 pub fn vecadd(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>) {
     let idx = thread::index_1d();
+    let i = idx.get();
     if let Some(c_elem) = c.get_mut(idx) {   // out-of-bounds threads skip
-        *c_elem = a[idx.get()] + b[idx.get()];
+        *c_elem = a[i] + b[i];
     }
 }
 ```

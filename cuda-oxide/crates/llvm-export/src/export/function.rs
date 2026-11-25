@@ -192,8 +192,8 @@ impl<'a> ModuleExportState<'a> {
             ));
         }
 
-        // Lowering names every static shared allocation `__shared_mem_N`, so
-        // the emitted symbol carries no hint of which Rust `static` it came
+        // Lowering names every static shared allocation `__shared_mem_<hash>`,
+        // so the emitted symbol carries no hint of which Rust `static` it came
         // from. Anyone attributing a kernel's shared-memory footprint back to
         // source has only the exported IR to work from, so record the Rust
         // path as a comment on the line above the definition. It is a comment
@@ -1041,7 +1041,7 @@ impl<'a> ModuleExportState<'a> {
         // A struct or array parameter reaches the kernel as the bytes the
         // host wrote, so a shared or local pointer inside one is as
         // impossible to supply as a bare one. Before this recursion a
-        // `struct { p: SharedPtr<f32>, n: u32 }` parameter compiled and the
+        // `struct { p: *mut Barrier, n: u32 }` parameter compiled and the
         // kernel applied `cvta.shared.u64` to host bytes.
         if is_kernel {
             for (index, arg_ty) in func_ty.arg_types().iter().enumerate() {

@@ -9,7 +9,7 @@
 
 #![feature(f16)]
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::atomic::{AtomicOrdering, BlockAtomicF16, DeviceAtomicF16, SystemAtomicF16};
 use cuda_device::{DisjointSlice, kernel, thread};

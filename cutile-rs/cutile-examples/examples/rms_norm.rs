@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 use cuda_async::device_operation::DeviceOp;
-use cuda_core::Device;
+use cuda_core::Context;
 use cutile::api::{randn, zeros};
 use cutile::error::Error;
 use cutile::tensor::{IntoPartition, Partition, Tensor, ToHostVec};
@@ -67,8 +67,8 @@ fn main() -> Result<(), Error> {
         return Ok(());
     }
 
-    // Create a context. Device 0 is associated with the context.
-    let device = Device::new(0)?;
+    // Create the primary context for GPU 0.
+    let device = Context::new(0)?;
     // Create a new stream on which we run CUDA operations.
     let stream = device.new_stream()?;
     let (m, n) = (4, 8);

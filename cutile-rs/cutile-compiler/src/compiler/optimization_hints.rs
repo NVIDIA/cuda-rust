@@ -14,6 +14,53 @@ use std::collections::HashMap;
 // Re-export the shared hint types.
 pub use crate::hints::{OptimizationHints, SMHints};
 
+/// Read the boolean const generic used by the likelihood intrinsic.
+pub fn condition_likelihood_arg(
+    call: &syn::ExprCall,
+    generics: &crate::generics::GenericVars,
+) -> Result<bool, crate::error::JITError> {
+    use syn::{Expr, GenericArgument, Lit, Type};
+    let args = crate::syn_utils::get_call_expression_generics(call);
+    let expected = match args.as_ref().and_then(|args| args.args.first()) {
+        Some(GenericArgument::Const(Expr::Lit(syn::ExprLit {
+            lit: Lit::Bool(value),
+            ..
+        }))) => Some(value.value),
+        Some(GenericArgument::Const(Expr::Path(path))) => path
+            .path
+            .get_ident()
+            .and_then(|name| generics.inst_bool.get(&name.to_string()))
+            .copied(),
+        Some(GenericArgument::Type(Type::Path(path))) => path
+            .path
+            .get_ident()
+            .and_then(|name| generics.inst_bool.get(&name.to_string()))
+            .copied(),
+        _ => None,
+    };
+    expected.ok_or_else(|| crate::error::JITError::Generic(
+        "likelihood requires a resolved boolean const generic (true, false, or a bool const parameter)".into()
+    ))
+}
+
+/// Advisory condition likelihood shared by ordinary If and Select lowering.
+pub fn build_condition_hint(expected: bool) -> Attribute {
+    let hint = if expected {
+        "LIKELY_TRUE"
+    } else {
+        "LIKELY_FALSE"
+    };
+    Attribute::OptimizationHints(TileIrOptHints {
+        entries: vec![(
+            "default".into(),
+            vec![(
+                "discardable_perf_hints".into(),
+                Attribute::String(format!("{{\"condition_hint\":\"{hint}\"}}")),
+            )],
+        )],
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Tile-IR attribute builders
 // ---------------------------------------------------------------------------
@@ -23,6 +70,12 @@ pub fn build_entry_optimization_hints(hints: &OptimizationHints) -> Option<Attri
     let mut entries = Vec::new();
     for (arch, sm_hints) in &hints.tile_as_hints {
         let mut arch_hints = Vec::new();
+        if let Some(value) = sm_hints.min_ctas_per_sm {
+            arch_hints.push((
+                "min_ctas_per_sm".to_string(),
+                Attribute::i32(i64::from(value)),
+            ));
+        }
         if let Some(num_cta) = sm_hints.num_cta_in_cga {
             arch_hints.push((
                 "num_cta_in_cga".to_string(),

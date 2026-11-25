@@ -1,0 +1,9 @@
+error[E0502]: cannot borrow `storage` as mutable because it is also borrowed as immutable
+ --> tests/compile_fail/packed_decode_callback_mutation.rs:8:72
+  |
+8 |     PackedDecode::with_validated(&storage, &storage, 1, 16, 8, 16, 16, |_| {
+  |     ---------------------------- -------- immutable borrow occurs here ^^^ mutable borrow occurs here
+  |     |
+  |     immutable borrow later used by call
+9 |         storage[0] = BFloat16::from_bits(1);
+  |         ------- second borrow occurs due to use of `storage` in closure

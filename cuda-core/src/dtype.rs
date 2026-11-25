@@ -126,6 +126,28 @@ impl f4e2m1fnx2 {
 #[allow(non_camel_case_types)]
 pub struct i4(pub u8);
 
+// Every bit pattern of the underlying `u8` or `u32` is a valid value of each
+// wrapper: the fields are public or reachable through a safe `from_bits`, and
+// nothing is reserved. That makes them plain old data in bytemuck's sense,
+// which is what lets byte storage be reinterpreted as one of them through
+// `DeviceBuffer::cast_elem`, `DeviceBuffer::cast_chunks`, and
+// `Tensor::reinterpret`, all bounded on `AnyBitPattern` (#1506). `bool` is
+// a `DType` too but deliberately has no such impl: only `0` and `1` are
+// valid, so a `bool` buffer or tensor can only come from memory written as
+// `bool`.
+macro_rules! impl_pod_newtype {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            // SAFETY: `#[repr(transparent)]` over an integer, so there is no
+            // padding, and every bit pattern is a valid value (see above).
+            unsafe impl bytemuck::Zeroable for $ty {}
+            unsafe impl bytemuck::Pod for $ty {}
+        )+
+    };
+}
+
+impl_pod_newtype!(tf32, f8e4m3fn, f8e5m2, f8e8m0fnu, f8e5m3fnu, f4e2m1fn, f4e2m1fnx2, i4);
+
 /// Runtime identifier for a `DType`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DTypeId {

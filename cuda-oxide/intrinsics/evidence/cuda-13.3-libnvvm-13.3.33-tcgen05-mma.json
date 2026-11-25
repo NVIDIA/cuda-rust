@@ -20,7 +20,7 @@
   "fixtures": [
     {
       "id": "tcgen05_mma19_libnvvm_probe",
-      "coverage_count": 24,
+      "coverage_count": 40,
       "stages": [
         {
           "targets": ["compute_100a", "ptx93"],
@@ -442,6 +442,126 @@
         "llvm_symbol": "llvm.nvvm.tcgen05.mma.ws.tensor",
         "expected_ptx": {"mnemonic": "tcgen05", "modifiers": ["mma", "ws", "cta_group::1", "kind::f8f6f4", "collector::b0::discard"], "operands": [{"kind": "address"}, {"kind": "address"}, {"kind": "register"}, {"kind": "register"}, {"kind": "exact", "value": "%enable_pred"}]},
         "facts": {"llvm_arguments": ["tmem_ptr", "tmem_ptr", "i64", "i32", "i1", "i32", "i32", "i32"]}
+      }
+    },
+    {
+      "axes": [{"name": "kind", "values": ["mxf4", "mxf8f6f4"]}],
+      "product_count": 2,
+      "fixtures": ["tcgen05_mma19_libnvvm_probe"],
+      "template": {
+        "id": "tcgen05_mma_shared_${kind}_block_scale",
+        "source_record": "int_nvvm_tcgen05_mma_shared_${kind}_block_scale",
+        "llvm_symbol": "llvm.nvvm.tcgen05.mma.shared.${kind}.block_scale",
+        "expected_ptx": {"mnemonic": "tcgen05", "modifiers": ["mma", "cta_group::1", "kind::${kind}", "block_scale", "collector::a::discard"], "operands": [{"kind": "address"}, {"kind": "register"}, {"kind": "register"}, {"kind": "register"}, {"kind": "address"}, {"kind": "address"}, {"kind": "exact", "value": "%enable_pred"}]},
+        "facts": {"llvm_arguments": ["tmem_ptr", "i64", "i64", "i32", "i1", "tmem_ptr", "tmem_ptr", "i32", "i32"]}
+      }
+    },
+    {
+      "axes": [{"name": "kind", "values": ["mxf4", "mxf4nvf4", "mxf8f6f4"]}],
+      "product_count": 3,
+      "fixtures": ["tcgen05_mma19_libnvvm_probe"],
+      "template": {
+        "id": "tcgen05_mma_shared_${kind}_block_scale_block32",
+        "source_record": "int_nvvm_tcgen05_mma_shared_${kind}_block_scale_block32",
+        "llvm_symbol": "llvm.nvvm.tcgen05.mma.shared.${kind}.block_scale.block32",
+        "expected_ptx": {"mnemonic": "tcgen05", "modifiers": ["mma", "cta_group::1", "kind::${kind}", "block_scale", "block32", "collector::a::discard"], "operands": [{"kind": "address"}, {"kind": "register"}, {"kind": "register"}, {"kind": "register"}, {"kind": "address"}, {"kind": "address"}, {"kind": "exact", "value": "%enable_pred"}]},
+        "facts": {"llvm_arguments": ["tmem_ptr", "i64", "i64", "i32", "i1", "tmem_ptr", "tmem_ptr", "i32", "i32"]}
+      }
+    },
+    {
+      "axes": [{"name": "id", "values": ["tcgen05_mma_shared_mxf4nvf4_block_scale_block16"]}],
+      "product_count": 1,
+      "fixtures": ["tcgen05_mma19_libnvvm_probe"],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_tcgen05_mma_shared_mxf4nvf4_block_scale_block16",
+        "llvm_symbol": "llvm.nvvm.tcgen05.mma.shared.mxf4nvf4.block_scale.block16",
+        "expected_ptx": {"mnemonic": "tcgen05", "modifiers": ["mma", "cta_group::1", "kind::mxf4nvf4", "block_scale", "block16", "collector::a::discard"], "operands": [{"kind": "address"}, {"kind": "register"}, {"kind": "register"}, {"kind": "register"}, {"kind": "address"}, {"kind": "address"}, {"kind": "exact", "value": "%enable_pred"}]},
+        "facts": {"llvm_arguments": ["tmem_ptr", "i64", "i64", "i32", "i1", "tmem_ptr", "tmem_ptr", "i32", "i32"]}
+      }
+    },
+    {
+      "axes": [{"name": "kind", "values": ["mxf4", "mxf8f6f4"]}],
+      "product_count": 2,
+      "fixtures": ["tcgen05_mma19_libnvvm_probe"],
+      "template": {
+        "id": "tcgen05_mma_tensor_${kind}_block_scale",
+        "source_record": "int_nvvm_tcgen05_mma_tensor_${kind}_block_scale",
+        "llvm_symbol": "llvm.nvvm.tcgen05.mma.tensor.${kind}.block_scale",
+        "expected_ptx": {"mnemonic": "tcgen05", "modifiers": ["mma", "cta_group::1", "kind::${kind}", "block_scale", "collector::a::discard"], "operands": [{"kind": "address"}, {"kind": "address"}, {"kind": "register"}, {"kind": "register"}, {"kind": "address"}, {"kind": "address"}, {"kind": "exact", "value": "%enable_pred"}]},
+        "facts": {"llvm_arguments": ["tmem_ptr", "tmem_ptr", "i64", "i32", "i1", "tmem_ptr", "tmem_ptr", "i32", "i32"]}
+      }
+    },
+    {
+      "axes": [{"name": "kind", "values": ["mxf4", "mxf4nvf4", "mxf8f6f4"]}],
+      "product_count": 3,
+      "fixtures": ["tcgen05_mma19_libnvvm_probe"],
+      "template": {
+        "id": "tcgen05_mma_tensor_${kind}_block_scale_block32",
+        "source_record": "int_nvvm_tcgen05_mma_tensor_${kind}_block_scale_block32",
+        "llvm_symbol": "llvm.nvvm.tcgen05.mma.tensor.${kind}.block_scale.block32",
+        "expected_ptx": {"mnemonic": "tcgen05", "modifiers": ["mma", "cta_group::1", "kind::${kind}", "block_scale", "block32", "collector::a::discard"], "operands": [{"kind": "address"}, {"kind": "address"}, {"kind": "register"}, {"kind": "register"}, {"kind": "address"}, {"kind": "address"}, {"kind": "exact", "value": "%enable_pred"}]},
+        "facts": {"llvm_arguments": ["tmem_ptr", "tmem_ptr", "i64", "i32", "i1", "tmem_ptr", "tmem_ptr", "i32", "i32"]}
+      }
+    },
+    {
+      "axes": [{"name": "id", "values": ["tcgen05_mma_tensor_mxf4nvf4_block_scale_block16"]}],
+      "product_count": 1,
+      "fixtures": ["tcgen05_mma19_libnvvm_probe"],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_tcgen05_mma_tensor_mxf4nvf4_block_scale_block16",
+        "llvm_symbol": "llvm.nvvm.tcgen05.mma.tensor.mxf4nvf4.block_scale.block16",
+        "expected_ptx": {"mnemonic": "tcgen05", "modifiers": ["mma", "cta_group::1", "kind::mxf4nvf4", "block_scale", "block16", "collector::a::discard"], "operands": [{"kind": "address"}, {"kind": "address"}, {"kind": "register"}, {"kind": "register"}, {"kind": "address"}, {"kind": "address"}, {"kind": "exact", "value": "%enable_pred"}]},
+        "facts": {"llvm_arguments": ["tmem_ptr", "tmem_ptr", "i64", "i32", "i1", "tmem_ptr", "tmem_ptr", "i32", "i32"]}
+      }
+    },
+    {
+      "axes": [{"name": "id", "values": ["tcgen05_mma_sp_shared_mxf8f6f4_block_scale"]}],
+      "product_count": 1,
+      "fixtures": ["tcgen05_mma19_libnvvm_probe"],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_tcgen05_mma_sp_shared_mxf8f6f4_block_scale",
+        "llvm_symbol": "llvm.nvvm.tcgen05.mma.sp.shared.mxf8f6f4.block_scale",
+        "expected_ptx": {"mnemonic": "tcgen05", "modifiers": ["mma", "sp", "cta_group::1", "kind::mxf8f6f4", "block_scale", "collector::a::discard"], "operands": [{"kind": "address"}, {"kind": "register"}, {"kind": "register"}, {"kind": "address"}, {"kind": "register"}, {"kind": "address"}, {"kind": "address"}, {"kind": "exact", "value": "%enable_pred"}]},
+        "facts": {"llvm_arguments": ["tmem_ptr", "i64", "i64", "i32", "i1", "tmem_ptr", "tmem_ptr", "tmem_ptr", "i32", "i32"]}
+      }
+    },
+    {
+      "axes": [{"name": "id", "values": ["tcgen05_mma_sp_shared_mxf8f6f4_block_scale_block32"]}],
+      "product_count": 1,
+      "fixtures": ["tcgen05_mma19_libnvvm_probe"],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_tcgen05_mma_sp_shared_mxf8f6f4_block_scale_block32",
+        "llvm_symbol": "llvm.nvvm.tcgen05.mma.sp.shared.mxf8f6f4.block_scale.block32",
+        "expected_ptx": {"mnemonic": "tcgen05", "modifiers": ["mma", "sp", "cta_group::1", "kind::mxf8f6f4", "block_scale", "block32", "collector::a::discard"], "operands": [{"kind": "address"}, {"kind": "register"}, {"kind": "register"}, {"kind": "address"}, {"kind": "register"}, {"kind": "address"}, {"kind": "address"}, {"kind": "exact", "value": "%enable_pred"}]},
+        "facts": {"llvm_arguments": ["tmem_ptr", "i64", "i64", "i32", "i1", "tmem_ptr", "tmem_ptr", "tmem_ptr", "i32", "i32"]}
+      }
+    },
+    {
+      "axes": [{"name": "id", "values": ["tcgen05_mma_sp_tensor_mxf8f6f4_block_scale"]}],
+      "product_count": 1,
+      "fixtures": ["tcgen05_mma19_libnvvm_probe"],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_tcgen05_mma_sp_tensor_mxf8f6f4_block_scale",
+        "llvm_symbol": "llvm.nvvm.tcgen05.mma.sp.tensor.mxf8f6f4.block_scale",
+        "expected_ptx": {"mnemonic": "tcgen05", "modifiers": ["mma", "sp", "cta_group::1", "kind::mxf8f6f4", "block_scale", "collector::a::discard"], "operands": [{"kind": "address"}, {"kind": "address"}, {"kind": "register"}, {"kind": "address"}, {"kind": "register"}, {"kind": "address"}, {"kind": "address"}, {"kind": "exact", "value": "%enable_pred"}]},
+        "facts": {"llvm_arguments": ["tmem_ptr", "tmem_ptr", "i64", "i32", "i1", "tmem_ptr", "tmem_ptr", "tmem_ptr", "i32", "i32"]}
+      }
+    },
+    {
+      "axes": [{"name": "id", "values": ["tcgen05_mma_sp_tensor_mxf8f6f4_block_scale_block32"]}],
+      "product_count": 1,
+      "fixtures": ["tcgen05_mma19_libnvvm_probe"],
+      "template": {
+        "id": "${id}",
+        "source_record": "int_nvvm_tcgen05_mma_sp_tensor_mxf8f6f4_block_scale_block32",
+        "llvm_symbol": "llvm.nvvm.tcgen05.mma.sp.tensor.mxf8f6f4.block_scale.block32",
+        "expected_ptx": {"mnemonic": "tcgen05", "modifiers": ["mma", "sp", "cta_group::1", "kind::mxf8f6f4", "block_scale", "block32", "collector::a::discard"], "operands": [{"kind": "address"}, {"kind": "address"}, {"kind": "register"}, {"kind": "address"}, {"kind": "register"}, {"kind": "address"}, {"kind": "address"}, {"kind": "exact", "value": "%enable_pred"}]},
+        "facts": {"llvm_arguments": ["tmem_ptr", "tmem_ptr", "i64", "i32", "i1", "tmem_ptr", "tmem_ptr", "tmem_ptr", "i32", "i32"]}
       }
     }
   ]

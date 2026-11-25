@@ -157,6 +157,8 @@ impl Serialize for Operand {
             Operand::Copy(place) => place.serialize_value(tcx),
             Operand::Move(place) => format!("Move({})", place.serialize_value(tcx)),
             Operand::Constant(lit) => lit.serialize(tcx),
+            Operand::Static(id, _) => format!("Static({})", id.identifier()),
+            Operand::StaticMut(id, _) => format!("StaticMut({})", id.identifier()),
         }
     }
 }
@@ -376,6 +378,19 @@ impl Program {
             program += Program::DUMPER;
         }
 
+        program.extend(self.statics.iter_enumerated().map(|(idx, decl)| {
+            let keyword = match decl.mutability {
+                Mutability::Not => "static",
+                Mutability::Mut => "static mut",
+            };
+            format!(
+                "{keyword} {}: {} = {};\n",
+                idx.identifier(),
+                decl.ty.serialize(tcx),
+                decl.init.serialize(tcx)
+            )
+        }));
+
         program.extend(self.functions.iter_enumerated().map(|(idx, body)| {
             let args_list: String = body
                 .args_iter()
@@ -436,7 +451,7 @@ impl Program {
 
 #[cfg(test)]
 mod tests {
-    use super::Serialize;
+    use super::{CallSynatx, Serialize};
     use crate::{syntax::*, tyctxt::TyCtxt};
     use config::TyConfig;
 
@@ -461,5 +476,42 @@ mod tests {
 
         let inf = Literal::Float(f32::INFINITY as f64, FloatTy::F32);
         assert_eq!(inf.serialize(&tcx), "f32::INFINITY");
+    }
+
+    #[test]
+    fn serialize_static_operands() {
+        let mut tcx = TyCtxt::from_primitives(TyConfig::default());
+        let shared_ref = tcx.push(TyKind::Ref(TyCtxt::I32, Mutability::Not));
+        let mut_ptr = tcx.push(TyKind::RawPtr(TyCtxt::I64, Mutability::Mut));
+        let mut program = Program::new(false);
+        let immutable = program.push_static(StaticDecl {
+            ty: TyCtxt::I32,
+            mutability: Mutability::Not,
+            init: 1_i32.into(),
+        });
+        let mutable = program.push_static(StaticDecl {
+            ty: TyCtxt::I64,
+            mutability: Mutability::Mut,
+            init: 2_i64.into(),
+        });
+
+        assert_eq!(
+            Operand::Static(immutable, shared_ref).serialize(&tcx),
+            "Static(static0)"
+        );
+        assert_eq!(
+            Operand::StaticMut(mutable, mut_ptr).serialize(&tcx),
+            "StaticMut(static1)"
+        );
+
+        let mut body = Body::new(&[], TyCtxt::UNIT, true);
+        body.new_basic_block(BasicBlockData {
+            statements: vec![],
+            terminator: Terminator::Return,
+        });
+        program.push_fn(body);
+        let source = program.serialize(&tcx, CallSynatx::V4);
+        assert!(source.contains("static static0: i32 = 1_i32;"));
+        assert!(source.contains("static mut static1: i64 = 2_i64;"));
     }
 }

@@ -18,8 +18,11 @@ macro_rules! shared_probe_body {
             let full = smem.add(1024).cast::<cuda_device::barrier::Barrier>();
             let data = smem.add(offset).cast::<u64>();
             cuda_device::barrier::mbarrier_init(full, 1);
+            cuda_device::thread::sync_threads();
             let pending = !cuda_device::barrier::mbarrier_try_wait_parity(full, 0);
-            let _token = cuda_device::barrier::mbarrier_arrive(full);
+            if pending {
+                let _token = cuda_device::barrier::mbarrier_arrive(full);
+            }
             // A failed barrier must report failure rather than hang the GPU.
             let mut complete = 0u64;
             let mut attempts = 0u32;
@@ -30,6 +33,7 @@ macro_rules! shared_probe_body {
                 }
                 attempts += 1;
             }
+            cuda_device::barrier::mbarrier_inval(full);
             let value = core::ptr::read_volatile(data);
             core::ptr::write_volatile(data, value.wrapping_mul(3) ^ 0x1234_5678);
             complete

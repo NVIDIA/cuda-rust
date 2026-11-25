@@ -22,7 +22,7 @@
 //!
 //! Run: cargo oxide run cross_crate_embedded
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use embedded_kernel_lib::kernels;
 

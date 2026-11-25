@@ -8,7 +8,7 @@
 //! raw address exactly; an old Debug-string byte parser mis-decoded these
 //! partially-initialized constant bytes.
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, cuda_module, kernel, thread};
 

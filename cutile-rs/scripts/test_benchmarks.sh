@@ -14,7 +14,7 @@ print_header "Smoke-testing benchmarks"
 
 echo -e "${YELLOW}>>> Running cutile-benchmarks with smoke-test (GPU)${NC}"
 cd "$REPO_ROOT/cutile-benchmarks" || exit 1
-run_benches "$REPO_ROOT/cutile-benchmarks/benches" "smoke-test"
+run_benches "$REPO_ROOT/cutile-benchmarks/benches" --features smoke-test
 
 print_summary_and_exit \
     "All benchmarks passed!" \

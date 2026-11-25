@@ -75,7 +75,7 @@ fn main() -> Result<(), Error> {
 }
 
 fn run() -> Result<(), Error> {
-    let device = Device::new(0)?;
+    let device = Context::new(0)?;
     let stream = device.new_stream()?;
     let gpu_name = get_gpu_name(0);
     println!("Target GPU: {gpu_name}");

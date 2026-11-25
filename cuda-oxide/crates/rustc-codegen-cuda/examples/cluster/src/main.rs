@@ -274,7 +274,7 @@ mod kernels {
 // ============================================================================
 
 fn main() {
-    use cuda_core::simt::LaunchConfig;
+    use cuda_core::LaunchConfig;
     use cuda_core::{CudaContext, DeviceBuffer};
 
     println!("=== Thread Block Cluster Tests (sm_90+) ===\n");

@@ -1246,8 +1246,8 @@ fn sibling_llvm_tools(llc: &Path) -> Result<(PathBuf, PathBuf)> {
     let tool_dir = llc
         .parent()
         .context("selected llc has no containing tool directory")?;
-    let llvm_as = tool_dir.join("llvm-as");
-    let llvm_dis = tool_dir.join("llvm-dis");
+    let llvm_as = tool_dir.join(format!("llvm-as{}", std::env::consts::EXE_SUFFIX));
+    let llvm_dis = tool_dir.join(format!("llvm-dis{}", std::env::consts::EXE_SUFFIX));
     ensure!(
         llvm_as.is_file() && llvm_dis.is_file(),
         "selected LLVM toolchain omits llvm-as or llvm-dis"
@@ -1799,6 +1799,22 @@ fn parse_ptxas_version(stdout: &str, stderr: &str) -> Result<String> {
     Ok(version.to_owned())
 }
 
+fn llvm_major_minor_series(version: &str) -> Option<&str> {
+    let rest = version.strip_prefix("LLVM version ")?;
+    let mut parts = rest.split(['.', '-']);
+    let major = parts.next()?;
+    let minor = parts.next()?;
+    if major.is_empty()
+        || !major.bytes().all(|b| b.is_ascii_digit())
+        || minor.is_empty()
+        || !minor.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    let prefix_len = "LLVM version ".len() + major.len() + 1 + minor.len();
+    Some(&version[..prefix_len])
+}
+
 fn validate_backend_identity(
     expected_version: &str,
     expected_commit: &RustcCommit,
@@ -1807,8 +1823,12 @@ fn validate_backend_identity(
     let ProbeBackendIdentity::SelectedEvidence(actual) = actual else {
         return Ok(());
     };
+    let same_version_or_series = actual.tool.version == expected_version
+        || (llvm_major_minor_series(&actual.tool.version).is_some()
+            && llvm_major_minor_series(&actual.tool.version)
+                == llvm_major_minor_series(expected_version));
     ensure!(
-        actual.tool.version == expected_version,
+        same_version_or_series,
         "rust-toolchain llc version mismatch: selected evidence records {expected_version:?}, found {:?}; use an explicit `--llc` only for a comparison probe",
         actual.tool.version
     );
@@ -1836,7 +1856,8 @@ fn rust_toolchain_llc() -> Result<(PathBuf, RustcCommit)> {
     let path = PathBuf::from(String::from_utf8_lossy(&sysroot.stdout).trim())
         .join("lib/rustlib")
         .join(host)
-        .join("bin/llc");
+        .join("bin")
+        .join(format!("llc{}", std::env::consts::EXE_SUFFIX));
     ensure!(
         path.is_file(),
         "rust toolchain has no llc at {}",
@@ -1938,15 +1959,30 @@ mod tests {
         CandidateToolTestDir(path)
     }
 
+    /// Writes `script` as an executable tool that tests can run at once.
+    ///
+    /// A test that writes the tool itself holds a writable handle to it for a
+    /// moment. Another test that spawns a process in that moment hands its
+    /// child a copy of the handle, and the kernel refuses to execute a file
+    /// with a writer (ETXTBSY, "Text file busy") until that child execs or
+    /// exits. Here `cp` creates the tool, so the only process that ever opens
+    /// it for writing has exited before this returns
     #[cfg(unix)]
     fn write_fake_tool(root: &Path, name: &str, script: &str) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
 
         let path = root.join(name);
-        fs::write(&path, script).unwrap();
-        let mut permissions = fs::metadata(&path).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&path, permissions).unwrap();
+        let staging = path.with_added_extension("staging");
+        fs::write(&staging, script).unwrap();
+        let status = std::process::Command::new("cp")
+            .arg(&staging)
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(status.success(), "cp {} failed: {status}", path.display());
+        fs::remove_file(staging).unwrap();
+        // cp masks the mode with the umask; chmod opens no writable handle
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
         path
     }
 

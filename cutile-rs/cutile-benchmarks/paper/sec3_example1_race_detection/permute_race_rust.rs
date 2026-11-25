@@ -24,7 +24,7 @@
  *   cargo run -p cutile-examples --example permute_race_rust
  */
 
-use cuda_core::Device;
+use cuda_core::Context;
 use cutile::error::Error;
 use cutile::prelude::*;
 use std::sync::Arc;
@@ -57,7 +57,7 @@ mod kernels {
 }
 
 fn main() -> Result<(), Error> {
-    let device = Device::new(0)?;
+    let device = Context::new(0)?;
     let stream = device.new_stream()?;
 
     let b = 2usize;

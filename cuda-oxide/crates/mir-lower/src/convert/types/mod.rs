@@ -103,6 +103,7 @@ mod enum_layout;
 mod func_abi;
 mod global_layout;
 mod layout;
+mod packed_shared_shape;
 mod pointer_storage;
 mod struct_layout;
 #[cfg(test)]
@@ -117,7 +118,7 @@ pub(crate) use enum_layout::{
 };
 pub(crate) use func_abi::{
     TransparentScalarAbiInfo, convert_grid_constant_storage_type, packed_shared_internal_abi_info,
-    transparent_scalar_abi_info, transparent_scalar_field,
+    shared_return_abi_info, transparent_scalar_abi_info, transparent_scalar_field,
 };
 pub use func_abi::{convert_function_type, is_kernel_func};
 // Surface parity with the pre-split `types.rs`: these four are currently
@@ -141,6 +142,7 @@ pub(crate) use layout::{
 // re-export would trip `unused_imports` in non-test builds.
 #[cfg(test)]
 pub(crate) use layout::MAX_NATURAL_ALIGN;
+pub(crate) use packed_shared_shape::packed_shared_mir_shape_is_supported;
 pub(crate) use pointer_storage::{
     llvm_packed_struct_contains_pointer_in_address_space,
     llvm_type_contains_pointer_in_address_space,

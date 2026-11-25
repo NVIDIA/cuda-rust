@@ -10,10 +10,10 @@ Replaces the previous `xtask` pattern with a proper cargo subcommand that works 
 
 **External users**:
 
-Install with the project's pinned nightly toolchain:
+Install with the project's pinned toolchain:
 
 ```bash
-cargo +nightly-2026-10-11 install --git https://github.com/NVIDIA/cuda-rust.git cargo-oxide
+cargo +1.99.1 install --git https://github.com/NVIDIA/cuda-rust.git cargo-oxide
 ```
 
 On first run, `cargo-oxide` will automatically fetch and build the codegen backend if it's not already available.
@@ -34,6 +34,7 @@ cargo oxide test                    # cargo test with cuda-oxide defaults
 cargo oxide test -- -p my_app       # arbitrary cargo test through cuda-oxide
 cargo oxide pipeline vecadd         # verbose pipeline dump
                                     # (MIR -> dialect-mir -> LLVM dialect -> LLVM IR -> PTX)
+cargo oxide lean-export             # inspect scalar MIR and its Lean translation
 cargo oxide inspect vecadd          # build + print generated PTX
 cargo oxide sanitize vecadd         # build + run under NVIDIA Compute Sanitizer
 cargo oxide debug vecadd --tui      # build + launch cuda-gdb
@@ -61,6 +62,7 @@ cargo oxide update --force          # inside the workspace, run setup via update
 | `--tool <T>`                 | sanitize                         | Compute Sanitizer tool: `memcheck`, `racecheck`, `initcheck`, or `synccheck` |
 | `-o, --output <P>`           | emit-ltoir, tilelib              | Output path for the `.ltoir` or `.tilelib` artifact |
 | `--library-optional`         | tilelib                          | Succeed when the installed tileiras cannot build the `.tilelib`; the descriptions and LTOIR are still written |
+| `--provider`                 | tilelib                          | Build the library as a linkage provider shared object, which serves exports without `tile_shape` at any extent |
 | `--print`                    | tilelib                          | Print the readable form of the interface and implementation modules |
 | `--cargo-target-dir <PATH>`  | build/test passthrough           | Cargo target directory                          |
 | `--device-codegen-crate <LIST>` | build/test passthrough        | Comma-separated device owner crate filter       |
@@ -130,12 +132,30 @@ request one independently finalized cubin per declared device crate with
 final-output mode, so it cannot be combined with `--emit-nvvm-ir`,
 `emit-ltoir` or `tilelib`.
 
+`CUDA_OXIDE_LINKER=wild` (or `[env] CUDA_OXIDE_LINKER = "wild"` in
+`.cargo/cuda-oxide.toml`) links host crates with the
+[wild](https://github.com/wild-linker/wild) linker instead of rustc's
+default. cargo-oxide passes `-Clinker=clang -Clink-arg=--ld-path=<wild>`, so
+`clang` and `wild` must both be on `PATH`; install wild with
+`cargo install wild-linker`. These flags come after any user `RUSTFLAGS`, so
+they take precedence over an existing `-Clinker`. Unset, empty, or `default`
+keeps rustc's default linker, and any other value is an error. Device code is
+unaffected: device payloads are still finalized by libNVVM and nvJitLink, and
+only host ELF links change. `cargo oxide doctor` reports whether `wild` is
+installed and fails if `CUDA_OXIDE_LINKER=wild` is set without it or if
+`CUDA_OXIDE_LINKER` is set to an unsupported value.
+
 ## Commands
 
 ### `cargo oxide list [--json]`
 
-Lists every example bundled with the cuda-oxide workspace, including its short
-description and any hardware or toolkit requirements documented in its README.
+Lists every example and model bundled with the cuda-oxide workspace, including
+its short description and any hardware or toolkit requirements documented in
+its README. Discovery includes `crates/rustc-codegen-cuda/examples/`,
+`examples/`, `models/`, `cute-rs-preview/examples/`, and
+`cute-rs-preview/models/` within the cuda-oxide component.
+Names must be unique across these directories; `run` and `build` accept model
+names in the same way as example names.
 
 ```bash
 cargo oxide list
@@ -412,6 +432,23 @@ cargo oxide pipeline vecadd
 cargo oxide pipeline device_ffi_test --emit-nvvm-ir --arch sm_120
 ```
 
+### `cargo oxide lean-export [input.mir --function name]`
+
+Shows the input MIR and generated Lean together. With no arguments, it uses the
+bundled, hand-authored scalar indexing demo:
+
+```bash
+cargo oxide lean-export
+cargo oxide lean-export path/to/helper.mir --function helper
+```
+
+Run from the `cuda-oxide/` workspace directory in a source checkout. The command builds and runs the Rust
+`lean-exporter`; it does not build the CUDA backend, require a GPU, or run Lean.
+The current subset supports unsigned scalar constants and wrapping arithmetic.
+Unsupported input fails with an error. This is translation inspection, not a
+kernel verification result. See the [exporter README](../lean-exporter/README.md)
+and [Lean workflow](../../lean/README.md).
+
 ### `cargo oxide inspect [example]`
 
 Builds the example or project and prints the generated PTX to stdout. Where `pipeline` shows every stage verbosely, this prints just the finished device code, which makes it the quick way to diff codegen across a change. Takes `--arch`, `--features`, `--no-fmad`, `--lineinfo`, `--device-debug`, `--unchecked-indexing` and `-v`. The example name is required inside the workspace and optional for a standalone project.
@@ -448,7 +485,7 @@ merged repository it also formats the parent shared-host workspace. With
 
 ### `cargo oxide doctor`
 
-Validates that your environment is correctly set up: Rust nightly toolchain,
+Validates that your environment is correctly set up: pinned Rust toolchain,
 CUDA headers (`cuda.h`), CUDA toolkit (`nvcc`, libNVVM, nvJitLink,
 libdevice), LLVM (`llc`), clang/libclang, the NVIDIA driver / GPU, and the
 codegen backend `.so`. Optional probes cover `cuda-gdb` (for `debug`) and
@@ -466,6 +503,10 @@ anyway).
 
 Explicitly builds (or rebuilds) the codegen backend. Normally this happens automatically on every `run`/`build`/`pipeline` command, but `setup` is useful after pulling new changes or for CI.
 
+Inside the cuda-oxide workspace, `setup` builds the local backend source and publishes it to the shared cache (`~/.cargo/cuda-oxide/`).
+
+In a project outside the workspace, `setup` does the same as `cargo oxide update`: it rebuilds the backend from the commit the project's cuda-oxide dependency resolves to. A path dependency builds in place and leaves the shared cache alone; otherwise `setup` clears the shared cache and rebuilds it, from a `main` clone when the project has no cuda-oxide dependency (see [Backend Discovery](#backend-discovery)). Like `update`, it refuses while `CUDA_OXIDE_BACKEND` or a `.cargo/cuda-oxide.toml` `backend` entry pins the backend, because the pin outranks the cache it would rebuild.
+
 ### `cargo oxide update [--force]`
 
 Rebuilds the shared codegen backend cache used by projects outside this
@@ -474,7 +515,8 @@ dependency resolves to (see [Backend Discovery](#backend-discovery)). You
 rarely need it: a changed dependency rebuilds the cache on the next build by
 itself. Inside the cuda-oxide workspace the local source tree is
 authoritative, so the default path prints how to run `cargo oxide setup`;
-pass `--force` to run setup from this command.
+pass `--force` to run setup from this command. Outside the workspace,
+`cargo oxide setup` performs the same refresh.
 
 ```bash
 cargo oxide update
@@ -506,11 +548,11 @@ Cargo.lock   cuda-device = git+https://github.com/NVIDIA/cuda-rust.git#<sha>
 The kernels compile against the crates at that commit and the backend that
 lowers them is built from the same commit, so the two cannot drift. Changing
 the dependency (`cargo update`, a new `rev = ...`) rebuilds the cache on the
-next build. The checkout's `rust-toolchain.toml` names the nightly that commit
-needs; if the project pins a different one, the build stops before compiling
-and tells you which channel to set. A path dependency on a local checkout
-builds in place, like step 3. Projects with no cuda-oxide dependency fall back
-to a one-time clone of `main`. The backend's build tree lives at
+next build. The checkout's `rust-toolchain.toml` names the toolchain channel
+that commit needs; if the project pins a different one, the build stops before
+compiling and tells you which channel to set. A path dependency on a local
+checkout builds in place, like step 3. Projects with no cuda-oxide dependency
+fall back to a one-time clone of `main`. The backend's build tree lives at
 `~/.cargo/cuda-oxide/target` (shared by every commit's builds; delete it to
 reclaim the space).
 

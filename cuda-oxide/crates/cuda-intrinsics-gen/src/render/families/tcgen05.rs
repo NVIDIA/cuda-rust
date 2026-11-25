@@ -29,6 +29,22 @@ pub(in crate::render) fn tcgen05_mma_form_name(form: Tcgen05MmaForm) -> &'static
         Tcgen05MmaForm::WsSpTensorZeroColMask => "WsSpTensorZeroColMask",
         Tcgen05MmaForm::WsTensor => "WsTensor",
         Tcgen05MmaForm::WsTensorZeroColMask => "WsTensorZeroColMask",
+        Tcgen05MmaForm::SharedMxf4BlockScale => "SharedMxf4BlockScale",
+        Tcgen05MmaForm::SharedMxf4BlockScaleBlock32 => "SharedMxf4BlockScaleBlock32",
+        Tcgen05MmaForm::SharedMxf4nvf4BlockScaleBlock16 => "SharedMxf4nvf4BlockScaleBlock16",
+        Tcgen05MmaForm::SharedMxf4nvf4BlockScaleBlock32 => "SharedMxf4nvf4BlockScaleBlock32",
+        Tcgen05MmaForm::SharedMxf8f6f4BlockScale => "SharedMxf8f6f4BlockScale",
+        Tcgen05MmaForm::SharedMxf8f6f4BlockScaleBlock32 => "SharedMxf8f6f4BlockScaleBlock32",
+        Tcgen05MmaForm::TensorMxf4BlockScale => "TensorMxf4BlockScale",
+        Tcgen05MmaForm::TensorMxf4BlockScaleBlock32 => "TensorMxf4BlockScaleBlock32",
+        Tcgen05MmaForm::TensorMxf4nvf4BlockScaleBlock16 => "TensorMxf4nvf4BlockScaleBlock16",
+        Tcgen05MmaForm::TensorMxf4nvf4BlockScaleBlock32 => "TensorMxf4nvf4BlockScaleBlock32",
+        Tcgen05MmaForm::TensorMxf8f6f4BlockScale => "TensorMxf8f6f4BlockScale",
+        Tcgen05MmaForm::TensorMxf8f6f4BlockScaleBlock32 => "TensorMxf8f6f4BlockScaleBlock32",
+        Tcgen05MmaForm::SpSharedMxf8f6f4BlockScale => "SpSharedMxf8f6f4BlockScale",
+        Tcgen05MmaForm::SpSharedMxf8f6f4BlockScaleBlock32 => "SpSharedMxf8f6f4BlockScaleBlock32",
+        Tcgen05MmaForm::SpTensorMxf8f6f4BlockScale => "SpTensorMxf8f6f4BlockScale",
+        Tcgen05MmaForm::SpTensorMxf8f6f4BlockScaleBlock32 => "SpTensorMxf8f6f4BlockScaleBlock32",
     }
 }
 
@@ -42,6 +58,18 @@ pub(in crate::render) fn tcgen05_mma_kind_attr(kind: Tcgen05MmaKind) -> &'static
         Tcgen05MmaKind::Tf32 => "Tcgen05MmaKindAttr::Tf32",
         Tcgen05MmaKind::F8f6f4 => "Tcgen05MmaKindAttr::F8f6f4",
         Tcgen05MmaKind::I8 => "Tcgen05MmaKindAttr::I8",
+        Tcgen05MmaKind::Mxf4BlockScale => "Tcgen05MmaKindAttr::Mxf4BlockScale",
+        Tcgen05MmaKind::Mxf4BlockScaleBlock32 => "Tcgen05MmaKindAttr::Mxf4BlockScaleBlock32",
+        Tcgen05MmaKind::Mxf4nvf4BlockScaleBlock16 => {
+            "Tcgen05MmaKindAttr::Mxf4nvf4BlockScaleBlock16"
+        }
+        Tcgen05MmaKind::Mxf4nvf4BlockScaleBlock32 => {
+            "Tcgen05MmaKindAttr::Mxf4nvf4BlockScaleBlock32"
+        }
+        Tcgen05MmaKind::Mxf8f6f4BlockScale => "Tcgen05MmaKindAttr::Mxf8f6f4BlockScale",
+        Tcgen05MmaKind::Mxf8f6f4BlockScaleBlock32 => {
+            "Tcgen05MmaKindAttr::Mxf8f6f4BlockScaleBlock32"
+        }
     }
 }
 
@@ -52,6 +80,28 @@ pub(in crate::render) fn tcgen05_mma_b_usage_attr(usage: Tcgen05MmaBUsage) -> &'
         Tcgen05MmaBUsage::Use => "Tcgen05MmaBUsageAttr::Use",
         Tcgen05MmaBUsage::LastUse => "Tcgen05MmaBUsageAttr::LastUse",
     }
+}
+
+pub(in crate::render) fn tcgen05_mma_is_block_scale(form: Tcgen05MmaForm) -> bool {
+    matches!(
+        form,
+        Tcgen05MmaForm::SharedMxf4BlockScale
+            | Tcgen05MmaForm::SharedMxf4BlockScaleBlock32
+            | Tcgen05MmaForm::SharedMxf4nvf4BlockScaleBlock16
+            | Tcgen05MmaForm::SharedMxf4nvf4BlockScaleBlock32
+            | Tcgen05MmaForm::SharedMxf8f6f4BlockScale
+            | Tcgen05MmaForm::SharedMxf8f6f4BlockScaleBlock32
+            | Tcgen05MmaForm::TensorMxf4BlockScale
+            | Tcgen05MmaForm::TensorMxf4BlockScaleBlock32
+            | Tcgen05MmaForm::TensorMxf4nvf4BlockScaleBlock16
+            | Tcgen05MmaForm::TensorMxf4nvf4BlockScaleBlock32
+            | Tcgen05MmaForm::TensorMxf8f6f4BlockScale
+            | Tcgen05MmaForm::TensorMxf8f6f4BlockScaleBlock32
+            | Tcgen05MmaForm::SpSharedMxf8f6f4BlockScale
+            | Tcgen05MmaForm::SpSharedMxf8f6f4BlockScaleBlock32
+            | Tcgen05MmaForm::SpTensorMxf8f6f4BlockScale
+            | Tcgen05MmaForm::SpTensorMxf8f6f4BlockScaleBlock32
+    )
 }
 
 pub(in crate::render) fn tcgen05_mma_runtime_parameters(
@@ -67,72 +117,53 @@ pub(in crate::render) fn tcgen05_mma_runtime_parameters(
             ("enable_d", "bool"),
         ];
     }
-    let mut parameters = match mma.form {
-        Tcgen05MmaForm::Shared
-        | Tcgen05MmaForm::SpShared
-        | Tcgen05MmaForm::WsShared
-        | Tcgen05MmaForm::WsSharedZeroColMask
-        | Tcgen05MmaForm::WsSpShared
-        | Tcgen05MmaForm::WsSpSharedZeroColMask => vec![
-            ("d_tmem", "u32"),
-            ("a_desc", "u64"),
-            ("b_desc", "u64"),
-            ("idesc", "u32"),
-            ("enable_d", "bool"),
-        ],
-        Tcgen05MmaForm::Tensor
-        | Tcgen05MmaForm::TensorAshift
-        | Tcgen05MmaForm::SpTensor
-        | Tcgen05MmaForm::SpTensorAshift
-        | Tcgen05MmaForm::WsSpTensor
-        | Tcgen05MmaForm::WsSpTensorZeroColMask
-        | Tcgen05MmaForm::WsTensor
-        | Tcgen05MmaForm::WsTensorZeroColMask => vec![
+    let mut parameters = if tcgen05_mma_is_tensor_a(mma.form) {
+        vec![
             ("d_tmem", "u32"),
             ("a_tmem", "u32"),
             ("b_desc", "u64"),
             ("idesc", "u32"),
             ("enable_d", "bool"),
-        ],
+        ]
+    } else {
+        vec![
+            ("d_tmem", "u32"),
+            ("a_desc", "u64"),
+            ("b_desc", "u64"),
+            ("idesc", "u32"),
+            ("enable_d", "bool"),
+        ]
     };
-    if matches!(
-        mma.form,
-        Tcgen05MmaForm::SpShared
-            | Tcgen05MmaForm::SpTensor
-            | Tcgen05MmaForm::SpTensorAshift
-            | Tcgen05MmaForm::WsSpShared
-            | Tcgen05MmaForm::WsSpSharedZeroColMask
-            | Tcgen05MmaForm::WsSpTensor
-            | Tcgen05MmaForm::WsSpTensorZeroColMask
-    ) {
+    if tcgen05_mma_is_sparse(mma.form) {
         parameters.push(("metadata_tmem", "u32"));
     }
-    if matches!(
-        mma.form,
-        Tcgen05MmaForm::WsSharedZeroColMask
-            | Tcgen05MmaForm::WsSpSharedZeroColMask
-            | Tcgen05MmaForm::WsSpTensorZeroColMask
-            | Tcgen05MmaForm::WsTensorZeroColMask
-    ) {
+    if tcgen05_mma_has_zero_col_mask(mma.form) {
         parameters.push(("zero_column_mask", "u64"));
+    }
+    if tcgen05_mma_is_block_scale(mma.form) {
+        parameters.push(("scale_a_tmem", "u32"));
+        parameters.push(("scale_b_tmem", "u32"));
     }
     parameters
 }
 
 pub(in crate::render) fn tcgen05_mma_selector_parameters(
     layout: Tcgen05MmaSelectorLayout,
-) -> [(&'static str, &'static str); 3] {
+) -> Vec<(&'static str, &'static str)> {
     match layout {
-        Tcgen05MmaSelectorLayout::Base { .. } => [
+        Tcgen05MmaSelectorLayout::Base { .. } => vec![
             ("KIND", "kind"),
             ("CTA_GROUP", "cta_group"),
             ("COLLECTOR_A", "collector_a"),
         ],
-        Tcgen05MmaSelectorLayout::WarpSpecialized { .. } => [
+        Tcgen05MmaSelectorLayout::WarpSpecialized { .. } => vec![
             ("KIND", "kind"),
             ("B_BUFFER", "b_buffer"),
             ("B_USAGE", "b_usage"),
         ],
+        Tcgen05MmaSelectorLayout::BlockScaled { .. } => {
+            vec![("CTA_GROUP", "cta_group"), ("COLLECTOR_A", "collector_a")]
+        }
     }
 }
 
@@ -160,6 +191,10 @@ fn tcgen05_mma_is_sparse(form: Tcgen05MmaForm) -> bool {
             | Tcgen05MmaForm::WsSpSharedZeroColMask
             | Tcgen05MmaForm::WsSpTensor
             | Tcgen05MmaForm::WsSpTensorZeroColMask
+            | Tcgen05MmaForm::SpSharedMxf8f6f4BlockScale
+            | Tcgen05MmaForm::SpSharedMxf8f6f4BlockScaleBlock32
+            | Tcgen05MmaForm::SpTensorMxf8f6f4BlockScale
+            | Tcgen05MmaForm::SpTensorMxf8f6f4BlockScaleBlock32
     )
 }
 
@@ -174,6 +209,14 @@ fn tcgen05_mma_is_tensor_a(form: Tcgen05MmaForm) -> bool {
             | Tcgen05MmaForm::WsSpTensorZeroColMask
             | Tcgen05MmaForm::WsTensor
             | Tcgen05MmaForm::WsTensorZeroColMask
+            | Tcgen05MmaForm::TensorMxf4BlockScale
+            | Tcgen05MmaForm::TensorMxf4BlockScaleBlock32
+            | Tcgen05MmaForm::TensorMxf4nvf4BlockScaleBlock16
+            | Tcgen05MmaForm::TensorMxf4nvf4BlockScaleBlock32
+            | Tcgen05MmaForm::TensorMxf8f6f4BlockScale
+            | Tcgen05MmaForm::TensorMxf8f6f4BlockScaleBlock32
+            | Tcgen05MmaForm::SpTensorMxf8f6f4BlockScale
+            | Tcgen05MmaForm::SpTensorMxf8f6f4BlockScaleBlock32
     )
 }
 
@@ -200,6 +243,27 @@ fn tcgen05_mma_kind_name(kind: Tcgen05MmaKind) -> &'static str {
         Tcgen05MmaKind::Tf32 => "tf32",
         Tcgen05MmaKind::F8f6f4 => "f8f6f4",
         Tcgen05MmaKind::I8 => "i8",
+        Tcgen05MmaKind::Mxf4BlockScale => "mxf4_block_scale",
+        Tcgen05MmaKind::Mxf4BlockScaleBlock32 => "mxf4_block_scale_block32",
+        Tcgen05MmaKind::Mxf4nvf4BlockScaleBlock16 => "mxf4nvf4_block_scale_block16",
+        Tcgen05MmaKind::Mxf4nvf4BlockScaleBlock32 => "mxf4nvf4_block_scale_block32",
+        Tcgen05MmaKind::Mxf8f6f4BlockScale => "mxf8f6f4_block_scale",
+        Tcgen05MmaKind::Mxf8f6f4BlockScaleBlock32 => "mxf8f6f4_block_scale_block32",
+    }
+}
+
+fn tcgen05_mma_kind_ptx(kind: Tcgen05MmaKind) -> &'static str {
+    match kind {
+        Tcgen05MmaKind::F16 => "f16",
+        Tcgen05MmaKind::Tf32 => "tf32",
+        Tcgen05MmaKind::F8f6f4 => "f8f6f4",
+        Tcgen05MmaKind::I8 => "i8",
+        Tcgen05MmaKind::Mxf4BlockScale => "mxf4.block_scale",
+        Tcgen05MmaKind::Mxf4BlockScaleBlock32 => "mxf4.block_scale.block32",
+        Tcgen05MmaKind::Mxf4nvf4BlockScaleBlock16 => "mxf4nvf4.block_scale.block16",
+        Tcgen05MmaKind::Mxf4nvf4BlockScaleBlock32 => "mxf4nvf4.block_scale.block32",
+        Tcgen05MmaKind::Mxf8f6f4BlockScale => "mxf8f6f4.block_scale",
+        Tcgen05MmaKind::Mxf8f6f4BlockScaleBlock32 => "mxf8f6f4.block_scale.block32",
     }
 }
 
@@ -230,7 +294,7 @@ pub(in crate::render) fn tcgen05_mma_inline_asm(
     write!(
         instruction,
         ".cta_group::{cta_group}.kind::{}",
-        tcgen05_mma_kind_name(kind)
+        tcgen05_mma_kind_ptx(kind)
     )
     .unwrap();
     if tcgen05_mma_is_ws(form) {
@@ -262,7 +326,15 @@ pub(in crate::render) fn tcgen05_mma_inline_asm(
     if tcgen05_mma_is_sparse(form) {
         instruction.push_str(", [$5]");
     }
-    instruction.push_str(", $3, %enable_pred");
+    if tcgen05_mma_is_block_scale(form) {
+        if tcgen05_mma_is_sparse(form) {
+            instruction.push_str(", $3, [$6], [$7], %enable_pred");
+        } else {
+            instruction.push_str(", $3, [$5], [$6], %enable_pred");
+        }
+    } else {
+        instruction.push_str(", $3, %enable_pred");
+    }
     if tcgen05_mma_has_zero_col_mask(form) {
         instruction.push_str(if tcgen05_mma_is_sparse(form) {
             ", $6"
@@ -287,6 +359,9 @@ pub(in crate::render) fn tcgen05_mma_inline_asm(
     ];
     if tcgen05_mma_is_sparse(form) {
         constraints.push("r");
+    }
+    if tcgen05_mma_is_block_scale(form) {
+        constraints.extend(["r", "r"]);
     }
     if tcgen05_mma_has_zero_col_mask(form) {
         constraints.push("l");
@@ -446,23 +521,37 @@ fn tcgen05_mma_target_matrix_is_closed(
     let CatalogHardwareTarget::TargetMatrix { contracts } = &target.hardware else {
         return false;
     };
+    let is_block_scale_kind = matches!(
+        fixed_kind,
+        Some(
+            Tcgen05MmaKind::Mxf4BlockScale
+                | Tcgen05MmaKind::Mxf4BlockScaleBlock32
+                | Tcgen05MmaKind::Mxf4nvf4BlockScaleBlock16
+                | Tcgen05MmaKind::Mxf4nvf4BlockScaleBlock32
+                | Tcgen05MmaKind::Mxf8f6f4BlockScale
+                | Tcgen05MmaKind::Mxf8f6f4BlockScaleBlock32
+        )
+    );
+    let expected_min_ptx = if is_block_scale_kind { "8.8" } else { "8.6" };
     let expected_kinds: Vec<&str> = fixed_kind.map_or_else(
         || vec!["f16", "tf32", "f8f6f4", "i8"],
         |kind| vec![tcgen05_mma_kind_name(kind)],
     );
-    if target.minimum_ptx.to_string() != "8.6" || contracts.len() != expected_kinds.len() {
+    if target.minimum_ptx.to_string() != expected_min_ptx || contracts.len() != expected_kinds.len()
+    {
         return false;
     }
+    let common_ptx = if is_block_scale_kind { "8.8" } else { "8.6" };
     let common = match backend {
         IntrinsicBackend::LlvmNvptx => vec![
             (
                 CatalogHardwareAlternative::ExactArchitecture { sm: 100 },
-                "8.6",
+                common_ptx,
             ),
             (CatalogHardwareAlternative::FamilyTarget { sm: 100 }, "8.8"),
             (
                 CatalogHardwareAlternative::ExactArchitecture { sm: 101 },
-                "8.6",
+                common_ptx,
             ),
             (CatalogHardwareAlternative::FamilyTarget { sm: 101 }, "8.8"),
             (
@@ -479,7 +568,7 @@ fn tcgen05_mma_target_matrix_is_closed(
         IntrinsicBackend::LibNvvm => vec![
             (
                 CatalogHardwareAlternative::ExactArchitecture { sm: 100 },
-                "8.6",
+                common_ptx,
             ),
             (CatalogHardwareAlternative::FamilyTarget { sm: 100 }, "8.8"),
             (
@@ -563,7 +652,12 @@ fn tcgen05_mma_render_contract(
         || record.semantics.memory != "read_write"
         || !record.semantics.convergent
         || record.semantics.execution_scope != "thread"
-        || record.target.minimum_ptx.to_string() != "8.6"
+        || record.target.minimum_ptx.to_string()
+            != if tcgen05_mma_is_block_scale(mma.form) {
+                "8.8"
+            } else {
+                "8.6"
+            }
         || record.target.hardware != mma.llvm_target.hardware
         || record.target.targets != "sm_100a|sm_101a|sm_103a|sm_110a"
         || llvm_route.backend != IntrinsicBackend::LlvmNvptx
@@ -602,6 +696,9 @@ fn tcgen05_mma_render_contract(
     }
     if tcgen05_mma_has_zero_col_mask(mma.form) {
         expected_operands.push("i64".into());
+    }
+    if tcgen05_mma_is_block_scale(mma.form) {
+        expected_operands.extend(["i32".into(), "i32".into()]);
     }
 
     let llvm = llvm(record);
@@ -649,12 +746,16 @@ fn tcgen05_mma_render_contract(
     if tcgen05_mma_is_sparse(mma.form) {
         expected_ptx_operands.push(crate::ptx::OperandPattern::Address);
     }
-    expected_ptx_operands.extend([
-        crate::ptx::OperandPattern::Register,
-        crate::ptx::OperandPattern::Exact {
-            value: "%enable_pred".into(),
-        },
-    ]);
+    expected_ptx_operands.push(crate::ptx::OperandPattern::Register);
+    if tcgen05_mma_is_block_scale(mma.form) {
+        expected_ptx_operands.extend([
+            crate::ptx::OperandPattern::Address,
+            crate::ptx::OperandPattern::Address,
+        ]);
+    }
+    expected_ptx_operands.push(crate::ptx::OperandPattern::Exact {
+        value: "%enable_pred".into(),
+    });
     if tcgen05_mma_has_zero_col_mask(mma.form) {
         expected_ptx_operands.push(crate::ptx::OperandPattern::Register);
     }
@@ -692,6 +793,7 @@ fn tcgen05_mma_render_contract(
                     b_buffer_argument,
                     b_usage_argument,
                 } => [kind_argument, b_buffer_argument, b_usage_argument],
+                Tcgen05MmaSelectorLayout::BlockScaled { .. } => return false,
             };
             let first_selector = expected_operands.len() as u8;
             record.rust.arguments.len() == expected_operands.len() + 3
@@ -706,6 +808,24 @@ fn tcgen05_mma_render_contract(
                         mma.selector_layout,
                         Tcgen05MmaSelectorLayout::WarpSpecialized { .. }
                     )
+        }
+        (Tcgen05Adapter::MmaDirectSelectors, None, Some(fixed))
+            if tcgen05_mma_is_block_scale(mma.form) =>
+        {
+            let first_selector = expected_operands.len() as u8;
+            fixed.b_buffer == 0
+                && fixed.b_usage == Tcgen05MmaBUsage::Discard
+                && mma.selector_layout
+                    == Tcgen05MmaSelectorLayout::BlockScaled {
+                        cta_group_argument: first_selector,
+                        collector_a_argument: first_selector + 1,
+                    }
+                && record.rust.arguments.len() == expected_operands.len() + 2
+                && record
+                    .rust
+                    .arguments
+                    .ends_with(&["u32".into(), "u32".into()])
+                && llvm.arguments.len() == expected_operands.len() + 2
         }
         (
             Tcgen05Adapter::MmaDirectSelectors,

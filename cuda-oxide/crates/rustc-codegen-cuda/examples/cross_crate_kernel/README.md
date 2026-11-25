@@ -87,8 +87,9 @@ use core::ops::Mul;
 #[kernel]
 pub fn scale<T: Copy + Mul<Output = T>>(factor: T, input: &[T], mut out: DisjointSlice<T>) {
     let idx = thread::index_1d();
+    let i = idx.get();
     if let Some(out_elem) = out.get_mut(idx) {
-        *out_elem = input[idx.get()] * factor;
+        *out_elem = input[i] * factor;
     }
 }
 ```

@@ -1,0 +1,43 @@
+<!-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<svg class="cute-rs-preview" xmlns="http://www.w3.org/2000/svg" width="1040" height="520" viewBox="0 0 1040 520" role="img" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif">
+<title>How Rust types and runtime values combine into verified dialect-cute operations</title>
+<style>.cute-rs-preview text { dominant-baseline:central; text-anchor:middle } .cute-rs-preview .l { text-anchor:start } .cute-rs-preview .bg { fill:#faf9f5 } .cute-rs-preview .title { font-size:17px; font-weight:700; fill:#1e1e1e } .cute-rs-preview .th { font-size:14px; font-weight:600; fill:#1e1e1e } .cute-rs-preview .t { font-size:13px; fill:#2b2b2b } .cute-rs-preview .ts { font-size:12.5px; fill:#5c5c5c } .cute-rs-preview .tm { font-family:'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size:12px; font-weight:500 } .cute-rs-preview .k-box { fill:#f1efe9; stroke:#c8c5be } .cute-rs-preview .tx-box { fill:#1e1e1e } .cute-rs-preview .k-purple { fill:#ebe9fb; stroke:#7f77dd } .cute-rs-preview .tx-purple { fill:#3a3490 } .cute-rs-preview .k-teal { fill:#dff3ec; stroke:#3aa47f } .cute-rs-preview .tx-teal { fill:#1f5c47 } .cute-rs-preview .k-amber { fill:#fdeed3; stroke:#ef9f27 } .cute-rs-preview .tx-amber { fill:#6b4100 } .cute-rs-preview .arr { fill:none; stroke:#7b7b7b; stroke-width:1.5 } .cute-rs-preview .arrhead { fill:none; stroke:#7b7b7b; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round } @media (prefers-color-scheme: dark) { .cute-rs-preview .bg { fill:#1b1d23 } .cute-rs-preview .title, .cute-rs-preview .th { fill:#f5f6f8 } .cute-rs-preview .t { fill:#eceef2 } .cute-rs-preview .ts { fill:#cfd4de } .cute-rs-preview .k-box { fill:#2e323c; stroke:#5c6375 } .cute-rs-preview .tx-box { fill:#f5f6f8 } .cute-rs-preview .arr, .cute-rs-preview .arrhead { stroke:#b6bcc8 } .cute-rs-preview .k-purple { fill:#524e7d; stroke:#bab5f4 } .cute-rs-preview .tx-purple { fill:#f6f5ff } .cute-rs-preview .k-teal { fill:#346357; stroke:#7ed8bb } .cute-rs-preview .tx-teal { fill:#f0fdf8 } .cute-rs-preview .k-amber { fill:#735a3c; stroke:#f4c474 } .cute-rs-preview .tx-amber { fill:#fff8eb } }</style>
+<defs><marker id="arrow-xray" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="arrhead" d="M2 1L8 5L2 9"/></marker></defs>
+<rect class="bg" width="1040" height="520" rx="10"/>
+<text class="title l" x="36" y="34">From Rust types and kernel arguments to verified CuTe IR</text>
+<text class="ts l" x="36" y="56">Static layout and MMA types carry zero runtime bytes; mir-importer pairs them with SSA operands at compile time.</text>
+<rect class="k-purple" x="36" y="82" width="468" height="184" rx="8" stroke-width="0.9"/>
+<text class="th tx-purple l" x="56" y="106">Compile-time Rust types (zero bytes at runtime)</text>
+<rect class="k-box" x="56" y="124" width="428" height="30" rx="5" stroke-width="0.7"/>
+<text class="tm tx-box l" x="72" y="139">ComposedLayout&lt;Swizzle&lt;3, 3, 3&gt;, 0, RowMajor&lt;128, 64&gt;&gt;</text>
+<rect class="k-box" x="56" y="162" width="428" height="30" rx="5" stroke-width="0.7"/>
+<text class="tm tx-box l" x="72" y="177">Sm100SharedTile&lt;ASmem, OperandA&gt;</text>
+<rect class="k-box" x="56" y="200" width="428" height="30" rx="5" stroke-width="0.7"/>
+<text class="tm tx-box l" x="72" y="215">Sm100TiledMma&lt;ASmem, B0Smem, B1Smem, 192, 160&gt;</text>
+<text class="ts tx-purple" x="270" y="248">Carries: shape, stride, swizzle, operand role, MMA partitions</text>
+<rect class="k-amber" x="536" y="82" width="468" height="184" rx="8" stroke-width="0.9"/>
+<text class="th tx-amber l" x="556" y="106">Runtime kernel values (SSA operands)</text>
+<rect class="k-box" x="556" y="124" width="428" height="30" rx="5" stroke-width="0.7"/>
+<text class="tm tx-box l" x="572" y="139">#[grid_constant] a: &amp;TensorMap&lt;f16, ASmem&gt;</text>
+<rect class="k-box" x="556" y="162" width="428" height="30" rx="5" stroke-width="0.7"/>
+<text class="tm tx-box l" x="572" y="177">smem_ptr, tmem_addr, barrier_ptr</text>
+<rect class="k-box" x="556" y="200" width="428" height="30" rx="5" stroke-width="0.7"/>
+<text class="tm tx-box l" x="572" y="215">row, kt * 64, stage, phase, accumulate</text>
+<text class="ts tx-amber" x="770" y="248">Carries: 128B tensor map, addresses, coordinates, phases</text>
+<line class="arr" x1="270" y1="266" x2="270" y2="296" marker-end="url(#arrow-xray)"/>
+<line class="arr" x1="770" y1="266" x2="770" y2="296" marker-end="url(#arrow-xray)"/>
+<rect class="k-box" x="120" y="300" width="800" height="76" rx="8" stroke-width="0.9"/>
+<text class="th tx-box" x="520" y="322">mir-importer::translator::cute + cute-layout::validation</text>
+<text class="ts tx-box" x="520" y="343">1. Recognizes canonical DefId (e.g. Sm100ClusterTmaCopy::copy, Sm100TiledMma::gemm)</text>
+<text class="ts tx-box" x="520" y="361">2. Decodes generic type tree into static Layout / Swizzle attrs &amp; proves alignment and coverage</text>
+<line class="arr" x1="520" y1="376" x2="520" y2="404" marker-end="url(#arrow-xray)"/>
+<rect class="k-teal" x="120" y="408" width="800" height="92" rx="8" stroke-width="0.9"/>
+<text class="th tx-teal" x="520" y="429">Emitted dialect-cute operation → CUTLASS MLIR</text>
+<rect class="k-purple" x="148" y="446" width="356" height="42" rx="6" stroke-width="0.7"/>
+<text class="tm tx-purple" x="326" y="460">Static IR Attributes &amp; Types</text>
+<text class="ts tx-purple" x="326" y="477">Swizzle&lt;3, 3, 3&gt;, (128, 64):(64, 1), Role=A</text>
+<rect class="k-amber" x="536" y="446" width="356" height="42" rx="6" stroke-width="0.7"/>
+<text class="tm tx-amber" x="714" y="460">Runtime SSA Operands</text>
+<text class="ts tx-amber" x="714" y="477">%desc_a, %smem_tile, %row, %col, %bar</text>
+</svg>

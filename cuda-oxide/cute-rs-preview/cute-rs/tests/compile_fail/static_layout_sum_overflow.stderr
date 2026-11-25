@@ -1,0 +1,5 @@
+error[E0432]: unresolved import `cute_rs::markers`
+ --> tests/compile_fail/static_layout_sum_overflow.rs:6:5
+  |
+6 |     markers::{C, Layout},
+  |     ^^^^^^^ could not find `markers` in `cute_rs`

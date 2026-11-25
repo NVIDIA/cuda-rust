@@ -36,7 +36,7 @@
 //! Build and run with:
 //!   cargo oxide run gemm_sol
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer};
 use cuda_device::atomic::{AtomicOrdering, DeviceAtomicU32};
 use cuda_device::barrier::{
@@ -5821,7 +5821,7 @@ fn run_benchmark_persistent(
     for _ in 0..WARMUP {
         let z = 0u32;
         unsafe {
-            cuda_core::simt::memory::memcpy_htod_async(
+            cuda_core::memory::memcpy_htod_async(
                 dev_tile_counter.cu_deviceptr(),
                 &z as *const u32,
                 std::mem::size_of::<u32>(),
@@ -5851,7 +5851,7 @@ fn run_benchmark_persistent(
     for _ in 0..ITERS {
         let z = 0u32;
         unsafe {
-            cuda_core::simt::memory::memcpy_htod_async(
+            cuda_core::memory::memcpy_htod_async(
                 dev_tile_counter.cu_deviceptr(),
                 &z as *const u32,
                 std::mem::size_of::<u32>(),

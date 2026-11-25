@@ -33,15 +33,16 @@
 #     THIRD_PARTY_NOTICES). Its files keep their upstream form; adding an
 #     NVIDIA copyright line to code we do not own would be wrong, so the whole
 #     subtree is out of scope.
-#   * The two CUTLASS-derived benchmark helpers below carry a plain copyright
-#     line plus `SPDX-License-Identifier: BSD-3-Clause`, reviewed and accepted
-#     as-is by the OSRB. They are exempt from the Apache-2.0 header but must
+#   * CUTLASS-derived benchmark helpers and vendored reference sources below
+#     retain their copyright and `SPDX-License-Identifier: BSD-3-Clause`.
+#     The two gemm_sol helpers were reviewed and accepted as-is by the OSRB.
+#     These files are exempt from the Apache-2.0 header but must
 #     still carry their BSD-3-Clause identifier, and each entry is checked
 #     against the tree so a rename fails the run instead of quietly exempting
 #     nothing.
 #
-# The imported Tile book theme keeps its NVIDIA proprietary notice. Its exact
-# license identifier is checked separately; it must not be relabeled Apache.
+# Imported Tile sources keep their existing proprietary or MIT notices.
+# Their exact license identifiers are checked separately.
 # A new BSD-derived (or otherwise non-Apache) file is supposed to fail here:
 # adding it to the exemption list is the explicit, reviewable act that
 # replaces silence.
@@ -56,13 +57,25 @@ cd "${GIT_ROOT}"
 copyright_re='SPDX-FileCopyrightText: Copyright \(c\) [0-9]{4}( ?- ?[0-9]{4})? NVIDIA CORPORATION & AFFILIATES\. All rights reserved\.'
 license_re='SPDX-License-Identifier: Apache-2\.0'
 HEADER_WINDOW=15
-TILE_THEME=cutile-rs/cutile-book/_static/css/nvidia-sphinx-theme.css
+TILE_LICENSE_EXCEPTIONS=(
+    cutile-rs/cutile-book/_static/css/nvidia-sphinx-theme.css:LicenseRef-NvidiaProprietary
+    cutile-rs/cutile-kernels/src/experimental/qkv.rs:MIT
+)
 
-# CUTLASS-derived files accepted by the OSRB with their upstream BSD-3-Clause
-# terms. Path plus the identifier each must still carry.
+# CUTLASS-derived files retain their upstream BSD-3-Clause terms. Path plus
+# the identifier each must still carry; vendored copies are attributed in
+# cuda-oxide/THIRD_PARTY_NOTICES.
 BSD_EXEMPT_FILES=(
     cuda-oxide/crates/rustc-codegen-cuda/examples/gemm_sol/bench/tutorial_gemm_utils.py
-    cuda-oxide/crates/rustc-codegen-cuda/examples/gemm_sol_final/bench/tutorial_gemm_utils.py
+    cuda-oxide/examples/gemm_sol_final/bench/tutorial_gemm_utils.py
+    cuda-oxide/cute-rs-preview/examples/blockscale_gemm_cute/reference/dense_blockscaled_gemm_persistent_cooperative.py
+    cuda-oxide/cute-rs-preview/examples/blockscale_gemm_cute/reference/blockscaled_gemm_dispatch.py
+    cuda-oxide/cute-rs-preview/examples/fmha_prefill_sm120a_cute/reference/flash_attention_v2.py
+    cuda-oxide/cute-rs-preview/examples/sm100_fmha_prefill_cute/reference/cute/blackwell/kernel/attention/fmha/fmha.py
+    cuda-oxide/cute-rs-preview/examples/sm100_fmha_prefill_cute/reference/helpers/fmha_helpers.py
+    cuda-oxide/cute-rs-preview/examples/sm100_fmha_prefill_cute/reference/helpers/__init__.py
+    cuda-oxide/cute-rs-preview/examples/sm100_mla_decode_fp16_cute/reference/cute/blackwell/kernel/attention/mla/mla_decode_fp16.py
+    cuda-oxide/cute-rs-preview/examples/sm100_mla_decode_fp16_cute/reference/cute/blackwell/kernel/attention/mla/mla_helpers.py
 )
 
 # `head | grep -q` under pipefail can report a match as failure when grep
@@ -106,13 +119,17 @@ for f in "${BSD_EXEMPT_FILES[@]}"; do
     fi
 done
 
-# Preserve the imported theme's existing copyright and license identifier.
-if [[ ! -f "${TILE_THEME}" ]] ||
-    ! grep -Eq "${copyright_re}" <<<"$(window "${TILE_THEME}")" ||
-    ! grep -Eq 'SPDX-License-Identifier: LicenseRef-NvidiaProprietary[[:space:]]*$' <<<"$(window "${TILE_THEME}")"; then
-    echo "error: ${TILE_THEME} must retain its existing proprietary SPDX header" >&2
-    exit 1
-fi
+# Preserve the existing notices on these explicitly named Tile sources.
+for entry in "${TILE_LICENSE_EXCEPTIONS[@]}"; do
+    file="${entry%:*}"
+    license="${entry##*:}"
+    if [[ ! -f "${file}" ]] ||
+        ! grep -Eq "${copyright_re}" <<<"$(window "${file}")" ||
+        ! grep -Eq "SPDX-License-Identifier: ${license}[[:space:]]*$" <<<"$(window "${file}")"; then
+        echo "error: ${file} must retain its existing ${license} SPDX header" >&2
+        exit 1
+    fi
+done
 
 violations=''
 while IFS= read -r f; do
@@ -125,7 +142,7 @@ while IFS= read -r f; do
 done < <(git ls-files -- '*.rs' '*.sh' '*.py' '*.cu' '*.c' '*.h' '*.ll' \
     '*.js' '*.css' '*.html' '*.nix' |
     grep -v '^cuda-oxide/crates/fuzzer/rustlantis/' |
-    grep -vxF "${TILE_THEME}" |
+    grep -vxF -f <(printf '%s\n' "${TILE_LICENSE_EXCEPTIONS[@]%:*}") |
     grep -vxF -f <(printf '%s\n' "${BSD_EXEMPT_FILES[@]}"))
 
 if [ -n "${violations}" ]; then

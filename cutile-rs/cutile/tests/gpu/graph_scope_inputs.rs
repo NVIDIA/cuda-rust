@@ -37,7 +37,7 @@ use graph_scope_module::add;
 #[test]
 fn pre_allocated_inputs_record_and_replay() {
     common::with_test_stack(|| {
-        let device = cuda_core::Device::new(0).expect("device");
+        let device = cuda_core::Context::new(0).expect("device");
         let stream = device.new_stream().expect("stream");
 
         let a = api::arange::<f32>(8).sync_on(&stream).expect("a");

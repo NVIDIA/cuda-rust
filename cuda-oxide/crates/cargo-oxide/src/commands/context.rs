@@ -28,7 +28,10 @@ pub struct OxideConfig {
 pub struct Context {
     /// Absolute path to the workspace root (contains top-level `Cargo.toml`).
     pub workspace_root: PathBuf,
-    /// Path to `crates/rustc-codegen-cuda` (backend source tree).
+    /// Path to `crates/rustc-codegen-cuda` (backend source tree) in workspace
+    /// mode. In standalone mode it is the project directory, not a backend
+    /// source tree: the backend there is built from the project's cuda-oxide
+    /// dependency (see `backend::standalone_backend`).
     pub codegen_crate: PathBuf,
     /// Path to `crates/rustc-codegen-cuda/examples/`.
     pub examples_dir: PathBuf,
@@ -39,6 +42,20 @@ pub struct Context {
     pub is_workspace: bool,
     /// Project-local cuda-oxide defaults.
     pub config: OxideConfig,
+}
+
+impl Context {
+    /// The cuda-oxide component containing the selected backend. The checkout
+    /// root may instead be the parent stable workspace in the monorepo.
+    pub(super) fn oxide_workspace_root(&self) -> &Path {
+        if !self.is_workspace {
+            return &self.workspace_root;
+        }
+        self.codegen_crate
+            .parent()
+            .and_then(Path::parent)
+            .expect("workspace backend must live under crates/rustc-codegen-cuda")
+    }
 }
 
 /// Resolve the workspace root and backend, or exit with a helpful error.
@@ -54,44 +71,37 @@ pub struct Context {
 ///   holds it (see `backend::standalone_backend`). Commands like `run`
 ///   operate on the current directory directly.
 pub fn resolve_context() -> Context {
-    if let Some(workspace_root) = backend::find_workspace_root() {
-        let codegen_crate = backend::codegen_crate_path(&workspace_root);
-        let examples_dir = codegen_crate.join("examples");
-        let config = load_oxide_config(&workspace_root);
-        let backend_so = backend::find_or_build_backend(&workspace_root, config.backend.as_deref());
-        return Context {
-            workspace_root,
-            codegen_crate,
-            examples_dir,
-            backend_so,
-            is_workspace: true,
-            config,
-        };
-    }
+    resolve_from_cwd(|cwd| {
+        resolve_context_in(cwd, load_oxide_config, backend::find_or_build_backend)
+    })
+}
 
-    let cwd = std::env::current_dir().unwrap_or_else(|e| {
-        eprintln!("Error: cannot determine current directory: {}", e);
-        std::process::exit(1);
-    });
+/// Same as [`resolve_context`], keeping `stdout` completely clean for commands
+/// whose stdout is the exported artifact stream (`lean-export`).
+pub fn resolve_context_quiet_stdout() -> Context {
+    resolve_from_cwd(|cwd| {
+        resolve_context_in(
+            cwd,
+            load_oxide_config,
+            backend::find_or_build_backend_quiet_stdout,
+        )
+    })
+}
 
-    if cwd.join("Cargo.toml").is_file() {
-        let config = load_oxide_config(&cwd);
-        let backend_so = backend::find_or_build_backend(&cwd, config.backend.as_deref());
-        return Context {
-            workspace_root: cwd.clone(),
-            codegen_crate: cwd.clone(),
-            examples_dir: cwd.clone(),
-            backend_so,
-            is_workspace: false,
-            config,
-        };
-    }
+/// Resolve a context for `cargo oxide setup`, which builds the backend itself.
+///
+/// The config is loaded as strictly as [`resolve_context`] does, since setup
+/// is a build command, but the backend is only located, as in
+/// [`resolve_passive_context`]. Resolving it eagerly would build the backend
+/// here and then again in `setup`, whose standalone refresh clears the cache
+/// first, so a cold cache would be built twice.
+pub fn resolve_setup_context() -> Context {
+    resolve_from_cwd(setup_context_in)
+}
 
-    eprintln!("Error: Could not find cuda-oxide workspace or a standalone Cargo.toml.");
-    eprintln!();
-    eprintln!("Run from inside the cuda-oxide repository, or from a project created");
-    eprintln!("with `cargo oxide new <name>`.");
-    std::process::exit(1);
+/// [`resolve_setup_context`] starting from `start` instead of the CWD.
+pub(super) fn setup_context_in(start: &Path) -> Option<Context> {
+    resolve_context_in(start, load_oxide_config, backend::backend_so_candidate)
 }
 
 /// Resolve a context for commands that must not build or fetch the backend.
@@ -102,39 +112,27 @@ pub fn resolve_context() -> Context {
 /// a warning instead of exiting (so `doctor` can report it as a failed
 /// check). Passive commands such as `doctor`, `clean`, `list` and `fmt` must
 /// remain usable without triggering backend setup or network access.
-/// `run`/`build`/`pipeline`/`setup` still build the backend on demand.
+/// `run`/`build`/`pipeline` still build the backend on demand, and `setup`
+/// builds it itself.
 pub fn resolve_passive_context() -> Context {
-    if let Some(workspace_root) = backend::find_workspace_root() {
-        let codegen_crate = backend::codegen_crate_path(&workspace_root);
-        let examples_dir = codegen_crate.join("examples");
-        let config = load_oxide_config_lenient(&workspace_root);
-        let backend_so = backend::backend_so_candidate(&workspace_root, config.backend.as_deref());
-        return Context {
-            workspace_root,
-            codegen_crate,
-            examples_dir,
-            backend_so,
-            is_workspace: true,
-            config,
-        };
-    }
+    resolve_from_cwd(|cwd| {
+        resolve_context_in(
+            cwd,
+            load_oxide_config_lenient,
+            backend::backend_so_candidate,
+        )
+    })
+}
 
+/// Runs `resolve` from the CWD, exiting with guidance when it finds neither
+/// the workspace nor a standalone project.
+fn resolve_from_cwd(resolve: impl FnOnce(&Path) -> Option<Context>) -> Context {
     let cwd = std::env::current_dir().unwrap_or_else(|e| {
         eprintln!("Error: cannot determine current directory: {}", e);
         std::process::exit(1);
     });
-
-    if cwd.join("Cargo.toml").is_file() {
-        let config = load_oxide_config_lenient(&cwd);
-        let backend_so = backend::backend_so_candidate(&cwd, config.backend.as_deref());
-        return Context {
-            workspace_root: cwd.clone(),
-            codegen_crate: cwd.clone(),
-            examples_dir: cwd.clone(),
-            backend_so,
-            is_workspace: false,
-            config,
-        };
+    if let Some(ctx) = resolve(&cwd) {
+        return ctx;
     }
 
     eprintln!("Error: Could not find cuda-oxide workspace or a standalone Cargo.toml.");
@@ -142,6 +140,46 @@ pub fn resolve_passive_context() -> Context {
     eprintln!("Run from inside the cuda-oxide repository, or from a project created");
     eprintln!("with `cargo oxide new <name>`.");
     std::process::exit(1);
+}
+
+/// Resolves the context for a command run from `start`, loading the project
+/// config with `load_config` and the backend `.so` with `find_backend`.
+/// Returns `None` when `start` is in neither the workspace nor a standalone
+/// project.
+fn resolve_context_in(
+    start: &Path,
+    load_config: fn(&Path) -> OxideConfig,
+    find_backend: fn(&Path, Option<&Path>) -> PathBuf,
+) -> Option<Context> {
+    if let Some(workspace_root) = backend::find_workspace_root(start) {
+        let codegen_crate = backend::codegen_crate_path(&workspace_root);
+        let examples_dir = codegen_crate.join("examples");
+        let config = load_config(&workspace_root);
+        let backend_so = find_backend(&workspace_root, config.backend.as_deref());
+        return Some(Context {
+            workspace_root,
+            codegen_crate,
+            examples_dir,
+            backend_so,
+            is_workspace: true,
+            config,
+        });
+    }
+
+    if !start.join("Cargo.toml").is_file() {
+        return None;
+    }
+
+    let config = load_config(start);
+    let backend_so = find_backend(start, config.backend.as_deref());
+    Some(Context {
+        workspace_root: start.to_path_buf(),
+        codegen_crate: start.to_path_buf(),
+        examples_dir: start.to_path_buf(),
+        backend_so,
+        is_workspace: false,
+        config,
+    })
 }
 
 // =============================================================================
@@ -489,26 +527,61 @@ fn parse_config_env(
     Ok(env)
 }
 
-/// Resolve an example name to its directory path, or exit with a list of
-/// available examples if not found.
-pub(super) fn resolve_example_dir(ctx: &Context, example: &str) -> PathBuf {
-    let example_dir = ctx.examples_dir.join(example);
-    if !example_dir.exists() {
-        eprintln!("Error: Example not found: {}", example_dir.display());
-        eprintln!();
-        eprintln!("Available examples:");
-        if let Ok(entries) = std::fs::read_dir(&ctx.examples_dir) {
-            let mut names: Vec<_> = entries
-                .flatten()
-                .filter(|e| e.path().is_dir())
-                .map(|e| e.file_name().to_string_lossy().to_string())
-                .collect();
-            names.sort();
-            for name in names {
-                eprintln!("  - {}", name);
+/// Example and model roots belonging to the selected cuda-oxide component.
+pub(super) fn example_roots(ctx: &Context) -> Vec<PathBuf> {
+    let mut roots = vec![ctx.examples_dir.clone()];
+    if ctx.is_workspace {
+        for relative in [
+            "models",
+            "examples",
+            "cute-rs-preview/examples",
+            "cute-rs-preview/models",
+        ] {
+            let root = ctx.oxide_workspace_root().join(relative);
+            if root.is_dir() {
+                roots.push(root);
             }
         }
+    }
+    roots
+}
+
+pub(super) fn resolve_example_dir(ctx: &Context, example: &str) -> PathBuf {
+    let roots = example_roots(ctx);
+    let matches: Vec<_> = roots
+        .iter()
+        .map(|root| root.join(example))
+        .filter(|path| path.is_dir())
+        .collect();
+    if let [example_dir] = matches.as_slice() {
+        return example_dir.clone();
+    }
+    if matches.len() > 1 {
+        eprintln!("Error: Example name is ambiguous: {example}");
+        for path in matches {
+            eprintln!("  - {}", path.display());
+        }
+        eprintln!("Example names must be unique across all configured roots.");
         std::process::exit(1);
     }
-    example_dir
+
+    eprintln!("Error: Example not found: {example}");
+    eprintln!();
+    eprintln!("Available examples:");
+    let mut names: Vec<_> = roots
+        .iter()
+        .filter_map(|root| std::fs::read_dir(root).ok())
+        .flat_map(|entries| {
+            entries
+                .flatten()
+                .filter(|entry| entry.path().is_dir())
+                .map(|entry| entry.file_name().to_string_lossy().to_string())
+        })
+        .collect();
+    names.sort();
+    names.dedup();
+    for name in names {
+        eprintln!("  - {name}");
+    }
+    std::process::exit(1);
 }

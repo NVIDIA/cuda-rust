@@ -13,7 +13,7 @@
 //! Build and run:
 //!   cargo oxide run mcast_barrier_test
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::barrier::{
     Barrier, fence_proxy_async_shared_cta, mbarrier_arrive_cluster, mbarrier_init,

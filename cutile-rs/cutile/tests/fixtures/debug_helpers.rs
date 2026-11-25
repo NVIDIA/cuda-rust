@@ -13,6 +13,20 @@ pub mod debug_helpers {
         offset(x) * 2
     }
 
+    pub fn generated<const VALUES: [i32; 2], const FLAG: bool>(x: i32) -> i32 {
+        if FLAG {
+            // Keep a distinct runtime operation in this helper. An addition-only
+            // chain folds into the outer helper's add, merging source locations.
+            (x / VALUES[0]) + VALUES[1]
+        } else {
+            x
+        }
+    }
+
+    pub fn generated_nested<const VALUES: [i32; 2]>(x: i32) -> i32 {
+        generated::<VALUES, true>(x) + 1
+    }
+
     pub trait Bump {
         fn bump(self) -> i32;
     }

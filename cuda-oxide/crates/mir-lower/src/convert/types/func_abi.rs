@@ -7,14 +7,11 @@
 //! conversion (the boundary ABI: slice flattening, struct flattening,
 //! packed shared-pointer rewrites).
 
-use dialect_mir::types::{
-    MirArrayType, MirDisjointSliceType, MirFP16Type, MirPtrType, MirSliceType, MirStructType,
-    MirTupleType,
-};
+use dialect_mir::types::{MirDisjointSliceType, MirPtrType, MirSliceType, MirStructType};
 use llvm_export::types as llvm_types;
 use llvm_export::types::PointerTypeExt;
 use pliron::builtin::type_interfaces::FunctionTypeInterface;
-use pliron::builtin::types::{FP32Type, FP64Type, FunctionType, IntegerType, Signedness};
+use pliron::builtin::types::{FunctionType, IntegerType, Signedness};
 use pliron::context::{Context, Ptr};
 use pliron::operation::Operation;
 use pliron::r#type::{TypeHandle, type_cast};
@@ -22,6 +19,7 @@ use pliron::r#type::{TypeHandle, type_cast};
 use super::{
     StructLayoutInfo, build_struct_slot_map, convert_type, is_zero_sized_type,
     llvm_packed_struct_contains_pointer_in_address_space, llvm_type_size_align,
+    packed_shared_mir_shape_is_supported,
 };
 use crate::convert::target_stable_storage::{StorageRewriteOptions, target_stable_storage_type};
 
@@ -221,72 +219,6 @@ pub(crate) struct PackedSharedInternalAbiInfo {
 /// count against this code-shape budget.
 pub(crate) const MAX_PACKED_SHARED_INTERNAL_ABI_ARRAY_REWRITE_LEAVES: u64 = 16;
 
-/// Whether a MIR type converts to a zero-sized LLVM type.
-///
-/// MIR-side mirror of [`is_zero_sized_type`]: zero-length arrays, arrays of
-/// zero-sized elements, and structs/tuples whose fields are all zero-sized
-/// (including empty ones such as `PhantomData`) vanish at the LLVM level and
-/// must not affect ABI-lane classification.
-fn mir_type_is_zero_sized(ctx: &Context, ty: TypeHandle) -> bool {
-    let ty_ref = ty.deref(ctx);
-    if let Some(array_ty) = ty_ref.downcast_ref::<MirArrayType>() {
-        return array_ty.size() == 0 || mir_type_is_zero_sized(ctx, array_ty.element_type());
-    }
-    if let Some(struct_ty) = ty_ref.downcast_ref::<MirStructType>() {
-        return struct_ty
-            .field_types
-            .iter()
-            .all(|field| mir_type_is_zero_sized(ctx, *field));
-    }
-    if let Some(tuple_ty) = ty_ref.downcast_ref::<MirTupleType>() {
-        return tuple_ty
-            .get_types()
-            .iter()
-            .all(|field| mir_type_is_zero_sized(ctx, *field));
-    }
-    false
-}
-
-/// Whether a MIR value shape belongs to the recursive packed-AS3 ABI lane.
-///
-/// Structs, tuples, and fixed arrays may nest recursively and may contain any
-/// number of scalar pointer leaves. Zero-sized fields are skipped, matching the
-/// post-conversion field scan this predicate replaced. The array-specific
-/// expansion budget is enforced after conversion from the storage rewrite's
-/// exact AS3 leaf count. Vectors and unrelated aggregate kinds remain
-/// deliberately fail-closed.
-fn packed_shared_internal_abi_mir_shape_is_supported(ctx: &Context, mir_ty: TypeHandle) -> bool {
-    let children = {
-        let ty_ref = mir_ty.deref(ctx);
-        if ty_ref.is::<IntegerType>()
-            || ty_ref.is::<MirFP16Type>()
-            || ty_ref.is::<llvm_types::HalfType>()
-            || ty_ref.is::<FP32Type>()
-            || ty_ref.is::<FP64Type>()
-            || ty_ref.is::<MirPtrType>()
-            || ty_ref.is::<llvm_types::PointerType>()
-        {
-            return true;
-        }
-        if let Some(struct_ty) = ty_ref.downcast_ref::<MirStructType>() {
-            Some(struct_ty.field_types.clone())
-        } else if let Some(tuple_ty) = ty_ref.downcast_ref::<MirTupleType>() {
-            Some(tuple_ty.get_types().to_vec())
-        } else {
-            ty_ref
-                .downcast_ref::<MirArrayType>()
-                .map(|array_ty| vec![array_ty.element_type()])
-        }
-    };
-
-    children.is_some_and(|children| {
-        children.into_iter().all(|child| {
-            mir_type_is_zero_sized(ctx, child)
-                || packed_shared_internal_abi_mir_shape_is_supported(ctx, child)
-        })
-    })
-}
-
 /// Recognize a recursive packed-AS3 internal ABI shape.
 ///
 /// The root must remain a byte-faithful packed struct. Nested structs/tuples,
@@ -306,7 +238,7 @@ pub(crate) fn packed_shared_internal_abi_info(
         StructLayoutInfo::of_struct(struct_ty)
     };
 
-    if !packed_shared_internal_abi_mir_shape_is_supported(ctx, mir_ty) {
+    if !packed_shared_mir_shape_is_supported(ctx, mir_ty) {
         return Ok(None);
     }
 
@@ -346,6 +278,37 @@ pub(crate) fn packed_shared_internal_abi_info(
     Ok(Some(PackedSharedInternalAbiInfo {
         semantic_ty: map.llvm_struct_ty,
         storage_ty: rewrite.ty,
+    }))
+}
+
+/// Recognize an internal device-function return type that must cross the `.func`
+/// boundary as a target-stable 64-bit generic pointer (or generic-pointer carrier).
+///
+/// Under `--nvptx-short-ptr` (`p3:32:32:32`), LLVM 23's `NVPTXAsmPrinter` emits
+/// `.func (.param .b64 func_retval0)` in the function header for a bare
+/// `ptr addrspace(3)` return value while emitting `.param .b32 retval0` at the
+/// call site. Returning `ptr` (`addrspace(0)`) across the `.func` boundary and
+/// coercing back to `ptr addrspace(3)` at the call site matches `nvcc` and
+/// avoids the PTX return-slot width mismatch.
+pub(crate) fn shared_return_abi_info(
+    ctx: &mut Context,
+    mir_ty: TypeHandle,
+) -> Result<Option<PackedSharedInternalAbiInfo>, anyhow::Error> {
+    if let Some(abi) = packed_shared_internal_abi_info(ctx, mir_ty)? {
+        return Ok(Some(abi));
+    }
+    let is_shared_ptr = mir_ty
+        .deref(ctx)
+        .downcast_ref::<MirPtrType>()
+        .is_some_and(|ptr_ty| ptr_ty.address_space() == llvm_types::address_space::SHARED);
+    if !is_shared_ptr {
+        return Ok(None);
+    }
+    let semantic_ty = convert_type(ctx, mir_ty)?;
+    let storage_ty = llvm_types::PointerType::get_generic(ctx).into();
+    Ok(Some(PackedSharedInternalAbiInfo {
+        semantic_ty,
+        storage_ty,
     }))
 }
 
@@ -621,7 +584,7 @@ pub fn convert_function_type(
         let ty = if is_transparent_scalar {
             transparent_scalar_llvm_type(ctx, mir_ret_ty)?
         } else if !is_kernel_entry {
-            match packed_shared_internal_abi_info(ctx, mir_ret_ty)? {
+            match shared_return_abi_info(ctx, mir_ret_ty)? {
                 Some(abi) => abi.storage_ty,
                 None => convert_by_value_abi_type(ctx, mir_ret_ty, "by-value function return")?,
             }
@@ -644,7 +607,7 @@ mod tests {
     use super::super::llvm_type_contains_pointer_in_address_space;
     use super::super::test_support::{make_ctx, mir_uint, struct_fields, transparent_u32};
     use super::*;
-    use dialect_mir::types::StructAbiKind;
+    use dialect_mir::types::{MirArrayType, MirTupleType, StructAbiKind};
 
     #[test]
     fn transparent_scalar_return_type_uses_underlying_scalar() {

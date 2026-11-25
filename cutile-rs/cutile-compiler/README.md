@@ -10,16 +10,17 @@ The runtime resolves `tileiras` in this order:
 2. `$CUDA_TOOLKIT_PATH/bin/tileiras`, then `$CUDA_HOME/bin/tileiras`, when the
    variable is set and the binary exists there (the same variables, in the
    same order, that the build scripts honor).
-3. Standard CUDA 13.3/13.2 install locations, when they contain
+3. Standard CUDA 13.5/13.4/13.3/13.2 install locations, when they contain
    `bin/tileiras`.
 4. `tileiras` through normal `PATH` lookup.
 
-The bytecode version handed to `tileiras` is negotiated per toolchain: an
-explicit `CUTILE_BYTECODE_VERSION` (e.g. `13.2`), else the toolkit's `cuda.h`
-(also found under `targets/<platform>/include/`), else a probe of the resolved
-binary. The result is clamped to the versions this crate can emit (13.2 to
-13.3); a toolkit older than CUDA 13.2, or a probe that cannot run, is an error
-rather than a silent fallback.
+The bytecode version handed to `tileiras` is the newest format supported by
+both the writer (13.2 through 13.5) and the selected executable. The compiler
+uses `tileiras --list-versions`, falling back to representative compile probes
+for older assemblers. An explicit `CUTILE_BYTECODE_VERSION` requests an exact
+format and fails if either side does not support it; it is never clamped or
+silently downgraded. CUDA headers do not determine the format. See the
+[compatibility guide](../cutile-book/reference/compatibility.md).
 
 Set `CUTILE_TILEIRAS_PATH` to force a specific binary:
 
@@ -32,6 +33,8 @@ Set `CUTILE_SETUP_DIAGNOSTICS=1` to print CUDA toolkit and `tileiras` discovery
 decisions during setup.
 
 ## Testing
+
+Run commands from the `cutile-rs/` workspace.
 
 ```bash
 cargo test -p cutile-compiler

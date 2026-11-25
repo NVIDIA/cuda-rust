@@ -130,7 +130,7 @@ For each Q tile (row block of the output):
 
 ```rust
 use cuda_async::device_operation::DeviceOp;
-use cuda_core::Device;
+use cuda_core::Context;
 use std::sync::Arc;
 use cutile;
 use cutile::api::{randn, zeros};
@@ -227,7 +227,7 @@ mod fmha_module {
 use fmha_module::fmha;
 
 fn main() -> Result<(), Error> {
-    let device = Device::new(0)?;
+    let device = Context::new(0)?;
     let stream = device.new_stream()?;
 
     let (batch, heads, seq_len, head_dim) = (2, 4, 128, 64);

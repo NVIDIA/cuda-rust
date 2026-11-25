@@ -293,6 +293,21 @@ unsafe impl<S, K, const ID: usize> Send for ManagedBarrier<S, K, ID> {}
 // =============================================================================
 
 impl<Kind, const ID: usize> ManagedBarrier<Uninit, Kind, ID> {
+    /// Issue initialization without thread election, fences or synchronization.
+    ///
+    /// # Safety
+    /// Exactly one thread must initialize live shared storage. `count` must be
+    /// a valid hardware arrival count. Publish initialization with the required
+    /// fence and synchronization before any participant uses the barrier.
+    #[inline(always)]
+    pub unsafe fn init_instruction(self, count: u32) -> ManagedBarrier<Ready, Kind, ID> {
+        unsafe { mbarrier_init(self.ptr.cast_mut(), count) };
+        ManagedBarrier {
+            ptr: self.ptr,
+            _state: PhantomData,
+            _kind: PhantomData,
+        }
+    }
     /// Create an Uninit barrier from an explicit static declaration.
     ///
     /// Wrap a `static mut Barrier` in the typestate wrapper. Each barrier
@@ -422,6 +437,33 @@ impl<Kind, const ID: usize> ManagedBarrier<Uninit, Kind, ID> {
 // =============================================================================
 
 impl<Kind, const ID: usize> ManagedBarrier<Ready, Kind, ID> {
+    /// Adopt a participant's initialized barrier after caller synchronization.
+    ///
+    /// # Safety
+    /// `ptr` must identify an initialized barrier in live shared memory. All
+    /// participants must coordinate accesses and invalidation for its lifetime.
+    #[inline(always)]
+    pub unsafe fn adopt_ready(ptr: *mut Barrier) -> Self {
+        Self {
+            ptr,
+            _state: PhantomData,
+            _kind: PhantomData,
+        }
+    }
+    /// Issue invalidation without election or synchronization.
+    ///
+    /// # Safety
+    /// Exactly one thread must invalidate after all users and pending
+    /// asynchronous operations are finished.
+    #[inline(always)]
+    pub unsafe fn invalidate_instruction(self) -> ManagedBarrier<Invalidated, Kind, ID> {
+        unsafe { mbarrier_inval(self.ptr.cast_mut()) };
+        ManagedBarrier {
+            ptr: self.ptr,
+            _state: PhantomData,
+            _kind: PhantomData,
+        }
+    }
     /// Get the raw pointer to the underlying barrier.
     ///
     /// Useful for interop with low-level APIs.

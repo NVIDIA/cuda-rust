@@ -5,7 +5,7 @@
 
 //! End-to-end example for scalar and packed integer min/max intrinsics (sm_90+).
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::i16x2::{
     max_relu_s16x2, max_s16x2, max_u16x2, min_relu_s16x2, min_s16x2, min_u16x2,

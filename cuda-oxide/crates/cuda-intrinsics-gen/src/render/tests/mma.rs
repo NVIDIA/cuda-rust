@@ -7,7 +7,9 @@ use super::*;
 
 use crate::model::{
     RegisterMmaAdapter, RegisterMmaCompatibilitySource, RegisterMmaKind, RuntimeValidation,
-    SparseMmaAccumulator, SparseMmaAdapter, SparseMmaShape,
+    SparseMma, SparseMmaAccumulator, SparseMmaAdapter, SparseMmaCompatibilitySource,
+    SparseMmaElement, SparseMmaLayout, SparseMmaLlvmAdapter, SparseMmaMetadata, SparseMmaOverflow,
+    SparseMmaParticipation, SparseMmaSelector, SparseMmaShape,
 };
 use crate::render::collector_targets::generated_intrinsic_variant;
 use crate::render::common::intrinsic_marker;
@@ -21,6 +23,36 @@ use crate::render::families::{
 };
 use crate::util::read_json;
 use std::path::Path;
+
+#[test]
+fn dense_mxf4_k64_rendering_preserves_registers_and_scale_selectors() {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let catalog = crate::resolve::resolve_candidate(
+        &repo_root,
+        "mma_m16n8k64_mxf4_f32",
+        "test-llvm",
+        &"a".repeat(64),
+        "sm_120a",
+        "+ptx87",
+    )
+    .unwrap()
+    .catalog;
+    let record = &catalog.intrinsics[0];
+    assert_eq!(intrinsic_marker(&catalog, record), "v1:i1039");
+    assert_eq!(
+        register_mma_template(record),
+        "mma.sync.aligned.m16n8k64.row.col.kind::mxf4.block_scale.scale_vec::2X.f32.e2m1.e2m1.f32.ue8m0 {$0, $1, $2, $3}, {$8, $9, $10, $11}, {$12, $13}, {$4, $5, $6, $7}, $14, {$15, $16}, $17, {$18, $19};"
+    );
+    assert_eq!(
+        register_mma_constraints(record),
+        "=f,=f,=f,=f,f,f,f,f,r,r,r,r,r,r,r,h,h,r,h,h"
+    );
+    let compatibility = render_compat_register_mma(&catalog, "test-hash");
+    assert!(compatibility.contains("pub unsafe fn mma_m16n8k64_mxf4_f32("));
+    let importer = render_importer(&catalog, "test-hash");
+    assert!(importer.contains("set_attr_nvvm_register_mma_kind(ctx, RegisterMmaKindAttr::Mxf4)"));
+    assert!(generated_intrinsic_variant(record).contains("kind: GeneratedRegisterMmaKind::Mxf4"));
+}
 
 #[test]
 fn stmatrix_rendering_preserves_all_four_public_and_backend_contracts() {
@@ -345,9 +377,9 @@ fn register_mma_rendering_preserves_apis_order_convergence_and_variants() {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let catalog = crate::resolve::resolve(&repo_root).unwrap();
     validate_renderable(&catalog).unwrap();
-    assert_eq!(catalog.intrinsics.len(), 1038);
+    assert_eq!(catalog.intrinsics.len(), 1066);
     let records: Vec<_> = register_mmas(&catalog).collect();
-    assert_eq!(records.len(), 154);
+    assert_eq!(records.len(), 155);
     let generated_records = records
         .iter()
         .copied()
@@ -364,7 +396,7 @@ fn register_mma_rendering_preserves_apis_order_convergence_and_variants() {
                 == RegisterMmaCompatibilitySource::ExistingStub
         })
         .collect::<Vec<_>>();
-    assert_eq!(generated_records.len(), 149);
+    assert_eq!(generated_records.len(), 150);
     assert_eq!(existing_records.len(), 5);
 
     let raw = render_raw_abi(&catalog, "test-hash").unwrap();
@@ -376,7 +408,7 @@ fn register_mma_rendering_preserves_apis_order_convergence_and_variants() {
     assert!(raw.contains("Signed accumulator overflow clamps"));
 
     let compatibility = render_compat_register_mma(&catalog, "test-hash");
-    assert_eq!(compatibility.matches("pub unsafe fn ").count(), 149);
+    assert_eq!(compatibility.matches("pub unsafe fn ").count(), 150);
     for record in generated_records {
         let argument_names: &[&str] = if record.register_mma.as_ref().unwrap().adapter
             == RegisterMmaAdapter::C4F32A4U32B2U32Scales2U32Selectors4U16ToD4F32
@@ -425,7 +457,7 @@ fn register_mma_rendering_preserves_apis_order_convergence_and_variants() {
     assert!(dialect.contains("RegisterMmaOperationAttr::Multiply"));
     assert!(dialect.contains("RegisterMmaOperationAttr::AndPopc"));
     assert!(dialect.contains("RegisterMmaOperationAttr::XorPopc"));
-    assert!(dialect.contains("pub enum RegisterMmaKindAttr { Standard, F8f6f4, Mxf8f6f4 }"));
+    assert!(dialect.contains("pub enum RegisterMmaKindAttr { Standard, F8f6f4, Mxf8f6f4, Mxf4 }"));
     assert!(dialect.contains("kind_or_inferred"));
     assert!(dialect.contains("RegisterMmaAccumulatorAttr::F16"));
     assert!(dialect.contains("operation_or_multiply"));
@@ -590,7 +622,9 @@ fn register_mma_rendering_preserves_apis_order_convergence_and_variants() {
     assert!(targets.contains("GeneratedRegisterMmaOperation::Multiply"));
     assert!(targets.contains("GeneratedRegisterMmaOperation::AndPopc"));
     assert!(targets.contains("GeneratedRegisterMmaOperation::XorPopc"));
-    assert!(targets.contains("pub enum GeneratedRegisterMmaKind { Standard, F8f6f4, Mxf8f6f4 }"));
+    assert!(
+        targets.contains("pub enum GeneratedRegisterMmaKind { Standard, F8f6f4, Mxf8f6f4, Mxf4 }")
+    );
     assert!(targets.contains("kind: GeneratedRegisterMmaKind::Standard"));
     assert!(targets.contains("kind: GeneratedRegisterMmaKind::F8f6f4"));
     assert!(targets.contains("kind: GeneratedRegisterMmaKind::Mxf8f6f4"));
@@ -824,6 +858,50 @@ fn sparse_fp8_metadata_contract_requires_ordered_indices_without_changing_intege
 }
 
 #[test]
+fn standard_ampere_float_16bit_metadata_rule_follows_the_metadata_axis() {
+    let plain_16bit = "Every 4-bit metadata group must be `0x4`, `0x6`, `0x8`, `0x9`, `0xc`, `0xd`, or `0xe`; any other value is undefined behavior.";
+    let rule = |metadata, element| {
+        sparse_mma_metadata_rule(&SparseMma {
+            shape: SparseMmaShape::M16n8k16,
+            accumulator: SparseMmaAccumulator::F32,
+            a_element: element,
+            b_element: element,
+            a_layout: SparseMmaLayout::Row,
+            b_layout: SparseMmaLayout::Col,
+            overflow: SparseMmaOverflow::NotApplicable,
+            metadata,
+            selector: SparseMmaSelector::ImmediateZeroThroughThree,
+            participation:
+                SparseMmaParticipation::AllWarpLanesSameInstructionAndQualifiersNoExitedLanes,
+            adapter: SparseMmaAdapter::C4F32A2U32B2U32MetadataU32SelectorU32ToD4F32,
+            llvm_adapter: SparseMmaLlvmAdapter::A2I32B2I32C4F32MetadataI32SelectorI32ToD4F32,
+            compatibility_source: SparseMmaCompatibilitySource::GeneratedStub,
+            runtime_validation: RuntimeValidation::Unexecuted,
+        })
+    };
+    assert_eq!(
+        rule(SparseMmaMetadata::Standard, SparseMmaElement::Bf16),
+        plain_16bit
+    );
+    assert_eq!(
+        rule(SparseMmaMetadata::Standard, SparseMmaElement::F16),
+        plain_16bit
+    );
+    assert_eq!(
+        rule(SparseMmaMetadata::Standard, SparseMmaElement::Tf32),
+        SPARSE_MMA_STANDARD_METADATA_RULE
+    );
+    assert_eq!(
+        rule(SparseMmaMetadata::Ordered, SparseMmaElement::Bf16),
+        SPARSE_MMA_ORDERED_METADATA_RULE
+    );
+    assert_eq!(
+        rule(SparseMmaMetadata::Ordered, SparseMmaElement::Tf32),
+        SPARSE_MMA_ORDERED_TF32_METADATA_RULE
+    );
+}
+
+#[test]
 fn sparse_mma_rendering_enforces_selector_and_keeps_family_distinct() {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let catalog = crate::resolve::resolve(&repo_root).unwrap();
@@ -841,7 +919,7 @@ fn sparse_mma_rendering_enforces_selector_and_keeps_family_distinct() {
         .iter()
         .filter(|record| record.sparse_mma.as_ref().unwrap().shape == SparseMmaShape::M16n8k128)
         .count();
-    assert_eq!((records.len(), k32, k64, k128), (126, 19, 86, 16));
+    assert_eq!((records.len(), k32, k64, k128), (134, 22, 86, 16));
     let standard_k64 = records
         .iter()
         .copied()
@@ -1003,7 +1081,7 @@ fn sparse_mma_rendering_enforces_selector_and_keeps_family_distinct() {
     }
 
     let compatibility = render_compat_sparse_mma(&catalog, "test-hash");
-    assert_eq!(compatibility.matches("pub unsafe fn ").count(), 126);
+    assert_eq!(compatibility.matches("pub unsafe fn ").count(), 134);
     assert!(
         compatibility
             .contains("c: [i32; 4], a: [u32; 2], b: [u32; 2], metadata: u32, selector: u32")
@@ -1104,7 +1182,7 @@ fn sparse_mma_rendering_enforces_selector_and_keeps_family_distinct() {
     assert!(targets.contains("GeneratedSparseMmaOverflow::NotApplicable"));
     assert!(targets.contains("GeneratedHardwareAlternative::ExactArchitecture(120)"));
 
-    assert_eq!(raw.matches(SPARSE_MMA_STANDARD_METADATA_RULE).count(), 32);
+    assert_eq!(raw.matches(SPARSE_MMA_STANDARD_METADATA_RULE).count(), 34);
     assert_eq!(raw.matches(SPARSE_MMA_ORDERED_METADATA_RULE).count(), 92);
     assert_eq!(
         raw.matches(SPARSE_MMA_ORDERED_TF32_METADATA_RULE).count(),
@@ -1114,7 +1192,7 @@ fn sparse_mma_rendering_enforces_selector_and_keeps_family_distinct() {
         compatibility
             .matches(SPARSE_MMA_STANDARD_METADATA_RULE)
             .count(),
-        32
+        34
     );
     assert_eq!(
         compatibility
@@ -1178,7 +1256,7 @@ fn sparse_mma_rendering_enforces_selector_and_keeps_family_distinct() {
     assert!(reference.contains("LLVM source record uses A, B, C, metadata, selector order"));
     assert_eq!(
         reference.matches(SPARSE_MMA_STANDARD_METADATA_RULE).count(),
-        32
+        34
     );
     assert_eq!(
         reference.matches(SPARSE_MMA_ORDERED_METADATA_RULE).count(),

@@ -175,6 +175,15 @@ fn value_group_template_m64n128_bf16(mma_count: usize) -> String {
     )
 }
 
+fn value_group_template_m64n128_f16(mma_count: usize) -> String {
+    value_group_template_for_mnemonic(
+        mma_count,
+        M64N128_VALUE_ACCUMULATOR_COUNT,
+        "wgmma.mma_async.sync.aligned.m64n128k16.f32.f16.f16",
+        "1, 1, 1, 0, 0",
+    )
+}
+
 fn value_group_constraints_for_count(accumulator_count: usize, descriptor_count: usize) -> String {
     let mut constraints = vec!["=f".to_owned(); accumulator_count];
     constraints.extend((0..accumulator_count).map(|index| index.to_string()));
@@ -188,7 +197,10 @@ fn value_group_constraints(descriptor_count: usize) -> String {
     value_group_constraints_for_count(VALUE_ACCUMULATOR_COUNT, descriptor_count)
 }
 
-fn counted_loop_template(input_kind: WgmmaInputKind) -> String {
+/// The PTX for a fused counted K loop. With `nounroll`, the loop header starts
+/// with `.pragma "nounroll";`, which ptxas honors as the header's first
+/// statement, so a `#[nounroll]` K loop stays rolled after fusion.
+fn counted_loop_template(input_kind: WgmmaInputKind, nounroll: bool) -> String {
     let accumulators = value_accumulator_operand_list(VALUE_ACCUMULATOR_COUNT);
     let descriptor_base = VALUE_ACCUMULATOR_COUNT * 2;
     let desc_a_base = descriptor_base;
@@ -207,6 +219,9 @@ fn counted_loop_template(input_kind: WgmmaInputKind) -> String {
     template.push_str("    setp.eq.u64 %loop_more, %remaining, 0;\n");
     template.push_str("    @%loop_more bra.uni L__wgmma_done_${:uid};\n");
     template.push_str("L__wgmma_loop_${:uid}:\n");
+    if nounroll {
+        template.push_str("    .pragma \"nounroll\";\n");
+    }
     let input_types = input_kind.ptx_suffix();
     template.push_str(&format!(
         "    wgmma.mma_async.sync.aligned.m64n64k16.f32.{input_types} \
@@ -224,7 +239,9 @@ fn counted_loop_template(input_kind: WgmmaInputKind) -> String {
     template
 }
 
-fn counted_pipeline_template(slot_count: usize, max_pending_groups: u8) -> String {
+/// The PTX for a fused counted pipeline. `nounroll` works as in
+/// [`counted_loop_template`].
+fn counted_pipeline_template(slot_count: usize, max_pending_groups: u8, nounroll: bool) -> String {
     let result_count = slot_count * VALUE_ACCUMULATOR_COUNT;
     let control_base = result_count * 2;
     let step_base = control_base + slot_count * 2;
@@ -248,6 +265,9 @@ fn counted_pipeline_template(slot_count: usize, max_pending_groups: u8) -> Strin
     template.push_str("    setp.eq.u64 %loop_more, %remaining, 0;\n");
     template.push_str("    @%loop_more bra.uni L__wgmma_pipeline_done_${:uid};\n");
     template.push_str("L__wgmma_pipeline_loop_${:uid}:\n");
+    if nounroll {
+        template.push_str("    .pragma \"nounroll\";\n");
+    }
 
     for slot in 0..slot_count {
         let accumulators = pipeline_accumulator_operand_list(slot);
@@ -419,6 +439,22 @@ pub(crate) fn convert_mma_group_values_m64n128_bf16(
     )
 }
 
+/// Lower a value-form F16 m64n128 WGMMA full-drain group.
+pub(crate) fn convert_mma_group_values_m64n128_f16(
+    ctx: &mut Context,
+    rewriter: &mut DialectConversionRewriter,
+    op: Ptr<Operation>,
+    _operands_info: &OperandsInfo,
+) -> Result<()> {
+    convert_mma_group_values_for_shape(
+        ctx,
+        rewriter,
+        op,
+        M64N128_VALUE_ACCUMULATOR_COUNT,
+        value_group_template_m64n128_f16,
+    )
+}
+
 /// Lower a value-form TF32 K=8 WGMMA full-drain group to one inline-PTX scope.
 pub(crate) fn convert_mma_group_values_tf32(
     ctx: &mut Context,
@@ -555,7 +591,8 @@ fn convert_mma_loop_values_for_kind(
         );
     }
 
-    let template = counted_loop_template(input_kind);
+    let nounroll = llvm_export::ops::loop_unroll_disable(ctx, op);
+    let template = counted_loop_template(input_kind, nounroll);
     let constraints = counted_loop_constraints();
 
     let f32_ty = FP32Type::get(ctx);
@@ -632,7 +669,8 @@ pub(crate) fn convert_mma_loop_pipeline_values(
         );
     }
 
-    let template = counted_pipeline_template(slot_count, max_pending_groups);
+    let nounroll = llvm_export::ops::loop_unroll_disable(ctx, op);
+    let template = counted_pipeline_template(slot_count, max_pending_groups, nounroll);
     let constraints = counted_pipeline_constraints(result_count, control_count);
     let f32_ty = FP32Type::get(ctx);
     let struct_ty: TypeHandle = llvm_types::StructType::get_unnamed(
@@ -775,7 +813,7 @@ mod tests {
         WgmmaInputKind, counted_loop_constraints, counted_loop_template,
         counted_pipeline_constraints, counted_pipeline_template, deferred_group_template,
         pipeline_constraints, pipeline_template, value_group_constraints, value_group_template,
-        value_group_template_m64n128_bf16,
+        value_group_template_m64n128_bf16, value_group_template_m64n128_f16,
     };
 
     #[test]
@@ -869,6 +907,21 @@ mod tests {
     }
 
     #[test]
+    fn m64n128_f16_value_template_uses_sixty_four_tied_accumulators() {
+        let template = value_group_template_m64n128_f16(2);
+        assert_eq!(template.matches("wgmma.mma_async").count(), 2);
+        assert!(template.contains("wgmma.mma_async.sync.aligned.m64n128k16.f32.f16.f16"));
+        assert!(!template.contains(".bf16.bf16"));
+        assert!(template.contains("{$0, $1, $2"));
+        assert!(template.contains("$63}"));
+        assert!(template.contains("$128, $129"));
+        assert!(template.contains("$130, $131"));
+        assert!(template.contains("1, 1, 1, 0, 0"));
+        assert!(!template.contains("ld.f32"));
+        assert!(!template.contains("st.f32"));
+    }
+
+    #[test]
     fn tf32_value_template_uses_k8_without_transpose_controls() {
         let template = value_group_template(2, WgmmaInputKind::Tf32);
         assert_eq!(template.matches("wgmma.mma_async").count(), 2);
@@ -894,7 +947,7 @@ mod tests {
 
     #[test]
     fn counted_loop_template_keeps_descriptor_recurrence_inside_one_scope() {
-        let template = counted_loop_template(WgmmaInputKind::Bf16);
+        let template = counted_loop_template(WgmmaInputKind::Bf16, false);
         assert!(template.contains("m64n64k16.f32.bf16.bf16"));
         assert_eq!(template.matches("wgmma.fence.sync.aligned").count(), 1);
         assert_eq!(template.matches("wgmma.mma_async").count(), 1);
@@ -944,7 +997,7 @@ mod tests {
 
     #[test]
     fn f16_counted_loop_template_changes_only_the_input_element_types() {
-        let template = counted_loop_template(WgmmaInputKind::F16);
+        let template = counted_loop_template(WgmmaInputKind::F16, false);
         assert_eq!(template.matches("wgmma.mma_async").count(), 1);
         assert!(template.contains("m64n64k16.f32.f16.f16"));
         assert!(!template.contains(".bf16.bf16"));
@@ -970,8 +1023,24 @@ mod tests {
     }
 
     #[test]
+    fn nounroll_pragma_opens_each_fused_loop_header() {
+        const PRAGMA: &str = ".pragma \"nounroll\";";
+        for kind in [WgmmaInputKind::Bf16, WgmmaInputKind::F16] {
+            let rolled = counted_loop_template(kind, true);
+            assert_eq!(rolled.matches(PRAGMA).count(), 1);
+            assert!(rolled.contains("L__wgmma_loop_${:uid}:\n    .pragma \"nounroll\";\n"));
+            assert!(!counted_loop_template(kind, false).contains(PRAGMA));
+        }
+
+        let rolled = counted_pipeline_template(2, 1, true);
+        assert_eq!(rolled.matches(PRAGMA).count(), 1);
+        assert!(rolled.contains("L__wgmma_pipeline_loop_${:uid}:\n    .pragma \"nounroll\";\n"));
+        assert!(!counted_pipeline_template(2, 1, false).contains(PRAGMA));
+    }
+
+    #[test]
     fn counted_pipeline_template_supports_two_and_three_slot_wait_depths() {
-        let two_slot = counted_pipeline_template(2, 1);
+        let two_slot = counted_pipeline_template(2, 1, false);
         assert_eq!(two_slot.matches("wgmma.fence.sync.aligned").count(), 1);
         assert_eq!(two_slot.matches("wgmma.mma_async").count(), 2);
         assert_eq!(
@@ -994,7 +1063,7 @@ mod tests {
         assert!(two_slot.contains("add.u64 %desc_b1, %desc_b1, $135;"));
         assert!(two_slot.contains("mov.u64 %remaining, $136;"));
 
-        let three_slot = counted_pipeline_template(3, 2);
+        let three_slot = counted_pipeline_template(3, 2, false);
         assert_eq!(three_slot.matches("wgmma.fence.sync.aligned").count(), 1);
         assert_eq!(three_slot.matches("wgmma.mma_async").count(), 3);
         assert_eq!(

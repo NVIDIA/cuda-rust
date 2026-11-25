@@ -53,7 +53,7 @@ PreparedLaunch<K>  -> safe launch of exactly K
 GPU execution can still overlap the host until you synchronize.
 
 ```rust
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, cuda_module, kernel, thread};
 
@@ -110,6 +110,8 @@ The generated method maps kernel parameters to host values:
 | `&mut [T]`         | `&mut DeviceBuffer<T>` | Pointer + length |
 | `DisjointSlice<T>` | `&mut DeviceBuffer<T>` | Pointer + length |
 | scalar/raw pointer | Same value             | Value directly   |
+
+Plain `&mut [T]` kernel parameters require `#[verify(no_oob_idx(...), disjoint_writes(...))]` (preview); unverified kernels take `DisjointSlice<T>` instead (see [The Safety Model](../gpu-safety/the-safety-model.md)).
 
 ### Return value
 
@@ -532,7 +534,7 @@ explains why this can differ from the normal LLVM-to-PTX path.
 `LaunchConfig` specifies the grid shape:
 
 ```rust
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 
 let config = LaunchConfig {
     grid_dim: (num_blocks, 1, 1),
@@ -592,8 +594,8 @@ instead of enqueuing immediately. No stream is specified at launch time -- the
 scheduling policy chooses one when the operation is executed:
 
 ```rust
-use cuda_async::simt::device_context::init_device_contexts;
-use cuda_async::simt::device_operation::DeviceOperation;
+use cuda_async::device_context::init_device_contexts;
+use cuda_async::device_operation::DeviceOperation;
 
 init_device_contexts(0, 1)?;
 let module = kernels::load_async(0)?;

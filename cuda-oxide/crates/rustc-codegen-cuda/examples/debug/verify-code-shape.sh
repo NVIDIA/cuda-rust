@@ -19,6 +19,9 @@
 # zero-sized value), so the check walks every instruction ahead of the index
 # call, through its `inlinedAt` chain, and rejects any location that lands on
 # an attribute line within the kernel's own scope.
+#
+# Loop hints follow the same rule: nothing in `loop_hint_test` may map to a
+# `#[unroll]` / `#[nounroll]` attribute line, and each loop body keeps its own.
 
 set -euo pipefail
 
@@ -37,28 +40,30 @@ test -n "${entry_line}"
 test -n "${kernel_attr_line}"
 test -n "${launch_bounds_attr_line}"
 
-llvm_body="$(awk '
-    /^define ptx_kernel void @clock_test\(/ { in_function = 1 }
-    in_function { print }
-    in_function && /^}/ { exit }
-' "${llvm_ir}")"
-test -n "${llvm_body}"
-
 node() {
     grep -E "^!${1} = " "${llvm_ir}" || true
 }
 
-kernel_subprogram_id="$(
-    grep -E '^![0-9]+ = distinct !DISubprogram\(name: "clock_test"' "${llvm_ir}" |
-        sed -nE 's/^!([0-9]+) = .*/\1/p' | head -n 1
-)"
-test -n "${kernel_subprogram_id}"
+# The LLVM IR body of kernel $1.
+llvm_function_body() {
+    awk -v name="$1" '
+        index($0, "define ptx_kernel void @" name "(") == 1 { in_function = 1 }
+        in_function { print }
+        in_function && /^}/ { exit }
+    ' "${llvm_ir}"
+}
 
-# Does a debug scope belong to the kernel itself (not to an inlined callee)?
+# The DISubprogram id of kernel $1.
+kernel_subprogram() {
+    grep -E "^![0-9]+ = distinct !DISubprogram\\(name: \"$1\"" "${llvm_ir}" |
+        sed -nE 's/^!([0-9]+) = .*/\1/p' | head -n 1
+}
+
+# Does debug scope $1 belong to kernel subprogram $2 (not to an inlined callee)?
 scope_is_in_kernel() {
-    local scope="$1" text
+    local scope="$1" kernel="$2" text
     for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
-        [[ "${scope}" == "${kernel_subprogram_id}" ]] && return 0
+        [[ "${scope}" == "${kernel}" ]] && return 0
         text="$(node "${scope}")"
         grep -q 'DISubprogram(' <<<"${text}" && return 1
         scope="$(sed -nE 's/.*scope: !([0-9]+).*/\1/p' <<<"${text}")"
@@ -66,6 +71,51 @@ scope_is_in_kernel() {
     done
     return 1
 }
+
+# Print the first of the `!dbg` ids in $1 whose location, or a location in its
+# `inlinedAt` chain, lands on one of the lines in $2 within kernel subprogram $3.
+first_location_on_lines() {
+    local id location text line scope depth
+    for id in $1; do
+        location="${id}"
+        for depth in 0 1 2 3 4 5 6 7; do
+            text="$(node "${location}")"
+            grep -q 'DILocation(' <<<"${text}" || break
+            line="$(sed -nE 's/.*DILocation\(line: ([0-9]+),.*/\1/p' <<<"${text}")"
+            scope="$(sed -nE 's/.*scope: !([0-9]+).*/\1/p' <<<"${text}")"
+            if grep -qx "${line}" <<<"$2" && scope_is_in_kernel "${scope}" "$3"; then
+                echo "!dbg !${id}, inlinedAt depth ${depth}, line ${line}"
+                return 0
+            fi
+            location="$(sed -nE 's/.*inlinedAt: !([0-9]+)\).*/\1/p' <<<"${text}")"
+            [[ -n "${location}" ]] || break
+        done
+    done
+    return 0
+}
+
+# The PTX body of kernel entry $1, past any prototype declaration.
+ptx_entry_body() {
+    awk -v name="$1" '
+        !emit && !candidate && $0 ~ ("[.]entry[[:space:]]+" name "[(]") { candidate = 1 }
+        candidate && /^[[:space:]]*;[[:space:]]*$/ {
+            candidate = 0
+            next
+        }
+        candidate && /^[[:space:]]*\{[[:space:]]*$/ {
+            emit = 1
+            candidate = 0
+        }
+        emit { print }
+        emit && /End function/ { exit }
+    ' "${ptx}"
+}
+
+llvm_body="$(llvm_function_body clock_test)"
+test -n "${llvm_body}"
+
+kernel_subprogram_id="$(kernel_subprogram clock_test)"
+test -n "${kernel_subprogram_id}"
 
 # Everything ahead of (and including) the rewritten index call.
 llvm_prologue="$(awk '
@@ -78,22 +128,16 @@ index_debug_id="$(
 )"
 test -n "${index_debug_id}"
 
-for id in $(sed -nE 's/.*!dbg !([0-9]+).*/\1/p' <<<"${llvm_prologue}" | sort -u); do
-    location="${id}"
-    for depth in 0 1 2 3 4 5 6 7; do
-        text="$(node "${location}")"
-        grep -q 'DILocation(' <<<"${text}" || break
-        line="$(sed -nE 's/.*DILocation\(line: ([0-9]+),.*/\1/p' <<<"${text}")"
-        scope="$(sed -nE 's/.*scope: !([0-9]+).*/\1/p' <<<"${text}")"
-        if [[ "${line}" == "${kernel_attr_line}" || "${line}" == "${launch_bounds_attr_line}" ]] \
-            && scope_is_in_kernel "${scope}"; then
-            echo "error: kernel prologue instruction (!dbg !${id}, inlinedAt depth ${depth}) maps to macro attribute line ${line}" >&2
-            exit 1
-        fi
-        location="$(sed -nE 's/.*inlinedAt: !([0-9]+)\).*/\1/p' <<<"${text}")"
-        [[ -n "${location}" ]] || break
-    done
-done
+prologue_hit="$(
+    first_location_on_lines \
+        "$(sed -nE 's/.*!dbg !([0-9]+).*/\1/p' <<<"${llvm_prologue}" | sort -u)" \
+        "${kernel_attr_line}"$'\n'"${launch_bounds_attr_line}" \
+        "${kernel_subprogram_id}"
+)"
+if [[ -n "${prologue_hit}" ]]; then
+    echo "error: kernel prologue instruction (${prologue_hit}) maps to a macro attribute line" >&2
+    exit 1
+fi
 
 # A surviving (un-inlined) kernel-scope call must carry an artificial location.
 scope_debug_id="$(
@@ -110,19 +154,7 @@ if ! grep -Eq "^!${index_debug_id} = !DILocation\\(line: ${entry_line}, column:"
     exit 1
 fi
 
-ptx_body="$(awk '
-    !emit && !candidate && /[.]entry[[:space:]]+clock_test\(/ { candidate = 1 }
-    candidate && /^[[:space:]]*;[[:space:]]*$/ {
-        candidate = 0
-        next
-    }
-    candidate && /^[[:space:]]*\{[[:space:]]*$/ {
-        emit = 1
-        candidate = 0
-    }
-    emit { print }
-    emit && /End function/ { exit }
-' "${ptx}")"
+ptx_body="$(ptx_entry_body clock_test)"
 test -n "${ptx_body}"
 
 # PTX .loc directives name a file index; only main.rs lines can be attribute
@@ -161,4 +193,40 @@ if ! awk -v expected_index_line="${entry_line}" '
     exit 1
 fi
 
-echo "debug kernel-entry lineinfo shape: PASS"
+hint_attr_lines="$(grep -nF 'CUDA_OXIDE_DEBUG_LOOP_HINT_ATTRIBUTE_LINE' "${source_file}" | cut -d: -f1)"
+hint_body_lines="$(grep -nF 'CUDA_OXIDE_DEBUG_LOOP_HINT_BODY_LINE' "${source_file}" | cut -d: -f1)"
+test -n "${hint_attr_lines}"
+test -n "${hint_body_lines}"
+
+hint_llvm_body="$(llvm_function_body loop_hint_test)"
+hint_subprogram_id="$(kernel_subprogram loop_hint_test)"
+hint_ptx_body="$(ptx_entry_body loop_hint_test)"
+test -n "${hint_llvm_body}"
+test -n "${hint_subprogram_id}"
+test -n "${hint_ptx_body}"
+
+hint_hit="$(
+    first_location_on_lines \
+        "$(sed -nE 's/.*!dbg !([0-9]+).*/\1/p' <<<"${hint_llvm_body}" | sort -u)" \
+        "${hint_attr_lines}" \
+        "${hint_subprogram_id}"
+)"
+if [[ -n "${hint_hit}" ]]; then
+    echo "error: loop_hint_test instruction (${hint_hit}) maps to a loop-hint attribute" >&2
+    exit 1
+fi
+
+for line in ${hint_attr_lines}; do
+    if grep -Eq "^[[:space:]]*[.]loc[[:space:]]+${main_file_index}[[:space:]]+${line}([[:space:]]|$)" <<<"${hint_ptx_body}"; then
+        echo "error: loop_hint_test PTX maps an instruction to loop-hint attribute line ${line}" >&2
+        exit 1
+    fi
+done
+for line in ${hint_body_lines}; do
+    if ! grep -Eq "^[[:space:]]*[.]loc[[:space:]]+${main_file_index}[[:space:]]+${line}([[:space:]]|$)" <<<"${hint_ptx_body}"; then
+        echo "error: loop_hint_test PTX has no line-table entry for loop body line ${line}" >&2
+        exit 1
+    fi
+done
+
+echo "debug kernel-entry and loop-hint lineinfo shape: PASS"

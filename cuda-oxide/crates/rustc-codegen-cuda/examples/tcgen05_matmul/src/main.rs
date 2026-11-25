@@ -10,7 +10,7 @@
 //! Build and run with:
 //!   cargo oxide run tcgen05_matmul
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{
     CudaContext, CudaStream, DeviceBuffer,
     sys::{

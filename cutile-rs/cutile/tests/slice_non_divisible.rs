@@ -472,7 +472,7 @@ fn gemm_non_divisible_m_and_n() {
             k.to_string(),
         ];
 
-        let device = cuda_core::Device::new(0).unwrap();
+        let device = cuda_core::Context::new(0).unwrap();
         let stream = device.new_stream().unwrap();
 
         let z = api::zeros::<f32>(&[m, n])

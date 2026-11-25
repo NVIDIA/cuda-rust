@@ -3,7 +3,7 @@
 
 //! Regression for pointer provenance in a direct tuple constant.
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{kernel, thread};
 use cuda_host::cuda_module;

@@ -69,6 +69,7 @@ For each `MirFuncOp`, `convert_func` (in `lowering.rs`):
 | `type_conversion_interface` | Type interfaces for MIR → LLVM type conversion            |
 | `convert/type_interface_impls` | `#[type_interface_impl]` registrations for MIR → LLVM type conversion |
 | `scalarize_block_args`    | Scalarizes aggregate-typed block arguments after lowering  |
+| `entry_allocas`           | Hoists eligible fixed scratch allocas into `entry`         |
 | `wgmma_deferred_accumulator` | Fuses sound BF16 WGMMA sequences before conversion      |
 | `convert/enum_payload_storage` | Backing storage for enum payloads during conversion   |
 

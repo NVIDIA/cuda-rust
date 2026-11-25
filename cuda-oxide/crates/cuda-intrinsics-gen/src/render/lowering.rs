@@ -1774,41 +1774,71 @@ impl MirToLlvmConversion for Tcgen05MmaOp {
             Some(Tcgen05MmaKindAttr::Tf32) => "tf32",
             Some(Tcgen05MmaKindAttr::F8f6f4) => "f8f6f4",
             Some(Tcgen05MmaKindAttr::I8) => "i8",
+            Some(Tcgen05MmaKindAttr::Mxf4BlockScale) => "mxf4.block_scale",
+            Some(Tcgen05MmaKindAttr::Mxf4BlockScaleBlock32) => "mxf4.block_scale.block32",
+            Some(Tcgen05MmaKindAttr::Mxf4nvf4BlockScaleBlock16) => "mxf4nvf4.block_scale.block16",
+            Some(Tcgen05MmaKindAttr::Mxf4nvf4BlockScaleBlock32) => "mxf4nvf4.block_scale.block32",
+            Some(Tcgen05MmaKindAttr::Mxf8f6f4BlockScale) => "mxf8f6f4.block_scale",
+            Some(Tcgen05MmaKindAttr::Mxf8f6f4BlockScaleBlock32) => "mxf8f6f4.block_scale.block32",
             None => return pliron::input_err!(
                 op.deref(ctx).loc(),
                 "nvvm.tcgen05_mma requires a kind",
             ),
         };
-        let (prefix, a, metadata, zero_mask, constraints, arity, base, ashift) =
+        let (prefix, a, metadata, scales, zero_mask, constraints, arity, base, ashift) =
             match form {
                 Some(Tcgen05MmaFormAttr::Shared) =>
-                    ("tcgen05.mma", "$1", None, None, "r,l,l,r,r,~{memory}", 5, true, false),
+                    ("tcgen05.mma", "$1", None, None, None, "r,l,l,r,r,~{memory}", 5, true, false),
                 Some(Tcgen05MmaFormAttr::Tensor) =>
-                    ("tcgen05.mma", "[$1]", None, None, "r,r,l,r,r,~{memory}", 5, true, false),
+                    ("tcgen05.mma", "[$1]", None, None, None, "r,r,l,r,r,~{memory}", 5, true, false),
                 Some(Tcgen05MmaFormAttr::TensorAshift) =>
-                    ("tcgen05.mma", "[$1]", None, None, "r,r,l,r,r,~{memory}", 5, true, true),
+                    ("tcgen05.mma", "[$1]", None, None, None, "r,r,l,r,r,~{memory}", 5, true, true),
                 Some(Tcgen05MmaFormAttr::SpShared) =>
-                    ("tcgen05.mma.sp", "$1", Some("$5"), None, "r,l,l,r,r,r,~{memory}", 6, true, false),
+                    ("tcgen05.mma.sp", "$1", Some("$5"), None, None, "r,l,l,r,r,r,~{memory}", 6, true, false),
                 Some(Tcgen05MmaFormAttr::SpTensor) =>
-                    ("tcgen05.mma.sp", "[$1]", Some("$5"), None, "r,r,l,r,r,r,~{memory}", 6, true, false),
+                    ("tcgen05.mma.sp", "[$1]", Some("$5"), None, None, "r,r,l,r,r,r,~{memory}", 6, true, false),
                 Some(Tcgen05MmaFormAttr::SpTensorAshift) =>
-                    ("tcgen05.mma.sp", "[$1]", Some("$5"), None, "r,r,l,r,r,r,~{memory}", 6, true, true),
+                    ("tcgen05.mma.sp", "[$1]", Some("$5"), None, None, "r,r,l,r,r,r,~{memory}", 6, true, true),
                 Some(Tcgen05MmaFormAttr::WsShared) =>
-                    ("tcgen05.mma.ws", "$1", None, None, "r,l,l,r,r,~{memory}", 5, false, false),
+                    ("tcgen05.mma.ws", "$1", None, None, None, "r,l,l,r,r,~{memory}", 5, false, false),
                 Some(Tcgen05MmaFormAttr::WsSharedZeroColMask) =>
-                    ("tcgen05.mma.ws", "$1", None, Some("$5"), "r,l,l,r,r,l,~{memory}", 6, false, false),
+                    ("tcgen05.mma.ws", "$1", None, None, Some("$5"), "r,l,l,r,r,l,~{memory}", 6, false, false),
                 Some(Tcgen05MmaFormAttr::WsSpShared) =>
-                    ("tcgen05.mma.ws.sp", "$1", Some("$5"), None, "r,l,l,r,r,r,~{memory}", 6, false, false),
+                    ("tcgen05.mma.ws.sp", "$1", Some("$5"), None, None, "r,l,l,r,r,r,~{memory}", 6, false, false),
                 Some(Tcgen05MmaFormAttr::WsSpSharedZeroColMask) =>
-                    ("tcgen05.mma.ws.sp", "$1", Some("$5"), Some("$6"), "r,l,l,r,r,r,l,~{memory}", 7, false, false),
+                    ("tcgen05.mma.ws.sp", "$1", Some("$5"), None, Some("$6"), "r,l,l,r,r,r,l,~{memory}", 7, false, false),
                 Some(Tcgen05MmaFormAttr::WsSpTensor) =>
-                    ("tcgen05.mma.ws.sp", "[$1]", Some("$5"), None, "r,r,l,r,r,r,~{memory}", 6, false, false),
+                    ("tcgen05.mma.ws.sp", "[$1]", Some("$5"), None, None, "r,r,l,r,r,r,~{memory}", 6, false, false),
                 Some(Tcgen05MmaFormAttr::WsSpTensorZeroColMask) =>
-                    ("tcgen05.mma.ws.sp", "[$1]", Some("$5"), Some("$6"), "r,r,l,r,r,r,l,~{memory}", 7, false, false),
+                    ("tcgen05.mma.ws.sp", "[$1]", Some("$5"), None, Some("$6"), "r,r,l,r,r,r,l,~{memory}", 7, false, false),
                 Some(Tcgen05MmaFormAttr::WsTensor) =>
-                    ("tcgen05.mma.ws", "[$1]", None, None, "r,r,l,r,r,~{memory}", 5, false, false),
+                    ("tcgen05.mma.ws", "[$1]", None, None, None, "r,r,l,r,r,~{memory}", 5, false, false),
                 Some(Tcgen05MmaFormAttr::WsTensorZeroColMask) =>
-                    ("tcgen05.mma.ws", "[$1]", None, Some("$5"), "r,r,l,r,r,l,~{memory}", 6, false, false),
+                    ("tcgen05.mma.ws", "[$1]", None, None, Some("$5"), "r,r,l,r,r,l,~{memory}", 6, false, false),
+                Some(
+                    Tcgen05MmaFormAttr::SharedMxf4BlockScale
+                    | Tcgen05MmaFormAttr::SharedMxf4BlockScaleBlock32
+                    | Tcgen05MmaFormAttr::SharedMxf4nvf4BlockScaleBlock16
+                    | Tcgen05MmaFormAttr::SharedMxf4nvf4BlockScaleBlock32
+                    | Tcgen05MmaFormAttr::SharedMxf8f6f4BlockScale
+                    | Tcgen05MmaFormAttr::SharedMxf8f6f4BlockScaleBlock32,
+                ) => ("tcgen05.mma", "$1", None, Some(("$5", "$6")), None, "r,l,l,r,r,r,r,~{memory}", 7, true, false),
+                Some(
+                    Tcgen05MmaFormAttr::TensorMxf4BlockScale
+                    | Tcgen05MmaFormAttr::TensorMxf4BlockScaleBlock32
+                    | Tcgen05MmaFormAttr::TensorMxf4nvf4BlockScaleBlock16
+                    | Tcgen05MmaFormAttr::TensorMxf4nvf4BlockScaleBlock32
+                    | Tcgen05MmaFormAttr::TensorMxf8f6f4BlockScale
+                    | Tcgen05MmaFormAttr::TensorMxf8f6f4BlockScaleBlock32,
+                ) => ("tcgen05.mma", "[$1]", None, Some(("$5", "$6")), None, "r,r,l,r,r,r,r,~{memory}", 7, true, false),
+                Some(
+                    Tcgen05MmaFormAttr::SpSharedMxf8f6f4BlockScale
+                    | Tcgen05MmaFormAttr::SpSharedMxf8f6f4BlockScaleBlock32,
+                ) => ("tcgen05.mma.sp", "$1", Some("$5"), Some(("$6", "$7")), None, "r,l,l,r,r,r,r,r,~{memory}", 8, true, false),
+                Some(
+                    Tcgen05MmaFormAttr::SpTensorMxf8f6f4BlockScale
+                    | Tcgen05MmaFormAttr::SpTensorMxf8f6f4BlockScaleBlock32,
+                ) => ("tcgen05.mma.sp", "[$1]", Some("$5"), Some(("$6", "$7")), None, "r,r,l,r,r,r,r,r,~{memory}", 8, true, false),
                 None => return pliron::input_err!(
                     op.deref(ctx).loc(),
                     "nvvm.tcgen05_mma requires a form",
@@ -1868,7 +1898,11 @@ impl MirToLlvmConversion for Tcgen05MmaOp {
         if let Some(metadata) = metadata {
             operands.push_str(&format!(", [{metadata}]"));
         }
-        operands.push_str(", $3, %enable_pred");
+        operands.push_str(", $3");
+        if let Some((sa, sb)) = scales {
+            operands.push_str(&format!(", [{sa}], [{sb}]"));
+        }
+        operands.push_str(", %enable_pred");
         if let Some(zero_mask) = zero_mask {
             operands.push_str(&format!(", {zero_mask}"));
         }

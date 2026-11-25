@@ -1,0 +1,35 @@
+error[E0277]: the trait bound `BFloat16: TensorElement<f16>` is not satisfied
+ --> tests/compile_fail/bf16_invalid_storage.rs:9:13
+  |
+9 |     let _ = Tensor::<BFloat16, _, f16>::from_storage(&values, Contiguous1D::new(8));
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `TensorElement<f16>` is not implemented for `BFloat16`
+  |
+help: the trait `TensorElement<f16>` is not implemented for `BFloat16`
+      but trait `TensorElement<BFloat16>` is implemented for it
+ --> src/numeric.rs
+  |
+  | impl TensorElement<BFloat16> for BFloat16 {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = help: for that trait implementation, expected `BFloat16`, found `f16`
+note: required by a bound in `Tensor`
+ --> src/tensor/mod.rs
+  |
+  | pub struct Tensor<'a, Element, Layout, Storage = Element>
+  |            ------ required by a bound in this struct
+  | where
+  |     Element: TensorElement<Storage>,
+  |              ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Tensor`
+
+error[E0599]: the associated function or constant `from_storage` exists for struct `Tensor<'_, BFloat16, _, f16>`, but its trait bounds were not satisfied
+ --> tests/compile_fail/bf16_invalid_storage.rs:9:41
+  |
+9 |     let _ = Tensor::<BFloat16, _, f16>::from_storage(&values, Contiguous1D::new(8));
+  |                                         ^^^^^^^^^^^^ associated function or constant cannot be called on `Tensor<'_, BFloat16, _, f16>` due to unsatisfied trait bounds
+  |
+ ::: src/numeric.rs
+  |
+  | pub struct BFloat16(#[doc = "The unchanged IEEE-style BF16 storage bits."] u16);
+  | ------------------- doesn't satisfy `BFloat16: TensorElement<f16>`
+  |
+  = note: the following trait bounds were not satisfied:
+          `BFloat16: TensorElement<f16>`

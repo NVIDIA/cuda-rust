@@ -1,0 +1,40 @@
+<svg class="qtts" xmlns="http://www.w3.org/2000/svg" width="680" height="540" viewBox="0 0 680 540" role="img" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif">
+<title>Inside one block on decode step 1</title>
+<style>.qtts .th { font-size:14px; font-weight:600; fill:#1e1e1e } .qtts .ts { font-size:12px; fill:#5c5c5c } .qtts .k-box { fill:#f7f6f3; stroke:#c8c5be } .qtts .tx-box { fill:#1e1e1e } .qtts .k-purple { fill:#ebe9fb; stroke:#7f77dd } .qtts .tx-purple { fill:#3a3490 } .qtts .k-teal { fill:#dff3ec; stroke:#3aa47f } .qtts .tx-teal { fill:#1f5c47 } .qtts .k-amber { fill:#fdeed3; stroke:#ef9f27 } .qtts .tx-amber { fill:#6b4100 } .qtts .dash { fill:none; stroke:#c8c5be; stroke-dasharray:4 3 } .qtts .arr { fill:none; stroke:#7b7b7b; stroke-width:1.5 } .qtts .arrhead { fill:none; stroke:#7b7b7b; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round } @media (prefers-color-scheme: dark) { .qtts .th { fill: #f2f2f2 } .qtts .ts { fill: #b8b8b8 } .qtts .k-box { fill: #2a2a2e; stroke: #4a4a50 } .qtts .tx-box { fill: #f2f2f2 } .qtts .dash { stroke: #55555c } .qtts .arr, .qtts .arrhead { stroke: #a3a3a3 } .qtts .k-purple { fill: #3a3490; stroke: #9a93ea } .qtts .tx-purple { fill: #e9e7fb } .qtts .k-teal { fill: #1f5c47; stroke: #5fc6a0 } .qtts .tx-teal { fill: #dff3ec } .qtts .k-amber { fill: #6b4100; stroke: #f3b65a } .qtts .tx-amber { fill: #fdeed3 } }</style>
+<defs><marker id="arrow-06" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="arrhead" d="M2 1L8 5L2 9"/></marker></defs>
+<rect class="k-amber" x="250" y="34" width="180" height="12" rx="2"/>
+<text class="ts" x="440" y="40" text-anchor="start" dominant-baseline="central">[1, 4096] — one new token row</text>
+<path class="arr" d="M340 46 V68 H130 V94" marker-end="url(#arrow-06)"/>
+<path class="arr" d="M365 68 V94" marker-end="url(#arrow-06)"/>
+<path class="arr" d="M340 68 H545 V94" marker-end="url(#arrow-06)"/>
+<rect class="k-purple" x="60" y="98" width="140" height="12" rx="2"/>
+<text class="ts" x="155" y="122" text-anchor="middle" dominant-baseline="central">Q [1, 4096]</text>
+<rect class="k-teal" x="330" y="98" width="70" height="12" rx="2"/>
+<text class="ts" x="357" y="122" text-anchor="end" dominant-baseline="central">K [1, 1024]</text>
+<rect class="k-teal" x="510" y="98" width="70" height="12" rx="2"/>
+<text class="ts" x="537" y="122" text-anchor="end" dominant-baseline="central">V [1, 1024]</text>
+<line class="arr" x1="365" y1="110" x2="365" y2="168" marker-end="url(#arrow-06)"/>
+<line class="arr" x1="545" y1="110" x2="545" y2="168" marker-end="url(#arrow-06)"/>
+<rect class="dash" x="256" y="144" width="390" height="148" rx="8" stroke-width="0.5"/>
+<rect class="k-teal" x="330" y="172" width="70" height="6"/><rect class="k-teal" x="330" y="182" width="70" height="6"/><rect class="k-teal" x="330" y="192" width="70" height="6"/><rect class="k-teal" x="330" y="202" width="70" height="6"/><rect class="k-teal" x="330" y="212" width="70" height="6"/><rect class="k-teal" x="330" y="222" width="70" height="6"/><rect class="k-amber" x="330" y="234" width="70" height="7"/>
+<text class="ts" x="365" y="260" text-anchor="middle" dominant-baseline="central">K: 32 cached + 1 new</text>
+<rect class="k-teal" x="510" y="172" width="70" height="6"/><rect class="k-teal" x="510" y="182" width="70" height="6"/><rect class="k-teal" x="510" y="192" width="70" height="6"/><rect class="k-teal" x="510" y="202" width="70" height="6"/><rect class="k-teal" x="510" y="212" width="70" height="6"/><rect class="k-teal" x="510" y="222" width="70" height="6"/><rect class="k-amber" x="510" y="234" width="70" height="7"/>
+<text class="ts" x="545" y="260" text-anchor="middle" dominant-baseline="central">V: 32 cached + 1 new</text>
+<text class="ts" x="451" y="280" text-anchor="middle" dominant-baseline="central">this block's cache — every block has its own</text>
+<path class="arr" d="M100 110 V332 H166" marker-end="url(#arrow-06)"/>
+<line class="arr" x1="365" y1="292" x2="365" y2="312" marker-end="url(#arrow-06)"/>
+<rect class="k-purple" x="170" y="316" width="340" height="32" rx="6" stroke-width="0.5"/>
+<text class="ts tx-purple" x="340" y="332" text-anchor="middle" dominant-baseline="central">Q [1, 128] · Kᵀ [128, 33] → reads all 33</text>
+<path class="arr" d="M545 292 V390 H434" marker-end="url(#arrow-06)"/>
+<text class="ts" x="552" y="356" text-anchor="start" dominant-baseline="central">× 33 V rows</text>
+<line class="arr" x1="340" y1="348" x2="340" y2="380" marker-end="url(#arrow-06)"/>
+<rect class="k-purple" x="250" y="384" width="180" height="12" rx="2"/>
+<text class="ts" x="242" y="390" text-anchor="end" dominant-baseline="central">attention out [1, 4096]</text>
+<line class="arr" x1="340" y1="396" x2="340" y2="420" marker-end="url(#arrow-06)"/>
+<rect class="k-box" x="190" y="424" width="300" height="54" rx="8" stroke-width="0.5"/>
+<text class="th tx-box" x="340" y="442" text-anchor="middle" dominant-baseline="central">rest of the block, on [1, 4096]</text>
+<text class="ts tx-box" x="340" y="460" text-anchor="middle" dominant-baseline="central">Wo · skip · RMSNorm · SwiGLU FFN · skip</text>
+<line class="arr" x1="340" y1="478" x2="340" y2="502" marker-end="url(#arrow-06)"/>
+<rect class="k-teal" x="250" y="506" width="180" height="12" rx="2"/>
+<text class="ts" x="440" y="512" text-anchor="start" dominant-baseline="central">[1, 4096] → next block</text>
+</svg>

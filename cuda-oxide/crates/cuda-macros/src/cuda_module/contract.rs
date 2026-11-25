@@ -315,12 +315,21 @@ pub(super) fn cuda_module_launch_contract(
     };
     let args = attr.parse_args::<LaunchContractArgs>()?;
 
-    if let Some(param) = params.iter().find(|param| param.mutable_slice) {
-        return Err(syn::Error::new(
-            param.name.span(),
-            "contracted kernels cannot take `&mut [T]`; use `DisjointSlice<T, IndexSpace>` so the launch domain and per-thread write ownership are explicit",
+    let verify_attrs: Vec<_> = attrs
+        .iter()
+        .filter(|a| attr_path_ends_with(a, "verify"))
+        .collect();
+    if verify_attrs.len() > 1 {
+        return Err(syn::Error::new_spanned(
+            verify_attrs[1],
+            "a kernel may have only one #[verify(...)] attribute",
         ));
     }
+    let parsed_verify = match verify_attrs.first() {
+        Some(v_attr) => Some(v_attr.parse_args::<crate::verify::VerifyArgs>()?),
+        None => None,
+    };
+    crate::verify::validate_mutable_slice_verify_coverage(parsed_verify.as_ref(), params)?;
     if let Some(block) = args.exact_block {
         validate_dimensions_for_domain(block, args.domain, "block", attr.span())?;
     }
@@ -677,9 +686,11 @@ fn render_requires_expr(expr: &Expr) -> String {
 pub(super) fn generate_requires_checks(
     kernel: &CudaModuleKernel,
     access: RequiresLenAccess,
+    prepared_ident: &Ident,
 ) -> Option<TokenStream2> {
     let contract = kernel.launch_contract.as_ref()?;
-    if contract.requires.is_empty() {
+    let has_coverage = contract.domain == 1 && !kernel.writes_all_elems_params.is_empty();
+    if contract.requires.is_empty() && !has_coverage {
         return None;
     }
     let kernel_name = kernel.fn_name.to_string();
@@ -710,7 +721,46 @@ pub(super) fn generate_requires_checks(
             }
         }
     });
-    Some(quote! { #(#checks)* })
+    let coverage_checks = has_coverage
+        .then(|| {
+            kernel.writes_all_elems_params.iter().map(|param_ident| {
+                let len_expr = match access {
+                    RequiresLenAccess::SyncBuffer => quote! { (#param_ident.len() as u64) },
+                    RequiresLenAccess::AsyncRef => {
+                        quote! { (::cuda_host::KernelSliceArg::len(#param_ident) as u64) }
+                    }
+                    RequiresLenAccess::OwnedValue => {
+                        quote! { (::cuda_host::KernelSliceArg::len(&#param_ident) as u64) }
+                    }
+                };
+                let relation_text =
+                    format!("{param_ident}.len() <= grid.x * block.x (writes_all_elems)");
+                quote! {
+                    {
+                        let #lhs_binding: u64 = #len_expr;
+                        let __cuda_oxide_raw_cfg = #prepared_ident.__raw_config();
+                        let #rhs_binding: u64 = (__cuda_oxide_raw_cfg.grid_dim.0 as u64)
+                            .saturating_mul(__cuda_oxide_raw_cfg.block_dim.0 as u64);
+                        if !(#lhs_binding <= #rhs_binding) {
+                            return ::core::result::Result::Err(
+                                ::cuda_core::LaunchContractError::SizeRequirementViolated {
+                                    kernel: #kernel_name,
+                                    relation: #relation_text,
+                                    lhs: #lhs_binding,
+                                    rhs: #rhs_binding,
+                                },
+                            );
+                        }
+                    }
+                }
+            })
+        })
+        .into_iter()
+        .flatten();
+    Some(quote! {
+        #(#checks)*
+        #(#coverage_checks)*
+    })
 }
 
 /// Transliterates one validated side of a `requires` comparison into a `u64`

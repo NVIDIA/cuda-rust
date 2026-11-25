@@ -70,12 +70,19 @@ pub(super) fn has_device_prefix(name: &str) -> bool {
 
 /// Strip the device-function prefix from `name` if present.
 ///
-/// The reserved prefix is needed internally for MIR-level detection but
-/// should not leak into the final LLVM IR / PTX / LTOIR output. Returns
-/// `name` unchanged for non-device symbols and for device-extern declarations
-/// (those keep their original-name `link_name` attribute).
+/// Plain device symbols drop the reserved MIR-detection prefix in the
+/// final LLVM IR / PTX / LTOIR output. Returns
+/// `name` unchanged for non-device symbols, Rust-mangled symbols, and
+/// device-extern declarations (those keep their original-name `link_name`
+/// attribute). A mangling may contain a device marker in a generic argument
+/// or closure's parent path; stripping it would discard instance identity.
 pub(super) fn strip_device_prefix(name: &str) -> String {
-    if is_device_extern_symbol(name) {
+    // The collector deliberately uses rustc manglings for generic instances
+    // and name collisions. Keep the entire symbol, including any device
+    // marker nested inside it, so definitions and references stay distinct.
+    // Rust v0 starts with `_R`; legacy manglings start with `_ZN` (also after
+    // the collector sanitizes `$` characters for PTX).
+    if name.starts_with("_R") || name.starts_with("_ZN") || is_device_extern_symbol(name) {
         return name.to_string();
     }
     device_base_name(name)
@@ -85,7 +92,27 @@ pub(super) fn strip_device_prefix(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_intrinsic_identifier, legacy_nvvm_atomic_add_signature};
+    use super::{
+        decode_intrinsic_identifier, legacy_nvvm_atomic_add_signature, strip_device_prefix,
+    };
+
+    #[test]
+    fn device_prefix_stripping_preserves_manglings_and_extern_names() {
+        use reserved_oxide_symbols::{device_extern_symbol, device_symbol};
+        let device = device_symbol("helper");
+        for name in [device.clone(), format!("crate__module__{device}")] {
+            assert_eq!(strip_device_prefix(&name), "helper");
+        }
+        // Both encodings may embed the marker anywhere inside a type/path.
+        for name in [
+            format!("_RINvC4core7genericNCNvC4demo{}{}E0E", device.len(), device),
+            format!("_ZN4demo{}{}17h0123456789abcdefE", device.len(), device),
+            device_extern_symbol("helper"),
+            "ordinary_helper".to_string(),
+        ] {
+            assert_eq!(strip_device_prefix(&name), name);
+        }
+    }
 
     #[test]
     fn intrinsic_identifier_decoding_preserves_dots_and_literal_underscores() {

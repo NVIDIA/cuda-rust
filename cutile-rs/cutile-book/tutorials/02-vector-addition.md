@@ -8,7 +8,7 @@ In cutile, tile programs run concurrently and each program knows its grid coordi
 
 ```rust
 use cuda_async::device_operation::DeviceOp;
-use cuda_core::Device;
+use cuda_core::Context;
 use std::sync::Arc;
 use cutile;
 use cutile::api::{ones, zeros};
@@ -35,7 +35,7 @@ mod my_module {
 use my_module::add;
 
 fn main() -> Result<(), Error> {
-    let device = Device::new(0)?;
+    let device = Context::new(0)?;
     let stream = device.new_stream()?;
     
     // Create input tensors: 32×32 matrices filled with 1.0
@@ -84,14 +84,14 @@ Mutable tensors **must** be partitioned on the host side before kernel launch. T
 
 On the host side, the generated launcher expects a partition for every `&mut Tensor` parameter — `Partition<Tensor<T>>` from `tensor.partition(...)`, `Partition<&mut Tensor<T>>` from `(&mut tensor).partition(...)`, or a mapped partition — so you always call `.partition(...)` before passing the tensor.
 
-### Device-Side Partitioning (Available for `&Tensor`)
+### Context-Side Partitioning (Available for `&Tensor`)
 
 Read-only inputs are passed as `&Tensor<T>`, `Tensor<T>`, `Arc<Tensor<T>>`, or `&TensorView<T>` on the host side — no host-side partitioning required. Multiple tile blocks can safely read from the same or overlapping regions, so there is no exclusive-access constraint to enforce.
 
 Instead, read-only tensors can be partitioned **inside the kernel** using `.partition(shape![M, N])`:
 
 ```rust
-// Device-side: partition a read-only tensor inside the kernel.
+// Context-side: partition a read-only tensor inside the kernel.
 let part_x = x.partition(shape![BM, BK]);
 let tile = part_x.load([i, j]);
 ```
@@ -163,7 +163,7 @@ fn my_kernel(...) {
 | Concept | What It Means |
 |---------|---------------|
 | **Host-side partitioning** | `.partition([M, N])` on the host — required for `&mut Tensor` to ensure exclusive write access and determine the launch grid |
-| **Device-side partitioning** | `.partition(shape![M, N])` inside the kernel — available for `&Tensor`, flexible access patterns |
+| **Context-side partitioning** | `.partition(shape![M, N])` inside the kernel — available for `&Tensor`, flexible access patterns |
 | **Static shape `S`** | The tile shape carried in the compiled variant |
 | **Dynamic shape `[-1, -1]`** | Dynamic tensor shape; does not create a new compiled variant when tensor shape changes |
 | **load_like** | Convenience for element-wise ops: loads from the input using the same partitioning and mapping as the output (also available as the free function `load_tile_like`). The input must have the same shape as the whole output tensor — the tensor the host partitioned, not the per-program sub-tensor — and the output must be a partitioned mutable tensor |

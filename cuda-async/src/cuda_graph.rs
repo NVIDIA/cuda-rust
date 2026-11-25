@@ -7,7 +7,7 @@ use crate::device_context::with_default_device_policy;
 use crate::device_future::DeviceFuture;
 use crate::device_operation::{DeviceOp, ExecutionContext, GraphNode, ReplayResource};
 use crate::error::DeviceError;
-use cuda_core::{sys, Device, IntoResult, Stream};
+use cuda_core::{sys, Context, IntoResult, Stream};
 use std::collections::HashMap;
 use std::future::IntoFuture;
 use std::mem::MaybeUninit;
@@ -24,6 +24,31 @@ const CU_STREAM_CAPTURE_MODE_RELAXED: sys::CUstreamCaptureMode = 2;
 /// All device pointers used by the operation are baked into the graph at capture
 /// time. To vary inputs between replays, pre-allocate an input buffer, pass it
 /// into the operation, and memcpy new data into that buffer before each launch.
+///
+/// # Replay safety
+///
+/// A replay dereferences the device pointers recorded at capture time long
+/// after the capturing code has returned. Two runtime mechanisms keep that
+/// sound without tying the graph to the buffers by borrow:
+///
+/// - **Recorded storage stays alive.** Every device access made while
+///   recording registers the buffer's storage with the graph, so a captured
+///   buffer whose last host handle is dropped is not freed while the graph
+///   can still replay. Only the handle is gone; the data is unreachable until
+///   the graph itself is dropped.
+/// - **Each replay re-leases its accesses.** A launch registers the graph and
+///   one access lease per distinct captured storage on its own submission. A
+///   replay that conflicts with an in-flight access from another stream is
+///   rejected before it is enqueued, and an operation on another stream that
+///   conflicts with an in-flight replay is rejected the same way. Work on the
+///   same stream stays stream-ordered. A launch future forgotten mid-flight
+///   leaks the graph and those leases rather than releasing them early.
+///
+/// What the runtime does not do is order host-side reads for you. The output
+/// `T` from [`take_output`](CudaGraph::take_output) refers to buffers whose
+/// contents exist only once a replay has completed; read them through a
+/// device operation ordered after the launch, on the same stream or after
+/// synchronizing the launch stream.
 ///
 /// # Examples
 ///
@@ -67,7 +92,7 @@ struct GraphExecHandle {
     /// Contexts of `update` ops not yet consumed by a replay.
     pending: Mutex<Vec<ExecutionContext>>,
     /// Bound before destruction: the driver needs the owning context current.
-    device: Arc<Device>,
+    device: Arc<Context>,
     cu_graph: sys::CUgraph,
     cu_graph_exec: sys::CUgraphExec,
 }
@@ -85,7 +110,7 @@ impl GraphExecHandle {
     /// instantiation fails, and owned by the returned handle otherwise
     /// (whose `Drop` also covers an upload failure).
     fn instantiate(
-        device: Arc<Device>,
+        device: Arc<Context>,
         cu_graph: sys::CUgraph,
         stream: &Stream,
     ) -> Result<Self, DeviceError> {
@@ -165,7 +190,7 @@ fn capture_on<R>(
     stream: &Arc<Stream>,
     record: impl FnOnce() -> Result<R, DeviceError>,
 ) -> Result<(R, Arc<GraphExecHandle>), DeviceError> {
-    let device = stream.device().clone();
+    let device = stream.context().clone();
     device.bind_to_thread()?;
 
     unsafe {
@@ -204,7 +229,7 @@ fn capture_on<R>(
     let exec = GraphExecHandle::instantiate(device, cu_graph, stream)?;
 
     // Drain the upload. The recorded work itself has *not* run.
-    unsafe { stream.synchronize() }?;
+    stream.synchronize()?;
 
     Ok((output, Arc::new(exec)))
 }
@@ -252,6 +277,11 @@ impl<T: Send> CudaGraph<T> {
     ///
     /// Returns `Some(T)` on the first call, `None` thereafter. Use this to
     /// recover intermediate buffers or inspect the initial result.
+    ///
+    /// The handle is valid immediately (shapes, strides, device pointers),
+    /// but the buffers behind it hold meaningful data only after a replay has
+    /// completed. The graph keeps their storage alive independently of this
+    /// handle; see [Replay safety](CudaGraph#replay-safety).
     pub fn take_output(&mut self) -> Option<T> {
         self.output.take()
     }
@@ -335,7 +365,11 @@ impl<T: Send> CudaGraph<T> {
     /// ```
     ///
     /// The launch shares ownership of the instantiated graph, so it stays
-    /// valid even if the `CudaGraph` is dropped first.
+    /// valid even if the `CudaGraph` is dropped first. When executed, it
+    /// registers the graph and a lease on every captured buffer with its
+    /// submission, so a conflicting in-flight access on another stream makes
+    /// the launch fail instead of racing; see
+    /// [Replay safety](CudaGraph#replay-safety).
     ///
     /// Operations issued via [`update`](CudaGraph::update) are guaranteed to
     /// complete before the graph runs **only when the launch is executed on
@@ -367,6 +401,12 @@ impl DeviceOp for GraphLaunch {
     type Output = ();
 
     unsafe fn execute(self, context: &ExecutionContext) -> Result<(), DeviceError> {
+        if self.exec.device.as_ref() != context.context().as_ref() {
+            return Err(DeviceError::Internal(
+                "graph and launch stream belong to different CUDA contexts".into(),
+            ));
+        }
+        context.context().bind_to_thread()?;
         context.retain(self.exec.clone())?;
         // Reacquire every captured buffer for this replay: one lease per
         // distinct storage, registered on the launch submission so other
@@ -377,7 +417,7 @@ impl DeviceOp for GraphLaunch {
             }
         }
         // Pending updates need not accumulate over the graph's lifetime.
-        // The launch submission now owns them; their contexts wait on the
+        // The launch submission now owns them; their contexts retain owners on the
         // update stream if it differs from the launch stream.
         let pending =
             std::mem::take(&mut *self.exec.pending.lock().unwrap_or_else(|e| e.into_inner()));
@@ -492,6 +532,18 @@ impl IntoFuture for GraphLaunch {
 /// pre-allocated and passed in via borrows. No tensor created inside
 /// the scope means no tensor dropped inside the scope.
 ///
+/// ## Replay safety after capture
+///
+/// The two mechanisms above make *recording* safe. Replays happen later,
+/// after `record`'s borrows have ended, and are covered by the runtime
+/// contract described under [`CudaGraph`](CudaGraph#replay-safety): every
+/// storage recorded here stays alive while the graph can replay, and each
+/// launch re-leases those accesses, so a conflicting in-flight access on
+/// another stream is rejected rather than raced. Dropping a buffer's host
+/// handle after the scope therefore frees nothing the graph still uses; it
+/// only makes the data unreachable, so keep a handle to whatever you need to
+/// read back or refresh with [`update`](CudaGraph::update).
+///
 /// # What happens if you call other operations inside the closure
 ///
 /// While `s.record(op)` is the intended API, other operations inside
@@ -549,7 +601,9 @@ impl CudaGraph<()> {
     /// next.
     ///
     /// Pre-allocate all buffers before calling this method — the graph
-    /// replays into the same device pointers.
+    /// replays into the same device pointers. The graph retains the storage
+    /// of every buffer it records, so a buffer you will not read or refresh
+    /// again may be dropped after capture without affecting later replays.
     ///
     /// # Example
     ///

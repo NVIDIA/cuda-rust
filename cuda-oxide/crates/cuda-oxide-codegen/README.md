@@ -8,7 +8,7 @@ lowering, and LLVM tooling as the rustc frontend uses. The only supported
 public surface is the `experimental` module.
 
 The point is the absence of a dependency: this crate has **no rustc linkage**.
-It needs neither `rustc_private` nor a nightly toolchain matched to
+It needs neither `rustc_private` nor a toolchain pin matched to
 `rustc_driver`, so a caller that can build the IR itself can reach PTX without
 the compiler-plugin machinery `rustc-codegen-cuda` requires.
 

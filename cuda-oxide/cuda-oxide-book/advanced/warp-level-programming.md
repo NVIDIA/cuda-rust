@@ -161,10 +161,20 @@ Three constraints:
   example does, on `ctx.compute_capability()`, or restrict the build to Ampere
   and newer.
 
-`warp_reduce` does not select this form for you today; making it do so
-automatically needs a way for device code to know its target architecture,
-which is the open question in
-[#811](https://github.com/NVlabs/cuda-oxide/issues/811).
+`warp_reduce` selects this form for you, for integer element types on a full
+32-lane tile, whenever the build's compute-capability floor is `sm_80` or
+newer. The compiler resolves that floor with the same rule the backend uses to
+choose a target. An explicit target (`--arch` or `CUDA_OXIDE_TARGET`) sets the
+floor. Without one it is `sm_80`, or the detected GPU
+(`CUDA_OXIDE_DEVICE_ARCH`) if that is older: a newer GPU never raises it,
+because the backend may still build for an older architecture the kernel
+needs. The branch is folded during MIR import before feature detection runs,
+so a build below the floor drops the `redux.sync` arm entirely and never emits
+an instruction it cannot assemble.
+
+Calling `redux_sync_add` and friends directly is still the right move when you
+want the single instruction regardless of the surrounding generic code, and it
+is the only option for a sub-warp tile.
 
 ### Floats on Blackwell: `redux.sync` for `f32`
 
@@ -197,9 +207,10 @@ PTX 8.6 and exist only on `sm_100a`, `sm_100f`, `sm_103a`, and `sm_103f`. They
 are not available on `sm_110a` or `sm_120a`, so consumer Blackwell is out.
 Build for one of those four targets or compilation fails.
 
-The `redux_f32` example is the working reference. It builds for `sm_100a`, so
-CI compiles it and checks the emitted PTX rather than running it. Its `main`
-skips unless the device reports `sm_100` and nothing else.
+The `redux_f32` example is the working reference. CI builds it for `sm_100a`
+and checks the emitted PTX rather than running it. `cargo oxide run` builds
+for the attached GPU, and `main` skips unless that GPU can load the module's
+`.target` (an `sm_100a` module needs `sm_100`, an `sm_103a` module `sm_103`).
 
 ---
 

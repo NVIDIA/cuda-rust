@@ -873,7 +873,7 @@ fn build_pipeline(mathdx_root: &Path) -> Result<std::path::PathBuf, String> {
 // Host-side test infrastructure
 // =============================================================================
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use std::sync::Arc;
 

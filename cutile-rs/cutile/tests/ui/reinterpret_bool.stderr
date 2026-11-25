@@ -1,0 +1,30 @@
+error[E0277]: the trait bound `bool: AnyBitPattern` is not satisfied
+  --> tests/ui/reinterpret_bool.rs:11:25
+   |
+11 |     bytes.reinterpret::<bool>(&[4]).unwrap()
+   |           -----------   ^^^^ the trait `Pod` is not implemented for `bool`
+   |           |
+   |           required by a bound introduced by this call
+   |
+   = help: the following other types implement trait `Pod`:
+             ()
+             ManuallyDrop<T>
+             Option<T>
+             PhantomData<T>
+             PhantomPinned
+             Wrapping<T>
+             [T; N]
+             __m128
+           and $N others
+   = note: there's an inherent method on `cutile::prelude::Tensor<u8>` of the same name, which can be auto-dereferenced from `&Arc<cutile::prelude::Tensor<T>>`
+   = note: required for `bool` to implement `AnyBitPattern`
+note: required by a bound in `cutile::prelude::Tensor::<T>::reinterpret`
+  --> src/tensor.rs
+   |
+   |     pub fn reinterpret<U: DType + AnyBitPattern>(
+   |                                   ^^^^^^^^^^^^^ required by this bound in `Tensor::<T>::reinterpret`
+help: to access the inherent method on `cutile::prelude::Tensor<u8>`, use the fully-qualified path
+   |
+11 -     bytes.reinterpret::<bool>(&[4]).unwrap()
+11 +     cutile::prelude::Tensor::reinterpret(&bytes, &[4]).unwrap()
+   |

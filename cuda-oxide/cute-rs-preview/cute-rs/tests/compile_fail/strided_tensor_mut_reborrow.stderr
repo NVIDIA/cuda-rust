@@ -1,0 +1,11 @@
+error[E0499]: cannot borrow `parent` as mutable more than once at a time
+  --> tests/compile_fail/strided_tensor_mut_reborrow.rs:11:9
+   |
+ 9 |     let mut child = parent.reborrow();
+   |                     ------ first mutable borrow occurs here
+10 |     unsafe {
+11 |         parent.store_at(0, 1.0);
+   |         ^^^^^^ second mutable borrow occurs here
+...
+14 |         child.store_at(1, 2.0);
+   |         ----- first borrow later used here

@@ -19,16 +19,18 @@ Tests whether the collector correctly handles monomorphized generic kernels. Thi
 #[kernel]
 pub fn scale<T: Copy + Mul<Output = T>>(factor: T, input: &[T], mut out: DisjointSlice<T>) {
     let idx = thread::index_1d();
+    let i = idx.get();
     if let Some(out_elem) = out.get_mut(idx) {
-        *out_elem = input[idx.get()] * factor;
+        *out_elem = input[i] * factor;
     }
 }
 
 #[kernel]
 pub fn add<T: Copy + Add<Output = T>>(a: &[T], b: &[T], mut c: DisjointSlice<T>) {
     let idx = thread::index_1d();
+    let i = idx.get();
     if let Some(c_elem) = c.get_mut(idx) {
-        *c_elem = a[idx.get()] + b[idx.get()];
+        *c_elem = a[i] + b[i];
     }
 }
 ```
@@ -98,8 +100,9 @@ pub fn saxpy<T: Copy + Mul<Output = T> + Add<Output = T>>(
     a: T, x: &[T], y: &[T], mut out: DisjointSlice<T>
 ) {
     let idx = thread::index_1d();
+    let i = idx.get();
     if let Some(out_elem) = out.get_mut(idx) {
-        *out_elem = a * x[idx.get()] + y[idx.get()];
+        *out_elem = a * x[i] + y[i];
     }
 }
 
@@ -116,8 +119,9 @@ pub fn saxpy<T: Copy + Mul<Output = T> + Add<Output = T>>(
 #[kernel]
 pub fn map<T: Copy, F: Fn(T) -> T + Copy>(f: F, input: &[T], mut out: DisjointSlice<T>) {
     let idx = thread::index_1d();
+    let i = idx.get();
     if let Some(out_elem) = out.get_mut(idx) {
-        *out_elem = f(input[idx.get()]);
+        *out_elem = f(input[i]);
     }
 }
 ```

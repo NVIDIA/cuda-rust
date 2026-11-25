@@ -1,0 +1,81 @@
+error[E0599]: no associated function or constant named `wrap_ref` found for struct `DeviceAtomicU32` in the current scope
+ --> tests/compile_fail/atomic_shared_references.rs:9:30
+  |
+9 |     let _ = DeviceAtomicU32::wrap_ref(integer);
+  |                              ^^^^^^^^ associated function or constant not found in `DeviceAtomicU32`
+  |
+note: if you're trying to build a new `DeviceAtomicU32`, consider using `DeviceAtomicU32::new` which returns `DeviceAtomicU32`
+ --> src/atomic.rs
+  |
+  |               pub const fn new(val: $ty) -> Self {
+  |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+  | / define_integer_atomic! {
+  | |     /// 32-bit unsigned atomic, **device scope** (`.gpu`).
+  | |     pub struct DeviceAtomicU32(u32);
+  | | }
+  | |_- in this macro invocation
+  = note: this error originates in the macro `define_integer_atomic` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no associated function or constant named `wrap_ref` found for struct `DeviceAtomicF32` in the current scope
+  --> tests/compile_fail/atomic_shared_references.rs:10:30
+   |
+10 |     let _ = DeviceAtomicF32::wrap_ref(float);
+   |                              ^^^^^^^^ associated function or constant not found in `DeviceAtomicF32`
+   |
+note: if you're trying to build a new `DeviceAtomicF32`, consider using `DeviceAtomicF32::new` which returns `DeviceAtomicF32`
+  --> src/atomic.rs
+   |
+   |               pub const fn new(val: $ty) -> Self {
+   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+   | / define_float_atomic! {
+   | |     /// 32-bit float atomic, **device scope** (`.gpu`).
+   | |     ///
+   | |     /// `swap` lowers to hardware `atom.exch.b32`; this API does not expose
+...  |
+   | |     pub struct DeviceAtomicF32(f32);
+   | | }
+   | |_- in this macro invocation
+   = note: this error originates in the macro `define_float_atomic` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no associated function or constant named `peel_ref` found for struct `DeviceAtomicU32` in the current scope
+  --> tests/compile_fail/atomic_shared_references.rs:15:30
+   |
+15 |     let _ = DeviceAtomicU32::peel_ref(integer);
+   |                              ^^^^^^^^ associated function or constant not found in `DeviceAtomicU32`
+   |
+note: if you're trying to build a new `DeviceAtomicU32`, consider using `DeviceAtomicU32::new` which returns `DeviceAtomicU32`
+  --> src/atomic.rs
+   |
+   |               pub const fn new(val: $ty) -> Self {
+   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+   | / define_integer_atomic! {
+   | |     /// 32-bit unsigned atomic, **device scope** (`.gpu`).
+   | |     pub struct DeviceAtomicU32(u32);
+   | | }
+   | |_- in this macro invocation
+   = note: this error originates in the macro `define_integer_atomic` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no associated function or constant named `peel_ref` found for struct `DeviceAtomicF32` in the current scope
+  --> tests/compile_fail/atomic_shared_references.rs:16:30
+   |
+16 |     let _ = DeviceAtomicF32::peel_ref(float);
+   |                              ^^^^^^^^ associated function or constant not found in `DeviceAtomicF32`
+   |
+note: if you're trying to build a new `DeviceAtomicF32`, consider using `DeviceAtomicF32::new` which returns `DeviceAtomicF32`
+  --> src/atomic.rs
+   |
+   |               pub const fn new(val: $ty) -> Self {
+   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+   | / define_float_atomic! {
+   | |     /// 32-bit float atomic, **device scope** (`.gpu`).
+   | |     ///
+   | |     /// `swap` lowers to hardware `atom.exch.b32`; this API does not expose
+...  |
+   | |     pub struct DeviceAtomicF32(f32);
+   | | }
+   | |_- in this macro invocation
+   = note: this error originates in the macro `define_float_atomic` (in Nightly builds, run with -Z macro-backtrace for more info)

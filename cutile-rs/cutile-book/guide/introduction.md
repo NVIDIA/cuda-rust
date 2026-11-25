@@ -31,7 +31,7 @@ mod my_module {
 }
 
 fn main() -> Result<(), cuda_async::error::DeviceError> {
-    let device = cuda_core::Device::new(0)?;
+    let device = cuda_core::Context::new(0)?;
     let stream = device.new_stream()?;
 
     let x = api::ones::<f32>(&[32, 32]).sync_on(&stream)?;

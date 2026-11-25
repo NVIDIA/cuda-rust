@@ -9,6 +9,7 @@
 //! the old CUDATileFunctionCompiler.
 
 use super::_module::CUDATileModules;
+use super::launch_checks::LaunchChecks;
 use crate::ast::{SourceLocation, SpanBase};
 use crate::bounds::Bounds;
 use crate::error::{JITError, SpannedJITError};
@@ -72,7 +73,7 @@ pub struct CUDATileFunctionCompiler<'m> {
     /// (`Resolution::Launch`). Interior-mutable because compile passes take
     /// `&self`; merged into the `Validator` in [`Self::get_validator`] and run
     /// once per launch by the host `validate_launch`.
-    pub(crate) launch_checks: RefCell<Vec<cuda_async::predicate::LaunchCheck>>,
+    launch_checks: RefCell<LaunchChecks>,
     pub(crate) gpu_name: String,
     pub(crate) target_capabilities: Option<cutile_ir::capabilities::TargetCapabilities>,
     pub(crate) optimization_hints: OptimizationHints,
@@ -187,6 +188,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         a_axis: usize,
         b_tensor: &str,
         b_axis: usize,
+        span: &proc_macro2::Span,
     ) -> bool {
         use cuda_async::predicate::{Atom, Predicate, Term};
         // Resolve both tensor names to param indices; if either is not a
@@ -212,6 +214,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         self.lower_obligation(
             predicate,
             format!("dim({a_tensor}, {a_axis}) == dim({b_tensor}, {b_axis})"),
+            span,
         )
     }
 
@@ -238,6 +241,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         b_tensor: &str,
         b_axis: usize,
         tile: i32,
+        span: &proc_macro2::Span,
     ) -> bool {
         use crate::passes::obligation::{resolve, Obligation, Resolution};
         use cuda_async::predicate::{Atom, Predicate, Term};
@@ -296,6 +300,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             format!(
                 "ceil(dim({a_tensor}, {a_axis})/{tile}) <= ceil(dim({b_tensor}, {b_axis})/{tile})"
             ),
+            span,
         )
     }
 
@@ -315,23 +320,26 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         &self,
         predicate: cuda_async::predicate::Predicate,
         cause: impl Into<String>,
+        span: &proc_macro2::Span,
     ) -> bool {
         use crate::passes::obligation::{resolve, Obligation, Resolution};
         let obligation = Obligation::new(predicate, cause);
         match resolve(&obligation, &self.assumptions) {
             Resolution::Jit => true,
             Resolution::Launch(check) => {
-                // Canonical predicates make duplicate detection exact. Two
-                // obligations reducing to the same host compare (e.g. a shared
-                // `Dim`'s divisibility, once per binding) cost one check.
-                let mut checks = self.launch_checks.borrow_mut();
-                if !checks.iter().any(|c| c.predicate == check.predicate) {
-                    checks.push(check);
-                }
+                self.launch_checks
+                    .borrow_mut()
+                    .insert(check, &self.ir_location(span));
                 true
             }
             Resolution::Device => false,
         }
+    }
+
+    /// Export checks with their source origins rendered in the existing host
+    /// diagnostic field. Structured origins remain internal to the compiler.
+    pub(crate) fn launch_checks(&self) -> Vec<cuda_async::predicate::LaunchCheck> {
+        self.launch_checks.borrow().to_host_checks()
     }
 
     /// The kernel-visible extent of `partition`'s axis `axis`, taken from the
@@ -502,6 +510,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         compile_options: &crate::hints::CompileOptions,
     ) -> Result<Self, JITError> {
         // 1. Check module exists.
+        let module_name = modules.module_key(module_name);
         if !modules.modules().contains_key(module_name) {
             return Err(JITError::Generic(format!(
                 "Undefined module: {module_name}"
@@ -511,10 +520,9 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         // 2. KernelNaming.
         let kernel_naming = KernelNaming::new(function_name);
 
-        // 3. Look up function.
-        let (_, function) = modules
-            .functions()
-            .get(kernel_naming.public_name())
+        // 3. Look up function in the kernel's module.
+        let function = modules
+            .module_function(module_name, kernel_naming.public_name())
             .with_context(|| format!("Undefined function: {function_name}"))?;
 
         // 4. Parse entry_attrs.
@@ -569,6 +577,16 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 },
             )?;
         Self::add_module_const_vars_from_modules(modules, module_name, &mut generic_vars);
+        // A string tag the host names is spelled from its defining module,
+        // as one written in the kernel is (see `string_tag_path`).
+        for inst_type in generic_vars.inst_types.values_mut() {
+            let Ok(ty) = syn::parse_str::<syn::Type>(inst_type) else {
+                continue;
+            };
+            if let Some(marker) = modules.string_tag_type(&ty, module_name) {
+                *inst_type = marker.to_token_stream().to_string();
+            }
+        }
 
         // 9. generate_entry_point.
         let spec_args_map: HashMap<String, crate::specialization::SpecializationBits> = spec_args
@@ -600,8 +618,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
 
         // 10. Check namespace collision.
         if modules
-            .functions()
-            .get(kernel_naming.entry_name().as_str())
+            .module_function(module_name, kernel_naming.entry_name().as_str())
             .is_some()
         {
             return modules
@@ -647,7 +664,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         // in-kernel code motion (see CheckOptimizations::device_debug for
         // why discharge and launch relocation are untouched).
         let mut check_opts = crate::check_optimizations::CheckOptimizations::from_env();
-        if compile_options.device_debug {
+        if compile_options.codegen == crate::hints::CodegenMode::Debug {
             check_opts.hoist_to_preheaders = false;
         }
         Ok(CUDATileFunctionCompiler {
@@ -660,7 +677,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             assumptions,
             param_index,
             param_is_mutable,
-            launch_checks: RefCell::new(Vec::new()),
+            launch_checks: RefCell::new(LaunchChecks::default()),
             gpu_name,
             target_capabilities: None,
             optimization_hints,
@@ -709,6 +726,16 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 generic_vars.inst_bool.insert(name.clone(), value);
             }
         }
+    }
+
+    /// `ty` as the text of the string tag it names from the current
+    /// module, spelled from its defining module (see
+    /// [`crate::compiler::_module::string_tag_path`]), or `None` when
+    /// it names none.
+    pub(crate) fn string_tag_text(&self, ty: &syn::Type) -> Option<String> {
+        self.modules
+            .string_tag_type(ty, &self.current_module())
+            .map(|marker| marker.to_token_stream().to_string())
     }
 
     /// The module whose source is being compiled right now: the kernel's
@@ -776,9 +803,25 @@ impl<'m> CUDATileFunctionCompiler<'m> {
     /// stack.
     pub(crate) fn ir_location(&self, span: &proc_macro2::Span) -> cutile_ir::ir::Location {
         let stack = self.call_site_stack.borrow();
+        // Runtime parsing gives each captured module its own source span.
+        // Generated types, arrays, and wrapper calls do not join that span.
+        let captured_location = || {
+            self.modules
+                .name_resolver
+                .all_modules()
+                .iter()
+                .find_map(|(name, module)| {
+                    module.ident.span().join(*span)?;
+                    let base = self.modules.get_span_base(name).filter(|b| b.is_known())?;
+                    Some(base.resolve_span(span))
+                })
+        };
         let (caller, callee_scope, span_base) = match stack.last() {
             None => {
-                let loc = self.resolve_span(span);
+                let loc = captured_location().unwrap_or_else(|| {
+                    self.span_base()
+                        .resolve_span(&self._function.sig.ident.span())
+                });
                 return if loc.is_known() {
                     cutile_ir::ir::Location::FileLineCol {
                         filename: loc.file,
@@ -801,7 +844,12 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         // callee's own module base; scope the op to the CALLEE's subprogram
         // (so inline debug frames name the inlined function, not the kernel
         // entry) and chain where it was inlined.
-        let loc = span_base.resolve_span(span);
+        let loc = captured_location().unwrap_or_else(|| match callee_scope {
+            Some(scope) if span_base.is_known() => {
+                SourceLocation::new(span_base.file.clone(), scope.line as usize, 0)
+            }
+            _ => SourceLocation::unknown(),
+        });
         if !loc.is_known() {
             return cutile_ir::ir::Location::Unknown;
         }
@@ -885,6 +933,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                 linkage_name: format!("{callee_name}@{stem}:{}:{}", def.line, def.column),
                 compile_unit,
                 scope_line: def.line as u32,
+                is_declaration: false,
             })
         } else {
             None
@@ -959,7 +1008,11 @@ impl<'m> CUDATileFunctionCompiler<'m> {
 
     /// Compile the kernel function into a `cutile_ir::Module`.
     pub fn compile(&self) -> Result<Module, JITError> {
-        let mut module = Module::new(&self.module_name);
+        // The IR module has the kernel module's short name, the last
+        // segment of `module_name` when that is an absolute path (see
+        // `CUDATileModules::new`).
+        let short_name = self.module_name.rsplit("::").next().unwrap_or_default();
+        let mut module = Module::new(short_name);
         if let Some(item) = self.modules.modules().get(&self.module_name) {
             for attr in &item.attrs {
                 if attr.path().is_ident("noname") {
@@ -1171,12 +1224,21 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         }
 
         for (key, value) in generic_vars.ordered_inst_bool() {
-            let tr_val = self.compile_bool_constant(module, block_id, generic_vars, value)?;
+            let tr_val = self.compile_bool_constant(
+                module,
+                block_id,
+                generic_vars,
+                value,
+                &fn_item.sig.span(),
+            )?;
             ctx.vars.insert(key.to_string(), tr_val);
         }
 
         // Add arrays as variables.
         for (key, value) in generic_vars.ordered_inst_array() {
+            // Binding materialization has no expression in the source. Use
+            // the user signature, not the generated ABI wrapper's span.
+            let _source = self.push_opaque_call_site(&self._function.sig.span());
             let arr_expr = syn::parse2::<syn::Expr>(format!("{value:?}").parse().unwrap()).unwrap();
             let arr_ty =
                 syn::parse2::<syn::Type>(format!("[i32;{}]", value.len()).parse().unwrap())
@@ -1191,6 +1253,13 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         ctx.default_terminator = Some(BlockTerminator::Return);
         ctx.fn_body = true;
         ctx.kernel_entry = true;
+        self.seed_ffi_token(
+            module,
+            block_id,
+            generic_vars,
+            &mut ctx,
+            &fn_item.sig.span(),
+        )?;
 
         let mut typed_fn_item = fn_item.clone();
         crate::passes::node_ids::assign_expr_ids(&mut typed_fn_item);
@@ -1253,7 +1322,7 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         let mut validator = self.validator.clone();
         // Surface the launch checks hoisted during compilation so the host runs
         // them at launch.
-        validator.launch_checks = self.launch_checks.borrow().clone();
+        validator.launch_checks = self.launch_checks();
         validator
     }
 
@@ -1307,7 +1376,8 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         let tr_ty = self
             .compile_type(&rust_ty, generic_vars, &HashMap::new())?
             .ok_or(self.jit_error(&rust_ty.span(), "failed to compile constant"))?;
-        self.compile_constant_from_exact_bounds(module, block_id, bounds, tr_ty)
+        let span = tr_ty.rust_ty.span();
+        self.compile_constant_from_exact_bounds(module, block_id, bounds, tr_ty, &span)
     }
 
     pub(crate) fn compile_bool_constant(
@@ -1316,16 +1386,18 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         block_id: cutile_ir::ir::BlockId,
         generic_vars: &GenericVars,
         x: bool,
+        span: &proc_macro2::Span,
     ) -> Result<TileRustValue, JITError> {
         let rust_ty: syn::Type = syn::parse_quote!(bool);
         let tr_ty = self
             .compile_type(&rust_ty, generic_vars, &HashMap::new())?
-            .ok_or(self.jit_error(&rust_ty.span(), "failed to compile bool constant"))?;
+            .ok_or(self.jit_error(span, "failed to compile bool constant"))?;
         self.compile_constant_from_exact_bounds(
             module,
             block_id,
             Bounds::exact(if x { 1 } else { 0 }),
             tr_ty,
+            span,
         )
     }
 
@@ -1335,10 +1407,11 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         block_id: cutile_ir::ir::BlockId,
         bounds: Bounds<i64>,
         tr_ty: TileRustType,
+        span: &proc_macro2::Span,
     ) -> Result<TileRustValue, JITError> {
         if !bounds.is_exact() {
             return self.jit_error_result(
-                &tr_ty.rust_ty.span(),
+                span,
                 &format!(
                     "expected a compile-time constant, but got a value with bounds [{}, {}]",
                     bounds.start, bounds.end
@@ -1347,14 +1420,13 @@ impl<'m> CUDATileFunctionCompiler<'m> {
         }
         let const_value = bounds.start;
         let TypeInstance::ElementType(type_inst) = &tr_ty.type_instance else {
-            return self.jit_error_result(&tr_ty.rust_ty.span(), "expected a scalar element type");
+            return self.jit_error_result(span, "expected a scalar element type");
         };
         let Some(const_ty_str) = get_cuda_tile_element_type_from_rust_primitive_str(
             &type_inst.rust_element_instance_ty,
             self.modules.primitives(),
         ) else {
-            return self
-                .jit_error_result(&tr_ty.rust_ty.span(), "failed to compile constant value");
+            return self.jit_error_result(span, "failed to compile constant value");
         };
 
         // Build tile-ir Constant op directly (replaces operation_parse).
@@ -1388,18 +1460,17 @@ impl<'m> CUDATileFunctionCompiler<'m> {
             ScalarType::F4E2M1FN => vec![(const_value as u8) & 0x0F],
             _ => (const_value as i32).to_le_bytes().to_vec(),
         };
-        let (op_id, results) =
-            OpBuilder::new(Opcode::Constant, self.ir_location(&tr_ty.rust_ty.span()))
-                .result(result_ty.clone())
-                .attr(
-                    "value",
-                    Attribute::DenseElements(DenseElements {
-                        element_type: result_ty,
-                        shape: vec![],
-                        data,
-                    }),
-                )
-                .build(module);
+        let (op_id, results) = OpBuilder::new(Opcode::Constant, self.ir_location(span))
+            .result(result_ty.clone())
+            .attr(
+                "value",
+                Attribute::DenseElements(DenseElements {
+                    element_type: result_ty,
+                    shape: vec![],
+                    data,
+                }),
+            )
+            .build(module);
         append_op(module, block_id, op_id);
         let mut tr_val = TileRustValue::new_value_kind_like(results[0], tr_ty);
         tr_val.mutability = Mutability::Immutable;

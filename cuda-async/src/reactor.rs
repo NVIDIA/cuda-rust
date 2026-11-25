@@ -216,7 +216,7 @@ fn probe_stale_slots(
 /// slot's flag write can no longer land — the error is the context's sticky
 /// fault — so recycling the slot cannot be clobbered by a late device write.
 fn stream_is_faulted(stream: &Stream) -> bool {
-    if stream.device().bind_to_thread().is_err() {
+    if stream.context().bind_to_thread().is_err() {
         return false;
     }
     matches!(probe_stream(stream), StreamHealth::Faulted(_))

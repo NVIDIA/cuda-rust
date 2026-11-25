@@ -1,0 +1,4 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# This comparison uses the shared environment pinned in cute-rs-preview/requirements.txt.
+-r ../../../requirements.txt

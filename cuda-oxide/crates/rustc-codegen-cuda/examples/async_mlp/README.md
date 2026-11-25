@@ -106,12 +106,12 @@ to access the currently assigned CUDA stream and perform async memory operations
 ```rust
 fn h2d(host_data: Vec<f32>) -> impl DeviceOperation<Output = DeviceBox<[f32]>> {
     device_operation::with_context(move |ctx| {
-        let stream = ctx.get_cuda_stream();
-        unsafe {
-            let dptr = malloc_async(stream.cu_stream(), num_bytes).unwrap();
-            memcpy_htod_async(dptr, host_data.as_ptr(), num_bytes, stream.cu_stream()).unwrap();
-            value(DeviceBox::from_raw_parts(dptr, n, ctx.get_device_id()))
-        }
+        let host_data = Arc::new(host_data);
+        ctx.retain(host_data.clone()).unwrap();
+        let buffer =
+            unsafe { DeviceBuffer::from_host_async_unchecked(ctx.get_cuda_stream(), &host_data) }
+                .unwrap();
+        value(DeviceBox::from_buffer(buffer))
     })
 }
 ```
@@ -165,5 +165,5 @@ are required on `and_then` closure parameters:
 The `Zippable` trait must also be explicitly imported for `zip!` to work:
 
 ```rust
-use cuda_async::simt::device_operation::Zippable;
+use cuda_async::device_operation::Zippable;
 ```

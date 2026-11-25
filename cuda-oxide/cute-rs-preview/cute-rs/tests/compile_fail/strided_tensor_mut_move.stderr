@@ -1,0 +1,10 @@
+error[E0382]: borrow of moved value: `first`
+  --> tests/compile_fail/strided_tensor_mut_move.rs:11:9
+   |
+ 8 |     let mut first = StridedTensorMut::from_mut_slice(&mut values);
+   |         --------- move occurs because `first` has type `StridedTensorMut<'_, f32>`, which does not implement the `Copy` trait
+ 9 |     let mut second = first;
+   |                      ----- value moved here
+10 |     unsafe {
+11 |         first.store_at(0, 1.0);
+   |         ^^^^^ value borrowed here after move

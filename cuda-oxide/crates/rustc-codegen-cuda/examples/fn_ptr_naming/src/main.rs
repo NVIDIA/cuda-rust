@@ -17,7 +17,7 @@
 //! Run with:
 //!   cargo oxide run fn_ptr_naming
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, kernel, thread};
 use cuda_host::cuda_module;

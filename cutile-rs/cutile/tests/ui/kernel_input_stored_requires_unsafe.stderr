@@ -1,0 +1,11 @@
+error[E0200]: the trait `KernelInputStored` requires an `unsafe impl` declaration
+  --> tests/ui/kernel_input_stored_requires_unsafe.rs:13:1
+   |
+13 | impl KernelInputStored for Mislabelled {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: the trait `KernelInputStored` enforces invariants that the compiler can't check. Review the trait documentation and make sure this implementation upholds those invariants before adding the `unsafe` keyword
+help: add `unsafe` to this trait implementation
+   |
+13 | unsafe impl KernelInputStored for Mislabelled {
+   | ++++++

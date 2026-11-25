@@ -1,0 +1,35 @@
+error[E0277]: the trait bound `Float4E2M1FN: TensorElement<f32>` is not satisfied
+  --> tests/compile_fail/invalid_storage.rs:13:13
+   |
+13 |     let _ = Tensor::<Float4E2M1FN, _, f32>::from_storage(
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `TensorElement<f32>` is not implemented for `Float4E2M1FN`
+   |
+help: the trait `TensorElement<f32>` is not implemented for `Float4E2M1FN`
+      but trait `TensorElement<u8>` is implemented for it
+  --> src/numeric.rs
+   |
+   | impl TensorElement<u8> for Float4E2M1FN {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: for that trait implementation, expected `u8`, found `f32`
+note: required by a bound in `Tensor`
+  --> src/tensor/mod.rs
+   |
+   | pub struct Tensor<'a, Element, Layout, Storage = Element>
+   |            ------ required by a bound in this struct
+   | where
+   |     Element: TensorElement<Storage>,
+   |              ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Tensor`
+
+error[E0599]: the associated function or constant `from_storage` exists for struct `Tensor<'_, Float4E2M1FN, _, f32>`, but its trait bounds were not satisfied
+  --> tests/compile_fail/invalid_storage.rs:13:45
+   |
+13 |     let _ = Tensor::<Float4E2M1FN, _, f32>::from_storage(
+   |                                             ^^^^^^^^^^^^ associated function or constant cannot be called on `Tensor<'_, Float4E2M1FN, _, f32>` due to unsatisfied trait bounds
+   |
+  ::: src/numeric.rs
+   |
+   | pub struct Float4E2M1FN;
+   | ----------------------- doesn't satisfy `Float4E2M1FN: TensorElement<f32>`
+   |
+   = note: the following trait bounds were not satisfied:
+           `Float4E2M1FN: TensorElement<f32>`

@@ -5,7 +5,7 @@
 use cuda_async::device_context::global_policy;
 use cuda_async::device_operation::{value, with_context, DeviceOp};
 use cuda_async::error::DeviceError;
-use cuda_async::launch::AsyncKernelLaunch;
+use cuda_async::launch::AsyncKernelLaunchBuilder;
 use cuda_core::LaunchConfig;
 use cutile::api::arange;
 use cutile::api::DeviceOpReshape;
@@ -80,45 +80,26 @@ async fn main() -> Result<(), DeviceError> {
     // Chain a bunch of kernel launches.
     let cuda_async_ops = tokio::spawn(async move {
         let y_part = y.partition(y_partition_shape);
-        let mut launcher = AsyncKernelLaunch::new(function.clone());
-        launcher
-            .push_arg(&y_part)
-            .push_arg(a)
-            .push_arg_arc(&x)
-            .set_launch_config(LaunchConfig {
-                grid_dim: y_part.grid().expect("Invalid grid."),
-                block_dim: (1, 1, 1),
-                shared_mem_bytes: 0,
-            });
-        launcher
-            .then(|_| {
-                let mut launcher = AsyncKernelLaunch::new(function.clone());
-                launcher
-                    .push_arg(&y_part)
-                    .push_arg(a)
-                    .push_arg_arc(&x)
-                    .set_launch_config(LaunchConfig {
+        let operations = {
+            let make_launch = || -> cuda_async::launch::AsyncKernelLaunch<'static> {
+                let mut launcher = AsyncKernelLaunchBuilder::new(function.clone());
+                launcher.push_arg(&y_part).push_arg(a).push_arg_arc(&x);
+                // SAFETY: the signature and partition geometry match SAXPY above.
+                // Argument storage retains both allocations until completion.
+                unsafe {
+                    launcher.finalize_unchecked(LaunchConfig {
                         grid_dim: y_part.grid().expect("Invalid grid."),
                         block_dim: (1, 1, 1),
                         shared_mem_bytes: 0,
-                    });
-                launcher
-            })
-            .then(|_| {
-                let mut launcher = AsyncKernelLaunch::new(function.clone());
-                launcher
-                    .push_arg(&y_part)
-                    .push_arg(a)
-                    .push_arg_arc(&x)
-                    .set_launch_config(LaunchConfig {
-                        grid_dim: y_part.grid().expect("Invalid grid."),
-                        block_dim: (1, 1, 1),
-                        shared_mem_bytes: 0,
-                    });
-                launcher
-            })
-            .await
-            .expect("Kernel launch failed.");
+                    })
+                }
+            };
+            let first = make_launch();
+            let second = make_launch();
+            let third = make_launch();
+            first.then(move |_| second).then(move |_| third)
+        };
+        operations.await.expect("Kernel launch failed.");
         y_part.unpartition()
     });
     let res = cuda_async_ops.await;

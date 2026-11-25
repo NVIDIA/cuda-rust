@@ -31,7 +31,7 @@ pub(super) fn passthrough_codegen_fingerprint(
         owner_filter,
         target_arch,
         materialization,
-        &inherited_process_env(),
+        &inherited_process_env_with_cutlass_compiler_identity(ctx),
     )
 }
 
@@ -163,7 +163,7 @@ pub(super) fn sanitize_codegen_fingerprint(
         detected_device_arch,
         ptx_dir,
         materialization,
-        &inherited_process_env(),
+        &inherited_process_env_with_cutlass_compiler_identity(ctx),
     )
 }
 
@@ -317,6 +317,35 @@ pub(super) fn pipeline_codegen_fingerprint(
         "CUDA_OXIDE_DUMP_MIR=1",
         "CUDA_OXIDE_DUMP_LLVM=1",
     ] {
+        update_codegen_fingerprint_hash(&mut hash, value.as_bytes());
+    }
+    finish_codegen_fingerprint(hash)
+}
+
+/// Codegen fingerprint dedicated to `cargo oxide lean-export`.
+///
+/// Keeps `lean-export` builds (`CUDA_OXIDE_LEAN_EXPORT_ONLY=1`) in a separate
+/// Cargo artifact namespace so an export-only compile can never satisfy a
+/// subsequent `cargo oxide build` or `cargo oxide run` without running Lean.
+pub(super) fn lean_export_codegen_fingerprint(
+    ctx: &Context,
+    verbose: bool,
+    target_arch: Option<&str>,
+    materialization: &MaterializationMode,
+) -> String {
+    let base = standard_codegen_fingerprint(
+        ctx,
+        verbose,
+        false,
+        false,
+        DeviceDebug::Off,
+        false,
+        target_arch,
+        None,
+        materialization,
+    );
+    let mut hash = sha2::Sha256::new();
+    for value in [base.as_str(), "CUDA_OXIDE_LEAN_EXPORT_ONLY=1"] {
         update_codegen_fingerprint_hash(&mut hash, value.as_bytes());
     }
     finish_codegen_fingerprint(hash)

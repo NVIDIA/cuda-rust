@@ -18,20 +18,24 @@
 //!   byte, so scale selection cannot mask a data-path error, but the
 //!   scale *selector* logic is only trivially exercised.
 //!
-//! The instruction only exists on Blackwell consumer parts (sm_120a/f,
-//! sm_121a/f), so the device code is always compiled for sm_120a
-//! (smoketest passes `--arch=sm_120a`). On any other GPU the example
-//! verifies the generated PTX instead of executing and exits cleanly.
+//! The instruction only exists on Blackwell consumer parts (`sm_120a`/`f`,
+//! `sm_121a`/`f`). `cargo oxide run` selects the detected GPU target on
+//! `sm_120`/`sm_121` and falls back to `sm_120a` elsewhere; on any other GPU
+//! the example verifies the generated PTX instead of executing and exits
+//! cleanly.
 //!
 //! Build and run with:
-//!   cargo oxide run mma_mxf8f6f4 --arch sm_120a
+//!   cargo oxide run mma_mxf8f6f4
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, cuda_module, kernel, thread, wmma};
 
+/// Output matrix row count for the `m16n8k32` warp MMA shape.
 const M: usize = 16;
+/// Output matrix column count for the `m16n8k32` warp MMA shape.
 const N: usize = 8;
+/// Inner reduction dimension for the `m16n8k32` warp MMA shape.
 const K: usize = 32;
 /// Every selectable ue8m0 byte = 127 -> scale factor 2^0 = 1.0.
 const SCALES_ONE: u32 = 0x7F7F_7F7F;
@@ -80,16 +84,20 @@ fn encode_e4m3(v: i32) -> u8 {
     }
 }
 
+/// Deterministic small integer (`-3..=3`) at `(row, k)` in operand matrix `A`.
+/// Every value in this range is exact in OCP `e4m3`.
 fn a_value(row: usize, k: usize) -> i32 {
     ((row + k) % 7) as i32 - 3
 }
 
+/// Deterministic small integer (`-2..=2`) at `(k, col)` in operand matrix `B`.
+/// Every value in this range is exact in OCP `e4m3`.
 fn b_value(k: usize, col: usize) -> i32 {
     ((k * 2 + col) % 5) as i32 - 2
 }
 
-/// Non-Blackwell-consumer fallback: confirm the sm_120a PTX was generated
-/// and actually contains the block-scaled MMA instruction.
+/// Non-Blackwell-consumer fallback: confirm the generated PTX contains the
+/// block-scaled `kind::mxf8f6f4` MMA instruction.
 fn verify_ptx_only() -> Result<(), Box<dyn std::error::Error>> {
     let ptx_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("mma_mxf8f6f4.ptx");
     let ptx = std::fs::read_to_string(&ptx_path)?;
@@ -103,6 +111,8 @@ fn verify_ptx_only() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Executes the `m16n8k32` `kind::mxf8f6f4` numeric check on `sm_120`/`sm_121`
+/// or verifies PTX emission on other GPUs.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== mxf8f6f4 block-scale MMA numeric check (e4m3 x e4m3 -> f32) ===");
     let ctx = CudaContext::new(0)?;
@@ -110,7 +120,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // kind::mxf8f6f4 exists only on sm_120/sm_121 (Blackwell consumer).
     let (major, minor) = ctx.compute_capability()?;
     println!("GPU Compute Capability: sm_{major}{minor}");
-    if major != 12 {
+    if !matches!((major, minor), (12, 0 | 1)) {
         println!("WARNING: mxf8f6f4 block-scale MMA requires sm_120/sm_121 (Blackwell consumer)");
         println!("         detected sm_{major}{minor}; verifying generated PTX only");
         return verify_ptx_only();

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 use cuda_async::device_operation::DeviceOp;
-use cuda_core::Device;
+use cuda_core::Context;
 use cutile::api::{ones, zeros};
 use cutile::error::Error;
 use cutile::tensor::{IntoPartition, Partition, Tensor, ToHostVec};
@@ -50,7 +50,7 @@ fn main() -> Result<(), Error> {
         return Ok(());
     }
 
-    let device = Device::new(0)?;
+    let device = Context::new(0)?;
     let stream = device.new_stream()?;
 
     let batch = 4usize;

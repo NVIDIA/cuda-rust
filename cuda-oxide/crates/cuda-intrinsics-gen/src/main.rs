@@ -7,6 +7,7 @@ mod abi_history;
 mod coverage;
 mod extract;
 mod generate;
+mod libdevice_math;
 mod model;
 mod probe;
 mod ptx;
@@ -73,6 +74,21 @@ fn try_main() -> Result<()> {
         "check" => {
             reject_extra(arguments)?;
             generate::run(&repo_root, true)
+        }
+        "extract-libdevice" | "verify-libdevice" => {
+            let bitcode = take_option(&mut arguments, "--libdevice")?
+                .map(PathBuf::from)
+                .context("libdevice command requires --libdevice FILE")?;
+            let llvm_dis = take_option(&mut arguments, "--llvm-dis")?
+                .map(PathBuf::from)
+                .context("libdevice command requires --llvm-dis FILE")?;
+            reject_extra(arguments)?;
+            libdevice_math::inspect(
+                &repo_root,
+                &bitcode,
+                &llvm_dis,
+                command == "extract-libdevice",
+            )
         }
         "coverage" => {
             let family = take_option(&mut arguments, "--family")?;
@@ -218,6 +234,8 @@ fn print_usage() {
          cuda-intrinsics-gen extract --llvm-src DIR --llvm-tblgen FILE [--repo-root DIR]\n  \
          cuda-intrinsics-gen generate [--repo-root DIR]\n  \
          cuda-intrinsics-gen check [--repo-root DIR]\n  \
+         cuda-intrinsics-gen extract-libdevice --libdevice FILE --llvm-dis FILE [--repo-root DIR]\n  \
+         cuda-intrinsics-gen verify-libdevice --libdevice FILE --llvm-dis FILE [--repo-root DIR]\n  \
          cuda-intrinsics-gen coverage [--family NAME] [--repo-root DIR]\n  \
          cuda-intrinsics-gen check-abi-history --base-ref REF [--repo-root DIR]\n  \
          cuda-intrinsics-gen probe [--all | --intrinsic ID] [--llc FILE] [--skip-terminal] [--per-target] [--repo-root DIR]\n  \

@@ -37,6 +37,8 @@ also still traps.
   in, but calls `scaled_gather`'s helper function): a regression guard
   proving the flag never leaks from an opted kernel into a caller that
   didn't ask for it.
+- `shared_swap_checked` and `shared_swap_unchecked`: the same pair for
+  `SharedArray` indexing, which follows the same policy as slices.
 
 The host runs all kernels on the GPU, compares results against a CPU
 reference, then inspects the generated PTX and asserts:
@@ -46,6 +48,8 @@ indexed_sum_checked    traps present   (default behavior intact)
 indexed_sum_unchecked  zero traps      (the flag worked)
 scaled_gather          zero traps      (works for generic kernels)
 gather_then_check      traps present   (no leak into non-opted callers)
+shared_swap_checked    traps present   (SharedArray indexing is checked)
+shared_swap_unchecked  zero traps      (and elided when opted in)
 ```
 
 ```bash

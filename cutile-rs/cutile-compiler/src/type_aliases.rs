@@ -50,6 +50,13 @@ pub fn normalize_type_aliases(
     normalize_type_aliases_inner(ty, aliases, &mut Vec::new())
 }
 
+/// Substitute one alias's arguments without resolving names in its body.
+/// Scoped callers must resolve the result in the alias's declaring module.
+pub fn instantiate_type_alias(alias: &ItemType, args: &PathArguments) -> Result<Type, String> {
+    let subst = build_alias_substitution(alias, args)?;
+    substitute_type(&alias.ty, &subst, &HashMap::new(), &mut Vec::new())
+}
+
 /// Replace paths to module-level scalar consts inside a type with their
 /// literal expression. This keeps type-level shapes such as
 /// `Tensor<f32, {[BLOCK]}>` consumable by the existing generic machinery.

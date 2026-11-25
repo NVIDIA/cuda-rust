@@ -26,6 +26,10 @@ run_step \
     "cutile-ir build_basic example" \
     cargo run -p cutile-ir --example build_basic --quiet
 
+run_step \
+    "GEMM, attention and FP16 MoE example validation" \
+    cargo run -p cutile-kernels --example kernel_variants -- all
+
 echo -e "${YELLOW}>>> Running cutile-examples (GPU)${NC}"
 cd "$REPO_ROOT/cutile-examples" || exit 1
 run_examples "$REPO_ROOT/cutile-examples/examples" $EXTRA_FEATURES

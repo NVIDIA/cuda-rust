@@ -30,6 +30,9 @@ struct Allocation(Tensor<f32>);
 // SAFETY: the owned tensor has a stable, live allocation. The test's rescue
 // handle is used only to observe refcounts, never to access its GPU bytes.
 unsafe impl DeviceAllocation for Allocation {
+    fn context(&self) -> std::sync::Arc<cuda_core::Context> {
+        self.0.context().clone()
+    }
     fn device_ptr(&self) -> u64 {
         self.0.device_pointer().cu_deviceptr()
     }
@@ -67,6 +70,7 @@ const GATE_BOUND: Duration = Duration::from_secs(60);
 
 struct Gate {
     release: mpsc::Sender<()>,
+    completed: mpsc::Receiver<bool>,
     /// Set by the callback when it hit `GATE_BOUND`: this gate's stream drained
     /// on its own, so a `Ready` first poll is a harness stall, not an ordering
     /// bug. Per gate, because the process-wide counters below also see other
@@ -77,11 +81,12 @@ struct Gate {
 impl Gate {
     fn arm(stream: &Arc<cuda_core::Stream>) -> Self {
         let (sender, receiver) = mpsc::channel();
+        let (done, completed) = mpsc::channel();
         let expired = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let expired_flag = expired.clone();
         GATES_ARMED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         *LAST_GATE_ARMED_AT.lock().unwrap() = Some(std::time::Instant::now());
-        unsafe {
+        {
             stream
                 .launch_host_function(move || {
                     GATES_STARTED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -95,11 +100,13 @@ impl Gate {
                         .unwrap()
                         .push(format!("{outcome:?}"));
                     GATES_FINISHED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let _ = done.send(outcome.is_ok());
                 })
                 .unwrap();
         }
         Self {
             release: sender,
+            completed,
             expired,
         }
     }
@@ -112,6 +119,13 @@ impl Gate {
 impl Drop for Gate {
     fn drop(&mut self) {
         let _ = self.release.send(());
+        let completed = self.completed.recv_timeout(GATE_BOUND);
+        if !std::thread::panicking() {
+            assert!(
+                matches!(completed, Ok(true)),
+                "GPU gate did not acknowledge explicit release: {completed:?}"
+            );
+        }
     }
 }
 
@@ -138,7 +152,7 @@ fn assert_gated_pending<T>(
             panic!(
                 "gated submission completed on the first poll while its Gate should still be blocking the stream (newest gate armed {age:?} ago; gates armed: {armed}, callbacks started: {}, finished: {finished}, wait outcomes: {outcomes:?}, stream query now: {:?})",
                 GATES_STARTED.load(std::sync::atomic::Ordering::SeqCst),
-                unsafe { stream.query() },
+                stream.query(),
             )
         }
         Poll::Ready(Err(e)) => panic!("gated submission failed on the first poll: {e}"),
@@ -155,7 +169,7 @@ fn forget_pending<O: DeviceOp>(op: O, stream: &Arc<cuda_core::Stream>, gate: &Ga
 
 fn on_gpu(f: impl FnOnce(Arc<cuda_core::Stream>, Arc<cuda_core::Stream>) + Send + 'static) {
     crate::common::with_test_stack(move || {
-        let device = cuda_core::Device::new(0).unwrap();
+        let device = cuda_core::Context::new(0).unwrap();
         let stream = device.new_stream().unwrap();
         let other = device.new_stream().unwrap();
         let src = api::ones::<f32>(&[32]).sync_on(&stream).unwrap();
@@ -176,16 +190,15 @@ fn on_gpu(f: impl FnOnce(Arc<cuda_core::Stream>, Arc<cuda_core::Stream>) + Send 
         let _ = api::dup(&src).sync_on(&stream).unwrap();
         api::memcpy(&mut dst, &src).sync_on(&stream).unwrap();
         // Initialize the completion backend before placing any work behind a gate.
-        unsafe {
-            stream
-                .launch_host_function(|| std::thread::sleep(Duration::from_millis(10)))
-                .unwrap()
-        };
-        block_on(DeviceFuture::scheduled(
-            value(()),
-            ExecutionContext::new(stream.clone()),
-        ))
-        .unwrap();
+        let gate = Gate::arm(&stream);
+        let mut warmup = DeviceFuture::scheduled(value(()), ExecutionContext::new(stream.clone()));
+        assert_gated_pending(
+            Pin::new(&mut warmup).poll(&mut Context::from_waker(&noop_waker())),
+            &stream,
+            &gate,
+        );
+        drop(gate);
+        block_on(warmup).unwrap();
         f(stream, other);
     });
 }
@@ -220,7 +233,7 @@ fn forgotten_borrowed_kernel_retains_inputs_outputs_and_excludes_conflicts() {
             "borrowed output was released after recover"
         );
         drop(gate);
-        unsafe { stream.synchronize().unwrap() };
+        stream.synchronize().unwrap();
     });
 }
 
@@ -241,7 +254,7 @@ fn forgotten_view_and_mapped_output_keep_their_storage() {
         assert!(Arc::strong_count(&src_owner) > 1);
         assert!(Arc::strong_count(&dst_owner) > 1);
         drop(gate);
-        unsafe { stream.synchronize().unwrap() };
+        stream.synchronize().unwrap();
     });
 }
 
@@ -256,7 +269,7 @@ fn forgotten_memcpy_keeps_both_allocations() {
         assert!(Arc::strong_count(&src_owner) > 1);
         assert!(Arc::strong_count(&dst_owner) > 1);
         drop(gate);
-        unsafe { stream.synchronize().unwrap() };
+        stream.synchronize().unwrap();
     });
 }
 
@@ -304,7 +317,7 @@ fn projected_dup_keeps_source_until_submission_completes() {
         forget_pending(op, &stream, &gate);
         assert!(Arc::strong_count(&owner) > 1);
         drop(gate);
-        unsafe { stream.synchronize().unwrap() };
+        stream.synchronize().unwrap();
     });
 }
 
@@ -325,6 +338,56 @@ impl IntoFuture for Fail {
     }
 }
 
+fn async_on_leaves_lifetimes_to_caller(fail: bool) {
+    on_gpu(move |stream, _| {
+        let (src, src_owner) = tracked(&stream);
+        let (dst, dst_owner) = tracked(&stream);
+        let gate = Gate::arm(&stream);
+        // SAFETY: the rescue owners keep both allocations alive until the
+        // explicit synchronization below, even when the combinator discards
+        // the tensors or returns an error. No conflicting accesses are made.
+        // The warmed kernel remains cached throughout this isolated test.
+        let result = unsafe {
+            if fail {
+                kernels::copy(dst.partition([4]), src)
+                    .then(|_| Fail)
+                    .async_on(&stream)
+            } else {
+                kernels::copy(dst.partition([4]), src)
+                    .then(|_| value(()))
+                    .async_on(&stream)
+            }
+        };
+        let caller_is_only_owner =
+            Arc::strong_count(&src_owner) == 1 && Arc::strong_count(&dst_owner) == 1;
+        let still_pending = matches!(stream.query(), Ok(false));
+        let expired = gate.expired();
+        // Drain before asserting so a regression cannot free the rescue owners
+        // while the GPU is using their allocations.
+        drop(gate);
+        stream.synchronize().unwrap();
+        assert_eq!(result.is_err(), fail);
+        assert!(
+            !expired && still_pending,
+            "async_on waited for GPU completion"
+        );
+        assert!(
+            caller_is_only_owner,
+            "async_on retained resources after returning to the unsafe caller"
+        );
+    });
+}
+
+#[test]
+fn async_on_releases_tracking_without_waiting() {
+    async_on_leaves_lifetimes_to_caller(false);
+}
+
+#[test]
+fn async_on_error_leaves_submitted_resources_with_caller() {
+    async_on_leaves_lifetimes_to_caller(true);
+}
+
 #[test]
 fn partial_submission_error_retains_discarded_resources() {
     on_gpu(|stream, _| {
@@ -339,9 +402,26 @@ fn partial_submission_error_retains_discarded_resources() {
         let result = Pin::new(&mut future).poll(&mut Context::from_waker(&waker));
         assert!(matches!(result, std::task::Poll::Ready(Err(_))));
         assert!(Arc::strong_count(&owner) > 1);
-        drop(gate);
         drop(future);
-        assert_eq!(Arc::strong_count(&owner), 1);
+        assert!(!gate.expired(), "drop waited on a gated stream");
+        assert!(
+            !stream.query().unwrap(),
+            "gated work completed before release"
+        );
+        assert!(
+            Arc::strong_count(&owner) > 1,
+            "drop released GPU storage before completion"
+        );
+        drop(gate);
+        stream.synchronize().unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while Arc::strong_count(&owner) != 1 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "completed storage was not retired"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
     });
 }
 
@@ -362,9 +442,26 @@ fn partial_submission_panic_retains_discarded_resources() {
         }));
         assert!(panic.is_err());
         assert!(Arc::strong_count(&owner) > 1);
-        drop(gate);
         drop(future);
-        assert_eq!(Arc::strong_count(&owner), 1);
+        assert!(!gate.expired(), "drop waited on a gated stream");
+        assert!(
+            !stream.query().unwrap(),
+            "gated work completed before release"
+        );
+        assert!(
+            Arc::strong_count(&owner) > 1,
+            "drop released GPU storage before completion"
+        );
+        drop(gate);
+        stream.synchronize().unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while Arc::strong_count(&owner) != 1 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "completed storage was not retired"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
     });
 }
 
@@ -394,7 +491,7 @@ fn graph_replay_retains_projected_storage_and_releases_launch_accesses() {
         assert!(Arc::strong_count(&src_owner) > 1);
         assert!(Arc::strong_count(&dst_owner) > 1);
         drop(gate);
-        unsafe { other.synchronize().unwrap() };
+        other.synchronize().unwrap();
     });
 }
 

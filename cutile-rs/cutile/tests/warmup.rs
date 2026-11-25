@@ -160,6 +160,14 @@ fn cache_key_different_compile_options() {
         .compile_options(CompileOptions::default().num_worker_warps_per_cta(8))
         .build();
     assert_ne!(key_e, key_f);
+
+    let key_g = default_key()
+        .compile_options(CompileOptions::default().min_ctas_per_sm(0))
+        .build();
+    let key_h = default_key()
+        .compile_options(CompileOptions::default().min_ctas_per_sm(2))
+        .build();
+    assert_ne!(key_g, key_h);
 }
 
 #[test]

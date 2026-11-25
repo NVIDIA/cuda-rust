@@ -39,7 +39,7 @@
 use cuda_async::device_future::DeviceFuture;
 use cuda_async::device_operation::{DeviceOp, ExecutionContext};
 use cuda_core::sys::CUctx_flags_enum_CU_CTX_SCHED_SPIN;
-use cuda_core::{sys, Device, IntoResult, Stream};
+use cuda_core::{sys, Context, IntoResult, Stream};
 use cutile::api;
 use cutile::core::f16;
 use cutile::tensor::{IntoPartition, Partition, Tensor};
@@ -243,7 +243,7 @@ fn make_workload(n: usize, small_ratio: f64) -> Vec<Size> {
 
 fn run_serial_samples(
     workload: &[Size],
-    device: &Arc<Device>,
+    device: &Arc<Context>,
     samples: usize,
     warmup: bool,
     spec: SizeSpec,
@@ -251,7 +251,7 @@ fn run_serial_samples(
 ) -> Vec<f64> {
     let stream = device.new_stream().expect("stream");
     let mut worker = Worker::new(stream.clone(), spec);
-    unsafe { stream.synchronize() }.expect("sync");
+    stream.synchronize().expect("sync");
 
     let run_once = |worker: &mut Worker| -> f64 {
         let t0 = Instant::now();
@@ -295,7 +295,7 @@ enum Cmd {
 
 fn run_threaded_samples(
     workload: &[Size],
-    device: &Arc<Device>,
+    device: &Arc<Context>,
     stream_count: usize,
     samples: usize,
     warmup: bool,
@@ -308,7 +308,7 @@ fn run_threaded_samples(
         .collect();
     let workers: Vec<Worker> = streams.into_iter().map(|s| Worker::new(s, spec)).collect();
     for w in &workers {
-        unsafe { w.stream.synchronize() }.expect("sync");
+        w.stream.synchronize().expect("sync");
     }
 
     let (done_tx, done_rx) = mpsc::channel::<u64>();
@@ -320,7 +320,7 @@ fn run_threaded_samples(
         cmd_senders.push(cmd_tx);
         let done_tx = done_tx.clone();
         let h = std::thread::spawn(move || {
-            worker.stream.device().bind_to_thread().expect("bind");
+            worker.stream.context().bind_to_thread().expect("bind");
             while let Ok(cmd) = cmd_rx.recv() {
                 match cmd {
                     Cmd::Quit => break,
@@ -391,7 +391,7 @@ fn run_threaded_samples(
 
 fn run_async_samples(
     workload: &[Size],
-    device: &Arc<Device>,
+    device: &Arc<Context>,
     stream_count: usize,
     samples: usize,
     warmup: bool,
@@ -436,7 +436,7 @@ fn run_async_samples(
             let h = tokio::spawn(async move {
                 let stream = device.new_stream().expect("stream");
                 let mut worker = Worker::new(stream, spec);
-                unsafe { worker.stream.synchronize() }.expect("sync");
+                worker.stream.synchronize().expect("sync");
                 while let Some(maybe_queue) = cmd_rx.recv().await {
                     let queue = match maybe_queue {
                         Some(q) => q,
@@ -604,7 +604,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let spec = SizeSpec { small_m, large_m };
 
-    let device = Device::new(0).expect("device");
+    let device = Context::new(0).expect("device");
 
     // Pin the context to CU_CTX_SCHED_SPIN for a fair cross-mode
     // comparison. The CUDA default CU_CTX_SCHED_AUTO adapts sync

@@ -65,44 +65,46 @@ fn clean_workspace(ctx: &Context, summary: &mut CleanSummary) -> Result<(), Stri
         summary.removed_directories += 1;
     }
 
+    if ctx.oxide_workspace_root() != ctx.workspace_root
+        && remove_local_target(ctx.oxide_workspace_root())?
+    {
+        summary.removed_directories += 1;
+    }
     if remove_local_target(&ctx.codegen_crate)? {
         summary.removed_directories += 1;
     }
 
-    let entries = std::fs::read_dir(&ctx.examples_dir).map_err(|error| {
-        format!(
-            "could not read examples directory {}: {error}",
-            ctx.examples_dir.display()
-        )
-    })?;
-
     let mut example_dirs = Vec::new();
-
-    for entry in entries {
-        let entry = entry.map_err(|error| {
+    for root in example_roots(ctx) {
+        let entries = std::fs::read_dir(&root).map_err(|error| {
             format!(
-                "could not read an entry in {}: {error}",
-                ctx.examples_dir.display()
+                "could not read examples directory {}: {error}",
+                root.display()
             )
         })?;
 
-        let file_type = entry.file_type().map_err(|error| {
-            format!(
-                "could not inspect example entry {}: {error}",
-                entry.path().display()
-            )
-        })?;
+        for entry in entries {
+            let entry = entry.map_err(|error| {
+                format!("could not read an entry in {}: {error}", root.display())
+            })?;
 
-        if !file_type.is_dir() {
-            continue;
-        }
+            let file_type = entry.file_type().map_err(|error| {
+                format!(
+                    "could not inspect example entry {}: {error}",
+                    entry.path().display()
+                )
+            })?;
 
-        let example_dir = entry.path();
-        if example_dir.join("Cargo.toml").is_file() {
-            example_dirs.push(example_dir);
+            if !file_type.is_dir() {
+                continue;
+            }
+
+            let example_dir = entry.path();
+            if example_dir.join("Cargo.toml").is_file() {
+                example_dirs.push(example_dir);
+            }
         }
     }
-
     example_dirs.sort();
 
     for example_dir in example_dirs {

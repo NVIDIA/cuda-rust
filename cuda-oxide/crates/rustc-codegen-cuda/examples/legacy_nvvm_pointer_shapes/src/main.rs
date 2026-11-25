@@ -10,7 +10,7 @@
 //! and `u32`. Together, these cases check that legacy typed pointers work
 //! throughout a function, not only at loads and stores.
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, kernel, thread};
 use cuda_host::cuda_module;

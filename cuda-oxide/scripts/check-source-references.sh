@@ -22,10 +22,10 @@
 # the moment it starts inferring:
 #
 #   * A path is only checked when it is anchored at a repo root --
-#     cuda-oxide/crates/, cuda-oxide/cuda-oxide-book/, cuda-oxide/scripts/ --
-#     and carries a file extension. That
-#     is the form a new reference normally takes, and the only one that is
-#     unambiguous on its own. Each root is verified to be a real tracked
+#     cuda-oxide/crates/, cuda-oxide/cuda-oxide-book/, cuda-oxide/scripts/,
+#     or docs/ -- and carries a file extension. That is the form a new
+#     reference normally takes, and the only one that is unambiguous on its
+#     own. Each root is verified to be a real tracked
 #     directory before the sweep, so a renamed root fails here rather than
 #     silently matching nothing.
 #   * Prose only: every line of a tracked *.md, and `///` or `//!` lines in a
@@ -80,7 +80,7 @@ import subprocess
 import sys
 import tempfile
 
-ROOTS = ("cuda-oxide/crates", "cuda-oxide/cuda-oxide-book", "cuda-oxide/scripts")
+ROOTS = ("cuda-oxide/crates", "cuda-oxide/cuda-oxide-book", "cuda-oxide/scripts", "docs")
 # Short anchors are how prose inside a product tree names that tree.
 # checked_references adds the product prefix; these are not tracked roots.
 PATH_ROOTS = ROOTS + ("crates", "cuda-oxide-book", "scripts")
@@ -215,9 +215,15 @@ for root in ROOTS:
 live = next((path for path in sorted(tracked) if PATH.fullmatch(path)), None)
 if live is None:
     sys.exit("error: source-reference guard: no tracked path matches the declared roots/extensions")
-with tempfile.NamedTemporaryFile(prefix="zz-source-reference-", suffix=".rs", dir="cuda-oxide/crates") as canary:
+with tempfile.NamedTemporaryFile(
+    prefix="zz-source-reference-", suffix=".rs", dir="cuda-oxide/crates"
+) as canary, tempfile.NamedTemporaryFile(
+    prefix="zz-source-reference-", suffix=".md", dir="docs"
+) as docs_canary:
     untracked = pathlib.Path(canary.name).relative_to(pathlib.Path.cwd()).as_posix()
+    docs_untracked = pathlib.Path(docs_canary.name).relative_to(pathlib.Path.cwd()).as_posix()
     missing = "cuda-oxide/crates/no-such-source-reference-crate/src/lib.rs"
+    docs_missing = "docs/no-such-source-reference-file.md"
     # Synthetic policy inputs exercise the same decision functions even when
     # the repository no longer needs any generated-output declarations.
     output = "cuda-oxide/crates/source-reference-canary/generated.jsonl"
@@ -248,6 +254,16 @@ with tempfile.NamedTemporaryFile(prefix="zz-source-reference-", suffix=".rs", di
         ("case.rs", f"/// {missing}\n//! {missing}", 2),
         ("case.rs", f"///{missing}\n//!{missing}", 2),
         ("case.rs", f'// {missing}\n//// {missing}\nconst P: &str = "{missing}";', 0),
+        ("case.md", docs_missing, 1),
+        ("case.md", "docs/no-such-source-reference-directory/file.md", 1),
+        ("case.md", docs_untracked, 1),
+        ("case.md", "`docs/conf.py` [source](docs/build_all_docs.sh#L1)", 0),
+        ("case.md", f"[source]:{docs_missing}\n[source](./{docs_missing}#L1)", 2),
+        ("case.md", f"https://example.invalid/{docs_missing} //example.invalid/{docs_missing}", 0),
+        ("case.md", f"vendor/{docs_missing} /opt/{docs_missing} old-{docs_missing} {docs_missing}.backup", 0),
+        ("case.md", "docs/../README.md", 1),
+        ("case.rs", f"/// {docs_missing}\n//!{docs_missing}", 2),
+        ("case.rs", f'// {docs_missing}\n//// {docs_missing}\nconst P: &str = "{docs_missing}";', 0),
     ]
     for filename, text, expected in controls:
         actual = list(broken_references(references(filename, text), tracked, generated))
@@ -260,6 +276,15 @@ with tempfile.NamedTemporaryFile(prefix="zz-source-reference-", suffix=".rs", di
         sys.exit("error: source-reference guard self-test lost the traversal diagnostic")
     if list(paths_in_line(f"`{live}` {output}")) != [live, output]:
         sys.exit("error: source-reference guard self-test failed to extract live/output paths")
+    for filename in ("README.md", "docs/index.md", "cuda-oxide/README.md", "cutile-rs/README.md"):
+        if list(checked_references(filename, "`docs/conf.py`")) != [(1, "docs/conf.py")]:
+            sys.exit(f"error: source-reference guard self-test lost the repository docs root in {filename}")
+    docs_output = "docs/build/source-reference-canary.json"
+    docs_refs = list(references("case.md", f"[output]:{docs_output}"))
+    if docs_refs != [(1, docs_output)] or list(broken_references(docs_refs, tracked, {docs_output})):
+        sys.exit("error: source-reference guard self-test rejected a declared docs output")
+    if not list(broken_references(docs_refs, tracked, set())):
+        sys.exit("error: source-reference guard self-test accepted an undeclared docs output")
     for text in (f'const P: &str = "{output}";', f"/// https://example.invalid/{output}"):
         seen = {path for _, path in references("case.rs", text)}
         if not list(declaration_errors({output}, tracked, seen)):

@@ -416,7 +416,7 @@ fn mem_stats_track_alloc_and_free() {
         let dptr = unsafe { cuda_core::malloc_from_pool_async(N, &pool, &stream) }
             .expect("pool allocation failed");
         assert!(dptr != 0);
-        unsafe { stream.synchronize() }.expect("stream sync failed");
+        stream.synchronize().expect("stream sync failed");
 
         let stats = pool.mem_stats().expect("read stats failed");
         assert!(
@@ -431,7 +431,7 @@ fn mem_stats_track_alloc_and_free() {
         );
 
         unsafe { cuda_core::free_async(dptr, &stream) }.expect("free failed");
-        unsafe { stream.synchronize() }.expect("stream sync failed");
+        stream.synchronize().expect("stream sync failed");
 
         let stats = pool.mem_stats().expect("read stats failed");
         assert_eq!(
@@ -467,7 +467,7 @@ fn reset_used_high_collapses_watermark_to_current() {
         let dptr = unsafe { cuda_core::malloc_from_pool_async(N, &pool, &stream) }
             .expect("pool allocation failed");
         unsafe { cuda_core::free_async(dptr, &stream) }.expect("free failed");
-        unsafe { stream.synchronize() }.expect("stream sync failed");
+        stream.synchronize().expect("stream sync failed");
 
         let before = pool.mem_stats().expect("read stats failed");
         assert_eq!(before.used_current, 0);

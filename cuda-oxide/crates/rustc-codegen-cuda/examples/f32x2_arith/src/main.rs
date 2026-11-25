@@ -3,7 +3,7 @@
 
 //! End-to-end example for the SM100 packed f32x2 arithmetic family.
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::f32x2::{
     add_f32x2, add_ftz_f32x2, fma_f32x2, fma_ftz_f32x2, mul_f32x2, mul_ftz_f32x2, pack_f32x2,

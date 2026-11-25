@@ -1,0 +1,21 @@
+cargo-features = ["profile-rustflags"]
+
+[package]
+name = "nvvm_entry_allocas"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[workspace]
+
+[dependencies]
+cuda-device = { path = "../../../cuda-device" }
+cuda-host = { path = "../../../cuda-host" }
+cuda-core = { path = "../../../../../cuda-core" }
+libnvvm-sys = { path = "../../../libnvvm-sys" }
+nvjitlink-sys = { path = "../../../nvjitlink-sys" }
+
+# Keep helper calls visible until LLVM inlining so scratch placement remains
+# observable. Scope the flag to this example, as in disjoint_slice_len.
+[profile.release.package.nvvm_entry_allocas]
+rustflags = ["-Zinline-mir=no"]

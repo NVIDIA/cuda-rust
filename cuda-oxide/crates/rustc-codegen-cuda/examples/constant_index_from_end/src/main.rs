@@ -19,7 +19,7 @@
 //! Run with:
 //!   CUDA_OXIDE_DUMP_MIR=1 cargo oxide run constant_index_from_end
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, kernel, thread};
 use cuda_host::cuda_module;

@@ -50,6 +50,7 @@
 
 pub mod block;
 pub mod body;
+pub(crate) mod cute;
 pub(crate) mod facts;
 pub(crate) mod layout;
 pub(crate) mod location;
@@ -60,6 +61,7 @@ pub(crate) mod statement_debug;
 pub mod terminator;
 pub mod types;
 pub mod values;
+pub(crate) mod verification;
 
 use pliron::context::Context;
 
@@ -107,6 +109,9 @@ pub fn register_dialects(ctx: &mut Context) {
 
     // dialect-nvvm is required for thread / block / warp intrinsics.
     dialect_nvvm::register(ctx);
+
+    // dialect-cute keeps tensor and tile meaning visible to both backends.
+    dialect_cute::register(ctx);
 
     // The builtin dialect (ModuleOp etc.) is auto-registered by pliron 0.14.
 }

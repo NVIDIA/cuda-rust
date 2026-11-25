@@ -108,7 +108,7 @@ require_define_keyword "plain #[inline(never)] helper" 'inline_intent__never_add
 require_define_keyword "non-generic #[inline(never)] #[device] helper" 'never_dev' noinline
 require_define_keyword "plain #[inline] helper" 'inline_intent__hint_mul' inlinehint
 require_define_keyword "plain #[inline(always)] helper" 'inline_intent__always_sub' alwaysinline
-forbid_define_keywords "const-generic #[device] helper" 'scale_by[A-Za-z0-9_.$]*'
+forbid_define_keywords "const-generic #[device] helper" '(.*cuda_oxide_device_[0-9a-f]+_)?scale_by[A-Za-z0-9_.$]*'
 
 # PTX: the noinline helpers survive opt as functions the entry calls.
 require_ptx_function "plain noinline helper" 'inline_intent__never_add'

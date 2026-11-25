@@ -19,6 +19,7 @@ use super::layout::{alignment_anchor_type, make_enum_filler_type, mir_type_conta
 use super::pointer_storage::{
     PointerOverlapRejection, analyze_pointer_overlap, llvm_type_contains_pointer,
 };
+use super::struct_layout::{StructLayoutInfo, build_struct_slot_map};
 use super::{
     convert_type, is_zero_sized_type, llvm_type_contains_i1, llvm_type_is_byte_faithful,
     llvm_type_size_align, natural_struct_layout,
@@ -26,6 +27,24 @@ use super::{
 use crate::convert::enum_payload_storage::{
     MAX_ENUM_PAYLOAD_ARRAY_REWRITE_LEAVES, enum_payload_storage_type,
 };
+
+/// A payload leaf's `insertvalue`/`extractvalue` path into the field's
+/// lowered value, paired with the enum struct slot backing it.
+pub(crate) type LeafSlot = (Vec<u32>, u32);
+
+/// The claim-index form used while [`build_enum_slot_map`] is still laying
+/// claims down; converted to [`LeafSlot`] once slots exist.
+type LeafClaim = (Vec<u32>, usize);
+
+/// One byte-range claim on the enum's storage: (offset, size, type).
+type EnumClaim = (u64, u64, TypeHandle);
+
+/// A successful leaf decomposition: each leaf's claim placement, plus the
+/// fresh claims the caller must add.
+struct DecomposedPayload {
+    placement: Vec<LeafClaim>,
+    fresh_claims: Vec<EnumClaim>,
+}
 
 /// The LLVM struct for an enum, plus a map saying where the tag and each
 /// payload field ended up.
@@ -43,14 +62,178 @@ pub(crate) struct EnumSlotMap {
     pub carrier_llvm_ty: Option<TypeHandle>,
     /// Which struct slot holds each payload field, in the flattened
     /// order of `MirEnumType::all_field_types`. `None` means the field
-    /// has no slot of its own: it is zero-sized, or its bytes are shared
-    /// with a different-typed field of another variant. Such fields are
-    /// read and written through memory at `field_offsets` instead.
+    /// has no slot of its own: it is zero-sized, its bytes are shared
+    /// with a different-typed field of another variant, or it was
+    /// decomposed leaf by leaf (check [`Self::field_leaf_slots`] first).
+    /// Slotless fields without leaves are read and written through
+    /// memory at `field_offsets` instead.
     pub field_slots: Vec<Option<u32>>,
+    /// Per-leaf slots for decomposed payload fields, parallel to
+    /// [`Self::field_slots`]. `Some` exactly when the field is an
+    /// aggregate whose every non-ZST leaf owns a typed slot (a leaf may
+    /// reuse the niche carrier's slot or another field's slot): one
+    /// `(path into the field's lowered LLVM value, enum struct slot)`
+    /// pair per leaf, in walk order. Construction and payload reads then
+    /// rebuild the aggregate in SSA, one `insertvalue`/`extractvalue`
+    /// per leaf, with no spill through memory.
+    pub field_leaf_slots: Vec<Option<Vec<LeafSlot>>>,
     /// Byte position of each payload field inside the enum.
     pub field_offsets: Vec<u64>,
     /// Converted LLVM type of each payload field.
     pub field_llvm_types: Vec<TypeHandle>,
+}
+
+/// Collect the leaves of an aggregate payload's MIR type: every real field
+/// at its rustc byte offset, recursing through structs and tuples.
+///
+/// The walk is over the MIR type, not the lowered LLVM struct, on purpose:
+/// a lowered struct's `[N x i8]` padding slots are indistinguishable from a
+/// real `[u8; N]` field, and padding must stay filler while real bytes get
+/// slots. Paths are the `extractvalue`/`insertvalue` index paths into the
+/// payload's lowered value, taken from [`build_struct_slot_map`] so they
+/// account for stripped ZSTs and inserted padding slots. Zero-sized fields
+/// carry no bytes and are skipped. Returns false (caller fails closed) on a
+/// layout the walk cannot trust: an unsizable leaf, a divergent (packed)
+/// struct layout, or an aggregate without computable slot offsets.
+fn collect_payload_leaves(
+    ctx: &mut Context,
+    mir_ty: TypeHandle,
+    base_offset: u64,
+    path: &[u32],
+    out: &mut Vec<(Vec<u32>, u64, TypeHandle)>,
+) -> bool {
+    let layout = {
+        let ty_ref = mir_ty.deref(ctx);
+        if let Some(struct_ty) = ty_ref.downcast_ref::<MirStructType>() {
+            Some(StructLayoutInfo::of_struct(struct_ty))
+        } else {
+            ty_ref
+                .downcast_ref::<MirTupleType>()
+                .map(StructLayoutInfo::of_tuple)
+        }
+    };
+    let Some(layout) = layout else {
+        // A leaf: scalars, pointers, arrays, unions, nested enums.
+        let Ok(converted) = convert_type(ctx, mir_ty) else {
+            return false;
+        };
+        out.push((path.to_vec(), base_offset, converted));
+        return true;
+    };
+    let Ok(slot_map) = build_struct_slot_map(ctx, &layout) else {
+        return false;
+    };
+    if slot_map.layout_diverges {
+        // Packed payloads sit at offsets a naturally laid-out claim cannot
+        // name; keep the whole-value memory round-trip for them.
+        return false;
+    }
+    let Some(slot_offsets) = slot_map.natural_slot_offsets else {
+        return false;
+    };
+    for (decl_index, field_ty) in layout.field_types.iter().enumerate() {
+        let Some(Some(slot)) = slot_map.decl_to_llvm.get(decl_index) else {
+            continue; // zero-sized field: no bytes, no slot
+        };
+        let Some(&field_offset) = slot_offsets.get(*slot as usize) else {
+            return false;
+        };
+        let Some(field_offset) = base_offset.checked_add(field_offset) else {
+            return false;
+        };
+        let mut child = path.to_vec();
+        child.push(*slot);
+        if !collect_payload_leaves(ctx, *field_ty, field_offset, &child, out) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Try to place one colliding struct/tuple payload field leaf by leaf.
+///
+/// Every leaf either reuses a claim that already holds the same type at the
+/// same bytes (the niche carrier backing the payload's pointer leaf, or a
+/// same-typed leaf another variant placed) or lands on bytes no claim covers
+/// and gets its own typed claim at its rustc byte offset. Bytes no leaf
+/// claims — the payload's own padding — stay filler. Returns the leaf
+/// placements (path, claim index — fresh claims are numbered
+/// `claims.len() + i`) plus the fresh claims to add.
+///
+/// Returns `None` — the field keeps today's whole-value memory round-trip —
+/// whenever the rule cannot prove a clean placement: a leaf only partially
+/// covered by a claim, covered by a different type, misaligned, or
+/// unsizable; a payload that is not a struct/tuple; or one whose lowered
+/// storage carries `i1`, which stays on the canonical byte path
+/// ([`super::llvm_byte_faithful_twin`]).
+///
+/// This is what keeps construction and payload reads in SSA for the
+/// `Option<{ptr, i64, i64}>` and `Option<(f32, f32, ptr)>` shapes: without
+/// it, the non-pointer leaves fall into `[N x i8]` filler bytes, the value
+/// round-trips through a spill slot (byte stores, one wide load), and SROA
+/// cannot reassemble the wide value from the byte slices — the spill slot
+/// survives `opt -O2` as local-memory traffic.
+fn try_decompose_aggregate_payload(
+    ctx: &mut Context,
+    mir_field_ty: TypeHandle,
+    storage_ty: TypeHandle,
+    field_offset: u64,
+    claims: &[(u64, u64, TypeHandle)],
+) -> Option<DecomposedPayload> {
+    {
+        // Only struct/tuple payloads decompose: their leaf count is
+        // proportional to source text. Scalars keep the shared-slot and
+        // memory paths; arrays keep the whole-value paths (and their own
+        // bounded-rewrite gate in `enum_payload_storage`).
+        let ty_ref = mir_field_ty.deref(ctx);
+        if !ty_ref.is::<MirStructType>() && !ty_ref.is::<MirTupleType>() {
+            return None;
+        }
+    }
+    if llvm_type_contains_i1(ctx, storage_ty) {
+        // Bool-bearing payloads stay slotless so the canonical-byte
+        // zero-extension at the storage boundary keeps owning their bytes.
+        return None;
+    }
+    let mut leaves = Vec::new();
+    if !collect_payload_leaves(ctx, mir_field_ty, field_offset, &[], &mut leaves) {
+        return None;
+    }
+    let mut placement = Vec::with_capacity(leaves.len());
+    let mut fresh_claims = Vec::new();
+    for (path, offset, leaf_ty) in leaves {
+        let leaf_storage = enum_payload_storage_type(ctx, leaf_ty).ok()?;
+        let (leaf_size, leaf_align) = llvm_type_size_align(ctx, leaf_storage)?;
+        if leaf_size == 0 {
+            continue; // zero-sized leaf: no bytes to place
+        }
+        if !offset.is_multiple_of(leaf_align.max(1)) {
+            // The leaf sits unaligned inside the payload (packed struct):
+            // not this rule's shape.
+            return None;
+        }
+        if let Some(claim_index) = claims
+            .iter()
+            .position(|&(o, s, t)| o == offset && s == leaf_size && t == leaf_storage)
+        {
+            placement.push((path, claim_index));
+            continue;
+        }
+        let overlaps_claim = claims
+            .iter()
+            .any(|&(o, s, _)| offset < o.saturating_add(s) && o < offset.saturating_add(leaf_size));
+        if overlaps_claim {
+            // A partial or different-typed overlap with another variant's
+            // bytes: fail closed, keep the memory round-trip.
+            return None;
+        }
+        placement.push((path, claims.len() + fresh_claims.len()));
+        fresh_claims.push((offset, leaf_size, leaf_storage));
+    }
+    Some(DecomposedPayload {
+        placement,
+        fresh_claims,
+    })
 }
 
 /// Build the LLVM struct for an enum, placing everything at the byte
@@ -78,6 +261,10 @@ pub(crate) struct EnumSlotMap {
 /// - shared slot: another variant already placed the SAME type at the
 ///                SAME position; both map to that slot. (If B were
 ///                B(u32), A and B would simply share slot 1.)
+/// - leaf slots: a colliding AGGREGATE whose every leaf either matches an
+///                existing claim (the niche carrier backing its pointer
+///                leaf) or lands on unclaimed bytes decomposes into one
+///                typed slot per leaf; construct/payload then stay in SSA.
 /// - no slot:    the bytes are taken by a different type (B's f32 vs
 ///                A's u32 here). The field is still at byte 4, just not
 ///                nameable as a struct field; reads and writes go
@@ -235,6 +422,10 @@ pub(crate) fn build_enum_slot_map(
     };
 
     let mut claim_of_field: Vec<Option<usize>> = vec![None; field_llvm_types.len()];
+    // Leaf placements for decomposed fields, in claim indices; converted to
+    // struct slots after Phase 2 lays the claims down.
+    let mut leaf_placement_of_field: Vec<Option<Vec<LeafClaim>>> =
+        vec![None; field_llvm_types.len()];
     let mut field_is_inhabited = Vec::with_capacity(field_llvm_types.len());
     for (variant, count) in variant_field_counts.iter().enumerate() {
         field_is_inhabited.extend(std::iter::repeat_n(
@@ -397,6 +588,23 @@ pub(crate) fn build_enum_slot_map(
             .filter(|&&(o, s, _)| offset < o + s && o < offset + size)
             .collect::<Vec<_>>();
         if !colliding_claims.is_empty() {
+            // A colliding aggregate may still be fully representable leaf by
+            // leaf: the pointer leaf reuses the carrier it coincides with and
+            // every integer/float leaf gets its own typed slot. That keeps
+            // construct and payload reads in SSA instead of a byte-wise spill
+            // SROA cannot promote. Anything the leaf walk cannot place
+            // exactly falls through to the whole-value paths below unchanged.
+            if let Some(decomposed) = try_decompose_aggregate_payload(
+                ctx,
+                all_field_types[flat],
+                storage_ty,
+                offset,
+                &claims,
+            ) {
+                claims.extend(decomposed.fresh_claims);
+                leaf_placement_of_field[flat] = Some(decomposed.placement);
+                continue;
+            }
             let has_pointer_overlap = llvm_type_contains_pointer(ctx, storage_ty)
                 || colliding_claims
                     .iter()
@@ -525,6 +733,17 @@ pub(crate) fn build_enum_slot_map(
         .into_iter()
         .map(|c| c.map(|ci| slot_of_claim[ci]))
         .collect();
+    let field_leaf_slots = leaf_placement_of_field
+        .into_iter()
+        .map(|placement| {
+            placement.map(|leaves| {
+                leaves
+                    .into_iter()
+                    .map(|(path, claim)| (path, slot_of_claim[claim]))
+                    .collect()
+            })
+        })
+        .collect();
     Ok(EnumSlotMap {
         llvm_struct_ty: llvm_types::StructType::get_unnamed(
             ctx,
@@ -534,6 +753,7 @@ pub(crate) fn build_enum_slot_map(
         carrier_slot: carrier_claim.map(|claim| slot_of_claim[claim]),
         carrier_llvm_ty: carrier_ty,
         field_slots,
+        field_leaf_slots,
         field_offsets: all_field_offsets,
         field_llvm_types,
     })
@@ -1384,6 +1604,284 @@ mod tests {
         );
     }
 
+    /// The `Option<RopePair>` shape: `{&mut T, usize, usize}` with the niche
+    /// on the pointer. Built once; the layout, slot, and lowering tests all
+    /// exercise it.
+    fn rope_pair_enum(ctx: &mut Context) -> TypeHandle {
+        let logical = mir_uint(ctx, 64);
+        let word = mir_uint(ctx, 64);
+        let pointee = mir_uint(ctx, 32);
+        let pointer: TypeHandle = MirPtrType::get_generic(ctx, pointee, false).into();
+        let payload: TypeHandle = MirStructType::get_with_full_layout(
+            ctx,
+            "RopePair".into(),
+            vec!["rope".into(), "base".into(), "cache".into()],
+            vec![pointer, word, word],
+            vec![0, 1, 2],
+            vec![0, 8, 16],
+            24,
+            8,
+        )
+        .into();
+        MirEnumType::get_with_encoding(
+            ctx,
+            "MaybeRopePair".into(),
+            logical,
+            vec![0, 1],
+            vec![
+                EnumVariant::unit("None".into()),
+                EnumVariant::new_with_layout("Some".into(), vec![payload], vec![0], vec![24]),
+            ],
+            EnumEncoding {
+                tag_offset: 0,
+                total_size: 24,
+                abi_align: 8,
+                layout_kind: EnumLayoutKind::Niche,
+                carrier_kind: EnumCarrierKind::Pointer,
+                carrier_width: 64,
+                untagged_variant: 1,
+                variant_inhabited: vec![1, 1],
+                ..EnumEncoding::default()
+            },
+        )
+        .into()
+    }
+
+    /// The `Option<(f32, f32, &mut f32)>` shape: the two floats below the
+    /// pointer that carries the niche (the rms_norm `next_cell` return).
+    fn float_pair_enum(ctx: &mut Context) -> TypeHandle {
+        let logical = mir_uint(ctx, 64);
+        let float: TypeHandle = FP32Type::get(ctx).into();
+        let pointee = mir_uint(ctx, 32);
+        let pointer: TypeHandle = MirPtrType::get_generic(ctx, pointee, false).into();
+        let payload: TypeHandle = MirTupleType::get_with_layout(
+            ctx,
+            vec![float, float, pointer],
+            vec![0, 1, 2],
+            vec![0, 4, 8],
+            16,
+            8,
+        )
+        .into();
+        MirEnumType::get_with_encoding(
+            ctx,
+            "MaybeFloatPair".into(),
+            logical,
+            vec![0, 1],
+            vec![
+                EnumVariant::unit("None".into()),
+                EnumVariant::new_with_layout("Some".into(), vec![payload], vec![0], vec![16]),
+            ],
+            EnumEncoding {
+                tag_offset: 8,
+                total_size: 16,
+                abi_align: 8,
+                layout_kind: EnumLayoutKind::Niche,
+                carrier_kind: EnumCarrierKind::Pointer,
+                carrier_width: 64,
+                untagged_variant: 1,
+                variant_inhabited: vec![1, 1],
+                ..EnumEncoding::default()
+            },
+        )
+        .into()
+    }
+
+    #[test]
+    fn aggregate_pointer_niche_payload_types_every_leaf() {
+        let mut ctx = make_ctx();
+        let enum_ty = rope_pair_enum(&mut ctx);
+        let map = build_enum_slot_map(&mut ctx, enum_ty).unwrap();
+        let pointee = mir_uint(&mut ctx, 32);
+        let pointer: TypeHandle = MirPtrType::get_generic(&mut ctx, pointee, false).into();
+        let lowered_pointer = convert_type(&mut ctx, pointer).unwrap();
+        let word = llvm_int(&mut ctx, 64);
+        assert_eq!(
+            struct_fields(&ctx, map.llvm_struct_ty),
+            vec![lowered_pointer, word, word],
+            "every leaf owns a typed slot: {{ptr, i64, i64}}, not {{ptr, [16 x i8]}}"
+        );
+        assert_eq!(
+            llvm_type_size_align(&ctx, map.llvm_struct_ty),
+            Some((24, 8)),
+            "same size and alignment as rustc's layout and the old carrier+filler form"
+        );
+        assert_eq!(map.carrier_slot, Some(0));
+    }
+
+    #[test]
+    fn float_pair_pointer_niche_payload_types_every_leaf() {
+        let mut ctx = make_ctx();
+        let enum_ty = float_pair_enum(&mut ctx);
+        let map = build_enum_slot_map(&mut ctx, enum_ty).unwrap();
+        let float: TypeHandle = FP32Type::get(&ctx).into();
+        let pointee = mir_uint(&mut ctx, 32);
+        let pointer: TypeHandle = MirPtrType::get_generic(&mut ctx, pointee, false).into();
+        let lowered_pointer = convert_type(&mut ctx, pointer).unwrap();
+        assert_eq!(
+            struct_fields(&ctx, map.llvm_struct_ty),
+            vec![float, float, lowered_pointer],
+            "the float pair owns typed slots below the carrier: {{f32, f32, ptr}}, not {{i64, ptr}}"
+        );
+        assert_eq!(
+            llvm_type_size_align(&ctx, map.llvm_struct_ty),
+            Some((16, 8)),
+            "same size and alignment as rustc's layout and the old filler form"
+        );
+        assert_eq!(map.carrier_slot, Some(2));
+    }
+
+    #[test]
+    fn enum_slot_map_records_leaf_slots_for_decomposed_payloads() {
+        let mut ctx = make_ctx();
+        let enum_ty = rope_pair_enum(&mut ctx);
+        let map = build_enum_slot_map(&mut ctx, enum_ty).unwrap();
+        assert_eq!(map.field_slots, vec![None]);
+        assert_eq!(
+            map.field_leaf_slots,
+            vec![Some(vec![(vec![0], 0), (vec![1], 1), (vec![2], 2),])],
+            "the pointer leaf reuses the carrier slot; both usize leaves get their own"
+        );
+
+        let enum_ty = float_pair_enum(&mut ctx);
+        let map = build_enum_slot_map(&mut ctx, enum_ty).unwrap();
+        assert_eq!(map.field_slots, vec![None]);
+        assert_eq!(
+            map.field_leaf_slots,
+            vec![Some(vec![(vec![0], 0), (vec![1], 1), (vec![2], 2),])],
+            "both floats get their own slots; the pointer leaf reuses the carrier"
+        );
+    }
+
+    #[test]
+    fn tagged_pair_payload_keeps_whole_struct_slot() {
+        // `Option<(u32, u32)>` has no niche, so the tuple never collides with
+        // anything: it keeps one whole-struct slot, before and after the
+        // leaf rule. A regression guard, not a leaf-rule case.
+        let mut ctx = make_ctx();
+        let logical = mir_uint(&mut ctx, 32);
+        let word = mir_uint(&mut ctx, 32);
+        let payload: TypeHandle =
+            MirTupleType::get_with_layout(&mut ctx, vec![word, word], vec![0, 1], vec![0, 4], 8, 4)
+                .into();
+        let enum_ty: TypeHandle = MirEnumType::get_with_layout(
+            &mut ctx,
+            "MaybeWords".into(),
+            logical,
+            vec![0, 1],
+            vec![
+                EnumVariant::unit("None".into()),
+                EnumVariant::new_with_layout("Some".into(), vec![payload], vec![4], vec![8]),
+            ],
+            0,
+            12,
+            4,
+        )
+        .into();
+        let map = build_enum_slot_map(&mut ctx, enum_ty).unwrap();
+        assert_eq!(map.field_slots, vec![Some(1)]);
+        assert_eq!(map.field_leaf_slots, vec![None]);
+        let tag = llvm_int(&mut ctx, 32);
+        let lowered_payload = convert_type(&mut ctx, payload).unwrap();
+        assert_eq!(
+            struct_fields(&ctx, map.llvm_struct_ty),
+            vec![tag, lowered_payload]
+        );
+        assert_eq!(
+            llvm_type_size_align(&ctx, map.llvm_struct_ty),
+            Some((12, 4))
+        );
+    }
+
+    #[test]
+    fn overlapping_data_variants_keep_byte_carrier() {
+        // `A(u64)` / `B(f32, f32)`: both of B's fields overlap A's u64 with
+        // a different type. The leaf rule only types leaves no other variant
+        // uses differently, so B stays on the byte-carrier memory path.
+        {
+            let mut ctx = make_ctx();
+            let tag = mir_uint(&mut ctx, 32);
+            let bits = mir_uint(&mut ctx, 64);
+            let float: TypeHandle = FP32Type::get(&ctx).into();
+            let enum_ty: TypeHandle = MirEnumType::get_with_layout(
+                &mut ctx,
+                "BitsOrFloats".into(),
+                tag,
+                vec![0, 1],
+                vec![
+                    EnumVariant::new_with_layout("Bits".into(), vec![bits], vec![8], vec![8]),
+                    EnumVariant::new_with_layout(
+                        "Floats".into(),
+                        vec![float, float],
+                        vec![8, 12],
+                        vec![4, 4],
+                    ),
+                ],
+                0,
+                16,
+                8,
+            )
+            .into();
+            let map = build_enum_slot_map(&mut ctx, enum_ty).unwrap();
+            assert_eq!(
+                map.field_slots,
+                vec![Some(2), None, None],
+                "A's u64 owns its slot; B's floats share its bytes with another type"
+            );
+            assert_eq!(map.field_leaf_slots, vec![None, None, None]);
+            let filler = llvm_int(&mut ctx, 32);
+            let word = llvm_int(&mut ctx, 64);
+            let tag_ty = llvm_int(&mut ctx, 32);
+            assert_eq!(
+                struct_fields(&ctx, map.llvm_struct_ty),
+                vec![tag_ty, filler, word],
+                "{{tag, filler, u64}}: B's bytes stay byte-carrier, not typed f32 slots"
+            );
+            assert_eq!(
+                llvm_type_size_align(&ctx, map.llvm_struct_ty),
+                Some((16, 8))
+            );
+        }
+        // The aggregate form `A(u64)` / `B((f32, f32))` fails closed the
+        // same way: the tuple's leaves overlap A's differently typed bytes.
+        {
+            let mut ctx = make_ctx();
+            let tag = mir_uint(&mut ctx, 32);
+            let bits = mir_uint(&mut ctx, 64);
+            let float: TypeHandle = FP32Type::get(&ctx).into();
+            let payload: TypeHandle = MirTupleType::get_with_layout(
+                &mut ctx,
+                vec![float, float],
+                vec![0, 1],
+                vec![0, 4],
+                8,
+                4,
+            )
+            .into();
+            let enum_ty: TypeHandle = MirEnumType::get_with_layout(
+                &mut ctx,
+                "BitsOrFloatPair".into(),
+                tag,
+                vec![0, 1],
+                vec![
+                    EnumVariant::new_with_layout("Bits".into(), vec![bits], vec![8], vec![8]),
+                    EnumVariant::new_with_layout("Floats".into(), vec![payload], vec![8], vec![8]),
+                ],
+                0,
+                16,
+                8,
+            )
+            .into();
+            let map = build_enum_slot_map(&mut ctx, enum_ty).unwrap();
+            assert_eq!(
+                map.field_slots,
+                vec![Some(2), None],
+                "the tuple overlaps the u64 claim with different leaf types: no leaf slots"
+            );
+            assert_eq!(map.field_leaf_slots, vec![None, None]);
+        }
+    }
+
     #[test]
     fn enum_slot_map_three_field_tuple_follows_recorded_offsets() {
         // rustc lays out `(u32, f32, &T)` with the pointer first in memory:
@@ -2059,36 +2557,30 @@ mod tests {
 
         let fields = struct_fields(&ctx, map.llvm_struct_ty);
 
-        // Required enum alignment is 16, while the 16-byte filler itself is
-        // deliberately represented as two i64 leaves with natural alignment 8.
-        // build_enum_slot_map supplies the zero-length alignment anchor separately.
-        assert_eq!(fields.len(), 4);
-
-        let filler_ref = fields[1].deref(&ctx);
-        let filler = filler_ref
-            .downcast_ref::<llvm_types::ArrayType>()
-            .expect("16-byte enum filler should lower to an LLVM array");
-
+        // The leaf rule types the u128 leaf itself, so the 16 bytes below the
+        // carrier are one i128 slot instead of two i64 filler leaves. An i128
+        // slot brings alignment 16 on its own, so the zero-length alignment
+        // anchor the filler form needed is gone.
+        assert_eq!(fields.len(), 3);
         assert_eq!(
-            filler.size(),
-            2,
-            "16-byte enum filler should use two 64-bit leaves"
-        );
-
-        assert_eq!(
-            filler
-                .elem_type()
+            fields[0]
                 .deref(&ctx)
                 .downcast_ref::<IntegerType>()
                 .map(IntegerType::width),
-            Some(64),
-            "16-byte enum filler elements should be i64"
+            Some(128),
+            "the u128 payload leaf should own a typed i128 slot"
+        );
+        assert_eq!(map.carrier_slot, Some(1));
+        assert_eq!(
+            map.field_leaf_slots,
+            vec![Some(vec![(vec![0], 0), (vec![1], 1)])],
+            "the u128 leaf gets slot 0 and the pointer leaf reuses the carrier"
         );
 
         assert_eq!(
             llvm_type_size_align(&ctx, map.llvm_struct_ty),
             Some((32, 16)),
-            "typed 16-byte filler must preserve rustc's enum size and alignment"
+            "the leaf-typed payload must preserve rustc's enum size and alignment"
         );
     }
 

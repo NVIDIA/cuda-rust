@@ -3,17 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Required for `type_id_u128`'s use of `core::intrinsics::reflection::type_id`. The
+// Required for `type_id_u128`'s use of `core::intrinsics::type_id`. The
 // intrinsic is the only way to obtain the same 128-bit hash the backend
 // uses while keeping the bound at `T: ?Sized` (stable `TypeId::of` would
 // force `T: 'static` on every kernel marker — see `type_id.rs` for why
 // that would silently reject non-`'static` borrowing closures).
 //
 // We accept the `internal_features` warning here: cuda-oxide already ships
-// `rustc_codegen_cuda` against `rustc_private` and pins a nightly
-// toolchain, so the broader project is firmly inside rustc's internal API
-// surface. Anyone trying to lift this helper to a stable crate will hit
-// the same gate and have to make the same trade-off there.
+// `rustc_codegen_cuda` against `rustc_private` and pins its Rust toolchain
+// with `RUSTC_BOOTSTRAP=1`, so the broader project is firmly inside rustc's
+// internal API surface. Anyone trying to lift this helper to a standalone
+// crate will hit the same gate and have to make the same trade-off there.
 #![feature(core_intrinsics)]
 #![allow(internal_features)]
 
@@ -51,7 +51,7 @@
 //! ```ignore
 //! use cuda_device::{kernel, thread, DisjointSlice};
 //! use cuda_host::cuda_module;
-//! use cuda_core::simt::LaunchConfig;
+//! use cuda_core::LaunchConfig;
 //! use cuda_core::{CudaContext, DeviceBuffer};
 //!
 //! #[cuda_module]
@@ -122,16 +122,12 @@ pub use launch::{
     set_async_kernel_cluster_dim, set_async_kernel_cooperative,
 };
 
-/// The shared async crate, re-exported whole. Its root is cutile's Tile API;
-/// the SIMT surface cuda-host builds on is `cuda_host::cuda_async::simt::*`.
-/// Same-named root items such as `DeviceError` or `init_device_contexts` are
-/// the Tile ones and do not interoperate with the generated launch methods.
+/// The shared async runtime crate, re-exported whole for convenience.
+/// Both Tile and SIMT launch methods interoperate through this root surface.
 #[cfg(feature = "async")]
 pub use cuda_async;
 #[cfg(feature = "async")]
-pub use cuda_async::simt::launch::{
-    AsyncKernelLaunch, AsyncKernelLaunchBuilder, OwnedAsyncKernelLaunch,
-};
+pub use cuda_async::launch::{AsyncKernelLaunch, AsyncKernelLaunchBuilder, OwnedAsyncKernelLaunch};
 
 pub use embedded::{
     EmbeddedModuleError, load_all_ptx_bundles_merged, load_embedded_module,
@@ -154,7 +150,7 @@ pub use cuda_macros::{cuda_launch, cuda_module};
 
 /// Re-export of [`cuda_macros::cuda_launch_async`].
 ///
-/// Builds a lazy `cuda_async::simt::launch::AsyncKernelLaunch`. Raw launch
+/// Builds a lazy `cuda_async::launch::AsyncKernelLaunch`. Raw launch
 /// configuration is not tied to the kernel's indexing assumptions, so the
 /// macro must be called inside `unsafe`. Stream assignment is deferred to the
 /// scheduling policy -- call `.sync()` to block or `.await` to suspend.

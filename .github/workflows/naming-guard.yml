@@ -9,18 +9,13 @@ name: naming-guard
 # here would rerun the same search; covering them means adding them to
 # SEARCH_ROOTS in the script first.
 on:
+  # Self-hosted runners reject pull_request. copy-pr-bot mirrors trusted PRs
+  # to pull-request/<n>, and this workflow triggers on that push.
   push:
-    branches: [main]
-    paths:
-      - 'cuda-oxide/crates/**'
-      - 'cuda-oxide/scripts/check-reserved-prefixes.sh'
-      - '.github/workflows/naming-guard.yml'
-  pull_request:
-    branches: [main]
-    paths:
-      - 'cuda-oxide/crates/**'
-      - 'cuda-oxide/scripts/check-reserved-prefixes.sh'
-      - '.github/workflows/naming-guard.yml'
+    # No workflow-level paths: filter; the changes job below gates the jobs.
+    branches:
+      - main
+      - "pull-request/[0-9]+"
 
 # Each commit on main gets its own group, so it starts at once. Any other ref
 # still shares one group and cancels the older run.
@@ -32,9 +27,43 @@ permissions:
   contents: read
 
 jobs:
+  # Path gate. copy-pr-bot creates pull-request/<n> at an existing SHA, and
+  # GitHub often treats that push as having no path changes, so a workflow-level
+  # `paths:` filter would skip the whole run. This job diffs against main
+  # instead, as cutile-rs.yml does, and every job below runs when no file diff
+  # is detected. Other events (schedule, workflow_dispatch) skip the gate.
+  changes:
+    if: github.event_name == 'push'
+    runs-on: linux-amd64-cpu4
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      relevant: ${{ steps.changes.outputs.relevant }}
+      any_changed: ${{ steps.changes.outputs.any_changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad  # v3.0.4
+        id: changes
+        with:
+          filters: |
+            relevant:
+              - 'cuda-oxide/crates/**'
+              - 'cuda-oxide/scripts/check-reserved-prefixes.sh'
+              - '.github/workflows/naming-guard.yml'
+            # `*` covers a root file, `**` every nested path. Both false means
+            # no file diff was detected.
+            any_changed:
+              - '*'
+              - '**'
+
   reserved-symbols-guard:
+    needs: changes
+    if: ${{ !cancelled() && (github.event_name != 'push' || needs.changes.outputs.relevant == 'true' || needs.changes.outputs.any_changed != 'true') }}
     name: reserved-oxide-symbols literal guard
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 5
     steps:
       - name: Clone repository

@@ -85,17 +85,13 @@ fn pointer_address_space(ctx: &Context, value: pliron::value::Value) -> Option<u
 /// Convert a TMA G2S operation whose destination and barrier belong to the
 /// issuing CTA rather than to cluster shared memory.
 ///
-/// The destination is shared by type: the device wrapper takes a
-/// `SharedPtr<u8>`, which lowers to an `addrspace(3)` pointer, while the raw
-/// ABI entry still passes a generic pointer under the caller's promise of
-/// CTA locality. The barrier is a caller promise on both layers, as for every
-/// mbarrier operation. Generic and shared pointers are converted to the
+/// Both destination and barrier are caller promises of CTA locality, as for
+/// every mbarrier operation. Generic and shared pointers are converted to the
 /// shared window. A pointer known to be cluster shared (`addrspace(7)`, for
 /// example from `map_shared_rank`) may name another CTA's shared memory, so
 /// it is rejected rather than reinterpreted as a local offset; such copies
 /// use the cluster form. The check sees only uncast operands: a pointer cast
-/// or `SharedPtr::from_raw` applied to a cluster pointer is the caller's
-/// unsafe contract.
+/// applied to a cluster pointer is the caller's unsafe contract.
 pub(crate) fn convert_g2s_cta(
     ctx: &mut Context,
     rewriter: &mut DialectConversionRewriter,

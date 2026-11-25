@@ -72,7 +72,7 @@ the workers once and reuses them via command/done channels:
   `spawn_local`'d worker tasks.
 
 **Context binding.** In Mode B each worker calls
-`stream.device().bind_to_thread()` on startup, binding the CUDA
+`stream.context().bind_to_thread()` on startup, binding the CUDA
 context to that OS thread. Without this, driver calls serialize
 against whichever thread currently owns the context.
 

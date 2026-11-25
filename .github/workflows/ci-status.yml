@@ -5,11 +5,9 @@ name: CI status
 
 # One status for the whole repository, so the README needs one badge.
 #
-# Badges are per workflow file, and the two pipelines have to stay separate
-# for now: ci.yml (SIMT and the shared host crates) runs on GitHub-hosted
-# runners on push and pull_request; cutile-rs.yml (Tile) runs on NVIDIA
-# self-hosted runners, which cannot run on pull_request events, so it
-# triggers on push to main and to the copy-pr-bot mirror branches.
+# Badges are per workflow file. ci.yml and cutile-rs.yml both run on NVIDIA
+# self-hosted runners, which reject pull_request, so both trigger on push to
+# main and to the copy-pr-bot mirror branches.
 #
 # This workflow runs whenever either of them completes on main. For each
 # pipeline it finds the newest completed push run on main that actually
@@ -34,7 +32,7 @@ permissions:
 jobs:
   status:
     name: combined CI status on main
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 5
     steps:
       - name: Report the newest executed main run of each pipeline

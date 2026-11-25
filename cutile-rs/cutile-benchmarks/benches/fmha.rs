@@ -4,7 +4,7 @@
  */
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use cuda_async::device_operation::DeviceOp;
-use cuda_core::Device;
+use cuda_core::Context;
 use cutile::api::{randn_f16, zeros};
 use cutile::core::f16;
 use cutile::tensor::{IntoPartition, Partition, Tensor};
@@ -159,7 +159,7 @@ fn ocean_fmha(c: &mut Criterion) {
             .measurement_time(Duration::from_millis(2000));
     }
 
-    let device = Device::new(0).expect("Failed to get device.");
+    let device = Context::new(0).expect("Failed to get device.");
     let stream = device.new_stream().expect("Failed to get stream.");
 
     // This is what the ocean benchmark uses.
@@ -238,7 +238,7 @@ fn ocean_fmha(c: &mut Criterion) {
                         out.grid().expect("Invalid grid."),
                         ((b * h) as u32, (m / bm) as u32, 1)
                     );
-                    unsafe { stream.synchronize() }.expect("Failed to synchronize.");
+                    stream.synchronize().expect("Failed to synchronize.");
                     let start = Instant::now();
                     for _i in 0..iters {
                         let (_, _, _, out_local, _, _) = unsafe {
@@ -256,7 +256,7 @@ fn ocean_fmha(c: &mut Criterion) {
                         };
                         out = out_local;
                     }
-                    unsafe { stream.synchronize() }.expect("Failed to synchronize.");
+                    stream.synchronize().expect("Failed to synchronize.");
                     start.elapsed()
                 });
             },

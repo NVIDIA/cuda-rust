@@ -1,0 +1,28 @@
+{
+  "text": "Hello. This is a cuda-oxide acceptance test.",
+  "text_ids": [
+    151644,
+    77091,
+    198,
+    9707,
+    13,
+    1096,
+    374,
+    264,
+    24408,
+    12,
+    54089,
+    25505,
+    1273,
+    13,
+    151645,
+    198,
+    151644,
+    77091,
+    198
+  ],
+  "speaker": "Vivian",
+  "language": "English",
+  "non_streaming_mode": false,
+  "max_new_tokens": 128
+}

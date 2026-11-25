@@ -32,7 +32,7 @@ fn launch(
     // The spelling chose the two-word (ptr, len) marshalling, so this raw
     // launch would push two kernel parameters for a three-parameter kernel.
     // The ABI bound must reject the call.
-    let cfg = cuda_core::simt::LaunchConfig {
+    let cfg = cuda_core::LaunchConfig {
         grid_dim: (1, 1, 1),
         block_dim: (64, 1, 1),
         shared_mem_bytes: 0,

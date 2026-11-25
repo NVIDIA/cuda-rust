@@ -1,0 +1,12 @@
+# Local pipeline diagnostics
+tmp_pipeline_cutlass_mlir_sm120a*
+
+# Local comparison experiment
+/examples/fp16_gemm_256x352_cute/test_compare.py
+
+# Run outputs and measurement records stay out of the tree; the backup branch
+# backup/cute-rs-preview-2026-10-21 on the fork holds the records removed in 2026-10.
+__pycache__/
+*.pyc
+results/
+/models/qwen3_8b_cute/reference/cutedsl_comparison.json

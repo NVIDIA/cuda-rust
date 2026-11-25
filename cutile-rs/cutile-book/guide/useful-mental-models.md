@@ -118,6 +118,6 @@ Common CUDA and Triton concepts have these cuTile Rust counterparts:
 | Shared memory staging | Tile loads and compiler-managed staging |
 | Tensor Core placement | `mma` / `mmaf_scaled` |
 | Kernel pipeline composition | `DeviceOp` combinators and CUDA graphs |
-| External kernels | PTX/CUBIN interop through `AsyncKernelLaunch` |
+| External kernels | PTX/CUBIN interop through `AsyncKernelLaunchBuilder` |
 
 Use [Interoperability](interoperability.md) when an algorithm needs a hand-written CUDA kernel or a PTX/CUBIN artifact from another compiler.

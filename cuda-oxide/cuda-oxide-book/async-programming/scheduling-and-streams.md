@@ -109,12 +109,9 @@ it -- the policy just works.
 
 ## `SingleStream` -- one lane, strict order
 
-:::{note}
-`SingleStream` is implemented in the scheduling internals but is **not
-currently wired into `GlobalSchedulingPolicy`** or exposed through
-`init_device_contexts`. The default setup always uses `StreamPoolRoundRobin`.
-This section describes the design intent for a future API surface.
-:::
+Use `SingleStream::from_stream(stream.clone())` with `.schedule(&policy)` to
+run Tile and SIMT operations on the same stream. The default global policy
+continues to use `StreamPoolRoundRobin`.
 
 For debugging, or when you need guaranteed ordering across *all* operations,
 `SingleStream` routes everything to one stream. Every operation sees the results
@@ -140,7 +137,7 @@ Before any async operation can run, you initialize the thread-local device
 context:
 
 ```rust
-use cuda_async::simt::device_context::init_device_contexts;
+use cuda_async::device_context::init_device_contexts;
 
 init_device_contexts(0, 1)?;
 ```

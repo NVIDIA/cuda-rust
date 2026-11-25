@@ -55,7 +55,9 @@ impl TemporaryDirectory {
                 "{prefix}-{}-{timestamp:x}-{sequence:x}",
                 std::process::id()
             ));
-            let mut builder = fs::DirBuilder::new();
+            let builder = fs::DirBuilder::new();
+            #[cfg(unix)]
+            let mut builder = builder;
             #[cfg(unix)]
             builder.mode(0o700);
             match builder.create(&candidate) {
@@ -218,6 +220,14 @@ impl PtxasTool {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Observe an actual ETXTBSY before retrying, only in this test thread.
+    /// Tests can release their write descriptor at that exact point.
+    static ON_BUSY_TEXT_FILE: std::cell::RefCell<Option<Box<dyn FnMut()>>> =
+        std::cell::RefCell::new(None);
+}
+
 /// Runs `command`, retrying briefly when the kernel reports ETXTBSY.
 ///
 /// Executing a just-written tool by path can collide with an unrelated
@@ -231,6 +241,12 @@ fn run_tolerating_busy_text_file(command: &mut Command) -> io::Result<Output> {
     for _ in 0..8 {
         match command.output() {
             Err(error) if error.kind() == io::ErrorKind::ExecutableFileBusy => {
+                #[cfg(test)]
+                ON_BUSY_TEXT_FILE.with(|hook| {
+                    if let Some(hook) = hook.borrow_mut().as_mut() {
+                        hook();
+                    }
+                });
                 thread::sleep(delay);
                 delay = delay.saturating_mul(2);
             }
@@ -566,22 +582,34 @@ fi
 
     #[test]
     fn discovery_order_is_explicit_tool_then_roots_then_path() {
+        let executable = if cfg!(windows) { "ptxas.exe" } else { "ptxas" };
+        let explicit_path = PathBuf::from("explicit").join(executable);
+        let search_path = std::env::join_paths(["first", "second"]).unwrap();
         let environment = HashMap::from([
-            ("CUDA_OXIDE_PTXAS", OsString::from("/explicit/ptxas")),
-            ("CUDA_TOOLKIT_PATH", OsString::from("/toolkit")),
-            ("CUDA_HOME", OsString::from("/home")),
-            ("CUDA_PATH", OsString::from("/cuda-path")),
-            ("PATH", OsString::from("/first:/second")),
+            ("CUDA_OXIDE_PTXAS", explicit_path.clone().into_os_string()),
+            ("CUDA_TOOLKIT_PATH", OsString::from("toolkit")),
+            ("CUDA_HOME", OsString::from("home")),
+            ("CUDA_PATH", OsString::from("cuda-path")),
+            ("PATH", search_path),
         ]);
         let (candidates, explicit) = ptxas_candidates(|name| environment.get(name).cloned());
         assert!(explicit);
-        assert_eq!(candidates[0], PathBuf::from("/explicit/ptxas"));
-        assert_eq!(candidates[1], PathBuf::from("/toolkit/bin/ptxas"));
-        assert_eq!(candidates[2], PathBuf::from("/home/bin/ptxas"));
-        assert_eq!(candidates[3], PathBuf::from("/cuda-path/bin/ptxas"));
+        assert_eq!(candidates[0], explicit_path);
+        assert_eq!(
+            candidates[1],
+            PathBuf::from("toolkit").join("bin").join(executable)
+        );
+        assert_eq!(
+            candidates[2],
+            PathBuf::from("home").join("bin").join(executable)
+        );
+        assert_eq!(
+            candidates[3],
+            PathBuf::from("cuda-path").join("bin").join(executable)
+        );
         assert!(candidates.ends_with(&[
-            PathBuf::from("/first/ptxas"),
-            PathBuf::from("/second/ptxas")
+            PathBuf::from("first").join(executable),
+            PathBuf::from("second").join(executable)
         ]));
     }
 
@@ -706,23 +734,31 @@ echo 'not a cubin' > "$output"
         ));
     }
 
-    /// Exec of the fake tool must survive a write descriptor that another
-    /// process (here: this test) still holds when the version probe runs.
-    /// Without the bounded ETXTBSY retry this fails immediately with
-    /// "Text file busy", which is the race CI hits when a concurrent
-    /// test's spawn inherits a freshly written script's descriptor.
-    #[cfg(unix)]
+    /// Exercise real ETXTBSY retries, keeping the writer open until three
+    /// attempts actually fail. No thread scheduling or release delay is assumed.
+    #[cfg(target_os = "linux")]
     #[test]
-    fn version_probe_survives_a_briefly_held_write_descriptor() {
+    fn version_probe_retries_until_the_write_descriptor_is_released() {
         let (_directory, path) = fake_ptxas("exit 0", None);
-        let held = fs::OpenOptions::new().append(true).open(&path).unwrap();
-        let release = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(30));
-            drop(held);
+        let mut held = Some(fs::OpenOptions::new().append(true).open(&path).unwrap());
+        let attempts = std::rc::Rc::new(std::cell::Cell::new(0));
+        let observed = attempts.clone();
+        ON_BUSY_TEXT_FILE.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                observed.set(observed.get() + 1);
+                if observed.get() == 3 {
+                    drop(held.take());
+                }
+            }));
         });
         let assembler = PtxAssembler::from_path(path);
-        release.join().unwrap();
+        ON_BUSY_TEXT_FILE.with(|hook| *hook.borrow_mut() = None);
         assert!(assembler.is_ok());
+        assert_eq!(
+            attempts.get(),
+            3,
+            "the real busy-executable retry path was not exercised"
+        );
     }
 
     #[cfg(unix)]

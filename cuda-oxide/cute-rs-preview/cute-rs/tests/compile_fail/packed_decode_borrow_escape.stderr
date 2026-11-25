@@ -1,0 +1,17 @@
+error[E0515]: cannot return value referencing local variable `storage`
+ --> tests/compile_fail/packed_decode_borrow_escape.rs:8:5
+  |
+8 |     PackedDecode::new(&storage, &storage, 1, 16, 8, 16, 16)
+  |     ^^^^^^^^^^^^^^^^^^--------^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |     |                 |
+  |     |                 `storage` is borrowed here
+  |     returns a value referencing data owned by the current function
+
+error[E0515]: cannot return value referencing local variable `storage`
+ --> tests/compile_fail/packed_decode_borrow_escape.rs:8:5
+  |
+8 |     PackedDecode::new(&storage, &storage, 1, 16, 8, 16, 16)
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^--------^^^^^^^^^^^^^^^^^^^
+  |     |                           |
+  |     |                           `storage` is borrowed here
+  |     returns a value referencing data owned by the current function

@@ -6,7 +6,7 @@
 //! Stream scheduling policies that control how operations are assigned to CUDA streams.
 
 use crate::error::DeviceError;
-use cuda_core::{Device, Stream};
+use cuda_core::{Context, Stream};
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
@@ -27,6 +27,12 @@ pub trait SchedulingPolicy: Send + Sync {
     fn next_stream(&self) -> Result<Arc<Stream>, DeviceError>;
 }
 
+impl<P: SchedulingPolicy + ?Sized> SchedulingPolicy for Arc<P> {
+    fn next_stream(&self) -> Result<Arc<Stream>, DeviceError> {
+        self.as_ref().next_stream()
+    }
+}
+
 /// Distributes operations across a fixed-size pool of CUDA streams using round-robin assignment.
 ///
 /// This is the **default scheduling policy**. Each call to `next_stream()` picks the
@@ -39,7 +45,7 @@ pub struct StreamPoolRoundRobin {
 
 impl StreamPoolRoundRobin {
     /// Creates a round-robin pool with `num_streams` streams on the given device.
-    pub fn new(device: &Arc<Device>, num_streams: usize) -> Result<Self, DeviceError> {
+    pub fn new(device: &Arc<Context>, num_streams: usize) -> Result<Self, DeviceError> {
         let mut stream_pool = Vec::with_capacity(num_streams);
         for _ in 0..num_streams {
             stream_pool.push(device.new_stream()?);
@@ -67,8 +73,13 @@ pub struct SingleStream {
 }
 
 impl SingleStream {
+    /// Uses an existing shared CUDA stream.
+    pub fn from_stream(stream: Arc<Stream>) -> Self {
+        Self { stream }
+    }
+
     /// Creates a single-stream policy on the given device.
-    pub fn new(device: &Arc<Device>) -> Result<Self, DeviceError> {
+    pub fn new(device: &Arc<Context>) -> Result<Self, DeviceError> {
         Ok(Self {
             stream: device.new_stream()?,
         })

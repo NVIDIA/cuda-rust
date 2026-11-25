@@ -9,7 +9,7 @@
 //! which on the GPU means the kernel must trap and the launch must fail.
 //! If the launch succeeds instead, the panic path was compiled away.
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, kernel, thread};
 use cuda_host::cuda_module;

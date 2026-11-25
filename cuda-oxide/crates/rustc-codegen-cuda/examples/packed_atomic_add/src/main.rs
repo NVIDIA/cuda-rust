@@ -10,7 +10,7 @@
 //! old values for each 16-bit half independently because PTX does not promise
 //! that the two returned halves form one coherent 32-bit snapshot.
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::atomic::{atom_add_bf16x2, atom_add_f16x2};
 use cuda_device::{kernel, thread};

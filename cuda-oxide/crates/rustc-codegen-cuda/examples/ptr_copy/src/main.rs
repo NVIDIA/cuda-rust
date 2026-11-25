@@ -18,7 +18,7 @@
 //!   cargo oxide run ptr_copy
 //!   CUDA_OXIDE_NO_OPT=1 cargo oxide run ptr_copy
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, cuda_module, kernel, thread};
 

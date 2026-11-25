@@ -1118,16 +1118,27 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ptx-schedule-drain-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let script = dir.join("spam.sh");
+        // a concurrent test that forks while this process holds the script
+        // open for writing would hand its child that handle, and running the
+        // script would then fail with ETXTBSY; `cp` makes the only writer a
+        // process that has already exited
+        let staging = script.with_added_extension("staging");
         // 1 MiB of stdout, far beyond the pipe buffer the watchdog loop used
         // to deadlock against before the reader threads were added.
         fs::write(
-            &script,
+            &staging,
             "#!/bin/sh\ndd if=/dev/zero bs=65536 count=16 2>/dev/null | tr '\\0' 'a'\n",
         )
         .unwrap();
-        let mut permissions = fs::metadata(&script).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&script, permissions).unwrap();
+        let status = Command::new("cp")
+            .arg(&staging)
+            .arg(&script)
+            .status()
+            .unwrap();
+        assert!(status.success(), "cp {} failed: {status}", script.display());
+        fs::remove_file(staging).unwrap();
+        // cp masks the mode with the umask; chmod opens no writable handle
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
         let result = run_binary(&script, &dir, Duration::from_secs(30));
         fs::remove_dir_all(&dir).ok();
         assert!(matches!(result.kind, RunKind::Pass), "{:?}", result.kind);

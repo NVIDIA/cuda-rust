@@ -4,7 +4,7 @@ Criterion benchmarks for selected cuTile Rust kernels and workloads.
 
 ## Quick start
 
-Run these from the repository root:
+Run these from the `cutile-rs/` workspace:
 
 ```bash
 # Smoke test: verify all benchmarks execute (fast, discards results)
@@ -25,7 +25,7 @@ don't pollute criterion baselines. Use it in CI or during development to
 catch compilation and runtime errors without waiting for full measurements.
 
 ```bash
-./scripts/test_benchmarks.sh   # from the repository root
+./scripts/test_benchmarks.sh   # from cutile-rs/
 # or equivalently:
 cargo bench -p cutile-benchmarks --features smoke-test
 ```
@@ -33,11 +33,11 @@ cargo bench -p cutile-benchmarks --features smoke-test
 ## GPU clock locking
 
 For reproducible results, lock GPU clocks before benchmarking. The clock
-scripts live in `cutile-benchmarks/scripts/` (not the repository-root
+scripts live in `cutile-benchmarks/scripts/` (not the workspace's
 `scripts/` directory used above):
 
 ```bash
-./cutile-benchmarks/scripts/setclock.sh     # lock clocks (from the repository root)
+./cutile-benchmarks/scripts/setclock.sh     # lock clocks (from cutile-rs/)
 cargo bench -p cutile-benchmarks
 ./cutile-benchmarks/scripts/resetclock.sh   # restore defaults
 ```

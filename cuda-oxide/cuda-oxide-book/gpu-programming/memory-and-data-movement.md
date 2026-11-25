@@ -115,7 +115,7 @@ let results = c_dev.to_host_vec(&stream).unwrap();
 | Method                            | Direction     | Description                    |
 |:--------------------------------- |:--------------|:-------------------------------|
 | `from_host(&stream, &[T])`        | Host → Device | Allocate + blocking copy       |
-| `zeroed(&stream, len)`            | --            | Allocate + zero-fill           |
+| `zeroed(&stream, len)`            | --            | Allocate + zero-fill + synchronize |
 | `to_host_vec(&stream)`            | Device → Host | Async copy + return `Vec<T>`   |
 | `copy_to_host(&stream, &mut [T])` | Device → Host | Copy into existing slice       |
 | `cu_deviceptr()`                  | --            | Raw `CUdeviceptr` for FFI      |
@@ -148,8 +148,8 @@ and executes only after all preceding work on that stream completes. Critically,
 it does **not** synchronize the device:
 
 ```rust
-use cuda_async::simt::device_box::DeviceBox;
-use cuda_async::simt::device_context::init_device_contexts;
+use cuda_async::device_box::DeviceBox;
+use cuda_async::device_context::init_device_contexts;
 
 init_device_contexts(0, 1)?;  // Initialize device context map (default device 0)
 

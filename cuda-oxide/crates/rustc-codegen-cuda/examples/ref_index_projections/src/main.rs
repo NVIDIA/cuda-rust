@@ -20,6 +20,12 @@
  *     outer.inner.tail[k]                                // nested DST tail + runtime index
  *     value.tail[k] = x                                  // DST tail element write
  *     &value.tail[k]                                     // DST tail element borrow
+ *     if let Flag::Value(ref b) = flags[k] { r = b; }    // bool enum payload borrow
+ *     if let Flag::Value(ref b) = values[0] { r = b; }   // ... through a slice
+ *     while .. { if let Flag::Value(ref b) = flags[j] }  // ... inside a loop
+ *     if let .. { r = b; seen = true; }                  // ... not last in its block
+ *     if let .. { p = addr_of!(*b); }                    // ... as a raw pointer
+ *     if let Stage::Array(ref s) = stages[k] { r = s; }  // shared-memory pointer payload
  *
  * Each kernel writes the difference compute(1) - compute(0), with inputs
  * designed so the two slots differ: a dropped index reads slot 0 twice
@@ -32,9 +38,9 @@
  * projections, returning the field's base address).
  */
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, CudaStream, DeviceBuffer};
-use cuda_device::{DisjointSlice, kernel, thread, warp};
+use cuda_device::{DisjointSlice, SharedArray, kernel, thread, warp};
 use cuda_host::cuda_module;
 use std::sync::Arc;
 
@@ -131,6 +137,44 @@ pub struct NestedOuter<T: ?Sized> {
 pub struct NestedPaddedOuter<T: ?Sized> {
     pub marker: u32,
     pub inner: PaddedTail<T>,
+}
+
+/// Enum with a `bool` payload. `bool` is stored as an `i8` byte inside enum
+/// storage, so the address walker declines a shared borrow of the payload and
+/// the importer borrows a copy instead (issue #1698).
+#[derive(Copy, Clone)]
+pub enum Flag {
+    /// Carries the `bool` the kernels borrow. Its byte is stored as an `i8`
+    /// in enum storage, which is what makes the walker decline the address.
+    Value(bool),
+    /// No payload. The kernels place it after `Value` so a runtime index
+    /// picks between a borrowable payload and none.
+    Empty,
+}
+
+/// Enum with a shared-memory pointer payload. Enum storage holds the pointer
+/// as a generic address, so a shared borrow of the payload takes the same
+/// value-copy fallback as a `bool` payload (issue #1698).
+#[derive(Copy, Clone)]
+pub enum Stage {
+    /// Carries an `addrspace(3)` pointer to a shared array. Enum storage
+    /// holds it as a generic address, so the walker declines the address.
+    Array(*mut SharedArray<f32, N>),
+    /// No payload. Pairs with `Array` so a runtime index picks between a
+    /// borrowable payload and none.
+    Empty,
+}
+
+/// The issue #1698 shape verbatim. `values` is a slice, so the walker loads
+/// its data pointer and offsets to `values[0]` before it declines the `bool`
+/// payload. `#[inline(never)]` keeps that chain in its own MIR body.
+#[inline(never)]
+fn first_flag_is_set(values: &[Flag]) -> bool {
+    let mut r: &bool = &false;
+    if let Flag::Value(ref b) = values[0] {
+        r = b;
+    }
+    *r
 }
 
 /// Out-of-line accessor pinning the `[Deref, Field(0), Deref, Index(k)]`
@@ -1002,6 +1046,173 @@ mod kernels {
             *slot = (*c1 as f32 - *c0 as f32) + (*r1 as f32 - *r0 as f32);
         }
     }
+
+    /// Issue #1698: a shared borrow of a `bool` enum payload that outlives
+    /// its `if let`. The walker emits `flags[k]`'s element address before it
+    /// declines the payload, and must erase that before the value-copy
+    /// fallback, or the leftover ops land after the block's `goto` and the
+    /// kernel fails verification. The flag is true, so the result is +5.
+    #[kernel]
+    pub fn test_bool_payload_borrow(input: &[[f32; 2]], mut out: DisjointSlice<f32>) {
+        let idx = thread::index_1d();
+        let i = idx.get();
+        if i >= input.len() {
+            return;
+        }
+        let flags = [Flag::Value(input[i][1] > input[i][0]), Flag::Empty];
+        // Runtime index: input[0][0] == 0.0, so k == 0 at runtime.
+        let k = (input[0][0] as usize) & 1;
+        let mut r: &bool = &false;
+        if let Flag::Value(ref b) = flags[k] {
+            r = b;
+        }
+        if let Some(slot) = out.get_mut(idx) {
+            *slot = if *r { input[i][1] - input[i][0] } else { 0.0 };
+        }
+    }
+
+    /// Issue #1698 through a slice: the issue's `values[0]` shape, with the
+    /// borrow as the last statement before the block's `goto`.
+    #[kernel]
+    pub fn test_bool_payload_borrow_slice(input: &[[f32; 2]], mut out: DisjointSlice<f32>) {
+        let idx = thread::index_1d();
+        let i = idx.get();
+        if i >= input.len() {
+            return;
+        }
+        let flags = [Flag::Value(input[i][1] > input[i][0]), Flag::Empty];
+        if let Some(slot) = out.get_mut(idx) {
+            *slot = if first_flag_is_set(&flags) {
+                input[i][1] - input[i][0]
+            } else {
+                0.0
+            };
+        }
+    }
+
+    /// Issue #1698 inside a loop: the first iteration borrows the `Value`
+    /// payload, and the second, over `Empty`, keeps that borrow.
+    #[kernel]
+    pub fn test_bool_payload_borrow_in_loop(input: &[[f32; 2]], mut out: DisjointSlice<f32>) {
+        let idx = thread::index_1d();
+        let i = idx.get();
+        if i >= input.len() {
+            return;
+        }
+        let flags = [Flag::Value(input[i][1] > input[i][0]), Flag::Empty];
+        // runtime start: input[0][0] == 0.0, so the loop visits both slots
+        let mut j = (input[0][0] as usize) & 1;
+        let mut r: &bool = &false;
+        while j < flags.len() {
+            if let Flag::Value(ref b) = flags[j] {
+                r = b;
+            }
+            j += 1;
+        }
+        if let Some(slot) = out.get_mut(idx) {
+            *slot = if *r { input[i][1] - input[i][0] } else { 0.0 };
+        }
+    }
+
+    /// Issue #1698 with another statement after the borrow in the same
+    /// block. The abandoned ops still end up after the block's `goto`,
+    /// because the next statement is also inserted ahead of them.
+    #[kernel]
+    pub fn test_bool_payload_borrow_not_final(input: &[[f32; 2]], mut out: DisjointSlice<f32>) {
+        let idx = thread::index_1d();
+        let i = idx.get();
+        if i >= input.len() {
+            return;
+        }
+        let flags = [Flag::Value(input[i][1] > input[i][0]), Flag::Empty];
+        let k = (input[0][0] as usize) & 1;
+        let mut r: &bool = &false;
+        let mut seen = false;
+        if let Flag::Value(ref b) = flags[k] {
+            r = b;
+            seen = true;
+        }
+        if let Some(slot) = out.get_mut(idx) {
+            *slot = if *r && seen {
+                input[i][1] - input[i][0]
+            } else {
+                0.0
+            };
+        }
+    }
+
+    /// Issue #1698 with a raw pointer to the borrowed payload. Rust has no
+    /// syntax for `&raw const` of an enum payload place, so the MIR is the
+    /// payload borrow followed by `&raw const (*b)`: the raw pointer must
+    /// read the value-copy fallback the borrow produced.
+    #[kernel]
+    pub fn test_bool_payload_addr_of(input: &[[f32; 2]], mut out: DisjointSlice<f32>) {
+        let idx = thread::index_1d();
+        let i = idx.get();
+        if i >= input.len() {
+            return;
+        }
+        let flags = [Flag::Value(input[i][1] > input[i][0]), Flag::Empty];
+        let k = (input[0][0] as usize) & 1;
+        let fallback = false;
+        let mut p: *const bool = &raw const fallback;
+        if let Flag::Value(ref b) = flags[k] {
+            p = core::ptr::addr_of!(*b);
+        }
+        // SAFETY: `p` points at `fallback` or at the payload copy, both live here
+        let set = unsafe { *p };
+        if let Some(slot) = out.get_mut(idx) {
+            *slot = if set { input[i][1] - input[i][0] } else { 0.0 };
+        }
+    }
+
+    /// Issue #1698 for the other payload the walker declines: a
+    /// shared-memory (`addrspace(3)`) pointer, stored as a generic address
+    /// in enum storage. The borrowed payload points at `DIFFS`, which holds
+    /// +5; the fallback points at `ZEROS`.
+    #[kernel]
+    pub fn test_shared_array_payload_borrow(input: &[[f32; 2]], mut out: DisjointSlice<f32>) {
+        // per-thread `+5` differences, one `f32` per input row; the
+        // `Stage::Array` payload points here, so reading through the
+        // borrowed payload must land on these values
+        static mut DIFFS: SharedArray<f32, N> = SharedArray::UNINIT;
+        // per-thread zeros, one `f32` per input row; the fallback reference
+        // points here, so a lost borrow reads `0.0`
+        static mut ZEROS: SharedArray<f32, N> = SharedArray::UNINIT;
+
+        let idx = thread::index_1d();
+        let i = idx.get();
+        if i >= input.len() {
+            return;
+        }
+
+        // raw pointers, not references: other threads write their own
+        // elements concurrently, and each thread reads back only its own, so
+        // no barrier is needed
+        let diffs = &raw mut DIFFS;
+        let zeros = &raw mut ZEROS;
+        // SAFETY: the early return above keeps only threads with
+        // `i < input.len()`, and the harness passes `N` inputs, so `i < N`;
+        // no other thread touches element `i`
+        unsafe {
+            SharedArray::as_raw_mut_ptr(diffs)
+                .add(i)
+                .write(input[i][1] - input[i][0]);
+            SharedArray::as_raw_mut_ptr(zeros).add(i).write(0.0);
+        }
+        let stages = [Stage::Array(diffs), Stage::Empty];
+        let k = (input[0][0] as usize) & 1;
+        let mut r: &*mut SharedArray<f32, N> = &zeros;
+        if let Stage::Array(ref s) = stages[k] {
+            r = s;
+        }
+        // SAFETY: `*r` is `diffs` or `zeros`, and this thread wrote element `i`
+        // of both above
+        let value = unsafe { SharedArray::as_raw_mut_ptr(*r).add(i).read() };
+        if let Some(slot) = out.get_mut(idx) {
+            *slot = value;
+        }
+    }
 }
 
 const N: usize = 4;
@@ -1247,6 +1458,42 @@ fn main() {
         // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
         unsafe { module.test_slice_tail_borrow_padded(s, cfg, i, o) }.expect("launch")
     });
+    all_pass &= run_and_report("test_bool_payload_borrow", &stream, |s, cfg, i, o| {
+        // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
+        unsafe { module.test_bool_payload_borrow(s, cfg, i, o) }.expect("launch")
+    });
+    all_pass &= run_and_report("test_bool_payload_borrow_slice", &stream, |s, cfg, i, o| {
+        // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
+        unsafe { module.test_bool_payload_borrow_slice(s, cfg, i, o) }.expect("launch")
+    });
+    all_pass &= run_and_report(
+        "test_bool_payload_borrow_in_loop",
+        &stream,
+        |s, cfg, i, o| {
+            // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
+            unsafe { module.test_bool_payload_borrow_in_loop(s, cfg, i, o) }.expect("launch")
+        },
+    );
+    all_pass &= run_and_report(
+        "test_bool_payload_borrow_not_final",
+        &stream,
+        |s, cfg, i, o| {
+            // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
+            unsafe { module.test_bool_payload_borrow_not_final(s, cfg, i, o) }.expect("launch")
+        },
+    );
+    all_pass &= run_and_report("test_bool_payload_addr_of", &stream, |s, cfg, i, o| {
+        // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
+        unsafe { module.test_bool_payload_addr_of(s, cfg, i, o) }.expect("launch")
+    });
+    all_pass &= run_and_report(
+        "test_shared_array_payload_borrow",
+        &stream,
+        |s, cfg, i, o| {
+            // SAFETY: launch shape/resources match the kernel; buffers cover its accesses.
+            unsafe { module.test_shared_array_payload_borrow(s, cfg, i, o) }.expect("launch")
+        },
+    );
 
     if all_pass {
         println!("\nSUCCESS: all kernels passed");

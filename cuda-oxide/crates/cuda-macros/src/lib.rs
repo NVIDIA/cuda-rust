@@ -40,6 +40,7 @@ mod launch_attrs;
 mod printf;
 mod ptx_asm;
 mod tile_export;
+mod verify;
 
 #[cfg(test)]
 mod tests;
@@ -465,13 +466,37 @@ pub fn cuda_module(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// Full `#[unroll]` preserves `break` paths and multiple exit targets. Partial
 /// `#[unroll(N)]` currently requires the loop condition to be the only exit. If
 /// the loop has a `break` or another extra exit, the compiler warns and skips
-/// partial unrolling for that loop.
+/// partial unrolling for that loop. A `match` in the body, such as
+/// `row.get(i).unwrap_or(0.0)`, is not an exit.
 ///
-/// Partial unrolling also requires a positive counter step, a `<` or `<=` test,
-/// and a limit that does not change inside the loop. One annotation may create
+/// Partial unrolling also requires a `<` or `<=` test, a limit that does not
+/// change inside the loop, and a counter that advances by the same positive
+/// constant or loop-invariant runtime value on every iteration, such as
+/// `blockDim_x()` in a block-stride loop. One annotation may create
 /// at most 1,024 body copies, 8,192 cloned basic blocks, and 65,536 cloned
 /// operations. Factors above 1,024 are rejected; unsupported loop shapes warn
 /// and are not unrolled.
+///
+/// # Keeping a loop rolled
+///
+/// Put `#[nounroll]` on a loop to keep it rolled. ptxas otherwise fully unrolls
+/// small constant-trip-count loops on its own, which can raise register
+/// pressure. The annotation becomes `llvm.loop.unroll.disable` metadata on the
+/// loop, so LLVM and libNVVM leave it rolled and ptxas sees
+/// `.pragma "nounroll";` at its header.
+///
+/// ```ignore
+/// #[kernel]
+/// pub fn example(out: *mut f32) {
+///     let mut acc = 0.0;
+///     let mut tap = 0;
+///     #[nounroll]
+///     while tap < 4 { acc += load(tap); tap += 1; }
+/// }
+/// ```
+///
+/// `#[nounroll]` applies to the annotated loop only and takes no arguments. A
+/// loop cannot carry both `#[unroll]` and `#[nounroll]`.
 #[proc_macro_attribute]
 pub fn kernel(attr: TokenStream, item: TokenStream) -> TokenStream {
     kernel::kernel_entry(attr, item)
@@ -722,6 +747,48 @@ pub fn launch_contract(attr: TokenStream, item: TokenStream) -> TokenStream {
     launch_attrs::launch_contract_entry(attr, item)
 }
 
+/// Declares preview formal verification obligations for a kernel, checked by
+/// Lean 4 (`cuda-oxide/oxide-proofs-preview`) at the `PostMem2Reg` `dialect-mir` stage.
+///
+/// **Preview:** `#[verify(...)]` covers a validated subset of `PostMem2Reg`
+/// integer, shared-memory, barrier, cluster, and `tcgen05` / `TMEM` MIR.
+/// Kernels outside that subset fail closed at compile time, and clause syntax
+/// may evolve between releases.
+///
+/// Supported clauses name the kernel's slice parameters, `SharedArray`s, and
+/// hardware contracts:
+/// - `no_oob_idx(a, TILE)`: every indexed read or write stays in bounds
+/// - `no_data_race(TILE)`: no two CTA threads conflict on shared memory in one phase
+/// - `disjoint_writes(c)`: distinct launched threads never write the same slot
+/// - `writes_all_elems(c)`: every element in `0..c.len()` has a writer thread
+/// - `uniform_barriers`: CTA/cluster barriers and `mbarrier` waits are safe
+/// - `tmem_lifecycle`: Blackwell `TMEM` bounds, warpgroup slices, and async order
+///
+/// ```ignore
+/// #[launch_contract(
+///     domain = 1,
+///     block = (256, 1, 1),
+///     requires = (a.len() >= c.len(), b.len() >= c.len()),
+/// )]
+/// #[verify(
+///     no_oob_idx(a, b, c),
+///     disjoint_writes(c),
+///     writes_all_elems(c),
+/// )]
+/// #[kernel]
+/// pub fn vecadd(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>) {
+///     let idx = thread::index_1d();
+///     let idx_raw = idx.get();
+///     if let Some(c_elem) = c.get_mut(idx) {
+///         *c_elem = a[idx_raw] + b[idx_raw];
+///     }
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn verify(attr: TokenStream, item: TokenStream) -> TokenStream {
+    verify::verify_entry(attr, item)
+}
+
 /// Specifies compile-time cluster dimensions for a kernel.
 ///
 /// This attribute sets the thread block cluster size at compile time by emitting
@@ -849,7 +916,7 @@ pub fn cooperative_launch(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// - Return values (unlike kernels which must return `()`)
 /// - Be called from kernels and other device functions
 /// - Use generics (each monomorphization becomes a separate device function)
-/// - Use per-loop `#[unroll]` and `#[unroll(N)]` annotations
+/// - Use per-loop `#[unroll]`, `#[unroll(N)]`, and `#[nounroll]` annotations
 ///
 /// # Loop unrolling
 ///
@@ -859,12 +926,16 @@ pub fn cooperative_launch(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// `isize`); other iterator loops are not yet recognized. Partial
 /// factors must be `N >= 2`. Multiple `continue` paths are supported; full
 /// unrolling preserves `break` and multiple exit targets. Partial unrolling
-/// requires a positive counter step, a `<` or `<=` test, an unchanging limit,
-/// and no exit besides the normal header test.
+/// requires a `<` or `<=` test, an unchanging limit, a step that is a positive
+/// constant or a loop-invariant runtime value, and no exit besides the normal
+/// header test.
 ///
 /// One annotation may create at most 1,024 body copies, 8,192 cloned basic
 /// blocks, and 65,536 cloned operations. Factors above 1,024 are rejected;
 /// unsupported loop shapes warn and are not unrolled.
+///
+/// `#[nounroll]` keeps a loop rolled through LLVM, libNVVM, and ptxas, as in
+/// kernels.
 ///
 /// # Example: Device Function Definition
 ///
@@ -930,15 +1001,18 @@ pub fn device(_attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// | Argument                    | Meaning                                         | Default           |
 /// |-----------------------------|-------------------------------------------------|-------------------|
-/// | `tile_shape = N`            | 1-D tile extent (required)                      | none              |
+/// | `tile_shape = N`            | 1-D tile extent of a static library             | parametric        |
 /// | `name = "..."`              | declaration name the cuTile caller uses         | the function name |
 /// | `symbol = "..."`            | implementation symbol in the device artifact    | `<name>_impl`     |
 /// | `sync = "none"` / `"warp"`  | threads that must call the function together    | `"none"`          |
 /// | `arch = ["sm_120", ...]`    | compute capabilities the implementation supports| every architecture|
 ///
-/// `tile_shape` is required because this version ships concrete implementations:
-/// a parametric one would need one mangled symbol per specialization in the
-/// device artifact. `sync = "warp"` needs a tile shape that is a multiple of 32
+/// With `tile_shape` the export is one static declaration at that extent, which
+/// `cargo oxide tilelib` packs into a `.tilelib` ahead of time. Without it the
+/// export is parametric (`@name<[N: index]>`): the call supplies the extent,
+/// and only the provider form of the library (`cargo oxide tilelib
+/// --provider`) can ship it, because the Tile compiler asks for one
+/// implementation symbol per extent. `sync = "warp"` needs a tile shape that is a multiple of 32
 /// times the parameter footprint, so every invocation group fills whole
 /// warps. `arch` is normally omitted, which matches every target; when given,
 /// names are compared after stripping `_` and lowercasing, and a portable name
@@ -1247,7 +1321,7 @@ pub fn cuda_launch(input: TokenStream) -> TokenStream {
 ///
 /// ```ignore
 /// use cuda_host::cuda_launch_async;
-/// use cuda_core::simt::LaunchConfig;
+/// use cuda_core::LaunchConfig;
 ///
 /// // SAFETY: ABI, lifetimes, geometry, and resources match vecadd.
 /// let op = unsafe {

@@ -1,0 +1,7 @@
+error: cluster_launch expects 1, 2, or 3 dimensions: #[cluster_launch(x)], #[cluster_launch(x, y)], or #[cluster_launch(x, y, z)]
+ --> tests/compile_fail/cluster_launch_wrong_arity.rs:4:1
+  |
+4 | #[cuda_macros::cluster_launch(1, 1, 1, 1)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `cuda_macros::cluster_launch` (in Nightly builds, run with -Z macro-backtrace for more info)

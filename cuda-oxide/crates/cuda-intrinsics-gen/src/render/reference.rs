@@ -7,9 +7,9 @@ use crate::model::{
     BackendLoweringMechanism, CatalogFile, ClusterBarrierOrdering, ClusterMemorySourceContract,
     CpAsyncMbarrierOperation, CpAsyncMbarrierStateSpace, EvidenceArtifactKind, IntrinsicBackend,
     MbarrierBasicOperation, MbarrierExtendedSourceContract, PackedAtomicFormat,
-    PackedConversionRounding, PackedConversionSaturation, RegisterMmaAdapter, RegisterMmaOperation,
-    RegisterMmaOverflow, RuntimeValidation, SparseMmaOverflow, WarpMatchAdapter,
-    WarpShuffleValueKind, WgmmaControlMode,
+    PackedConversionRounding, PackedConversionSaturation, RegisterMmaAdapter, RegisterMmaKind,
+    RegisterMmaOperation, RegisterMmaOverflow, RuntimeValidation, SparseMmaOverflow,
+    WarpMatchAdapter, WarpShuffleValueKind, WgmmaControlMode,
 };
 use crate::render::common::{
     backend_label, evidence_stage_label, hardware_target_label, llvm, lowering_mechanism_label,
@@ -120,9 +120,14 @@ pub(super) fn render_reference(catalog: &CatalogFile, hash: &str) -> String {
             RuntimeValidation::Executed => "executed on a GPU",
         };
         if mma.adapter == RegisterMmaAdapter::C4F32A4U32B2U32Scales2U32Selectors4U16ToD4F32 {
+            let selectors = if mma.kind == Some(RegisterMmaKind::Mxf4) {
+                "For `scale_vec::2X`, byte selectors must each be `0` or `2`, the A thread selector in `0..=1`, and the B thread selector in `0..=3`."
+            } else {
+                "For `scale_vec::1X`, byte selectors must be in `0..=3`, the A thread selector in `0..=1`, and the B thread selector in `0..=3`."
+            };
             writeln!(
                 output,
-                "- `{}` takes C, A, B, scale-A data/selectors, and scale-B data/selectors in PTX operand order, performs {operation}, and lowers to one convergent, register-only `{}` instruction. For `scale_vec::1X`, byte selectors must be in `0..=3`, the A thread selector in `0..=1`, and the B thread selector in `0..=3`. Every non-exited warp lane must execute the same instruction and qualifiers. Integer overflow is {overflow}; runtime validation is {runtime}.",
+                "- `{}` takes C, A, B, scale-A data/selectors, and scale-B data/selectors in PTX operand order, performs {operation}, and lowers to one convergent, register-only `{}` instruction. {selectors} Every non-exited warp lane must execute the same instruction and qualifiers. Integer overflow is {overflow}; runtime validation is {runtime}.",
                 record.id,
                 expected_ptx_head(record),
             )

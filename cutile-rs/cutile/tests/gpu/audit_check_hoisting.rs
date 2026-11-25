@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use cutile::prelude::*;
-use cutile::tile_kernel::CompileOptions;
+use cutile::tile_kernel::{CompileOptions, DebugInfoLevel};
 
 use crate::audit_common::{self, host, report_outcome, run_in_subprocess, upload, Outcome};
 use crate::common;
@@ -132,7 +132,7 @@ fn a_loop_body_with_continue_keeps_its_check_in_place() {
         let (z, _x, _limit) =
             check_hoisting_module::continue_before(api::zeros::<f32>(&[B]).partition([B]), x, 4)
                 .generics(vec![B.to_string()])
-                .compile_options(CompileOptions::new().device_debug(false))
+                .compile_options(CompileOptions::new().debug_info(DebugInfoLevel::None))
                 .sync()
                 .expect("continue_before with every attained access in bounds");
         let expected: Vec<f32> = (0..B)
@@ -167,7 +167,7 @@ fn stepped_loops_are_checked_at_the_last_attained_index() {
         let (z, _x) =
             check_hoisting_module::stepped_dynamic(api::zeros::<f32>(&[B]).partition([B]), x)
                 .generics(vec![B.to_string()])
-                .compile_options(CompileOptions::new().device_debug(false))
+                .compile_options(CompileOptions::new().debug_info(DebugInfoLevel::None))
                 .sync()
                 .expect("nine tiles cover the attained indices {0, 4, 8}");
         let expected: Vec<f32> = (0..B)
@@ -222,7 +222,7 @@ fn execute_trap_case(case: &str) -> Result<(), String> {
             let x = upload((0..(8 * B) as i32).map(|v| v as f32).collect());
             check_hoisting_module::stepped_dynamic(api::zeros::<f32>(&[B]).partition([B]), x)
                 .generics(vec![B.to_string()])
-                .compile_options(CompileOptions::new().device_debug(false))
+                .compile_options(CompileOptions::new().debug_info(DebugInfoLevel::None))
                 .sync()
                 .map_err(|err| err.to_string())?;
             Ok(())

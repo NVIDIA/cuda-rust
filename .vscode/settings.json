@@ -21,8 +21,11 @@
         "./cutile-rs/Cargo.toml",
         "./cuda-oxide/crates/rustc-codegen-cuda/Cargo.toml",
         "./cuda-oxide/crates/rustc-codegen-cuda/examples/debug_pointer_locals/Cargo.toml",
-        "./cuda-oxide/crates/rustc-codegen-cuda/examples/gemm_sol_final/Cargo.toml",
+        "./cuda-oxide/examples/gemm_sol_final/Cargo.toml",
         "./cuda-oxide/crates/rustc-codegen-cuda/examples/vecadd/Cargo.toml",
         "./cuda-oxide/crates/rustc-codegen-cuda/examples/abi_hmm/Cargo.toml",
+        "./cuda-oxide/cute-rs-preview/examples/sm100_qkv_epilogue_cute/Cargo.toml",
+        "./cuda-oxide/cute-rs-preview/models/nemotron3_moe_cute/Cargo.toml",
+        "./cuda-oxide/models/nemotron3_moe/Cargo.toml",
     ],
 }

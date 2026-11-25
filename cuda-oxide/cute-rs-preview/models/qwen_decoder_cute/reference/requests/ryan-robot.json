@@ -1,0 +1,31 @@
+{
+  "text": "The robot is ready. Please move the blue block to the left.",
+  "text_ids": [
+    151644,
+    77091,
+    198,
+    785,
+    12305,
+    374,
+    5527,
+    13,
+    5209,
+    3271,
+    279,
+    6303,
+    2504,
+    311,
+    279,
+    2115,
+    13,
+    151645,
+    198,
+    151644,
+    77091,
+    198
+  ],
+  "speaker": "Ryan",
+  "language": "English",
+  "non_streaming_mode": false,
+  "max_new_tokens": 128
+}

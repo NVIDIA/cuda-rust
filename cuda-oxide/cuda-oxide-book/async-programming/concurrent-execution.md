@@ -59,7 +59,7 @@ sets up the scheduling policy (round-robin with four streams by default), and
 makes the thread-local state available for `.sync()` and `.await`:
 
 ```rust
-use cuda_async::simt::device_context::init_device_contexts;
+use cuda_async::device_context::init_device_contexts;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

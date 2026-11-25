@@ -11,7 +11,7 @@
 //! cargo oxide build iket_trace --arch sm_120
 //! ```
 
-use cuda_core::simt::LaunchConfig;
+use cuda_core::LaunchConfig;
 use cuda_core::{CudaContext, DeviceBuffer};
 use cuda_device::{DisjointSlice, cuda_module, iket, kernel, thread};
 

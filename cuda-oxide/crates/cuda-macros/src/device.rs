@@ -5,12 +5,16 @@
 
 //! `#[device]` functions and extern blocks, plus `#[constant]` statics.
 
-use crate::common::{impl_trait_parameter_error, reject_reserved_name, track_codegen_environment};
+use crate::common::{
+    collector_root, device_build, impl_trait_parameter_error, reject_reserved_name,
+    reserved_name_error, track_codegen_environment,
+};
 use crate::cuda_module::constants::extract_constant_inner_ty;
 use crate::cuda_module::launchers::{codegen_generic_arguments, has_codegen_generics};
 use crate::kernel::scope::{forwarding_inputs, inject_device_thread_index_scope};
 use crate::launch_attrs::rewrite_loop_unroll_attrs;
 use proc_macro::TokenStream;
+use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use reserved_oxide_symbols::{DEVICE_EXTERN_PREFIX, DEVICE_PREFIX, constant_symbol};
 use syn::{
@@ -113,22 +117,29 @@ pub(crate) fn device_entry(_attr: TokenStream, item: TokenStream) -> TokenStream
 /// so user code can call `my_func()` rather than the mangled internal symbol.
 ///
 /// Handles both non-generic and generic device functions:
-/// - **Non-generic**: `#[no_mangle]` on the prefixed function, `#[inline(always)]` wrapper.
+/// - **Non-generic**: `#[no_mangle]` on the prefixed function in the device build,
+///   `#[inline(always)]` wrapper.
 /// - **Generic**: No `#[no_mangle]` (generics use mangled symbols), `#[inline(never)]` on
 ///   the prefixed function (so monomorphizations appear in CGUs for the collector),
 ///   `#[inline(always)]` wrapper with generics + turbofish forwarding.
 ///
 /// This mirrors the pattern used by `#[kernel]` for generic kernels
 /// (see `generate_generic_kernel_no_instantiation`).
-fn generate_device_function(mut input: ItemFn) -> TokenStream {
-    if let Some(err) = reject_reserved_name(&input.sig.ident) {
-        return err;
+fn generate_device_function(input: ItemFn) -> TokenStream {
+    device_function_tokens(input, device_build()).into()
+}
+
+/// Expansion body of [`generate_device_function`], split out so unit tests can
+/// inspect the generated items without a live proc-macro bridge.
+pub(crate) fn device_function_tokens(mut input: ItemFn, device_build: bool) -> TokenStream2 {
+    if let Some(err) = reserved_name_error(&input.sig.ident) {
+        return err.to_compile_error();
     }
     if let Some(err) = impl_trait_parameter_error(&input, "device function") {
-        return err.to_compile_error().into();
+        return err.to_compile_error();
     }
     if let Err(err) = rewrite_loop_unroll_attrs(&mut input) {
-        return err.to_compile_error().into();
+        return err.to_compile_error();
     }
     inject_device_thread_index_scope(&mut input);
 
@@ -148,7 +159,7 @@ fn generate_device_function(mut input: ItemFn) -> TokenStream {
 
     let (wrapper_inputs, params) = match forwarding_inputs(&input.sig.inputs) {
         Ok(forwarding) => forwarding,
-        Err(err) => return err.to_compile_error().into(),
+        Err(err) => return err.to_compile_error(),
     };
 
     // Rename the original function with the prefix
@@ -179,7 +190,7 @@ fn generate_device_function(mut input: ItemFn) -> TokenStream {
             call
         };
 
-        let expanded = quote! {
+        quote! {
             #[inline(never)]
             #input
 
@@ -188,9 +199,7 @@ fn generate_device_function(mut input: ItemFn) -> TokenStream {
             #vis #constness #unsafety #abi fn #fn_name #generics (#(#wrapper_inputs),*) #return_type #where_clause {
                 #call
             }
-        };
-
-        TokenStream::from(expanded)
+        }
     } else {
         let call = quote! { #new_name(#(#params),*) };
         let call = if unsafety.is_some() {
@@ -199,8 +208,11 @@ fn generate_device_function(mut input: ItemFn) -> TokenStream {
             call
         };
         // Non-generic device function: simple case.
-        let expanded = quote! {
-            #[unsafe(no_mangle)]
+        let (export, root) =
+            collector_root(device_build, &new_name, quote! { #[unsafe(no_mangle)] });
+        input.block.stmts.splice(0..0, root);
+        quote! {
+            #export
             #input
 
             /// Wrapper for the device function with the original name.
@@ -208,9 +220,7 @@ fn generate_device_function(mut input: ItemFn) -> TokenStream {
             #vis #constness #unsafety #abi fn #fn_name #generics (#(#wrapper_inputs),*) #return_type #where_clause {
                 #call
             }
-        };
-
-        TokenStream::from(expanded)
+        }
     }
 }
 

@@ -300,7 +300,8 @@ pub fn cuda_module(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// Marks a function as a CUDA kernel.
 ///
 /// This attribute:
-/// 1. Adds `#[no_mangle]` to preserve the function name in the binary
+/// 1. Adds `#[no_mangle]` in the device build to preserve the function name in
+///    the binary; a host build instantiates it without exporting it
 /// 2. Marks the function for detection by the `rustc-codegen-cuda` backend
 ///
 /// # Grid-constant parameters
@@ -906,7 +907,8 @@ pub fn cooperative_launch(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// but cannot be called from host code.
 ///
 /// This attribute:
-/// 1. Adds `#[no_mangle]` to preserve the function name in the binary
+/// 1. Adds `#[no_mangle]` in the device build to preserve the function name in
+///    the binary; a host build instantiates it without exporting it
 /// 2. Renames the function into the reserved `cuda_oxide_device_<hash>_` namespace
 ///    for detection by the codegen backend (the prefix lives in
 ///    `cuda-oxide/crates/reserved-oxide-symbols/`)

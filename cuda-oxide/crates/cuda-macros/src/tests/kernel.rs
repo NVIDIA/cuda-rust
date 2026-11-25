@@ -4,9 +4,10 @@
  */
 
 use crate::common::attr_path_ends_with;
+use crate::device::device_function_tokens;
 use crate::kernel::codegen::{
     generate_cuda_kernel_impl, generic_kernel_instantiation_tokens,
-    generic_kernel_no_instantiation_tokens, route_generic_kernel_attrs,
+    generic_kernel_no_instantiation_tokens, route_generic_kernel_attrs, simple_kernel_tokens,
 };
 use crate::kernel::scope::{
     explicit_kernel_scope, explicit_kernel_scope_bindings, forwarding_inputs,
@@ -16,7 +17,7 @@ use crate::kernel::scope::{
 use crate::kernel::{KernelArgs, inject_grid_constant_markers};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use reserved_oxide_symbols::{KERNEL_PREFIX, KERNEL_SCOPE_LOCAL};
+use reserved_oxide_symbols::{DEVICE_PREFIX, KERNEL_PREFIX, KERNEL_SCOPE_LOCAL};
 use syn::{Expr, ItemFn, Stmt, parse_quote, spanned::Spanned};
 
 /// A bare `#[kernel]` outside any `#[cuda_module]` carries its own
@@ -463,7 +464,8 @@ fn legacy_instantiation_confines_unchecked_marker_to_entry_and_hidden_twin() {
             work(value);
         }
     };
-    let expanded = generic_kernel_instantiation_tokens(kernel, vec![parse_quote! { f32 }], None);
+    let expanded =
+        generic_kernel_instantiation_tokens(kernel, vec![parse_quote! { f32 }], None, true);
 
     let helper = expansion_fn_source(&expanded, "scaled_gather");
     assert!(
@@ -493,7 +495,8 @@ fn legacy_instantiation_confines_grid_constant_marker_to_entry() {
             work(descriptor, tag);
         }
     };
-    let expanded = generic_kernel_instantiation_tokens(kernel, vec![parse_quote! { u32 }], None);
+    let expanded =
+        generic_kernel_instantiation_tokens(kernel, vec![parse_quote! { u32 }], None, true);
 
     let helper = expansion_fn_source(&expanded, "read");
     assert!(!helper.contains("__grid_constant_config"));
@@ -563,9 +566,102 @@ fn raw_identifier_kernel_names_build_a_valid_unchecked_twin() {
     let twin = expansion_fn_source(&expanded, "__cuda_oxide_unchecked_impl_gen");
     assert!(twin.contains("__unchecked_indexing_config"));
 
-    let expanded = generic_kernel_instantiation_tokens(kernel, vec![parse_quote! { f32 }], None);
+    let expanded =
+        generic_kernel_instantiation_tokens(kernel, vec![parse_quote! { f32 }], None, true);
     let twin = expansion_fn_source(&expanded, "__cuda_oxide_unchecked_impl_gen");
     assert!(twin.contains("__unchecked_indexing_config"));
+}
+
+/// Each fn item of an expansion as (name, exported, rooted): whether it
+/// carries `no_mangle`, and whether its body holds the host build's
+/// monomorphization root for it.
+fn entry_exports(expanded: &TokenStream2) -> Vec<(String, bool, bool)> {
+    let file: syn::File =
+        syn::parse2(expanded.clone()).expect("generated tokens must parse as items");
+    file.items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Fn(function) => Some(function),
+            _ => None,
+        })
+        .map(|function| {
+            let name = function.sig.ident.to_string();
+            let exported = function
+                .attrs
+                .iter()
+                .any(|attr| quote!(#attr).to_string().contains("no_mangle"));
+            let body: Vec<String> = function
+                .block
+                .stmts
+                .iter()
+                .map(|stmt| quote!(#stmt).to_string().replace(' ', ""))
+                .collect();
+            let reify = format!("{name}as*const()");
+            let rooted = body
+                .iter()
+                .any(|stmt| stmt.starts_with("static") && stmt.contains(&reify))
+                && body.iter().any(|stmt| stmt.starts_with("const_:()"));
+            (name, exported, rooted)
+        })
+        .collect()
+}
+
+/// cuda-oxide's device build finds entries by their exported names. A host
+/// build must not export them, or their device-only callees become
+/// undefined imports of a host shared object, but must still instantiate
+/// them so post-monomorphization checks fail it.
+#[test]
+fn entries_export_only_in_the_device_build() {
+    for device_build in [true, false] {
+        let simple = simple_kernel_tokens(
+            parse_quote! { fn scale(out: *mut f32) {} },
+            None,
+            device_build,
+        );
+        let legacy = generic_kernel_instantiation_tokens(
+            parse_quote! { fn fill<T: Copy>(value: T) {} },
+            vec![parse_quote! { f32 }, parse_quote! { u32 }],
+            None,
+            device_build,
+        );
+        let device = device_function_tokens(
+            parse_quote! { fn twice(x: u32) -> u32 { x * 2 } },
+            device_build,
+        );
+        let expansions = [
+            (simple, vec![format!("{KERNEL_PREFIX}scale")]),
+            (
+                legacy,
+                vec![
+                    format!("{KERNEL_PREFIX}fill_f32"),
+                    format!("{KERNEL_PREFIX}fill_u32"),
+                ],
+            ),
+            (device, vec![format!("{DEVICE_PREFIX}twice")]),
+        ];
+        for (expanded, entries) in expansions {
+            let functions = entry_exports(&expanded);
+            for entry in &entries {
+                assert!(
+                    functions.iter().any(|(name, ..)| name == entry),
+                    "expansion has no entry `{entry}`:\n{expanded}"
+                );
+            }
+            for (name, exported, rooted) in functions {
+                let entry = entries.contains(&name);
+                assert_eq!(
+                    exported,
+                    entry && device_build,
+                    "`{name}` export with device_build = {device_build}:\n{expanded}"
+                );
+                assert_eq!(
+                    rooted,
+                    entry && !device_build,
+                    "`{name}` root with device_build = {device_build}:\n{expanded}"
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -587,7 +683,8 @@ fn generic_kernels_validate_routed_launch_contract_requires_at_source_names() {
     assert!(expanded.contains("unknown identifier `n`"), "{expanded}");
 
     let expanded =
-        generic_kernel_instantiation_tokens(typo, vec![parse_quote! { f32 }], None).to_string();
+        generic_kernel_instantiation_tokens(typo, vec![parse_quote! { f32 }], None, true)
+            .to_string();
     assert!(expanded.contains("compile_error"), "{expanded}");
     assert!(expanded.contains("unknown identifier `n`"), "{expanded}");
 

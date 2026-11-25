@@ -6,7 +6,7 @@
 //! Kernel body generation: simple kernels, generic instantiations, and
 //! the hidden device twins.
 
-use crate::common::{attr_path_ends_with, internal_ident};
+use crate::common::{attr_path_ends_with, collector_root, device_build, internal_ident};
 use crate::cuda_module::launchers::{
     codegen_generic_arguments, generic_arguments, generic_phantom_type,
 };
@@ -312,10 +312,17 @@ fn _generate_dummy_binding(name: &Ident, ty: &Type) -> TokenStream2 {
 }
 
 /// Generate a simple non-generic kernel
-pub(super) fn generate_simple_kernel(
+pub(super) fn generate_simple_kernel(input: ItemFn, explicit_scope: Option<Ident>) -> TokenStream {
+    simple_kernel_tokens(input, explicit_scope, device_build()).into()
+}
+
+/// Expansion body of [`generate_simple_kernel`], split out so unit tests can
+/// inspect the generated items without a live proc-macro bridge.
+pub(crate) fn simple_kernel_tokens(
     mut input: ItemFn,
     explicit_scope: Option<Ident>,
-) -> TokenStream {
+    device_build: bool,
+) -> TokenStream2 {
     if let Some(ident) = explicit_scope {
         let scope = explicit_kernel_scope(&mut input, ident);
         let bindings = explicit_kernel_scope_bindings(&scope);
@@ -344,14 +351,18 @@ pub(super) fn generate_simple_kernel(
         cfg!(feature = "host"),
     );
 
-    let expanded = quote! {
-        #[unsafe(no_mangle)]
+    let (export, root) = collector_root(
+        device_build,
+        &input.sig.ident,
+        quote! { #[unsafe(no_mangle)] },
+    );
+    input.block.stmts.splice(0..0, root);
+    quote! {
+        #export
         #input
 
         #cuda_kernel_impl
-    };
-
-    TokenStream::from(expanded)
+    }
 }
 
 /// Generate the GenericCudaKernel trait implementation for a generic kernel.
@@ -493,7 +504,8 @@ pub(super) fn generate_generic_kernel(
     instantiate_types: Vec<Type>,
     explicit_scope: Option<Ident>,
 ) -> TokenStream {
-    generic_kernel_instantiation_tokens(input, instantiate_types, explicit_scope).into()
+    generic_kernel_instantiation_tokens(input, instantiate_types, explicit_scope, device_build())
+        .into()
 }
 
 /// Expansion body of [`generate_generic_kernel`] (legacy `#[kernel(Type, ...)]`
@@ -503,6 +515,7 @@ pub(crate) fn generic_kernel_instantiation_tokens(
     mut input: ItemFn,
     instantiate_types: Vec<Type>,
     explicit_scope: Option<Ident>,
+    device_build: bool,
 ) -> TokenStream2 {
     let entry_inputs = input.sig.inputs.clone();
     // Same as the no-instantiation path: `requires` relations of a routed
@@ -640,11 +653,19 @@ pub(crate) fn generic_kernel_instantiation_tokens(
                 })
                 .collect();
 
+            let (export, root) = collector_root(
+                device_build,
+                &wrapper_name,
+                quote! {
+                    #[unsafe(no_mangle)]
+                    #[unsafe(export_name = #export_name_str)]
+                },
+            );
             quote! {
                 #(#entry_attrs)*
-                #[unsafe(no_mangle)]
-                #[unsafe(export_name = #export_name_str)]
+                #export
                 #vis fn #wrapper_name(#(#wrapper_args),*) {
+                    #(#root)*
                     #(#entry_config_markers)*
                     #(#scope_bindings)*
                     #implementation_target::<#inst_type>(#(#implementation_args),*);

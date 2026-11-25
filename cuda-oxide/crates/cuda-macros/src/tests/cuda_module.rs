@@ -887,6 +887,22 @@ fn writes_all_elems_generates_host_grid_coverage_check_in_checked_launchers() {
         "expected writes_all_elems grid coverage check in host launcher: {expanded}"
     );
     assert!(expanded.contains("saturating_mul"), "{expanded}");
+
+    let dom2_invalid: ItemMod = parse_quote! {
+        mod kernels {
+            #[kernel]
+            #[launch_contract(domain = 2, block = (16, 16, 1))]
+            #[verify(no_oob_idx(c), disjoint_writes(c), writes_all_elems(c))]
+            pub fn bad_dom2(c: &mut [f32]) {}
+        }
+    };
+    let err = expand_cuda_module(dom2_invalid)
+        .expect_err("writes_all_elems on domain = 2 must fail closed");
+    assert!(
+        err.to_string()
+            .contains("requires `#[launch_contract(domain = 1"),
+        "unexpected error: {err}"
+    );
 }
 
 #[cfg(feature = "async")]

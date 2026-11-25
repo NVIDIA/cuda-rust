@@ -21,6 +21,7 @@ REJECTED = (
     ("RejectedTmemColOverflow.lean", "TMEM column range overflow"),
     ("RejectedTmemWarpSlice.lean", "TMEM warpgroup lane-slice violation"),
     ("RejectedMutSliceRace.lean", "cross-thread &mut [T] read-write race"),
+    ("RejectedTrappingWrite.lean", "trapping mir.assert before writes_all_elems store"),
 )
 
 

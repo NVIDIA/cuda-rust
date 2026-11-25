@@ -4,7 +4,9 @@
  */
 //! Physical Rust carriers needed by checked instruction-level APIs.
 //! Enum storage retains rustc's byte offsets, size and alignment. Niche encoding
-//! remains unsupported rather than being approximated by a logical tag.
+//! is supported only in the null-pointer `Option<&T>` shape, where the carrier is
+//! the payload pointer itself. Every other niche encoding remains unsupported
+//! rather than being approximated by a logical tag.
 use crate::{
     DropAttribute, MlirAttribute, MlirLocation, MlirOperation, MlirResult, MlirType, MlirValueUse,
     OperationInput, OperationTranslation, TranslationError, TranslationRegistry,
@@ -36,6 +38,39 @@ pub(crate) fn register(r: &mut TranslationRegistry) -> Result<(), TranslationErr
     r.register_operation::<MirCheckedMulOp>(Checked("mul"))?;
     r.register_operation::<MirUnreachableOp>(Unreachable)?;
     Ok(())
+}
+
+/// Accept only the `Option<&T>` niche shape: a pointer-sized enum whose dataful variant holds one
+/// generic-space pointer at offset 0 and whose single other variant is the null pointer.
+/// Returns `(niche_variant, dataful_variant)`.
+pub(crate) fn pointer_niche(e: &MirEnumType) -> Result<(usize, usize), String> {
+    let dataful = e.untagged_variant as usize;
+    let niche = e.niche_variant_start as usize;
+    let ok = e.layout_kind == EnumLayoutKind::Niche
+        && e.carrier_kind == EnumCarrierKind::Pointer
+        && e.carrier_width == 64
+        && e.carrier_address_space == 0
+        && e.tag_offset == 0
+        && e.total_size == 8
+        && e.abi_align == 8
+        && e.niche_start.0 == 0
+        && e.niche_variant_start == e.niche_variant_end
+        && e.variant_names.len() == 2
+        && e.variant_discriminants.len() == 2
+        && e.variant_field_counts.len() == 2
+        && dataful < 2
+        && niche < 2
+        && dataful != niche
+        && e.variant_field_counts[dataful] == 1
+        && e.variant_field_counts[niche] == 0
+        && e.all_field_offsets.as_slice() == [0]
+        && e.all_field_sizes.as_slice() == [8];
+    if !ok {
+        return Err(
+            "MLIR export supports niche enums only in the null-pointer `Option<&T>` shape".into(),
+        );
+    }
+    Ok((niche, dataful))
 }
 
 /// Validate reviewed enum layouts and preserve their physical size and alignment.
@@ -70,7 +105,9 @@ pub(crate) fn enum_storage_type(e: &MirEnumType) -> Result<MlirType, String> {
         }
         return MlirType::dialect("!llvm.struct<(array<0 x i8>, array<0 x i8>)>");
     }
-    if !matches!(
+    if e.layout_kind == EnumLayoutKind::Niche {
+        pointer_niche(e)?;
+    } else if !matches!(
         e.layout_kind,
         EnumLayoutKind::Direct | EnumLayoutKind::Single
     ) {
@@ -475,6 +512,14 @@ impl OperationTranslation for EnumOp {
                     )?;
                     let ptr = byte_pointer(p.clone(), e.tag_offset, s, loc, &mut out)?;
                     store(tag, ptr, loc, &mut out)?;
+                } else if e.layout_kind == EnumLayoutKind::Niche {
+                    // `None`: the carrier is the null pointer. `Some(p)`: the payload store below is the carrier.
+                    let (niche, _) = pointer_niche(&e)?;
+                    if variant == niche {
+                        let null = integer(0, 64, s, loc, &mut out)?;
+                        let ptr = byte_pointer(p.clone(), 0, s, loc, &mut out)?;
+                        store(null, ptr, loc, &mut out)?;
+                    }
                 } else if variant != e.single_variant as usize {
                     return Err("construction disagrees with single variant layout".into());
                 }
@@ -497,6 +542,53 @@ impl OperationTranslation for EnumOp {
                     store(value, ptr, loc, &mut out)?;
                 }
                 load(p, result, loc, &mut out)?;
+            }
+            Self::Discriminant if e.layout_kind == EnumLayoutKind::Niche => {
+                // Logical discriminant of the `Option<&T>` shape: null carrier selects the niche variant.
+                let (niche, dataful) = pointer_niche(&e)?;
+                let MlirType::Integer(width) = result.ty.clone() else {
+                    return Err("niche enum discriminant needs an integer result".into());
+                };
+                store(input.operands[0].clone(), p.clone(), loc, &mut out)?;
+                let ptr = byte_pointer(p, 0, s, loc, &mut out)?;
+                let (carrier_result, carrier) = fresh(s, MlirType::Integer(64));
+                load(ptr, carrier_result, loc, &mut out)?;
+                let zero = integer(0, 64, s, loc, &mut out)?;
+                let (is_niche_result, is_niche) = fresh(s, MlirType::Integer(1));
+                let mut cmp = op(
+                    "arith.cmpi",
+                    vec![carrier, zero],
+                    vec![is_niche_result],
+                    loc,
+                )?;
+                cmp.properties.insert(
+                    "predicate".into(),
+                    MlirAttribute::Integer {
+                        value: 0,
+                        ty: MlirType::Integer(64),
+                    },
+                );
+                out.push(cmp);
+                let niche_value = integer(
+                    e.variant_discriminants[niche].into(),
+                    width,
+                    s,
+                    loc,
+                    &mut out,
+                )?;
+                let dataful_value = integer(
+                    e.variant_discriminants[dataful].into(),
+                    width,
+                    s,
+                    loc,
+                    &mut out,
+                )?;
+                out.push(op(
+                    "arith.select",
+                    vec![is_niche, niche_value, dataful_value],
+                    vec![result],
+                    loc,
+                )?);
             }
             Self::Discriminant => {
                 store(input.operands[0].clone(), p.clone(), loc, &mut out)?;
@@ -673,7 +765,7 @@ mod tests {
     //! Enum byte-layout and scratch-hoisting regressions, including conditional and loop-local accesses.
 
     use super::*;
-    use dialect_mir::types::{EnumEncoding, EnumVariant};
+    use dialect_mir::types::{EnumEncoding, EnumVariant, NicheStart};
     /// Construct the explicit Direct enum layout used by byte-storage rejection tests.
     fn direct(ctx: &mut Context) -> MirEnumType {
         let tag = IntegerType::get(ctx, 8, Signedness::Unsigned).into();
@@ -755,6 +847,74 @@ mod tests {
         let mut invalid = e.clone();
         invalid.all_field_offsets[0] = 12;
         assert!(enum_storage_type(&invalid).is_err());
+    }
+    /// Construct the pointer-niche layout rustc uses for `Option<&T>`, where `None` is the null carrier.
+    fn option_reference(ctx: &mut Context) -> MirEnumType {
+        let discriminant = IntegerType::get(ctx, 64, Signedness::Signed).into();
+        let byte: TypeHandle = IntegerType::get(ctx, 8, Signedness::Unsigned).into();
+        let pointer: TypeHandle = MirPtrType::get(ctx, byte, true, 0).into();
+        MirEnumType::get_with_encoding(
+            ctx,
+            "Option".into(),
+            discriminant,
+            vec![0, 1],
+            vec![
+                EnumVariant::new_with_layout("None".into(), vec![], vec![], vec![]),
+                EnumVariant::new_with_layout("Some".into(), vec![pointer], vec![0], vec![8]),
+            ],
+            EnumEncoding {
+                total_size: 8,
+                abi_align: 8,
+                layout_kind: EnumLayoutKind::Niche,
+                carrier_kind: EnumCarrierKind::Pointer,
+                carrier_width: 64,
+                niche_start: 0,
+                niche_variant_start: 0,
+                niche_variant_end: 0,
+                untagged_variant: 1,
+                variant_inhabited: vec![1, 1],
+                ..Default::default()
+            },
+        )
+        .deref(ctx)
+        .clone()
+    }
+    /// Check the null-pointer `Option<&T>` shape is the only niche encoding given enum storage.
+    #[test]
+    fn niche_enum_storage_accepts_only_the_null_pointer_option_shape() {
+        let mut ctx = Context::new();
+        dialect_mir::register(&mut ctx);
+        let e = option_reference(&mut ctx);
+        assert_eq!(pointer_niche(&e).unwrap(), (0, 1));
+        assert_eq!(
+            enum_storage_type(&e).unwrap(),
+            MlirType::dialect("!llvm.struct<(array<8 x i8>, array<0 x i64>)>").unwrap()
+        );
+        let mut invalid = e.clone();
+        invalid.niche_start = NicheStart(1);
+        assert!(enum_storage_type(&invalid).is_err());
+        let mut invalid = e.clone();
+        invalid.carrier_kind = EnumCarrierKind::Integer;
+        assert!(enum_storage_type(&invalid).is_err());
+        let mut invalid = e.clone();
+        invalid.carrier_address_space = 3;
+        assert!(enum_storage_type(&invalid).is_err());
+        let mut invalid = e.clone();
+        invalid.niche_variant_end = 1;
+        assert!(enum_storage_type(&invalid).is_err());
+        let mut invalid = e.clone();
+        invalid.untagged_variant = 0;
+        assert!(enum_storage_type(&invalid).is_err());
+        let mut invalid = e.clone();
+        invalid.all_field_offsets[0] = 4;
+        assert!(enum_storage_type(&invalid).is_err());
+        let mut invalid = e.clone();
+        invalid.total_size = 16;
+        assert!(
+            enum_storage_type(&invalid)
+                .unwrap_err()
+                .contains("null-pointer")
+        );
     }
     /// Check scratch allocations move to entry while conditional construction and loop projections remain in place.
     #[test]

@@ -332,6 +332,7 @@ impl Context {
             cu_stream,
             context: self.clone(),
             owned: true,
+            pool_eligible: self.owned,
             _keep_alive: KeepAlive::none(),
         }))
     }
@@ -570,8 +571,8 @@ pub struct PoolMemStats {
 /// (created via [`Stream::borrow_with_owner`], holds a liveness token so the
 /// external owner outlives it).
 ///
-/// Owned streams enqueue retirement without CUDA driver calls on the dropping
-/// thread. Background workers wait for queued GPU work. Borrowed streams and per-thread
+/// Idle streams created by `new_stream` return directly to the pool; busy streams enqueue
+/// retirement. Background workers wait for queued GPU work. Borrowed streams and per-thread
 /// default streams capture completion on the dropping thread; their CUDA calls
 /// can block on Driver contention. A per-thread default stream captures
 /// context-wide completion and must not be dropped during an active capture in
@@ -586,6 +587,7 @@ pub struct Stream {
     pub(crate) cu_stream: cuda_bindings::CUstream,
     pub(crate) context: Arc<Context>,
     pub(crate) owned: bool,
+    pub(crate) pool_eligible: bool,
     pub(crate) _keep_alive: KeepAlive,
 }
 
@@ -597,10 +599,37 @@ pub struct Stream {
 /// destroyed: drops return the handle here, `new_stream` reuses it, and the
 /// last `Context` drop for an ordinal discards the pooled handles — the
 /// primary-context release reclaims them.
-fn stream_pool() -> &'static std::sync::Mutex<std::collections::HashMap<usize, Vec<usize>>> {
-    static POOL: std::sync::OnceLock<
-        std::sync::Mutex<std::collections::HashMap<usize, Vec<usize>>>,
-    > = std::sync::OnceLock::new();
+// Only driver-owned context handles are keys. Mix their high address bits so
+// aligned pointers do not cluster in the low bits used by the hash table.
+#[derive(Default)]
+struct StreamPoolHasher(u64);
+
+impl std::hash::Hasher for StreamPoolHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 = (self.0 ^ u64::from(*byte)).wrapping_mul(0x100000001b3);
+        }
+    }
+
+    fn write_usize(&mut self, value: usize) {
+        let mut hash = self.0 ^ value as u64;
+        hash ^= hash >> 33;
+        hash = hash.wrapping_mul(0xff51afd7ed558ccd);
+        hash ^= hash >> 33;
+        hash = hash.wrapping_mul(0xc4ceb9fe1a85ec53);
+        self.0 = hash ^ (hash >> 33);
+    }
+}
+
+type StreamPool =
+    std::collections::HashMap<usize, Vec<usize>, std::hash::BuildHasherDefault<StreamPoolHasher>>;
+
+fn stream_pool() -> &'static std::sync::Mutex<StreamPool> {
+    static POOL: std::sync::OnceLock<std::sync::Mutex<StreamPool>> = std::sync::OnceLock::new();
     POOL.get_or_init(Default::default)
 }
 
@@ -797,16 +826,11 @@ impl RetiredStream {
         }
     }
 
-    fn retire_owned(mut self) {
+    fn retire_owned(self) {
         // The retained handle is private to retirement and cannot be added
         // to a later capture. Its completion event is private as well.
         let event = crate::completion::with_retirement_capture_mode(&self.context, || {
             self.context.bind_to_thread()?;
-            let mut priority = 0;
-            // SAFETY: this worker retains the live stream and its bound context.
-            self.reusable &=
-                unsafe { cuda_bindings::cuStreamGetPriority(self.handle as _, &mut priority) } == 0
-                    && priority == 0;
             // SAFETY: retirement exclusively owns this live stream handle.
             if unsafe { stream::query(self.handle as _) }? {
                 return Ok(None);
@@ -832,7 +856,7 @@ impl Drop for Stream {
             owned: self.owned,
             // Preserve priority semantics: only default-priority streams enter
             // the pool used by Context::new_stream.
-            reusable: self.context.owned,
+            reusable: self.pool_eligible,
             _keep_alive: std::mem::take(&mut self._keep_alive),
         };
         if retired.handle == PER_THREAD_STREAM_HANDLE {
@@ -855,7 +879,24 @@ impl Drop for Stream {
             }
             return;
         }
-        // Ordinary owned streams enqueue only CPU work on the dropping thread.
+        // An idle default-priority stream can return to the pool immediately.
+        // Check capture first: querying a capturing stream can invalidate it.
+        if retired.reusable
+            && crate::completion::with_retirement_capture_mode(&self.context, || {
+                self.context.bind_to_thread()?;
+                if unsafe { stream::is_capturing(self.cu_stream)? }
+                    != cuda_bindings::CUstreamCaptureStatus_enum_CU_STREAM_CAPTURE_STATUS_NONE
+                {
+                    return Ok(false);
+                }
+                // SAFETY: this context is current and the owned handle is live.
+                unsafe { stream::query(self.cu_stream) }
+            }) == Ok(true)
+        {
+            drop(retired);
+            return;
+        }
+        // In-flight or unknown completion stays on the retirement worker.
         crate::completion::defer_stream(move || retired.retire_owned());
     }
 }
@@ -878,6 +919,7 @@ impl Stream {
             cu_stream: cu_stream as cuda_bindings::CUstream,
             context: context.clone(),
             owned: false,
+            pool_eligible: false,
             _keep_alive: KeepAlive::none(),
         })
     }
@@ -904,6 +946,7 @@ impl Stream {
             cu_stream: cu_stream as cuda_bindings::CUstream,
             context: context.clone(),
             owned: false,
+            pool_eligible: false,
             _keep_alive: KeepAlive::owner(owner),
         })
     }

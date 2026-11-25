@@ -126,6 +126,9 @@ pub fn register_nvvm_cluster_pack(
         "v1:i1042",
         SharedAcquireFence
     );
+    // `thread::sync_threads()` (`nvvm.barrier0`, the CTA-wide `bar.sync 0`): the same plain CTA barrier the
+    // CuTe pipeline pack already emits.
+    register!(Barrier0Op, "v1:i0034", NoOperands("nvvm.barrier"));
     register!(
         BarrierCtaSyncCountOp,
         "v1:i0883",
@@ -1103,6 +1106,25 @@ mod tests {
         {
             assert!(line.contains("(%v8, %v9)"), "{line}");
         }
+    }
+
+    /// Check `thread::sync_threads()` becomes the plain CTA barrier and keeps its catalog identity.
+    #[test]
+    fn sync_threads_becomes_the_plain_cta_barrier() {
+        let mut fixture = Fixture::new();
+        fixture.append::<Barrier0Op>("v1:i0034", vec![], vec![]);
+        let text = fixture.render().unwrap();
+        assert_eq!(text.matches("\"nvvm.barrier\"()").count(), 1, "{text}");
+        assert!(!text.contains("\"nvvm.barrier.cta."), "{text}");
+
+        let mut wrong_identity = Fixture::new();
+        wrong_identity.append::<Barrier0Op>("v1:i0883", vec![], vec![]);
+        assert!(
+            wrong_identity
+                .render()
+                .unwrap_err()
+                .contains("expected intrinsic marker v1:i0034")
+        );
     }
 
     /// Check cluster synchronization modes and catalog identities are validated and preserved.

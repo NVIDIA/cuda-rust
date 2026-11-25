@@ -1625,6 +1625,11 @@ fn verifies_plain_mut_slice_and_rejects_unverified_wraparound_and_cross_thread_r
         .expect_err("Lean 4 must reject cross-thread c[idx + 1] read + c[idx] write race");
 }
 
+/// Verify that `mir.checked_add`, `mir.checked_sub`, and `mir.checked_mul` on a
+/// slice-loaded `u32` keep their overflow arm reachable in Lean 4 (`add`/`mul` fail
+/// bounds and disjointness; `sub(1)` overflows at `x = 0` and fails `MirDisjointWrites`),
+/// while `x.checked_mul(1)` proves its overflow arm unreachable and a safe handler
+/// on both arms verifies and elides all 3 bounds assertions.
 #[test]
 fn checked_arithmetic_overflow_arm_is_reachable() {
     let Some(lean_dir) = lean_package_dir_if_available() else {

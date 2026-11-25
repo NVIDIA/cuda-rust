@@ -97,6 +97,10 @@ impl Drop for Allocation {
             return;
         }
         let ptr = self.ptr;
+        if matches!(&self.owner, Owner::Synchronous) {
+            crate::completion::defer_sync_free(ptr, self.context.clone());
+            return;
+        }
         let context = self.context.clone();
         let allocation_stream = match &self.owner {
             Owner::StreamOrdered(s) => Some(s.clone()),

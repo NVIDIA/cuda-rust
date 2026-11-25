@@ -176,6 +176,77 @@ pub(crate) fn defer_stream(cleanup: impl FnOnce() + Send + 'static) {
     enqueue(&QUEUE, "cuda-stream-retirement", Box::new(cleanup));
 }
 
+/// Reclaims synchronous allocations on a private per-thread stream. A batch
+/// holds every context until its final stream synchronization has completed.
+pub(crate) fn defer_sync_free(ptr: cuda_bindings::CUdeviceptr, context: Arc<Context>) {
+    struct Free {
+        ptr: cuda_bindings::CUdeviceptr,
+        context: Arc<Context>,
+    }
+    static QUEUE: OnceLock<Option<mpsc::Sender<Free>>> = OnceLock::new();
+    let queue = QUEUE.get_or_init(|| {
+        let (sender, receiver) = mpsc::channel::<Free>();
+        std::thread::Builder::new()
+            .name("cuda-sync-free".into())
+            .spawn(move || {
+                while let Ok(first) = receiver.recv() {
+                    // Allow a burst of drops to share one device fence.
+                    std::thread::sleep(Duration::from_micros(75));
+                    let stream = crate::runtime::PER_THREAD_STREAM_HANDLE as cuda_bindings::CUstream;
+                    let batch = std::iter::once(first).chain(receiver.try_iter().take(4095));
+                    let mut pending = std::collections::HashMap::<usize, Vec<Arc<Context>>>::new();
+                    for Free { ptr, context } in batch {
+                        if let Err(error) = context.bind_to_thread() {
+                            context.record_err(Err::<(), _>(error));
+                            std::mem::forget(context);
+                            continue;
+                        }
+                        let pools = unsafe {
+                            crate::cudarc_shim::device::get_attribute(
+                                context.cu_device(),
+                                cuda_bindings::CUdevice_attribute_enum_CU_DEVICE_ATTRIBUTE_MEMORY_POOLS_SUPPORTED,
+                            )
+                        } == Ok(1);
+                        let result = if pools {
+                            // This worker's per-thread stream is private in the
+                            // bound context; all access leases have drained.
+                            unsafe { crate::memory::free_async(ptr, stream) }
+                        } else {
+                            unsafe { crate::memory::free_sync(ptr) }
+                        };
+                        if let Err(error) = result {
+                            context.record_err(Err::<(), _>(error));
+                            std::mem::forget(context);
+                        } else if pools {
+                            pending.entry(context.cu_ctx() as usize).or_default().push(context);
+                        }
+                    }
+                    for (_, contexts) in pending {
+                        let result = contexts[0].bind_to_thread().and_then(|()| unsafe {
+                            crate::cudarc_shim::stream::synchronize(stream)
+                        });
+                        for context in &contexts {
+                            context.record_err(result);
+                        }
+                        if result.is_err() {
+                            std::mem::forget(contexts);
+                        }
+                    }
+                }
+            })
+            .ok()
+            .map(|_| sender)
+    });
+    let free = Free { ptr, context };
+    if let Some(queue) = queue {
+        if let Err(error) = queue.send(free) {
+            std::mem::forget(error.0);
+        }
+    } else {
+        std::mem::forget(free);
+    }
+}
+
 // Context workers have a separate registry: a blocked owner in one context
 // must not hold up another context's retirement.
 pub(crate) fn defer_context(key: usize, cleanup: impl FnOnce() + Send + 'static) {

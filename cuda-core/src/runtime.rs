@@ -738,7 +738,7 @@ struct RetiredStream {
 }
 
 // CUDA defines CU_STREAM_PER_THREAD as the special handle value 2.
-const PER_THREAD_STREAM_HANDLE: usize = 2;
+pub(crate) const PER_THREAD_STREAM_HANDLE: usize = 2;
 
 impl Drop for RetiredStream {
     fn drop(&mut self) {

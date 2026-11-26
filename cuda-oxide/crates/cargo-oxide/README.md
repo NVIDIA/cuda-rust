@@ -588,8 +588,11 @@ so a table's `-C target-cpu` replaces a top-level one. The triple is found in
 this order:
 
 1. a `--target <triple>` or `--target=<triple>` among the Cargo arguments
-   (before any `--`);
-2. else `CARGO_BUILD_TARGET`;
+   passed after `cargo oxide`'s `--` (`cargo oxide build -- --target
+   aarch64-unknown-linux-gnu`), before any later `--` for test or program
+   arguments;
+2. else `CARGO_BUILD_TARGET` (including for subcommands like
+   `cargo oxide run <example>` that take no Cargo arguments);
 3. else the `host:` line of `rustc -vV`, run as the build would run it: the
    compiler is `RUSTC`, else `CARGO_BUILD_RUSTC`, else `rustc`, in the
    command's directory.

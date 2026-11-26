@@ -23,7 +23,12 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     process::Command,
+    sync::atomic::{AtomicU64, Ordering},
 };
+
+/// Monotonic per-process counter guaranteeing unique temp filenames when
+/// `verify_module_kernels` checks multiple kernels concurrently in one process.
+static NEXT_TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 use dialect_mir::ops::MirFuncOp;
 use pliron::{
@@ -237,20 +242,26 @@ pub fn check_generated_lean_in_cache(
         return Ok(());
     }
 
+    let seq = NEXT_TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
     let temp_path = env::temp_dir().join(format!(
-        "cuda_oxide_verified_{}_{unique}.lean",
+        "cuda_oxide_verified_{}_{seq}_{unique}.lean",
         std::process::id()
     ));
-    fs::write(&temp_path, lean_source).map_err(|e| {
-        reject(
-            "lean verifier",
-            format!("cannot write temporary Lean file: {e}"),
-        )
-    })?;
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp_path)
+        .and_then(|mut f| f.write_all(lean_source.as_bytes()))
+        .map_err(|e| {
+            reject(
+                "lean verifier",
+                format!("cannot write temporary Lean file: {e}"),
+            )
+        })?;
 
     let output = if use_direct_lean {
         Command::new(&lean_bin)
@@ -305,7 +316,7 @@ pub fn check_generated_lean_in_cache(
         }
     }
     if let Some(marker) = cache_marker {
-        let tmp = marker.with_extension(format!("tmp.{}", std::process::id()));
+        let tmp = marker.with_extension(format!("tmp.{}_{seq}", std::process::id()));
         if fs::write(&tmp, b"ok\n").is_ok() {
             let _ = fs::rename(&tmp, &marker);
         }

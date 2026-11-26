@@ -2392,3 +2392,194 @@ mir.func @vecadd_rev: builtin.function <(mir.slice <builtin.fp32 ,mutable:false,
         "unexpected domain=2 error: {dom2_err}"
     );
 }
+
+/// `a.as_ptr().add(idx + 1_000_000)` on a slice parameter named in `#[verify]`: slice -> raw slice
+/// -> thin pointer casts, then `mir.ptr_offset` and `mir.load`. The model tracks no access on it.
+fn with_raw_far_read(fixture: &str) -> String {
+    fixture
+        .replacen(
+            "    b_ptr = mir.extract_field (b)",
+            concat!(
+                "    raw_slice = mir.cast (a) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority RawAddress]: <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>) -> (mir.slice <builtin.fp32 ,mutable:false,kind:RawConst>)>;\n",
+                "    raw_ptr = mir.cast (raw_slice) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority RustCast]: <(mir.slice <builtin.fp32 ,mutable:false,kind:RawConst>) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:RawConst>)>;\n",
+                "    far = mir.constant () [] [value: builtin.integer <1000000: ui64>]: <() -> (builtin.integer ui64)>;\n",
+                "    far_idx = mir.add (idx, far) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;\n",
+                "    far_elem = mir.ptr_offset (raw_ptr, far_idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:RawConst>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:RawConst>)>;\n",
+                "    far_val = mir.load (far_elem) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:RawConst>) -> (builtin.fp32)>;\n",
+                "    b_ptr = mir.extract_field (b)",
+            ),
+            1,
+        )
+        .replacen(
+            "    mir.store (c_elem, sum) [] []:",
+            "    sum_far = mir.add (sum, far_val) [] []: <(builtin.fp32, builtin.fp32) -> (builtin.fp32)>;\n    mir.store (c_elem, sum_far) [] []:",
+            1,
+        )
+}
+
+/// Verify that `as_ptr` / `as_mut_ptr` casts on verified slice parameters transcribe
+/// 1-to-1 into `MirRhs::SlicePtr`, so Lean 4 proves in-bounds raw pointer accesses and
+/// rejects out-of-bounds raw pointer reads and stores.
+#[test]
+fn verifies_safe_raw_slice_pointers_and_rejects_oob_immutable_and_exposed_accesses() {
+    let Some(lean_dir) = lean_package_dir_if_available() else {
+        return;
+    };
+
+    // 1. Positive: in-bounds `a.as_ptr().add(idx)` under `idx < c.len()` + `a.len() >= c.len()`
+    //    transcribes to `MirRhs::SlicePtr(0)` + `MirRhs::PtrOffset` and verifies in Lean 4.
+    let safe_raw_read = VECADD_FIXTURE.replacen(
+        "    a_ptr = mir.extract_field (a) [] [index: mir.field_index 0]: <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>)>;\n    a_elem = mir.ptr_offset (a_ptr, idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>)>;\n    a_val = mir.load (a_elem) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>) -> (builtin.fp32)>;",
+        concat!(
+            "    a_raw_slice = mir.cast (a) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority RawAddress]: <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>) -> (mir.slice <builtin.fp32 ,mutable:false,kind:RawConst>)>;\n",
+            "    a_ptr = mir.cast (a_raw_slice) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority RustCast]: <(mir.slice <builtin.fp32 ,mutable:false,kind:RawConst>) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:RawConst>)>;\n",
+            "    a_elem = mir.ptr_offset (a_ptr, idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:RawConst>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:RawConst>)>;\n",
+            "    a_val = mir.load (a_elem) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:RawConst>) -> (builtin.fp32)>;",
+        ),
+        1,
+    );
+    let safe_lean = export_named_source(&safe_raw_read, "vecadd")
+        .expect("safe raw-pointer read from verified slice exports cleanly");
+    assert!(safe_lean.contains("(.slicePtr 0)"));
+    lean_exporter::runner::check_generated_lean(&safe_lean, &lean_dir)
+        .expect("Lean 4 proves in-bounds `a.as_ptr().add(idx)` read");
+
+    // 2. Negative: `a.as_ptr().add(idx + 1_000_000)` exports and fails `verify_no_oob_idx_param0` in Lean 4.
+    let raw_far = with_raw_far_read(VECADD_FIXTURE);
+    let raw_far_lean =
+        export_named_source(&raw_far, "vecadd").expect("exports OOB raw-pointer read for Lean VC");
+    let far_err = lean_exporter::runner::check_generated_lean(&raw_far_lean, &lean_dir)
+        .expect_err("Lean 4 must reject OOB `a.as_ptr().add(idx + 1_000_000)`");
+    assert!(
+        far_err.to_string().contains(
+            "'CudaOxide.Generated.verify_no_oob_idx_param0' depends on axioms: [propext, sorryAx"
+        ),
+        "expected `verify_no_oob_idx_param0` failure on OOB raw read, got: {far_err}"
+    );
+
+    // 3. Negative: OOB `c.as_mut_ptr().add(1_000_000)` on `&mut [u32]` fails `verify_no_oob_idx_param0` in Lean 4.
+    let raw_store = r#"
+builtin.module @raw_store_test {
+  ^entry():
+    mir.func @raw_store_k: builtin.function <(mir.slice <builtin.integer ui32 ,mutable:true,kind:UniqueRef>) -> ()>
+      [gpu_kernel: builtin.string "true", launch_contract_domain: builtin.integer <1: ui32>, reqntid_x: builtin.integer <256: ui32>, reqntid_y: builtin.integer <1: ui32>, reqntid_z: builtin.integer <1: ui32>, verify_no_oob_idx: builtin.string "0", verify_disjoint_writes: builtin.string "0"]
+    {
+      ^entry(c: mir.slice <builtin.integer ui32 ,mutable:true,kind:UniqueRef>):
+        one = mir.constant () [] [value: builtin.integer <1: ui32>]: <() -> (builtin.integer ui32)>;
+        raw_slice = mir.cast (c) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority RawAddress]: <(mir.slice <builtin.integer ui32 ,mutable:true,kind:UniqueRef>) -> (mir.slice <builtin.integer ui32 ,mutable:true,kind:RawMut>)>;
+        raw_ptr = mir.cast (raw_slice) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority RustCast]: <(mir.slice <builtin.integer ui32 ,mutable:true,kind:RawMut>) -> (mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:0,kind:RawMut>)>;
+        far = mir.constant () [] [value: builtin.integer <1000000: ui64>]: <() -> (builtin.integer ui64)>;
+        far_elem = mir.ptr_offset (raw_ptr, far) [] []: <(mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:0,kind:RawMut>, builtin.integer ui64) -> (mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:0,kind:RawMut>)>;
+        mir.store (far_elem, one) [] []: <(mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:0,kind:RawMut>, builtin.integer ui32) -> ()>;
+        mir.return () [] []: <() -> ()>
+    }
+}
+"#;
+    let raw_store_lean = export_named_source(raw_store, "raw_store_k")
+        .expect("exports OOB raw-pointer store on `&mut [u32]`");
+    let store_err = lean_exporter::runner::check_generated_lean(&raw_store_lean, &lean_dir)
+        .expect_err("Lean 4 must reject OOB `c.as_mut_ptr().add(1_000_000)` store");
+    assert!(
+        store_err
+            .to_string()
+            .contains("'CudaOxide.Generated.verify_no_oob_idx_param0' depends on axioms"),
+        "expected `verify_no_oob_idx_param0` failure on OOB raw store, got: {store_err}"
+    );
+
+    // 4. Fail-closed guards: mutating through `a: &[f32]` and `expose_provenance` on slice pointers.
+    let mut_through_shared = VECADD_FIXTURE.replacen(
+        "    b_ptr = mir.extract_field (b)",
+        concat!(
+            "    a_rs = mir.cast (a) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority RawAddress]: <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>) -> (mir.slice <builtin.fp32 ,mutable:false,kind:RawConst>)>;\n",
+            "    a_rp = mir.cast (a_rs) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority RustCast]: <(mir.slice <builtin.fp32 ,mutable:false,kind:RawConst>) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:RawConst>)>;\n",
+            "    a_mut = mir.cast (a_rp) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority RustCast]: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:RawConst>) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:RawMut>)>;\n",
+            "    mir.store (a_mut, a_val) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:RawMut>, builtin.fp32) -> ()>;\n",
+            "    b_ptr = mir.extract_field (b)",
+        ),
+        1,
+    );
+    let ro_err = export_named_source(&mut_through_shared, "vecadd")
+        .expect_err("writing through `*const T as *mut T` on `&[T]` must fail closed");
+    assert!(ro_err.to_string().contains("read-only slice parameter 0"));
+
+    let exposed = VECADD_FIXTURE.replacen(
+        "    b_ptr = mir.extract_field (b)",
+        "    _exp = mir.cast (a_elem) [] [cast_kind: mir.cast_kind PointerExposeAddress]: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>) -> (builtin.integer ui64)>;\n    b_ptr = mir.extract_field (b)",
+        1,
+    );
+    let exp_err = export_named_source(&exposed, "vecadd")
+        .expect_err("exposing provenance of a verified slice pointer must fail closed");
+    assert!(exp_err.to_string().contains("pointer provenance exposure"));
+
+    // 5. Block-argument provenance lattice: merging a verified `GlobalPtr(0)` with `UnverifiedPtr`
+    //    (`core::ptr::null()`) saturates to `ConflictingPtr` and fails closed on dereference.
+    let mixed_phi = r#"
+builtin.module @mixed_phi_test {
+  ^entry():
+    mir.func @mixed_phi_k: builtin.function <(mir.slice <builtin.integer ui32 ,mutable:false,kind:SharedRef>, builtin.integer ui32) -> ()>
+      [gpu_kernel: builtin.string "true", launch_contract_domain: builtin.integer <1: ui32>, reqntid_x: builtin.integer <256: ui32>, reqntid_y: builtin.integer <1: ui32>, reqntid_z: builtin.integer <1: ui32>, verify_no_oob_idx: builtin.string "0"]
+    {
+      ^entry(a: mir.slice <builtin.integer ui32 ,mutable:false,kind:SharedRef>, flag: builtin.integer ui32):
+        zero32 = mir.constant () [] [value: builtin.integer <0: ui32>]: <() -> (builtin.integer ui32)>;
+        cond = mir.eq (flag, zero32) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer i1)>;
+        a_len = mir.extract_field (a) [] [index: mir.field_index 1]: <(mir.slice <builtin.integer ui32 ,mutable:false,kind:SharedRef>) -> (builtin.integer ui64)>;
+        zero64 = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+        ok0 = mir.lt (zero64, a_len) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        mir.cond_br (ok0) [^guard_ok, ^done] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+      ^guard_ok():
+        a_ptr0 = mir.extract_field (a) [] [index: mir.field_index 0]: <(mir.slice <builtin.integer ui32 ,mutable:false,kind:SharedRef>) -> (mir.ptr <builtin.integer ui32 ,mutable:false,addrspace:0,kind:Erased>)>;
+        _v0 = mir.load (a_ptr0) [] []: <(mir.ptr <builtin.integer ui32 ,mutable:false,addrspace:0,kind:Erased>) -> (builtin.integer ui32)>;
+        mir.cond_br (cond) [^arm_verified, ^arm_null] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+      ^arm_verified():
+        rs = mir.cast (a) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority RawAddress]: <(mir.slice <builtin.integer ui32 ,mutable:false,kind:SharedRef>) -> (mir.slice <builtin.integer ui32 ,mutable:false,kind:RawConst>)>;
+        rp = mir.cast (rs) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority RustCast]: <(mir.slice <builtin.integer ui32 ,mutable:false,kind:RawConst>) -> (mir.ptr <builtin.integer ui32 ,mutable:false,addrspace:0,kind:RawConst>)>;
+        mir.goto (rp) [^join] []: <(mir.ptr <builtin.integer ui32 ,mutable:false,addrspace:0,kind:RawConst>) -> ()>
+      ^arm_null():
+        null_p = mir.cast (zero64) [] [cast_kind: mir.cast_kind PointerWithExposedProvenance, pointer_kind_authority: mir.pointer_kind_authority RustCast]: <(builtin.integer ui64) -> (mir.ptr <builtin.integer ui32 ,mutable:false,addrspace:0,kind:RawConst>)>;
+        mir.goto (null_p) [^join] []: <(mir.ptr <builtin.integer ui32 ,mutable:false,addrspace:0,kind:RawConst>) -> ()>
+      ^join(merged: mir.ptr <builtin.integer ui32 ,mutable:false,addrspace:0,kind:RawConst>):
+        far = mir.constant () [] [value: builtin.integer <1000000: ui64>]: <() -> (builtin.integer ui64)>;
+        bad_p = mir.ptr_offset (merged, far) [] []: <(mir.ptr <builtin.integer ui32 ,mutable:false,addrspace:0,kind:RawConst>, builtin.integer ui64) -> (mir.ptr <builtin.integer ui32 ,mutable:false,addrspace:0,kind:RawConst>)>;
+        _bad_v = mir.load (bad_p) [] []: <(mir.ptr <builtin.integer ui32 ,mutable:false,addrspace:0,kind:RawConst>) -> (builtin.integer ui32)>;
+        mir.goto () [^done] []: <() -> ()>
+      ^done():
+        mir.return () [] []: <() -> ()>
+    }
+}
+"#;
+    let mixed_err = export_named_source(mixed_phi, "mixed_phi_k")
+        .expect_err("merging verified slice pointer with null/unverified pointer must fail closed");
+    assert!(mixed_err.to_string().contains("unmodeled raw-pointer load"));
+
+    // 6. Concurrent temp-file isolation: 8 simultaneous uncached `check_generated_lean_in_cache`
+    //    invocations in the same process never collide on `/tmp/cuda_oxide_verified_*.lean`.
+    std::thread::scope(|s| {
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let lean_src = &safe_lean;
+            let dir = &lean_dir;
+            handles.push(s.spawn(move || {
+                lean_exporter::runner::check_generated_lean_in_cache(lean_src, dir, None)
+                    .expect("concurrent uncached Lean check must not collide on temp file");
+            }));
+        }
+        for h in handles {
+            h.join().expect("worker did not panic");
+        }
+    });
+}
+
+/// Allow raw pointer reads on a slice parameter that appears only in `requires` and
+/// is not named in any `#[verify(...)]` safety clause.
+#[test]
+fn accepts_raw_pointer_read_of_a_slice_parameter_no_verify_clause_names() {
+    // `a` appears only in `requires`, so no clause makes a bounds claim about it and a raw read of it
+    // stays accepted: the rejection is for the parameters a clause names.
+    let unnamed = with_raw_far_read(VECADD_FIXTURE).replacen(
+        "verify_no_oob_idx: builtin.string \"0,1,2\"",
+        "verify_no_oob_idx: builtin.string \"1,2\"",
+        1,
+    );
+    export_named_source(&unnamed, "vecadd")
+        .expect("raw read of a slice parameter that no verify clause names stays accepted");
+}

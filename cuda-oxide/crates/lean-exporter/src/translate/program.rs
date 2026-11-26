@@ -12,7 +12,9 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use dialect_mir::types::{MirDisjointSliceType, MirEnumType, MirSliceType, MirStructType};
+use dialect_mir::types::{
+    MirDisjointSliceType, MirEnumType, MirPtrType, MirSliceType, MirStructType,
+};
 use pliron::{
     basic_block::BasicBlock,
     builtin::types::IntegerType,
@@ -39,6 +41,7 @@ use crate::{
         CfgBranchCond, CfgOpItem, GuardExpr, IdxExpr, TranscribedCfgBlock,
         TranscribedControlFlowCfg,
     },
+    symbol_name,
 };
 
 /// Parameter kind in a transcribed [`MirProgramData`].
@@ -227,6 +230,22 @@ enum LocalTag {
     Index1DWrapper(usize),
     /// Thread-local stack slot (`mir.alloca`).
     StackSlot,
+    /// Join of incompatible pointer origins across predecessors; fails closed on load/store/call.
+    ConflictingPtr,
+}
+
+/// Join `incoming` into `dst`'s provenance tag, saturating to [`LocalTag::ConflictingPtr`]
+/// whenever two control-flow predecessors disagree on a pointer's origin.
+fn merge_local_tag(tags: &mut HashMap<Value, LocalTag>, dst: Value, incoming: LocalTag) {
+    match tags.get(&dst).copied() {
+        None => {
+            tags.insert(dst, incoming);
+        }
+        Some(cur) if cur == incoming => {}
+        Some(_) => {
+            tags.insert(dst, LocalTag::ConflictingPtr);
+        }
+    }
 }
 
 /// Candidate `mir.assert` instruction awaiting pairing with the subsequent `mir.ptr_offset`
@@ -389,6 +408,14 @@ pub(super) fn translate_mir_program(
             || spec.mutable_slice_params.contains(&p)
             || spec.requires_len_ge.iter().any(|&(l, r)| l == p || r == p)
     };
+    // Parameters a `#[verify]` clause makes an access or coverage claim about.
+    let is_claimed_param = |p: usize| -> bool {
+        spec.no_oob_idx.contains(&p)
+            || spec.disjoint_writes.contains(&p)
+            || spec.writes_all_elems.contains(&p)
+            || spec.mutable_slice_params.contains(&p)
+    };
+    let kernel_name = symbol_name(ctx, function).unwrap_or_else(|_| "<kernel>".to_string());
     for (idx, arg) in graph.blocks[0].deref(ctx).arguments().enumerate() {
         let arg_vid = *val_ids.entry(arg).or_insert_with(|| {
             let id = next_var_id;
@@ -414,9 +441,16 @@ pub(super) fn translate_mir_program(
                 tags.insert(arg, LocalTag::ScalarWrapper(arg_vid));
             } else {
                 params.push(MirParamKind::Scalar(0));
+                tags.insert(arg, LocalTag::UnverifiedPtr);
             }
         } else {
             let w = mir_uint_width(ctx, ty);
+            if w <= 1
+                && (ty_ref.downcast_ref::<MirPtrType>().is_some()
+                    || ty_ref.downcast_ref::<MirStructType>().is_some())
+            {
+                tags.insert(arg, LocalTag::UnverifiedPtr);
+            }
             params.push(MirParamKind::Scalar(if w <= 1 { 0 } else { w }));
         }
     }
@@ -999,11 +1033,11 @@ pub(super) fn translate_mir_program(
                     let (src, res) = (op.get_operand(0), op.get_result(0));
                     let fi = attribute_field_index(&op.attributes, "index")
                         .or_else(|| attribute_field_index(&op.attributes, "field_index"));
-                    if let Some(LocalTag::SliceParam(p, ver)) = tags.get(&src).copied() {
+                    if let Some(LocalTag::SliceParam(p, _)) = tags.get(&src).copied() {
                         if fi == Some(0) {
                             tags.insert(
                                 res,
-                                if ver {
+                                if is_claimed_param(p) {
                                     LocalTag::GlobalPtr(p)
                                 } else {
                                     LocalTag::UnverifiedPtr
@@ -1031,14 +1065,51 @@ pub(super) fn translate_mir_program(
                     && op.get_num_results() == 1
                 {
                     let cstr = format!("{:?}", op.attributes);
-                    if (cstr.contains("PtrToPtr")
+                    if cstr.contains("PointerExposeAddress") {
+                        if let Some(t @ (LocalTag::BarrierPtr { .. } | LocalTag::UnverifiedPtr)) =
+                            tags.get(&op.get_operand(0)).copied()
+                        {
+                            tags.insert(op.get_result(0), t);
+                        }
+                    } else if cstr.contains("PointerWithExposedProvenance") {
+                        let src_op = op.get_operand(0);
+                        if let Some(t @ LocalTag::BarrierPtr { .. }) = tags.get(&src_op).copied() {
+                            tags.insert(op.get_result(0), t);
+                        } else {
+                            tags.insert(op.get_result(0), LocalTag::UnverifiedPtr);
+                        }
+                    } else if (cstr.contains("PtrToPtr")
                         || cstr.contains("StaticAddress")
-                        || cstr.contains("PointerExposeAddress")
-                        || cstr.contains("PointerWithExposedProvenance")
                         || cstr.contains("PointerCoercionMutToConst"))
                         && let Some(t) = tags.get(&op.get_operand(0)).copied()
                     {
-                        tags.insert(op.get_result(0), t);
+                        let src_is_slice = {
+                            let ty = op.get_operand(0).get_type(ctx);
+                            let r = ty.deref(ctx);
+                            r.downcast_ref::<MirSliceType>().is_some()
+                                || r.downcast_ref::<MirDisjointSliceType>().is_some()
+                        };
+                        let res_is_slice = {
+                            let ty = op.get_result(0).get_type(ctx);
+                            let r = ty.deref(ctx);
+                            r.downcast_ref::<MirSliceType>().is_some()
+                                || r.downcast_ref::<MirDisjointSliceType>().is_some()
+                        };
+                        if let LocalTag::SliceParam(p, _) = t
+                            && src_is_slice
+                            && !res_is_slice
+                        {
+                            tags.insert(
+                                op.get_result(0),
+                                if is_claimed_param(p) {
+                                    LocalTag::GlobalPtr(p)
+                                } else {
+                                    LocalTag::UnverifiedPtr
+                                },
+                            );
+                        } else {
+                            tags.insert(op.get_result(0), t);
+                        }
                         if let Some(&sf) = stack_field_ptrs.get(&op.get_operand(0)) {
                             stack_field_ptrs.insert(op.get_result(0), sf);
                         }
@@ -1211,7 +1282,7 @@ pub(super) fn translate_mir_program(
                                 enum_payload_tags.insert(darg, pt);
                             }
                             if let Some(&vt) = tags.get(&v) {
-                                tags.insert(darg, vt);
+                                merge_local_tag(&mut tags, darg, vt);
                             }
                             if let Some(sft) = struct_field_tags.get(&v).cloned() {
                                 struct_field_tags.insert(darg, sft);
@@ -1250,7 +1321,7 @@ pub(super) fn translate_mir_program(
                                 enum_payload_tags.insert(darg, pt);
                             }
                             if let Some(&vt) = tags.get(&sv) {
-                                tags.insert(darg, vt);
+                                merge_local_tag(&mut tags, darg, vt);
                             }
                             if let Some(sft) = struct_field_tags.get(&sv).cloned() {
                                 struct_field_tags.insert(darg, sft);
@@ -1285,7 +1356,7 @@ pub(super) fn translate_mir_program(
                                 enum_payload_tags.insert(darg, pt);
                             }
                             if let Some(&vt) = tags.get(&sv) {
-                                tags.insert(darg, vt);
+                                merge_local_tag(&mut tags, darg, vt);
                             }
                             if let Some(sft) = struct_field_tags.get(&sv).cloned() {
                                 struct_field_tags.insert(darg, sft);
@@ -2489,6 +2560,14 @@ pub(super) fn translate_mir_program(
                     match tags.get(&ptr_v).copied() {
                         Some(LocalTag::StackSlot | LocalTag::UnverifiedPtr) => {}
                         Some(LocalTag::GlobalPtr(p)) => {
+                            if matches!(params.get(p), Some(MirParamKind::Slice(false))) {
+                                return Err(reject(
+                                    "mir.store",
+                                    format!(
+                                        "cannot store through read-only slice parameter {p} (`&[T]`) in verified kernel `{kernel_name}`"
+                                    ),
+                                ));
+                            }
                             let expected_eb = slice_elem_bytes.get(&p).copied().unwrap_or(0);
                             let actual_eb = ptr_pointee_elem_bytes(ctx, ptr_v.get_type(ctx));
                             if expected_eb > 0 && actual_eb != expected_eb {
@@ -2556,7 +2635,14 @@ pub(super) fn translate_mir_program(
                                 .push(CfgOpItem::DsmemAccess { shared_id: sid });
                             stmts.push(MirStmt::Store(val_ids[&ptr_v], val_ids[&val_v]));
                         }
-                        _ => {}
+                        _ => {
+                            return Err(reject(
+                                "mir.store",
+                                format!(
+                                    "unmodeled raw-pointer store in verified kernel `{kernel_name}`"
+                                ),
+                            ));
+                        }
                     }
                 }
                 "mir.alloca" if op.get_num_results() == 1 => {
@@ -2596,6 +2682,7 @@ pub(super) fn translate_mir_program(
                                     | LocalTag::DsmemSharedPtr(_, _)
                                     | LocalTag::BarrierPtr { .. }
                                     | LocalTag::ClusterBarrierAddr { .. }
+                                    | LocalTag::ConflictingPtr
                             )
                         ) {
                             return Err(reject(
@@ -2819,9 +2906,7 @@ pub(super) fn translate_mir_program(
                         if let Some(tag) = tags.get(&arg_v) {
                             match tag {
                                 LocalTag::SliceParam(p, true) | LocalTag::GlobalPtr(p)
-                                    if spec.no_oob_idx.contains(p)
-                                        || spec.disjoint_writes.contains(p)
-                                        || spec.mutable_slice_params.contains(p) =>
+                                    if is_claimed_param(*p) =>
                                 {
                                     return Err(reject(
                                         "mir.call",
@@ -2840,7 +2925,8 @@ pub(super) fn translate_mir_program(
                                     ));
                                 }
                                 LocalTag::BarrierPtr { .. }
-                                | LocalTag::ClusterBarrierAddr { .. } => {
+                                | LocalTag::ClusterBarrierAddr { .. }
+                                | LocalTag::ConflictingPtr => {
                                     return Err(reject(
                                         "mir.call",
                                         "verified mbarrier pointer cannot escape into unmodeled operation `mir.call`",
@@ -2974,11 +3060,11 @@ pub(super) fn translate_mir_program(
                     let fidx = attribute_field_index(&op.attributes, "index")
                         .or_else(|| attribute_field_index(&op.attributes, "field_index"));
                     match (tags.get(&src).copied(), fidx) {
-                        (Some(LocalTag::SliceParam(p, true)), Some(0)) => {
+                        (Some(LocalTag::SliceParam(p, _)), Some(0)) if is_claimed_param(p) => {
                             tags.insert(res, LocalTag::GlobalPtr(p));
                             stmts.push(MirStmt::Assign(val_ids[&res], MirRhs::SlicePtr(p)));
                         }
-                        (Some(LocalTag::SliceParam(_, false)), Some(0)) => {
+                        (Some(LocalTag::SliceParam(_, _)), Some(0)) => {
                             tags.insert(res, LocalTag::UnverifiedPtr);
                             stmts.push(MirStmt::Assign(val_ids[&res], MirRhs::OpaqueVal));
                         }
@@ -3057,25 +3143,112 @@ pub(super) fn translate_mir_program(
                 "mir.cast" if op.get_num_operands() == 1 && op.get_num_results() == 1 => {
                     let (src, res) = (op.get_operand(0), op.get_result(0));
                     let cast_str = format!("{:?}", op.attributes);
-                    if cast_str.contains("PtrToPtr")
+                    if cast_str.contains("PointerExposeAddress") {
+                        match tags.get(&src).copied() {
+                            Some(LocalTag::SliceParam(p, _)) if is_claimed_param(p) => {
+                                return Err(reject(
+                                    "mir.cast",
+                                    format!(
+                                        "pointer provenance exposure (`expose_provenance`) in kernel `{kernel_name}` is not modeled on verified slice parameter {p}"
+                                    ),
+                                ));
+                            }
+                            Some(
+                                LocalTag::GlobalPtr(_)
+                                | LocalTag::SharedPtr(_, _)
+                                | LocalTag::DsmemSharedPtr(_, _)
+                                | LocalTag::ClusterBarrierAddr { .. }
+                                | LocalTag::ConflictingPtr,
+                            ) => {
+                                return Err(reject(
+                                    "mir.cast",
+                                    format!(
+                                        "pointer provenance exposure (`expose_provenance`) in kernel `{kernel_name}` is not modeled on verified slice or shared-memory pointers"
+                                    ),
+                                ));
+                            }
+                            Some(t @ (LocalTag::BarrierPtr { .. } | LocalTag::UnverifiedPtr)) => {
+                                tags.insert(res, t);
+                                if let Some(&sv) = bar_slot_vars.get(&src) {
+                                    bar_slot_vars.insert(res, sv);
+                                }
+                                if let Some(&pair) = ptr_assert_map.get(&src) {
+                                    ptr_assert_map.insert(res, pair);
+                                }
+                                stmts.push(MirStmt::Assign(
+                                    val_ids[&res],
+                                    MirRhs::Copy(val_ids[&src]),
+                                ));
+                            }
+                            _ => {
+                                stmts.push(MirStmt::Assign(
+                                    val_ids[&res],
+                                    fallback_rhs_for(res, &opaque_ids),
+                                ));
+                            }
+                        }
+                    } else if cast_str.contains("PointerWithExposedProvenance") {
+                        if let Some(t @ LocalTag::BarrierPtr { .. }) = tags.get(&src).copied() {
+                            tags.insert(res, t);
+                            if let Some(&sv) = bar_slot_vars.get(&src) {
+                                bar_slot_vars.insert(res, sv);
+                            }
+                            if let Some(&pair) = ptr_assert_map.get(&src) {
+                                ptr_assert_map.insert(res, pair);
+                            }
+                            stmts.push(MirStmt::Assign(val_ids[&res], MirRhs::Copy(val_ids[&src])));
+                        } else {
+                            tags.insert(res, LocalTag::UnverifiedPtr);
+                            stmts.push(MirStmt::Assign(
+                                val_ids[&res],
+                                fallback_rhs_for(res, &opaque_ids),
+                            ));
+                        }
+                    } else if cast_str.contains("PtrToPtr")
                         || cast_str.contains("StaticAddress")
-                        || cast_str.contains("PointerExposeAddress")
-                        || cast_str.contains("PointerWithExposedProvenance")
                         || cast_str.contains("PointerCoercionMutToConst")
                     {
-                        if let Some(&t) = tags.get(&src) {
-                            tags.insert(res, t);
+                        let src_is_slice = {
+                            let ty = src.get_type(ctx);
+                            let r = ty.deref(ctx);
+                            r.downcast_ref::<MirSliceType>().is_some()
+                                || r.downcast_ref::<MirDisjointSliceType>().is_some()
+                        };
+                        let res_is_slice = {
+                            let ty = res.get_type(ctx);
+                            let r = ty.deref(ctx);
+                            r.downcast_ref::<MirSliceType>().is_some()
+                                || r.downcast_ref::<MirDisjointSliceType>().is_some()
+                        };
+                        // `as_ptr` / `as_mut_ptr`: transcribe slice-to-thin-pointer casts 1-to-1 into
+                        // `MirRhs::SlicePtr(p)` (`GlobalPtr(p)`) on claimed parameters so Lean 4 verifies
+                        // safe raw pointer / `get_unchecked` offsets and rejects out-of-bounds offsets.
+                        if let Some(LocalTag::SliceParam(p, _)) = tags.get(&src).copied()
+                            && src_is_slice
+                            && !res_is_slice
+                        {
+                            if is_claimed_param(p) {
+                                tags.insert(res, LocalTag::GlobalPtr(p));
+                                stmts.push(MirStmt::Assign(val_ids[&res], MirRhs::SlicePtr(p)));
+                            } else {
+                                tags.insert(res, LocalTag::UnverifiedPtr);
+                                stmts.push(MirStmt::Assign(val_ids[&res], MirRhs::OpaqueVal));
+                            }
+                        } else {
+                            if let Some(&t) = tags.get(&src) {
+                                tags.insert(res, t);
+                            }
+                            if let Some(av) = alloca_vars.get(&src).cloned() {
+                                alloca_vars.insert(res, av);
+                            }
+                            if let Some(&sv) = bar_slot_vars.get(&src) {
+                                bar_slot_vars.insert(res, sv);
+                            }
+                            if let Some(&pair) = ptr_assert_map.get(&src) {
+                                ptr_assert_map.insert(res, pair);
+                            }
+                            stmts.push(MirStmt::Assign(val_ids[&res], MirRhs::Copy(val_ids[&src])));
                         }
-                        if let Some(av) = alloca_vars.get(&src).cloned() {
-                            alloca_vars.insert(res, av);
-                        }
-                        if let Some(&sv) = bar_slot_vars.get(&src) {
-                            bar_slot_vars.insert(res, sv);
-                        }
-                        if let Some(&pair) = ptr_assert_map.get(&src) {
-                            ptr_assert_map.insert(res, pair);
-                        }
-                        stmts.push(MirStmt::Assign(val_ids[&res], MirRhs::Copy(val_ids[&src])));
                     } else if cast_str.contains("IntToInt") {
                         let sw = mir_uint_width(ctx, src.get_type(ctx));
                         let dw = mir_uint_width(ctx, res.get_type(ctx));
@@ -3372,11 +3545,21 @@ pub(super) fn translate_mir_program(
                                     stmts.push(MirStmt::Assign(val_ids[&res], MirRhs::OpaqueVal));
                                 }
                                 struct_fields.insert(res, flds);
-                            } else {
+                            } else if matches!(
+                                tags.get(&ptr_v),
+                                Some(LocalTag::StackSlot | LocalTag::UnverifiedPtr)
+                            ) {
                                 tags.insert(res, LocalTag::UnverifiedPtr);
                                 stmts.push(MirStmt::Assign(
                                     val_ids[&res],
                                     fallback_rhs_for(res, &opaque_ids),
+                                ));
+                            } else {
+                                return Err(reject(
+                                    "mir.load",
+                                    format!(
+                                        "unmodeled raw-pointer load in verified kernel `{kernel_name}`"
+                                    ),
                                 ));
                             }
                         }

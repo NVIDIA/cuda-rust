@@ -51,6 +51,15 @@ pub(super) fn collect_cuda_module_constants(
             Some(name) => name,
             None => cuda_module_constant_symbol(module_ident, &item_static.ident),
         };
+        if constants
+            .iter()
+            .any(|existing: &CudaModuleConstant| existing.symbol == symbol)
+        {
+            return Err(syn::Error::new_spanned(
+                &item_static.ident,
+                format!("duplicate #[constant] PTX symbol `{symbol}` in `#[cuda_module]`"),
+            ));
+        }
         constants.push(CudaModuleConstant {
             ident: item_static.ident.clone(),
             ty: item_static.ty.clone(),
@@ -71,14 +80,10 @@ fn user_export_name(attrs: &[syn::Attribute]) -> syn::Result<Option<String>> {
         let syn::Meta::List(list) = &attr.meta else {
             continue;
         };
-        let pair: syn::MetaNameValue = list.parse_args()?;
-        if !pair.path.is_ident("export_name") {
-            return Err(syn::Error::new_spanned(&pair.path, "expected `export_name = \"...\"`"));
+        let args: crate::device::ConstantArgs = list.parse_args()?;
+        if let Some(name) = args.export_name {
+            return Ok(Some(name.value()));
         }
-        let syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(name), .. }) = &pair.value else {
-            return Err(syn::Error::new_spanned(&pair.value, "`export_name` must be a string literal"));
-        };
-        return Ok(Some(name.value()));
     }
     Ok(None)
 }

@@ -19,8 +19,8 @@ use syn::{
     parse_macro_input,
 };
 
-struct ConstantArgs {
-    export_name: Option<LitStr>,
+pub(crate) struct ConstantArgs {
+    pub(crate) export_name: Option<LitStr>,
 }
 
 impl Parse for ConstantArgs {
@@ -33,11 +33,24 @@ impl Parse for ConstantArgs {
         if key != "export_name" {
             return Err(syn::Error::new_spanned(
                 key,
-                "#[constant] does not take public arguments",
+                "expected `export_name = \"...\"`",
             ));
         }
         input.parse::<Token![=]>()?;
-        let export_name = input.parse()?;
+        let export_name: LitStr = input.parse()?;
+        let value = export_name.value();
+        let valid_ptx_ident = !value.is_empty()
+            && value.chars().enumerate().all(|(idx, ch)| {
+                ch.is_ascii_alphabetic()
+                    || matches!(ch, '_' | '$')
+                    || (idx > 0 && ch.is_ascii_digit())
+            });
+        if !valid_ptx_ident {
+            return Err(syn::Error::new_spanned(
+                &export_name,
+                "`export_name` must be a non-empty PTX identifier (`[A-Za-z$_][A-Za-z$_0-9]*`)",
+            ));
+        }
         if !input.is_empty() {
             input.parse::<Token![,]>()?;
             if !input.is_empty() {

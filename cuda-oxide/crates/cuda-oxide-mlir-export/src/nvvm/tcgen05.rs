@@ -8,6 +8,8 @@
 //! CUDA Oxide represents a TMEM address as a packed `u32` token and a load as
 //! scalar register results. MLIR uses an address-space-6 pointer and a vector.
 //! Those carrier conversions must not rescale the packed TMEM row/column bits.
+//! A shared-memory operand descriptor is exported as the NVVM descriptor
+//! operation, so the consumer sees which shared address an MMA reads.
 //! This pack does not lower through PTX or expand high-level CuTe operations.
 
 use dialect_nvvm::ops::*;
@@ -43,6 +45,7 @@ pub fn register_nvvm_tcgen05_pack(
     registry.register_operation::<CvtaGenericToSharedOffsetOp>(SharedOffsetTranslation(false))?;
     registry
         .register_operation::<CvtaGenericToClusterSharedOffsetOp>(SharedOffsetTranslation(true))?;
+    registry.register_operation::<Tcgen05SmemDescriptorOp>(SmemDescriptorTranslation)?;
     /// Register a tensor-memory lifecycle instruction with group, arity, identity, and verifier.
     macro_rules! primitive {
         ($op:ty, $marker:literal, $kind:expr, $group:literal, $operands:literal) => {
@@ -261,6 +264,167 @@ impl OperationTranslation for SharedOffsetTranslation {
             vec![pointer],
             input.results,
             &input.location,
+        )?);
+        Ok(operations)
+    }
+}
+
+/// Export tcgen05 shared-memory descriptor packing as `nvvm.tcgen05_mma_smem_desc_v2`.
+///
+/// The source operation has no catalog identity: it is the hand-written
+/// `nvvm.tcgen05_smem_descriptor`, checked by its own verifier. Its operands
+/// are byte values, the target operation takes the fields in 16-byte units.
+struct SmemDescriptorTranslation;
+
+impl OperationTranslation for SmemDescriptorTranslation {
+    fn translate(
+        &self,
+        ctx: &Context,
+        source: Ptr<Operation>,
+        input: OperationInput,
+        session: &mut TranslationSession<'_>,
+    ) -> Result<Vec<MlirOperation>, String> {
+        Tcgen05SmemDescriptorOp::new(source)
+            .verify(ctx)
+            .map_err(|error| error.to_string())?;
+        let operand_types = [64, 32, 32, 8, 1, 8].map(MlirType::Integer);
+        if input.operands.len() != operand_types.len()
+            || input.results.len() != 1
+            || !input.attributes.is_empty()
+            || !input.regions.is_empty()
+            || !input.successors.is_empty()
+        {
+            return Err("tcgen05 shared-memory descriptor expects six operands, one result, and no attributes or control flow".into());
+        }
+        if input
+            .operands
+            .iter()
+            .zip(&operand_types)
+            .any(|(operand, ty)| operand.ty != *ty)
+            || input.results[0].ty != MlirType::Integer(64)
+        {
+            return Err(
+                "tcgen05 shared-memory descriptor expects (i64, i32, i32, i8, i1, i8) -> i64"
+                    .into(),
+            );
+        }
+        let [address, leading, stride, base_offset, leading_mode, swizzle]: [MlirValueUse; 6] =
+            input
+                .operands
+                .try_into()
+                .map_err(|_| "tcgen05 shared-memory descriptor expects six operands")?;
+        let location = input.location;
+        let mut operations = vec![];
+        let mut emit = |session: &mut TranslationSession<'_>,
+                        name: &str,
+                        operands: Vec<MlirValueUse>,
+                        value: Option<MlirAttribute>,
+                        ty: MlirType|
+         -> Result<MlirValueUse, String> {
+            let (result, result_use) = fresh(session, ty);
+            let mut target = operation(name, operands, vec![result], &location)?;
+            if let Some(value) = value {
+                target.properties.insert("value".into(), value);
+            }
+            operations.push(target);
+            Ok(result_use)
+        };
+        let integer = |value: i128, width: u32| {
+            Some(MlirAttribute::Integer {
+                value,
+                ty: MlirType::Integer(width),
+            })
+        };
+        // Bits 0-13: the shared start address in 16-byte units. The target
+        // operation keeps 15 bits of this field and of the leading-dimension
+        // offset. The source encoding keeps 14, so mask both to give the same
+        // descriptor for every input.
+        let i64_ty = MlirType::Integer(64);
+        let i32_ty = MlirType::Integer(32);
+        let four = emit(
+            session,
+            "arith.constant",
+            vec![],
+            integer(4, 64),
+            i64_ty.clone(),
+        )?;
+        let mask = emit(
+            session,
+            "arith.constant",
+            vec![],
+            integer(0x3FFF, 64),
+            i64_ty.clone(),
+        )?;
+        let units = emit(
+            session,
+            "arith.shrui",
+            vec![address, four],
+            None,
+            i64_ty.clone(),
+        )?;
+        let units = emit(session, "arith.andi", vec![units, mask], None, i64_ty)?;
+        let start = emit(session, "arith.trunci", vec![units], None, i32_ty.clone())?;
+        // Bits 16-29 and 32-45: the two byte offsets in 16-byte units. The
+        // stride field has 14 bits on both sides and needs no mask.
+        let four = emit(
+            session,
+            "arith.constant",
+            vec![],
+            integer(4, 32),
+            i32_ty.clone(),
+        )?;
+        let mask = emit(
+            session,
+            "arith.constant",
+            vec![],
+            integer(0x3FFF, 32),
+            i32_ty.clone(),
+        )?;
+        let leading = emit(
+            session,
+            "arith.shrui",
+            vec![leading, four.clone()],
+            None,
+            i32_ty.clone(),
+        )?;
+        let leading = emit(
+            session,
+            "arith.andi",
+            vec![leading, mask],
+            None,
+            i32_ty.clone(),
+        )?;
+        let stride = emit(session, "arith.shrui", vec![stride, four], None, i32_ty)?;
+        // Bits 46-48: the fixed descriptor version 0b001.
+        let version = emit(
+            session,
+            "arith.constant",
+            vec![],
+            integer(1, 8),
+            MlirType::Integer(8),
+        )?;
+        // Bit 53 is zero in the source encoding.
+        let k_segment = emit(
+            session,
+            "arith.constant",
+            vec![],
+            Some(MlirAttribute::Bool(false)),
+            MlirType::Integer(1),
+        )?;
+        operations.push(operation(
+            "nvvm.tcgen05_mma_smem_desc_v2",
+            vec![
+                start,
+                leading,
+                stride,
+                version,
+                base_offset,
+                leading_mode,
+                k_segment,
+                swizzle,
+            ],
+            input.results,
+            &location,
         )?);
         Ok(operations)
     }

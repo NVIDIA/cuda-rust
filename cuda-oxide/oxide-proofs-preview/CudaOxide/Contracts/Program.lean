@@ -131,10 +131,10 @@ def MirNoOobClusterRank (f : MirFunc) : Prop :=
       r < f.clusterDimX                                     -- THEN `r` is a valid peer CTA rank `< f.clusterDimX`.
 
 /-- **`writes_all_elems(out)`**: Whenever the launched grid has at least one Y row
-    (`0 < env.gridDimY`) and covers `out.len()` (`env.sliceLen paramId ≤ gridDimX * f.blockDimX`,
+    (`0 < gridDimY`) and covers `out.len()` (`env.sliceLen paramId ≤ gridDimX * f.blockDimX`,
     with `env.sliceLen paramId < 2^32` when `f.u32Coords = true`), EVERY element index
-    `elemIdx < env.sliceLen paramId` is written by some valid launched GPU thread `t`
-    (`t.bx < gridDimX ∧ t.by_ < gridDimY`) executing `f` from entry block `0`. -/
+    `elemIdx < env.sliceLen paramId` is written without hitting any `mir.assert` trap by some
+    valid launched GPU thread `t` (`t.bx < gridDimX ∧ t.by_ < gridDimY`) starting from block `0`. -/
 def MirWritesAllElems (f : MirFunc) (paramId : Nat) : Prop :=
   ∀ env : InputEnv, ∀ gridDimX gridDimY : Nat,              -- Pick ANY valid launch `env` and `(gridDimX, gridDimY)`:
     f.validInput env →                                      -- IF `env` satisfies launch preconditions,
@@ -146,7 +146,7 @@ def MirWritesAllElems (f : MirFunc) (paramId : Nat) : Prop :=
       ∃ t : ThreadCtx, ∃ ev : MemEvent,                     -- there EXISTS a GPU thread `t` and write event `ev` such that:
         f.validThread t ∧                                   --   (1) `t` is within the CTA's `(blockDimX, blockDimY)` bounds,
         t.bx < gridDimX ∧ t.by_ < gridDimY ∧                --   (2) `t` belongs to an active launched CTA in the grid,
-        EmitsEvent f env t ev ∧                             --   (3) `t` reaches and emits `ev` starting from entry block `0`,
+        EmitsTrapFreeEvent f env t ev ∧                     --   (3) `t` reaches and emits `ev` trap-free from entry block `0`,
         ev.isWrite = true ∧ ev.space = .global ∧            --   (4) `ev` is a global write to `paramId` at `ev.index = elemIdx`.
         ev.bufId = paramId ∧ ev.index = elemIdx
 

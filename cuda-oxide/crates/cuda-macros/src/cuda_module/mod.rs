@@ -668,6 +668,12 @@ fn cuda_module_kernel(
             && let Ok(v_args) = attr.parse_args::<crate::verify::VerifyArgs>()
         {
             for ident in v_args.writes_all_elems {
+                if launch_contract.as_ref().map(|c| c.domain) != Some(1) {
+                    return Err(syn::Error::new(
+                        ident.span(),
+                        "`writes_all_elems(...)` requires `#[launch_contract(domain = 1, ...)]`",
+                    ));
+                }
                 if !writes_all_elems_params.iter().any(|p| p == &ident) {
                     writes_all_elems_params.push(ident);
                 }

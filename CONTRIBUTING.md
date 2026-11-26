@@ -197,6 +197,11 @@ instructions.
 run `cd cuda-oxide` and then `nix develop` with flakes enabled. Container setup
 is documented in [cuda-oxide/.devcontainer/README.md](cuda-oxide/.devcontainer/README.md).
 
+Git-backed Nix flakes only include files known to Git. After adding a crate or
+source file, run `git add -N <path>` before `nix develop` to make it visible to
+Nix without staging its contents. Otherwise, Cargo can report a missing
+workspace manifest or module even though the file exists locally.
+
 ### Running the cuda-oxide checks
 
 Most of CI is one command. The SIMT tree ships a `Justfile` that mirrors the

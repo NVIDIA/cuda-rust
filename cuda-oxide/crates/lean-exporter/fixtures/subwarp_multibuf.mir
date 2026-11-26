@@ -1,0 +1,172 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+// PostMem2Reg dialect-mir fixture for Stage 4 sub-warp bitwise splits and multi-buffer shared staging.
+builtin.module @safe_subwarp_stage {
+  ^entry():
+    mir.func @subwarp_bit_split_stage: builtin.function <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>, mir.disjoint_slice <builtin.fp32 ,[]>) -> ()>
+      [gpu_kernel: builtin.string "true", launch_contract_domain: builtin.integer <1: ui32>, reqntid_x: builtin.integer <256: ui32>, reqntid_y: builtin.integer <1: ui32>, reqntid_z: builtin.integer <1: ui32>, verify_no_data_race: builtin.string "0", verify_no_oob_shared: builtin.string "0", verify_uniform_barriers: builtin.string "true"]
+    {
+      ^entry(data: mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>, out: mir.disjoint_slice <builtin.fp32 ,[]>):
+        tx_u32 = nvvm.read_ptx_sreg_tid_x () [] []: <() -> (builtin.integer ui32)>;
+        tid = mir.cast (tx_u32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+        sh4 = mir.constant () [] [value: builtin.integer <4: ui64>]: <() -> (builtin.integer ui64)>;
+        mask15 = mir.constant () [] [value: builtin.integer <15: ui64>]: <() -> (builtin.integer ui64)>;
+        m_local = mir.shr (tid, sh4) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        k_lane = mir.bitand (tid, mask15) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        c16 = mir.constant () [] [value: builtin.integer <16: ui64>]: <() -> (builtin.integer ui64)>;
+        row_off = mir.mul (m_local, c16) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        split_idx = mir.add (row_off, k_lane) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        tile_raw = mir.shared_alloc () [] [elem_type: builtin.type builtin.fp32, size: builtin.integer <256: i64>, alloc_key: builtin.string "SUBWARP_TILE", source_name: builtin.string "safe_subwarp_stage::kernels::subwarp_bit_split_stage::SUBWARP_TILE"]: <() -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>)>;
+        tile_mut = mir.cast (tile_raw) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority Reborrow]: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>)>;
+        c256_w = mir.constant () [] [value: builtin.integer <256: ui64>]: <() -> (builtin.integer ui64)>;
+        ok_w = mir.lt (split_idx, c256_w) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        mir.assert (ok_w) [] []: <(builtin.integer i1) -> ()>;
+        slot_ptr = mir.ptr_offset (tile_mut, split_idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>)>;
+        zero_f32 = mir.float_constant () [] [float_value: builtin.single 0]: <() -> (builtin.fp32)>;
+        mir.store (slot_ptr, zero_f32) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>, builtin.fp32) -> ()>;
+        nvvm.barrier0 () [] []: <() -> ()>;
+        zero_j = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+        mir.goto (zero_f32, zero_j) [^scan_header] []: <(builtin.fp32, builtin.integer ui64) -> ()>
+
+      ^scan_header(acc: builtin.fp32, j: builtin.integer ui64):
+        c16_bound = mir.constant () [] [value: builtin.integer <16: ui64>]: <() -> (builtin.integer ui64)>;
+        in_scan = mir.lt (j, c16_bound) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        done_scan = mir.not (in_scan) [] []: <(builtin.integer i1) -> (builtin.integer i1)>;
+        mir.cond_br (done_scan) [^exit, ^scan_body] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^scan_body():
+        lane_base = mir.mul (k_lane, c16_bound) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        read_idx = mir.add (lane_base, j) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        tile_r_raw = mir.shared_alloc () [] [elem_type: builtin.type builtin.fp32, size: builtin.integer <256: i64>, alloc_key: builtin.string "SUBWARP_TILE", source_name: builtin.string "safe_subwarp_stage::kernels::subwarp_bit_split_stage::SUBWARP_TILE"]: <() -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>)>;
+        tile_ref = mir.cast (tile_r_raw) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority Reborrow]: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>)>;
+        c256_r = mir.constant () [] [value: builtin.integer <256: ui64>]: <() -> (builtin.integer ui64)>;
+        ok_r = mir.lt (read_idx, c256_r) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        mir.assert (ok_r) [] []: <(builtin.integer i1) -> ()>;
+        elem_ptr = mir.ptr_offset (tile_ref, read_idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>)>;
+        val = mir.load (elem_ptr) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>) -> (builtin.fp32)>;
+        next_acc = mir.add (acc, val) [] []: <(builtin.fp32, builtin.fp32) -> (builtin.fp32)>;
+        one_u64 = mir.constant () [] [value: builtin.integer <1: ui64>]: <() -> (builtin.integer ui64)>;
+        next_j = mir.add (j, one_u64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        mir.goto (next_acc, next_j) [^scan_header] []: <(builtin.fp32, builtin.integer ui64) -> ()>
+
+      ^exit():
+        mir.return () [] []: <() -> ()>
+    };
+    mir.func @multibuf_subwarp_stage: builtin.function <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>, mir.disjoint_slice <builtin.fp32 ,[]>) -> ()>
+      [gpu_kernel: builtin.string "true", launch_contract_domain: builtin.integer <1: ui32>, reqntid_x: builtin.integer <256: ui32>, reqntid_y: builtin.integer <1: ui32>, reqntid_z: builtin.integer <1: ui32>, verify_no_data_race: builtin.string "0,1,2", verify_no_oob_shared: builtin.string "0,1,2", verify_uniform_barriers: builtin.string "true"]
+    {
+      ^entry(data: mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>, out: mir.disjoint_slice <builtin.fp32 ,[]>):
+        tx_u32 = nvvm.read_ptx_sreg_tid_x () [] []: <() -> (builtin.integer ui32)>;
+        tid = mir.cast (tx_u32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui32)>;
+        tid_u64 = mir.cast (tid) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+        sh4 = mir.constant () [] [value: builtin.integer <4: ui64>]: <() -> (builtin.integer ui64)>;
+        mask15 = mir.constant () [] [value: builtin.integer <15: ui64>]: <() -> (builtin.integer ui64)>;
+        m_local = mir.shr (tid_u64, sh4) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        k_lane = mir.bitand (tid_u64, mask15) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        c64 = mir.constant () [] [value: builtin.integer <64: ui64>]: <() -> (builtin.integer ui64)>;
+        in_64 = mir.lt (tid_u64, c64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        mir.cond_br (in_64) [^phase0_stage, ^barrier_0] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^phase0_stage():
+        s_xs_raw = mir.shared_alloc () [] [elem_type: builtin.type builtin.fp32, size: builtin.integer <64: i64>, alloc_key: builtin.string "S_XS_DIRECT", source_name: builtin.string "safe_subwarp_stage::kernels::multibuf_subwarp_stage::S_XS_DIRECT"]: <() -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>)>;
+        s_xs_mut = mir.cast (s_xs_raw) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority Reborrow]: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>)>;
+        ok_xs_w = mir.lt (tid_u64, c64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        mir.assert (ok_xs_w) [] []: <(builtin.integer i1) -> ()>;
+        xs_ptr = mir.ptr_offset (s_xs_mut, tid_u64) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>)>;
+        zero_f32 = mir.float_constant () [] [float_value: builtin.single 0]: <() -> (builtin.fp32)>;
+        mir.store (xs_ptr, zero_f32) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>, builtin.fp32) -> ()>;
+        zero_w = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+        mir.goto (zero_w) [^pack_header] []: <(builtin.integer ui64) -> ()>
+
+      ^pack_header(w: builtin.integer ui64):
+        c4 = mir.constant () [] [value: builtin.integer <4: ui64>]: <() -> (builtin.integer ui64)>;
+        in_pack = mir.lt (w, c4) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        done_pack = mir.not (in_pack) [] []: <(builtin.integer i1) -> (builtin.integer i1)>;
+        mir.cond_br (done_pack) [^barrier_0, ^pack_body] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^pack_body():
+        tid_x4 = mir.mul (tid_u64, c4) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        pack_idx = mir.add (tid_x4, w) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        s_x_raw = mir.shared_alloc () [] [elem_type: builtin.type builtin.fp32, size: builtin.integer <256: i64>, alloc_key: builtin.string "S_X_DIRECT", source_name: builtin.string "safe_subwarp_stage::kernels::multibuf_subwarp_stage::S_X_DIRECT"]: <() -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>)>;
+        s_x_mut = mir.cast (s_x_raw) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority Reborrow]: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>)>;
+        c256 = mir.constant () [] [value: builtin.integer <256: ui64>]: <() -> (builtin.integer ui64)>;
+        ok_x_w = mir.lt (pack_idx, c256) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        mir.assert (ok_x_w) [] []: <(builtin.integer i1) -> ()>;
+        x_ptr = mir.ptr_offset (s_x_mut, pack_idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>)>;
+        zero_f32_p = mir.float_constant () [] [float_value: builtin.single 0]: <() -> (builtin.fp32)>;
+        mir.store (x_ptr, zero_f32_p) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>, builtin.fp32) -> ()>;
+        one_u64 = mir.constant () [] [value: builtin.integer <1: ui64>]: <() -> (builtin.integer ui64)>;
+        next_w = mir.add (w, one_u64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        mir.goto (next_w) [^pack_header] []: <(builtin.integer ui64) -> ()>
+
+      ^barrier_0():
+        nvvm.barrier0 () [] []: <() -> ()>;
+        init_acc = mir.float_constant () [] [float_value: builtin.single 0]: <() -> (builtin.fp32)>;
+        zero_g = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+        mir.goto (init_acc, zero_g) [^phase1_header] []: <(builtin.fp32, builtin.integer ui64) -> ()>
+
+      ^phase1_header(acc: builtin.fp32, g: builtin.integer ui64):
+        c4_g = mir.constant () [] [value: builtin.integer <4: ui64>]: <() -> (builtin.integer ui64)>;
+        in_g = mir.lt (g, c4_g) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        done_g = mir.not (in_g) [] []: <(builtin.integer i1) -> (builtin.integer i1)>;
+        mir.cond_br (done_g) [^phase1_leader_check, ^phase1_body] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^phase1_body():
+        c16_x = mir.constant () [] [value: builtin.integer <16: ui64>]: <() -> (builtin.integer ui64)>;
+        x_lane_base = mir.mul (k_lane, c16_x) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        x_read_idx = mir.add (x_lane_base, g) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        s_x_r_raw = mir.shared_alloc () [] [elem_type: builtin.type builtin.fp32, size: builtin.integer <256: i64>, alloc_key: builtin.string "S_X_DIRECT", source_name: builtin.string "safe_subwarp_stage::kernels::multibuf_subwarp_stage::S_X_DIRECT"]: <() -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>)>;
+        s_x_ref = mir.cast (s_x_r_raw) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority Reborrow]: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>)>;
+        c256_r = mir.constant () [] [value: builtin.integer <256: ui64>]: <() -> (builtin.integer ui64)>;
+        ok_x_r = mir.lt (x_read_idx, c256_r) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        mir.assert (ok_x_r) [] []: <(builtin.integer i1) -> ()>;
+        x_elem_ptr = mir.ptr_offset (s_x_ref, x_read_idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>)>;
+        xv = mir.load (x_elem_ptr) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>) -> (builtin.fp32)>;
+        xs_lane_base = mir.mul (k_lane, c4_g) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        xs_read_idx = mir.add (xs_lane_base, g) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        s_xs_r_raw = mir.shared_alloc () [] [elem_type: builtin.type builtin.fp32, size: builtin.integer <64: i64>, alloc_key: builtin.string "S_XS_DIRECT", source_name: builtin.string "safe_subwarp_stage::kernels::multibuf_subwarp_stage::S_XS_DIRECT"]: <() -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>)>;
+        s_xs_ref = mir.cast (s_xs_r_raw) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority Reborrow]: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>)>;
+        ok_xs_r = mir.lt (xs_read_idx, c64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        mir.assert (ok_xs_r) [] []: <(builtin.integer i1) -> ()>;
+        xs_elem_ptr = mir.ptr_offset (s_xs_ref, xs_read_idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>)>;
+        xsv = mir.load (xs_elem_ptr) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>) -> (builtin.fp32)>;
+        prod = mir.mul (xv, xsv) [] []: <(builtin.fp32, builtin.fp32) -> (builtin.fp32)>;
+        next_acc = mir.add (acc, prod) [] []: <(builtin.fp32, builtin.fp32) -> (builtin.fp32)>;
+        one_g = mir.constant () [] [value: builtin.integer <1: ui64>]: <() -> (builtin.integer ui64)>;
+        next_g = mir.add (g, one_g) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        mir.goto (next_acc, next_g) [^phase1_header] []: <(builtin.fp32, builtin.integer ui64) -> ()>
+
+      ^phase1_leader_check():
+        zero_lane = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+        is_subwarp_leader = mir.eq (k_lane, zero_lane) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        mir.cond_br (is_subwarp_leader) [^phase1_leader_write, ^barrier_1] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^phase1_leader_write():
+        s_act_raw = mir.shared_alloc () [] [elem_type: builtin.type builtin.fp32, size: builtin.integer <16: i64>, alloc_key: builtin.string "S_ACT_DIRECT", source_name: builtin.string "safe_subwarp_stage::kernels::multibuf_subwarp_stage::S_ACT_DIRECT"]: <() -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>)>;
+        s_act_mut = mir.cast (s_act_raw) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority Reborrow]: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>)>;
+        c16_act = mir.constant () [] [value: builtin.integer <16: ui64>]: <() -> (builtin.integer ui64)>;
+        ok_act_w = mir.lt (m_local, c16_act) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        mir.assert (ok_act_w) [] []: <(builtin.integer i1) -> ()>;
+        act_w_ptr = mir.ptr_offset (s_act_mut, m_local) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>)>;
+        mir.store (act_w_ptr, acc) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>, builtin.fp32) -> ()>;
+        mir.goto () [^barrier_1] []: <() -> ()>
+
+      ^barrier_1():
+        nvvm.barrier0 () [] []: <() -> ()>;
+        c16_epilogue = mir.constant () [] [value: builtin.integer <16: ui64>]: <() -> (builtin.integer ui64)>;
+        in_16 = mir.lt (tid_u64, c16_epilogue) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        mir.cond_br (in_16) [^phase2_epilogue, ^exit] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^phase2_epilogue():
+        s_act_r_raw = mir.shared_alloc () [] [elem_type: builtin.type builtin.fp32, size: builtin.integer <16: i64>, alloc_key: builtin.string "S_ACT_DIRECT", source_name: builtin.string "safe_subwarp_stage::kernels::multibuf_subwarp_stage::S_ACT_DIRECT"]: <() -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>)>;
+        s_act_ref = mir.cast (s_act_r_raw) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority Reborrow]: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>)>;
+        ok_act_r = mir.lt (tid_u64, c16_epilogue) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        mir.assert (ok_act_r) [] []: <(builtin.integer i1) -> ()>;
+        act_r_ptr = mir.ptr_offset (s_act_ref, tid_u64) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>)>;
+        _act_val = mir.load (act_r_ptr) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>) -> (builtin.fp32)>;
+        mir.goto () [^exit] []: <() -> ()>
+
+      ^exit():
+        mir.return () [] []: <() -> ()>
+    }
+}

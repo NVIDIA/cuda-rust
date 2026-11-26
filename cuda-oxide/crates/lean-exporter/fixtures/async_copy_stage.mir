@@ -1,0 +1,59 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+// PostMem2Reg dialect-mir fixture for Stage 5 async TMA bulk copy + mbarrier token ordering.
+builtin.module @safe_async_copy {
+  ^entry():
+    mir.func @async_copy_stage: builtin.function <(mir.ptr <builtin.integer ui8,mutable:false,addrspace:0,kind:SharedRef>, mir.disjoint_slice <builtin.fp32 ,[]>, builtin.integer si32, builtin.integer si32) -> ()>
+      [gpu_kernel: builtin.string "true", launch_contract_domain: builtin.integer <1: ui32>, reqntid_x: builtin.integer <256: ui32>, reqntid_y: builtin.integer <1: ui32>, reqntid_z: builtin.integer <1: ui32>, verify_no_data_race: builtin.string "0", verify_no_oob_shared: builtin.string "0", verify_uniform_barriers: builtin.string "true"]
+    {
+      ^entry(tmap: mir.ptr <builtin.integer ui8,mutable:false,addrspace:0,kind:SharedRef>, out: mir.disjoint_slice <builtin.fp32 ,[]>, tile_x: builtin.integer si32, tile_y: builtin.integer si32):
+        tx_u32 = nvvm.read_ptx_sreg_tid_x () [] []: <() -> (builtin.integer ui32)>;
+        tid = mir.cast (tx_u32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+        zero_u64 = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+        is_leader = mir.eq (tid, zero_u64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        mir.cond_br (is_leader) [^init_bar, ^sync_after_init] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^init_bar():
+        bar_init_raw = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string "BAR", source_name: builtin.string "safe_async_copy::kernels::async_copy_stage::BAR"]: <() -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;
+        c1_u32 = mir.constant () [] [value: builtin.integer <1: ui32>]: <() -> (builtin.integer ui32)>;
+        nvvm.mbarrier_init_shared (bar_init_raw, c1_u32) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui32) -> ()>;
+        nvvm.fence_proxy_async_shared_cta () [] []: <() -> ()>;
+        mir.goto () [^sync_after_init] []: <() -> ()>
+
+      ^sync_after_init():
+        nvvm.barrier0 () [] []: <() -> ()>;
+        mir.cond_br (is_leader) [^issue_tma, ^wait_header] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^issue_tma():
+        tile_raw = mir.shared_alloc () [] [elem_type: builtin.type builtin.fp32, size: builtin.integer <4096: i64>, alloc_key: builtin.string "TILE", source_name: builtin.string "safe_async_copy::kernels::async_copy_stage::TILE"]: <() -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>)>;
+        bar_prod_raw = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string "BAR", source_name: builtin.string "safe_async_copy::kernels::async_copy_stage::BAR"]: <() -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;
+        c16384_u32 = mir.constant () [] [value: builtin.integer <16384: ui32>]: <() -> (builtin.integer ui32)>;
+        _tok = nvvm.mbarrier_arrive_expect_tx_shared (bar_prod_raw, c16384_u32) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui32) -> (builtin.integer ui64)>;
+        ch_zero = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+        nvvm.cp_async_bulk_tensor_g2s_cta_tile_2d (tile_raw, bar_prod_raw, tmap, tile_x, tile_y, ch_zero) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>, mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>, mir.ptr <builtin.integer ui8,mutable:false,addrspace:0,kind:SharedRef>, builtin.integer si32, builtin.integer si32, builtin.integer ui64) -> ()>;
+        mir.goto () [^wait_header] []: <() -> ()>
+
+      ^wait_header():
+        bar_wait_raw = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string "BAR", source_name: builtin.string "safe_async_copy::kernels::async_copy_stage::BAR"]: <() -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;
+        parity_zero = mir.constant () [] [value: builtin.integer <0: ui32>]: <() -> (builtin.integer ui32)>;
+        ready = nvvm.mbarrier_try_wait_parity_shared (bar_wait_raw, parity_zero) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui32) -> (builtin.integer i1)>;
+        not_ready = mir.not (ready) [] []: <(builtin.integer i1) -> (builtin.integer i1)>;
+        mir.cond_br (not_ready) [^wait_spin, ^consume_tile] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^wait_spin():
+        mir.goto () [^wait_header] []: <() -> ()>
+
+      ^consume_tile():
+        tile_r_raw = mir.shared_alloc () [] [elem_type: builtin.type builtin.fp32, size: builtin.integer <4096: i64>, alloc_key: builtin.string "TILE", source_name: builtin.string "safe_async_copy::kernels::async_copy_stage::TILE"]: <() -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>)>;
+        tile_ref = mir.cast (tile_r_raw) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority Reborrow]: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>)>;
+        c4096 = mir.constant () [] [value: builtin.integer <4096: ui64>]: <() -> (builtin.integer ui64)>;
+        ok_read = mir.lt (tid, c4096) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        mir.assert (ok_read) [] []: <(builtin.integer i1) -> ()>;
+        elem_ptr = mir.ptr_offset (tile_ref, tid) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>)>;
+        _val = mir.load (elem_ptr) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>) -> (builtin.fp32)>;
+        mir.goto () [^exit] []: <() -> ()>
+
+      ^exit():
+        mir.return () [] []: <() -> ()>
+    }
+}

@@ -1,0 +1,121 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 370" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <style>
+    :root, svg {
+      --bg: #ffffff;
+      --bg-stroke: #e2e8f0;
+      --panel: #f8fafc;
+      --panel-stroke: #cbd5e1;
+      --box: #ffffff;
+      --box-stroke: #cbd5e1;
+      --fg: #0f172a;
+      --text: #334155;
+      --sub: #475569;
+      --muted: #64748b;
+      --green: #15803d;
+      --green-text: #14532d;
+      --green-sub: #166534;
+      --green-fill: #dcfce7;
+      --green-soft: #f0fdf4;
+      --green-border: #86efac;
+      --blue: #2563eb;
+      --blue-text: #1e3a8a;
+      --blue-fill: #dbeafe;
+      --blue-soft: #eff6ff;
+      --blue-border: #93c5fd;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root, svg {
+        --bg: #161b22;
+        --bg-stroke: #30363d;
+        --panel: #1e242c;
+        --panel-stroke: #3d444d;
+        --box: #13171d;
+        --box-stroke: #3d444d;
+        --fg: #f0f6fc;
+        --text: #c9d1d9;
+        --sub: #b1bac4;
+        --muted: #8b949e;
+        --green: #3fb950;
+        --green-text: #7ee787;
+        --green-sub: #56d364;
+        --green-fill: #163323;
+        --green-soft: #12261e;
+        --green-border: #2ea043;
+        --blue: #58a6ff;
+        --blue-text: #a5d6ff;
+        --blue-fill: #172b4d;
+        --blue-soft: #132238;
+        --blue-border: #388bfd;
+      }
+    }
+  </style>
+
+  <rect width="1080" height="370" rx="14" style="fill: var(--bg); stroke: var(--bg-stroke)" stroke-width="1.5"/>
+
+  <text x="40" y="40" font-size="18" font-weight="700" style="fill: var(--fg)">Three-Phase Sub-Warp Bit-Split &amp; Multi-Buffer Staging</text>
+  <text x="40" y="62" font-size="13" style="fill: var(--muted)">Bit shifts and masks (<tspan font-family="'Roboto Mono', monospace">tid &gt;&gt; 4</tspan>, <tspan font-family="'Roboto Mono', monospace">tid &amp; 15</tspan>) coordinate three shared buffers across two barriers.</text>
+
+  <!-- Phase 0 -->
+  <g transform="translate(36, 86)">
+    <rect width="286" height="248" rx="10" style="fill: var(--panel); stroke: var(--panel-stroke)" stroke-width="1.5"/>
+    <text x="143" y="28" text-anchor="middle" font-size="14.5" font-weight="700" style="fill: var(--fg)">Phase 0: Guarded Pack</text>
+    <text x="143" y="48" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11.5" style="fill: var(--green)">if tid &lt; 64</text>
+
+    <rect x="20" y="64" width="246" height="62" rx="6" style="fill: var(--green-soft); stroke: var(--green-border)" stroke-width="1.5"/>
+    <text x="143" y="88" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11.5" font-weight="600" style="fill: var(--green-text)">S_XS_DIRECT[tid]</text>
+    <text x="143" y="109" text-anchor="middle" font-size="11.5" style="fill: var(--sub)">64 floats (1 scale / thread)</text>
+
+    <rect x="20" y="138" width="246" height="62" rx="6" style="fill: var(--green-soft); stroke: var(--green-border)" stroke-width="1.5"/>
+    <text x="143" y="162" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11.5" font-weight="600" style="fill: var(--green-text)">S_X_DIRECT[tid * 4 + w]</text>
+    <text x="143" y="183" text-anchor="middle" font-size="11.5" style="fill: var(--sub)">256 floats (4 packed / thread)</text>
+
+    <text x="143" y="226" text-anchor="middle" font-size="12" style="fill: var(--text)">Disjoint 1-wide &amp; 4-wide writes</text>
+  </g>
+
+  <!-- Barrier 1 -->
+  <g transform="translate(334, 86)">
+    <rect width="64" height="248" rx="8" style="fill: var(--green-soft); stroke: var(--green)" stroke-width="1.8" stroke-dasharray="6 4"/>
+    <text x="32" y="114" text-anchor="middle" font-size="11.5" font-weight="700" style="fill: var(--green-text)">SYNC 1</text>
+    <text x="32" y="134" text-anchor="middle" font-size="10.5" style="fill: var(--green-sub)">256</text>
+    <text x="32" y="150" text-anchor="middle" font-size="10.5" style="fill: var(--green-sub)">threads</text>
+  </g>
+
+  <!-- Phase 1 -->
+  <g transform="translate(410, 86)">
+    <rect width="296" height="248" rx="10" style="fill: var(--panel); stroke: var(--panel-stroke)" stroke-width="1.5"/>
+    <text x="148" y="28" text-anchor="middle" font-size="14.5" font-weight="700" style="fill: var(--fg)">Phase 1: Sub-Warp Scan</text>
+    <text x="148" y="48" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11.5" style="fill: var(--blue)">m = tid &gt;&gt; 4, k = tid &amp; 15</text>
+
+    <rect x="20" y="64" width="256" height="62" rx="6" style="fill: var(--blue-soft); stroke: var(--blue-border)" stroke-width="1.5"/>
+    <text x="148" y="88" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11.5" font-weight="600" style="fill: var(--blue-text)">Scan S_X[k*16+g], S_XS[k*4+g]</text>
+    <text x="148" y="109" text-anchor="middle" font-size="11.5" style="fill: var(--sub)">Read-only + 16-lane shuffle</text>
+
+    <rect x="20" y="138" width="256" height="62" rx="6" style="fill: var(--green-soft); stroke: var(--green-border)" stroke-width="1.5"/>
+    <text x="148" y="162" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11.5" font-weight="600" style="fill: var(--green-text)">if k == 0: S_ACT_DIRECT[m]</text>
+    <text x="148" y="183" text-anchor="middle" font-size="11.5" style="fill: var(--sub)">16 floats (1 leader / sub-warp)</text>
+
+    <text x="148" y="226" text-anchor="middle" font-size="12" style="fill: var(--text)">16 sub-warps, 1 writer per slot</text>
+  </g>
+
+  <!-- Barrier 2 -->
+  <g transform="translate(718, 86)">
+    <rect width="64" height="248" rx="8" style="fill: var(--green-soft); stroke: var(--green)" stroke-width="1.8" stroke-dasharray="6 4"/>
+    <text x="32" y="114" text-anchor="middle" font-size="11.5" font-weight="700" style="fill: var(--green-text)">SYNC 2</text>
+    <text x="32" y="134" text-anchor="middle" font-size="10.5" style="fill: var(--green-sub)">256</text>
+    <text x="32" y="150" text-anchor="middle" font-size="10.5" style="fill: var(--green-sub)">threads</text>
+  </g>
+
+  <!-- Phase 2 -->
+  <g transform="translate(794, 86)">
+    <rect width="250" height="248" rx="10" style="fill: var(--panel); stroke: var(--panel-stroke)" stroke-width="1.5"/>
+    <text x="125" y="28" text-anchor="middle" font-size="14.5" font-weight="700" style="fill: var(--fg)">Phase 2: Epilogue</text>
+    <text x="125" y="48" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11.5" style="fill: var(--blue)">if tid &lt; 16</text>
+
+    <rect x="20" y="76" width="210" height="108" rx="6" style="fill: var(--blue-soft); stroke: var(--blue-border)" stroke-width="1.5"/>
+    <text x="125" y="114" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11.5" font-weight="600" style="fill: var(--blue-text)">Read S_ACT_DIRECT[tid]</text>
+    <text x="125" y="138" text-anchor="middle" font-size="11.5" style="fill: var(--sub)">First 16 threads read</text>
+    <text x="125" y="160" text-anchor="middle" font-size="11.5" font-weight="600" style="fill: var(--green)">All 6 checks erased!</text>
+
+    <text x="125" y="226" text-anchor="middle" font-size="12" style="fill: var(--text)">Safe after second barrier</text>
+  </g>
+</svg>

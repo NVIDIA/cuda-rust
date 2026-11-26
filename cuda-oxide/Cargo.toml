@@ -20,6 +20,7 @@ members = [
     "crates/cuda-macros",
     "crates/llvm-export",
     "crates/cuda-oxide-mlir-export",
+    "crates/lean-exporter",
     "crates/dialect-mir",
     "crates/dialect-iket",
     "crates/dialect-nvvm",
@@ -78,6 +79,7 @@ llvm-export = { path = "crates/llvm-export" }
 # Published printer; version-specific compatibility stays in the export adapter.
 pliron-mlir-interop = { version = "=0.1.0" }
 cuda-oxide-mlir-export = { path = "crates/cuda-oxide-mlir-export" }
+lean-exporter = { path = "crates/lean-exporter" }
 cute-layout = { path = "cute-rs-preview/cute-layout" }
 cutlass-primitives = { path = "cute-rs-preview/cutlass-primitives" }
 dialect-cute = { path = "cute-rs-preview/dialect-cute" }

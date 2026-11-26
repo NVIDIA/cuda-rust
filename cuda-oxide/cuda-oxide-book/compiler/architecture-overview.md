@@ -136,12 +136,13 @@ cuda-oxide is split into focused crates. Here is every one and its role:
 | `cuda-oxide-mlir-export` | CUTLASS 4.8.1 mappings and profiles; upstream MLIR printing                                   |
 | `dialect-nvvm`       | pliron dialect for NVIDIA GPU intrinsics (`tid`, `ntid`, barriers, TMA)                |
 | `mir-lower`          | Lowers `dialect-mir` to the LLVM dialect -- the main transformation pass               |
+| `lean-exporter`      | Preview: exports `dialect-mir` to `oxide-proofs-preview/` for `#[verify]`              |
 | `cargo-oxide`        | CLI tool: `cargo oxide build`, `cargo oxide run`, `cargo oxide pipeline`               |
 | `cuda-device`        | Device-side API: intrinsics, `DisjointSlice`, barriers, shared memory, warp ops        |
 | `cute-layout`       | CuTe-style layout algebra and coordinate mapping                                       |
 | `cutlass-primitives`            | Typed instruction-level CUDA primitives |
 | `cute-rs`           | Typed CuTe tensors, tiles, copies, pipelines, and MMA operations                        |
-| `cuda-macros`        | Proc macros: `#[kernel]`, `#[device]`                                                  |
+| `cuda-macros`        | Proc macros: `#[kernel]`, `#[device]`, `#[launch_contract]`, `#[verify]`               |
 | `cuda-host`          | Host-side typed module loading and launch helpers                                      |
 | `cuda-core`          | Shared with cutile-rs: safe Driver API bindings; shared context, stream and buffer types   |
 | `cuda-core-derive`   | Shared with cutile-rs: `#[derive(DeviceCopy)]` proc-macro for `cuda-core`              |

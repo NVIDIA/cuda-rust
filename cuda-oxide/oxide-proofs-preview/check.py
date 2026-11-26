@@ -21,6 +21,7 @@ REJECTED = (
     ("RejectedTmemColOverflow.lean", "TMEM column range overflow"),
     ("RejectedTmemWarpSlice.lean", "TMEM warpgroup lane-slice violation"),
     ("RejectedMutSliceRace.lean", "cross-thread &mut [T] read-write race"),
+    ("RejectedDivergentSharedRace.lean", "shared-memory race masked by divergent sync_threads"),
 )
 
 

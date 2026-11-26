@@ -691,6 +691,8 @@ fn verifies_2d_sgemm_tiled_views_and_rejects_shared_races_oob_and_divergent_barr
     );
 }
 
+/// Reject `no_data_race` on shared memory when `uniform_barriers` is omitted from the
+/// kernel verification contract.
 #[test]
 fn rejects_no_data_race_without_uniform_barriers() {
     // `MirNoSharedRace` orders shared accesses by per-thread `syncThreads` counts. Without

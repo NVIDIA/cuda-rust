@@ -10,7 +10,9 @@ import CudaOxide.Proofs.Program.Invariant
 -/
 namespace CudaOxide.Proofs.Program
 open CudaOxide.Mir.Program
+open CudaOxide.Mir.ControlFlow
 open CudaOxide.Contracts.Program
+open CudaOxide.Contracts.ControlFlow
 
 /-- Helper: extract a list-conjunction obligation at `x ∈ xs`. -/
 theorem foldr_and_of_mem {α : Type} {P : α → Prop} :
@@ -792,11 +794,13 @@ theorem mem_upperTriPairs {α : Type} {x y : α} :
       | Or.inl h1 => Or.inl (List.mem_append_right _ h1)
       | Or.inr h2 => Or.inr (List.mem_append_right _ h2)
 
-/-- Bridge theorem for `MirNoSharedRace`: prunes barrier-disjoint, mbarrier-ordered,
-    same-single-thread, and symmetric duplicate event pairs, reducing remaining conflicts on `sharedId` to `tx₁ = tx₂ ∧ ty₁ = ty₂`. -/
-theorem vcNoSharedRace_of_table {f : MirFunc} {tbl : List SymBlockInv}
+/-- Bridge theorem for `MirNoSharedRace`: requires `UniformBarriers cfg` to align barrier
+    phases across CTA threads, then prunes barrier-disjoint, mbarrier-ordered, same-single-thread,
+    and symmetric duplicate event pairs, reducing remaining conflicts on `sharedId` to `tx₁ = tx₂ ∧ ty₁ = ty₂`. -/
+theorem vcNoSharedRace_of_table {f : MirFunc} {cfg : ControlFlowCfg} {tbl : List SymBlockInv}
     {memEvs : List SymMemEvent} {sharedId : Nat}
     {pairs : List (SymMemEvent × SymMemEvent × Option (SymInt × SymInt))}
+    (hunif : UniformBarriers cfg)
     (hvalid : validSymFunc f tbl = true)
     (hmem : collectSymMemEvents f tbl = memEvs)
     (hpairs : (let sevs := dedupEvents (memEvs.filter fun s => s.space == .shared && s.bufId == sharedId)
@@ -817,7 +821,8 @@ theorem vcNoSharedRace_of_table {f : MirFunc} {tbl : List SymBlockInv}
              ((p.1.indexOpt.getD (.const 0)).eval env t₁ h₁)
              ((p.2.1.indexOpt.getD (.const 0)).eval env t₂ h₂)
              (t₁.tx = t₂.tx ∧ t₁.ty = t₂.ty))) ∧ acc) True) :
-    MirNoSharedRace f sharedId := by
+    MirNoSharedRace f cfg sharedId := by
+  refine ⟨hunif, ?_⟩                                        -- Supply `UniformBarriers cfg` for phase alignment
   intro env t₁ t₂ ev₁ ev₂ hIn hT1 hT2 hbx hby hem1 hem2 hsp1 hsp2 hb1 hb2 hph hnotOrd hw hidx
   obtain ⟨h₁, s1, hs1, i1, k1, hk1, hd1, hw1, hssp1, hsbid1, hab1, ho1, hi1, hpc1, hps1⟩ :=
     emitsEvent_mem_collect hvalid hIn hem1

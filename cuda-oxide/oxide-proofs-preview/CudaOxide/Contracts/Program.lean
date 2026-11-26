@@ -4,6 +4,7 @@ SPDX-License-Identifier: Apache-2.0
 -/
 
 import CudaOxide.Mir.Program
+import CudaOxide.Contracts.ControlFlow
 
 /-!
 # Operational Kernel Safety Contracts (`CudaOxide.Contracts.Program`)
@@ -15,6 +16,8 @@ operational semantics (`Reachable` / `EmitsEvent`) of a line-by-line
 -/
 namespace CudaOxide.Contracts.Program
 open CudaOxide.Mir.Program
+open CudaOxide.Mir.ControlFlow
+open CudaOxide.Contracts.ControlFlow
 
 /-- **`no_oob_idx(slice_param)`**: On every valid launch input `env`, for every
     valid GPU thread `t`, every reachable global memory load or store targeting
@@ -63,12 +66,15 @@ def asyncOrdered (f : MirFunc) (env : InputEnv) (ev₁ ev₂ : MemEvent) : Prop 
   (∃ b s : Nat, ev₂.syncBar = some (b, s) ∧ ev₁.syncBar = none ∧   -- `ev₂` released `BAR[s]`
                 f.hasValidBarSignal b = true ∧ env.mbarFlag b s = true)   -- and `BAR[s]` completed before `ev₁`.
 
-/-- **`no_data_race(SHARED)`**: Within any single CTA (`t₁.bx = t₂.bx ∧ t₁.by_ = t₂.by_`),
-    if two valid threads `t₁, t₂` access the same `SharedArray` `sharedId` in the
-    exact same CTA barrier phase (`ev₁.phase = ev₂.phase`), are not ordered by an
-    `mbarrier` completion handoff (`¬ asyncOrdered f env ev₁ ev₂`), at least one is a
-    write, and their element indices collide (`ev₁.index = ev₂.index`), then `t₁ = t₂`. -/
-def MirNoSharedRace (f : MirFunc) (sharedId : Nat) : Prop :=
+/-- **`no_data_race(SHARED)`**: Barrier synchronization is uniform across the CTA
+    (`UniformBarriers cfg`, so per-thread `sync_threads()` counters represent the same
+    CTA epoch), AND within any single CTA (`t₁.bx = t₂.bx ∧ t₁.by_ = t₂.by_`), if two
+    valid threads `t₁, t₂` access the same `SharedArray` `sharedId` in the same barrier
+    phase (`ev₁.phase = ev₂.phase`), are not ordered by an `mbarrier` completion handoff
+    (`¬ asyncOrdered f env ev₁ ev₂`), at least one is a write, and their element indices
+    collide (`ev₁.index = ev₂.index`), then `t₁ = t₂`. -/
+def MirNoSharedRace (f : MirFunc) (cfg : ControlFlowCfg) (sharedId : Nat) : Prop :=
+  UniformBarriers cfg ∧                                     -- CTA barriers are uniform so `ev.phase` epochs align, AND
   ∀ env : InputEnv, ∀ t₁ t₂ : ThreadCtx, ∀ ev₁ ev₂ : MemEvent, -- Pick ANY launch `env`, two CTA threads, and two events:
     f.validInput env →                                      -- IF `env` satisfies launch preconditions,
     f.validThread t₁ → f.validThread t₂ →                   -- AND both `t₁` and `t₂` are valid CTA threads,

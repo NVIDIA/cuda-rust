@@ -1080,6 +1080,16 @@ pub(super) fn translate_mir_program(
                         }
                         _ => {}
                     }
+                } else if on == "nvvm.tcgen05_smem_descriptor"
+                    && op.get_num_operands() == 6
+                    && op.get_num_results() == 1
+                {
+                    // The descriptor names the shared array of its address operand.
+                    if let Some(LocalTag::SmemDescSource(sid)) =
+                        tags.get(&op.get_operand(0)).copied()
+                    {
+                        tags.insert(op.get_result(0), LocalTag::SmemDescSource(sid));
+                    }
                 } else if matches!(
                     on.as_str(),
                     "nvvm.cvta_generic_to_shared_offset"
@@ -2422,6 +2432,34 @@ pub(super) fn translate_mir_program(
                 }
                 "nvvm.tcgen05_fence_after_thread_sync" => {
                     cfg_blocks[new_b].ops.push(CfgOpItem::TmemFenceAfterSync);
+                }
+                "nvvm.tcgen05_smem_descriptor"
+                    if op.get_num_operands() == 6 && op.get_num_results() == 1 =>
+                {
+                    // Model the descriptor as its start address in 16-byte units,
+                    // like a call to a `Tcgen05SmemDescriptor` constructor.
+                    let (src, res) = (op.get_operand(0), op.get_result(0));
+                    let res_vid = val_ids[&res];
+                    if let Some(LocalTag::SmemDescSource(sid)) = tags.get(&src).copied() {
+                        let src_vid = val_ids[&src];
+                        if smem_desc_ready.contains(&src_vid) {
+                            stmts.push(MirStmt::Assign(res_vid, MirRhs::Copy(src_vid)));
+                        } else {
+                            let c4_vid = next_var_id;
+                            next_var_id += 1;
+                            stmts.push(MirStmt::Assign(c4_vid, MirRhs::ConstInt(64, 4)));
+                            stmts.push(MirStmt::Assign(
+                                res_vid,
+                                MirRhs::BinOp("shr", 64, src_vid, c4_vid),
+                            ));
+                        }
+                        smem_desc_ready.insert(res_vid);
+                        tags.insert(res, LocalTag::SmemDescSource(sid));
+                    } else {
+                        // Not derived from a verified `SharedArray`. A `tcgen05`
+                        // instruction that reads this descriptor is rejected.
+                        stmts.push(MirStmt::Assign(res_vid, fallback_rhs_for(res, &opaque_ids)));
+                    }
                 }
                 _ if opid.starts_with("nvvm.tcgen05") => {
                     return Err(reject(

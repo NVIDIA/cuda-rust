@@ -90,11 +90,18 @@ fn end_to_end_grid_tune_on_gpu() {
         .collect();
     assert_eq!(invalid.len(), 1, "the N=0 candidate is invalid");
     assert!(invalid[0].config_id.contains("N=0"));
-    let best = state.best.expect("a winner");
+    // The paired timings include allocation and launch overhead.
+    // The first finalist wins ties.
+    let [first, second] = state.trials.last_chunk::<2>().expect("a runoff pair");
+    let winner = if first.median_ms().unwrap() <= second.median_ms().unwrap() {
+        first
+    } else {
+        second
+    };
     assert_eq!(
-        best.int("N"),
-        Some(1 << 16),
-        "smaller fill should be faster"
+        state.best.expect("a winner").id,
+        winner.config_id,
+        "winner must follow the paired runoff medians"
     );
 
     // Resume: measured candidates are not re-searched; the previously

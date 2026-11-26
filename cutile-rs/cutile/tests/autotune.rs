@@ -13,7 +13,8 @@ mod temp_dir;
 use cuda_core::Context;
 use cutile::bench::BenchOptions;
 use cutile::prelude::*;
-use cutile::tune::{Autotuner, Config, ParamValue, TrialState};
+use cutile::tune::{Autotuner, Config, Output, ParamValue, TrialState};
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
@@ -25,6 +26,58 @@ fn quick_bench() -> BenchOptions {
         max_reps: 20,
         clear_l2: true,
     }
+}
+
+// Print the trial data before TempDir cleans up during unwinding, so a failed
+// CI run records the measurements that led to the winner.
+struct TrialLogOnFailure<'a>(&'a Path);
+
+impl Drop for TrialLogOnFailure<'_> {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            match std::fs::read_to_string(self.0) {
+                Ok(log) => eprintln!("Autotune trial log ({}):\n{log}", self.0.display()),
+                Err(error) => eprintln!("Cannot read trial log {}: {error}", self.0.display()),
+            }
+        }
+    }
+}
+
+fn assert_runoff_winner(output: &Output, configs: &[Config]) {
+    let best = output.best.as_ref().expect("a winner");
+    assert!(configs.contains(best), "winner belongs to the search space");
+    assert_ne!(best.int("N"), Some(0), "invalid candidate cannot win");
+
+    // Search and resumed timings rank the finalists; the final two trials
+    // record the paired measurement that actually decides this run's winner.
+    assert!(output.trials.len() >= 2, "paired runoff trials: {output:?}");
+    let pair = &output.trials[output.trials.len() - 2..];
+    assert_ne!(pair[0].config_id, pair[1].config_id);
+    let medians: Vec<_> = pair
+        .iter()
+        .map(|trial| {
+            assert!(configs.iter().any(|config| config.id == trial.config_id));
+            match &trial.state {
+                TrialState::Measured {
+                    median_ms, reps, ..
+                } => {
+                    assert!(median_ms.is_finite() && *median_ms >= 0.0);
+                    assert!(*reps > 0);
+                    *median_ms
+                }
+                other => panic!("expected measured runoff, got {other:?}"),
+            }
+        })
+        .collect();
+    let expected = if medians[0] <= medians[1] {
+        &pair[0]
+    } else {
+        &pair[1]
+    };
+    assert_eq!(
+        best.id, expected.config_id,
+        "winner must follow the paired medians: {output:?}"
+    );
 }
 
 /// Tunes a fill "kernel" over candidate sizes; one candidate is invalid by
@@ -42,6 +95,7 @@ fn end_to_end_grid_tune_on_gpu() {
 
     let directory = temp_dir::TempDir::new("cutile-autotune");
     let log = directory.path().join("trials.jsonl");
+    let _diagnostics = TrialLogOnFailure(&log);
 
     let setup_calls = AtomicUsize::new(0);
     let run = |log_path: &std::path::Path| {
@@ -65,7 +119,7 @@ fn end_to_end_grid_tune_on_gpu() {
                     .to_host_vec()
                     .sync_on(&stream)
                     .map_err(cutile::error::Error::from)?;
-                if host[0] != 3.0 {
+                if host.iter().any(|&value| value != 3.0) {
                     return Err(cutile::error::Error::Tensor(cutile::error::TensorError(
                         "gate: wrong fill value".into(),
                     )));
@@ -89,13 +143,10 @@ fn end_to_end_grid_tune_on_gpu() {
         .filter(|t| matches!(t.state, TrialState::Invalid { .. }))
         .collect();
     assert_eq!(invalid.len(), 1, "the N=0 candidate is invalid");
-    assert!(invalid[0].config_id.contains("N=0"));
-    let best = state.best.expect("a winner");
-    assert_eq!(
-        best.int("N"),
-        Some(1 << 16),
-        "smaller fill should be faster"
-    );
+    assert_eq!(invalid[0].config_id, configs[2].id);
+    // This times allocation, fill and synchronization together. Candidate
+    // size alone does not determine the measured winner on every GPU.
+    assert_runoff_winner(&state, &configs);
 
     // Resume: measured candidates are not re-searched; the previously
     // Invalid one is retried (its invalidity may have been transient) and
@@ -108,7 +159,7 @@ fn end_to_end_grid_tune_on_gpu() {
         resumed_calls, 3,
         "resume setup calls = 1 invalid retry + 2 runoff finalists"
     );
-    assert!(resumed.best.is_some());
+    assert_runoff_winner(&resumed, &configs);
     let _ = std::fs::remove_file(&log);
 }
 

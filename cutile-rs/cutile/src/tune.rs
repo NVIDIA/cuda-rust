@@ -2397,6 +2397,32 @@ mod tests {
     }
 
     #[test]
+    fn paired_runoff_can_reverse_search_ranking() {
+        let (a, b) = (cfg(32, 2), cfg(64, 4));
+        for (paired_a, paired_b, expected) in [
+            (3.0, 2.0, &b), // The sequential leader loses the paired measurement.
+            (2.0, 3.0, &a),
+            (2.0, 2.0, &a), // A tie keeps the sequential leader.
+        ] {
+            let mut trials = vec![
+                Trial::measured(a.id.clone(), 1.0, 1.0, 3),
+                Trial::measured(b.id.clone(), 4.0, 4.0, 3),
+            ];
+            let winner = runoff_verdict(
+                a.clone(),
+                b.clone(),
+                Ok((meas(&[paired_a; 3]), meas(&[paired_b; 3]))),
+                &mut trials,
+                &mut silent_log(),
+            );
+            assert_eq!(winner, *expected);
+            assert_eq!(trials.len(), 4, "search trials and paired measurements");
+            assert_eq!(trials[2].median_ms(), Some(paired_a));
+            assert_eq!(trials[3].median_ms(), Some(paired_b));
+        }
+    }
+
+    #[test]
     fn runoff_setup_failure_forfeits_to_the_other_finalist() {
         let (a, b) = (cfg(32, 2), cfg(64, 4));
         for (b_failed, winner_id, loser_id) in [

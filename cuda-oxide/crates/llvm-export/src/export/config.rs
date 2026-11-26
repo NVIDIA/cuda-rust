@@ -217,7 +217,7 @@ impl ExportBackendConfig for PtxExportConfig {
 ///
 /// Identical to [`PtxExportConfig`] except for the data layout, which
 /// declares 64-bit pointers in every address space
-/// ([`NVPTX_DATALAYOUT_PTX_WIDE`]). OptiX programs need this model: OptiX
+/// (`NVPTX_DATALAYOUT_PTX_WIDE`). OptiX programs need this model: OptiX
 /// faults on `.local` depots addressed through 32-bit registers.
 #[derive(Clone, Debug, Default)]
 pub struct PtxWideExportConfig;

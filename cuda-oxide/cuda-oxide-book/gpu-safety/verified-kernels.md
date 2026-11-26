@@ -42,6 +42,8 @@ We do not prove functional correctness or floating-point math formulas. Instead,
 | `uniform_barriers`  | Every thread in the block reaches every barrier           | Waiting across different thread blocks    |
 | `tmem_lifecycle`    | Valid `TMEM` bounds, warpgroup slices, and async order    | Floating-point Tensor Core rounding       |
 
+Because shared-memory race checks group accesses by each thread's barrier phase, `no_data_race(TILE)` on a `SharedArray` always requires `uniform_barriers` in the same `#[verify(...)]` attribute.
+
 ---
 
 ## 2. How It Works

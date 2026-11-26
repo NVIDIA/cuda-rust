@@ -291,6 +291,14 @@ pub(crate) fn parse_kernel_verification_spec(
     let uniform_barriers =
         get_string_attr(attrs, "verify_uniform_barriers").as_deref() == Some("true");
     let tmem_lifecycle = get_string_attr(attrs, "verify_tmem_lifecycle").as_deref() == Some("true");
+    if !no_data_race.is_empty() && !uniform_barriers {
+        // `MirNoSharedRace` orders accesses by per-thread `syncThreads` counts. Those counts
+        // only line up across threads when `UniformBarriers` is also proved.
+        return Err(reject(
+            "kernel contract",
+            "`no_data_race` on shared memory requires `uniform_barriers`",
+        ));
+    }
 
     let u32_coordinates =
         get_string_attr(attrs, "launch_contract_u32_coords").as_deref() == Some("true");

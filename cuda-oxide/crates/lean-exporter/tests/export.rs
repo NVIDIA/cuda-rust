@@ -33,6 +33,67 @@ fn export(source: &str) -> String {
     export_named_source(source, "global_index").expect("valid scalar MIR")
 }
 
+/// Parse an entire MIR source file, locate `name`, and translate its `mir.func` into
+/// [`lean_exporter::translate::program::MirProgramData`] for structural AST assertions.
+fn translate_named_mir_program(
+    source: &str,
+    name: &str,
+) -> lean_exporter::translate::program::MirProgramData {
+    let mut ctx = Context::new();
+    dialect_mir::register(&mut ctx);
+    dialect_nvvm::register(&mut ctx);
+    let headers = combine::skip_many(combine::attempt(
+        combine::parser::char::spaces()
+            .with(combine::parser::char::string("//"))
+            .skip(combine::skip_many(combine::satisfy(|c| c != '\n'))),
+    ));
+    let root = parse_from_str(
+        headers
+            .with(spaced(Operation::top_level_parser()))
+            .skip(combine::eof()),
+        &mut ctx,
+        source,
+    )
+    .expect("valid test MIR");
+
+    let find_sym = |op: Ptr<Operation>| -> String {
+        op.deref(&ctx)
+            .attributes
+            .0
+            .iter()
+            .find(|(k, _)| k.to_string() == "builtin_sym_name")
+            .and_then(|(_, v)| v.downcast_ref::<pliron::builtin::attributes::IdentifierAttr>())
+            .expect("function symbol name")
+            .as_ref()
+            .to_string()
+    };
+
+    let func = if dialect_mir::ops::MirFuncOp::wrap(&ctx, root).is_some() {
+        assert_eq!(find_sym(root), name, "unexpected standalone function name");
+        root
+    } else {
+        let module = root.deref(&ctx);
+        let region = module.get_region(0).deref(&ctx);
+        let block = region.get_head().expect("module block");
+        block
+            .deref(&ctx)
+            .iter(&ctx)
+            .find(|&op| {
+                dialect_mir::ops::MirFuncOp::wrap(&ctx, op).is_some() && find_sym(op) == name
+            })
+            .unwrap_or_else(|| panic!("function `{name}` not found"))
+    };
+
+    match lean_exporter::translate::translate_function(&ctx, func)
+        .unwrap_or_else(|e| panic!("failed to translate `{name}`: {e}"))
+    {
+        lean_exporter::translate::TranslatedFunction::MirProgram { program, .. } => *program,
+        lean_exporter::translate::TranslatedFunction::Scalar { .. } => {
+            panic!("expected MirProgram for `{name}`, got Scalar")
+        }
+    }
+}
+
 /// Resolve the `cuda-oxide/oxide-proofs-preview` package directory when `lake` is installed,
 /// panicking if `CUDA_OXIDE_REQUIRE_LEAN=1` is set and Lean is unavailable.
 fn lean_package_dir_if_available() -> Option<std::path::PathBuf> {
@@ -2975,4 +3036,594 @@ builtin.module @continue_split {
         .expect("Lean 4 accepts the CTA-uniform barrier loop");
     lean_exporter::runner::check_generated_lean(&uniform_spin_lean, &lean_dir)
         .expect("Lean 4 accepts the constant-trip barrier loop");
+}
+
+/// Collect all source register IDs read by `stmt` via an exhaustive match over
+/// [`lean_exporter::translate::program::MirStmt`] and [`lean_exporter::translate::program::MirRhs`].
+fn mir_stmt_read_regs(stmt: &lean_exporter::translate::program::MirStmt) -> Vec<usize> {
+    use lean_exporter::translate::program::{MirRhs, MirStmt};
+
+    match stmt {
+        MirStmt::Assign(_, rhs) => match rhs {
+            MirRhs::Copy(src)
+            | MirRhs::NotBool(src)
+            | MirRhs::IntCast(_, src)
+            | MirRhs::Load(src)
+            | MirRhs::CvtaShared(src)
+            | MirRhs::LoadTmemBase(src, _)
+            | MirRhs::CtaUint1(_, _, src)
+            | MirRhs::CtaUnary(src) => vec![*src],
+            MirRhs::BinOp(_, _, l, r)
+            | MirRhs::CheckedOvf(_, _, l, r)
+            | MirRhs::CmpOp(_, l, r)
+            | MirRhs::PtrOffset(l, r)
+            | MirRhs::CtaBin(l, r) => vec![*l, *r],
+            MirRhs::MbarTryWait(_, slot, _) => vec![*slot],
+            MirRhs::ConstInt(_, _)
+            | MirRhs::ConstBool(_)
+            | MirRhs::Sreg(_)
+            | MirRhs::Index1D
+            | MirRhs::Coord2DU32
+            | MirRhs::SlicePtr(_)
+            | MirRhs::SliceLen(_)
+            | MirRhs::SharedBase(_)
+            | MirRhs::OpaqueUint(_, _)
+            | MirRhs::CtaConst
+            | MirRhs::OpaqueVal => Vec::new(),
+        },
+        MirStmt::Store(p, v) | MirStmt::TmaCopyG2S(p, _, v, _) => vec![*p, *v],
+        MirStmt::AssertCond(_, r)
+        | MirStmt::BarrierSlotCheck(r)
+        | MirStmt::ClusterRankCheck(r)
+        | MirStmt::MbarArrive(_, r, _)
+        | MirStmt::MbarArriveExpectTx(_, r, _)
+        | MirStmt::TmemAlloc(r, _)
+        | MirStmt::SmemDescRead(r, _)
+        | MirStmt::TmemAccess(r, _, _, _) => vec![*r],
+        MirStmt::SyncThreads => Vec::new(),
+    }
+}
+
+/// Collect all source register IDs read by `term` via an exhaustive match over
+/// [`lean_exporter::translate::program::MirTerminator`].
+fn mir_term_read_regs(term: &lean_exporter::translate::program::MirTerminator) -> Vec<usize> {
+    use lean_exporter::translate::program::MirTerminator;
+
+    match term {
+        MirTerminator::Ret | MirTerminator::Unreachable => Vec::new(),
+        MirTerminator::Goto(_, args) => args.clone(),
+        MirTerminator::CondBr(cond, _, t_args, _, f_args) => {
+            let mut out = Vec::with_capacity(1 + t_args.len() + f_args.len());
+            out.push(*cond);
+            out.extend_from_slice(t_args);
+            out.extend_from_slice(f_args);
+            out
+        }
+    }
+}
+
+/// Compute exact CFG dominator sets `dom[b]` over reachable RPO basic blocks in `program`
+/// (with block `0` as entry) so cross-block register reads can be checked for strict dominance.
+fn compute_cfg_dominators(
+    program: &lean_exporter::translate::program::MirProgramData,
+) -> Vec<std::collections::HashSet<usize>> {
+    use lean_exporter::translate::program::MirTerminator;
+    use std::collections::HashSet;
+
+    let n = program.blocks.len();
+    let mut preds: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (b_idx, blk) in program.blocks.iter().enumerate() {
+        match blk.term {
+            MirTerminator::Goto(dst, _) => {
+                if dst < n && !preds[dst].contains(&b_idx) {
+                    preds[dst].push(b_idx);
+                }
+            }
+            MirTerminator::CondBr(_, t_dst, _, f_dst, _) => {
+                for dst in [t_dst, f_dst] {
+                    if dst < n && !preds[dst].contains(&b_idx) {
+                        preds[dst].push(b_idx);
+                    }
+                }
+            }
+            MirTerminator::Ret | MirTerminator::Unreachable => {}
+        }
+    }
+
+    let all: HashSet<usize> = (0..n).collect();
+    let mut dom: Vec<HashSet<usize>> = vec![all; n];
+    dom[0] = HashSet::from([0]);
+    loop {
+        let mut changed = false;
+        for b in 1..n {
+            if preds[b].is_empty() {
+                let singleton = HashSet::from([b]);
+                if dom[b] != singleton {
+                    dom[b] = singleton;
+                    changed = true;
+                }
+                continue;
+            }
+            let mut inter: Option<HashSet<usize>> = None;
+            for &p in &preds[b] {
+                inter = Some(match inter {
+                    None => dom[p].clone(),
+                    Some(cur) => cur.intersection(&dom[p]).copied().collect(),
+                });
+            }
+            let mut new_set = inter.unwrap_or_default();
+            new_set.insert(b);
+            if new_set != dom[b] {
+                dom[b] = new_set;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    dom
+}
+
+/// Assert on the typed [`lean_exporter::translate::program::MirProgramData`] AST that every
+/// register read before local definition in any block is uniquely defined across blocks (zero
+/// Tier-2 slot reuse clobbers) in a block that strictly dominates the reader.
+fn assert_valid_cross_block_registers(
+    program: &lean_exporter::translate::program::MirProgramData,
+    label: &str,
+) {
+    use lean_exporter::translate::program::MirStmt;
+    use std::collections::{HashMap, HashSet};
+
+    assert!(
+        !program.blocks.is_empty(),
+        "{label}: expected non-empty MirFunc blocks"
+    );
+    let mut def_blocks: HashMap<usize, HashSet<usize>> = HashMap::new();
+    for (b_idx, blk) in program.blocks.iter().enumerate() {
+        for &(aid, _) in &blk.args {
+            def_blocks.entry(aid).or_default().insert(b_idx);
+        }
+        for stmt in &blk.stmts {
+            if let MirStmt::Assign(dst, _) = stmt {
+                def_blocks.entry(*dst).or_default().insert(b_idx);
+            }
+        }
+    }
+
+    let dom = compute_cfg_dominators(program);
+    let check_read = |b_idx: usize, reg: usize, defined_here: &HashSet<usize>, ctx_desc: &str| {
+        let defs = def_blocks.get(&reg).unwrap_or_else(|| {
+            panic!("{label}: block {b_idx} reads undefined register {reg} in {ctx_desc}")
+        });
+        if !defined_here.contains(&reg) {
+            assert_eq!(
+                defs.len(),
+                1,
+                "{label}: block {b_idx} reads cross-block register {reg} before local definition in {ctx_desc}, while blocks {defs:?} also write {reg} (Tier-2 clobber)"
+            );
+            let def_b = *defs.iter().next().expect("unique writer");
+            assert!(
+                def_b != b_idx && dom[b_idx].contains(&def_b),
+                "{label}: block {b_idx} reads register {reg} defined in non-dominating block {def_b} in {ctx_desc}"
+            );
+        }
+    };
+
+    for (b_idx, blk) in program.blocks.iter().enumerate() {
+        let mut defined_here: HashSet<usize> = blk.args.iter().map(|&(aid, _)| aid).collect();
+        for stmt in &blk.stmts {
+            for reg in mir_stmt_read_regs(stmt) {
+                check_read(b_idx, reg, &defined_here, &format!("{stmt:?}"));
+            }
+            if let MirStmt::Assign(dst, _) = stmt {
+                defined_here.insert(*dst);
+            }
+        }
+        for reg in mir_term_read_regs(&blk.term) {
+            check_read(b_idx, reg, &defined_here, &format!("{:?}", blk.term));
+        }
+    }
+}
+
+/// Extract the register ID assigned by the unique `mir.add` (`MirRhs::BinOp("add", ...)`)
+/// statement inside `blk` for structural regression assertions.
+fn find_add_assign_reg(blk: &lean_exporter::translate::program::MirBlockData) -> usize {
+    use lean_exporter::translate::program::{MirRhs, MirStmt};
+
+    blk.stmts
+        .iter()
+        .find_map(|stmt| match stmt {
+            MirStmt::Assign(dst, MirRhs::BinOp("add", _, _, _)) => Some(*dst),
+            _ => None,
+        })
+        .expect("block must contain an add assignment")
+}
+
+/// A register captured by an aggregate must still identify the original field when
+/// the successor extracts it. This fixture only constructs and reads value aggregates.
+#[test]
+fn aggregate_and_inserted_fields_preserve_register_identity() {
+    use lean_exporter::translate::program::{MirRhs, MirStmt};
+
+    let tuple = "mir.tuple <[builtin.integer ui64, builtin.integer ui64], [], [], 16, 8>";
+    for (op, ty, operands, types, field) in [
+        (
+            "mir.construct_struct",
+            "mir.struct <\"Wrap\", [\"field\"], [builtin.integer ui64], [], [], 8, 8, Aggregate>",
+            "sum",
+            "builtin.integer ui64",
+            0,
+        ),
+        (
+            "mir.construct_tuple",
+            tuple,
+            "sum, seed",
+            "builtin.integer ui64, builtin.integer ui64",
+            0,
+        ),
+        (
+            "mir.construct_array",
+            "mir.array <builtin.integer ui64, 2>",
+            "sum, seed",
+            "builtin.integer ui64, builtin.integer ui64",
+            0,
+        ),
+        ("mir.insert_field", tuple, "base, sum", "", 1),
+    ] {
+        let construct = if op == "mir.insert_field" {
+            format!(
+                "base = mir.construct_tuple (seed, seed) [] []: <(builtin.integer ui64, builtin.integer ui64) -> ({ty})>;\n        \
+                 value = mir.insert_field (base, sum) [] [insert_index: mir.field_index 1]: <({ty}, builtin.integer ui64) -> ({ty})>;"
+            )
+        } else {
+            format!("value = {op} ({operands}) [] []: <({types}) -> ({ty})>;")
+        };
+        let source = format!(
+            r#"
+mir.func @field_lifetime: builtin.function <(builtin.integer ui32) -> ()>
+  [gpu_kernel: builtin.string "true", launch_contract_domain: builtin.integer <1: ui32>, reqntid_x: builtin.integer <32: ui32>, reqntid_y: builtin.integer <1: ui32>, reqntid_z: builtin.integer <1: ui32>, verify_uniform_barriers: builtin.string "true"]
+{{
+  ^entry(_n: builtin.integer ui32):
+    seed = mir.constant () [] [value: builtin.integer <1: ui64>]: <() -> (builtin.integer ui64)>;
+    sum = mir.add (seed, seed) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+    {construct}
+    mir.goto () [^unpack] []: <() -> ()>
+  ^unpack():
+    local_a = mir.constant () [] [value: builtin.integer <2: ui64>]: <() -> (builtin.integer ui64)>;
+    local_b = mir.constant () [] [value: builtin.integer <3: ui64>]: <() -> (builtin.integer ui64)>;
+    field_value = mir.extract_field (value) [] [index: mir.field_index {field}]: <({ty}) -> (builtin.integer ui64)>;
+    mir.return () [] []: <() -> ()>
+}}"#
+        );
+        let program = translate_named_mir_program(&source, "field_lifetime");
+        assert_valid_cross_block_registers(&program, op);
+        let captured = find_add_assign_reg(&program.blocks[0]);
+        let successor = &program.blocks[1].stmts;
+        assert!(
+            successor
+                .iter()
+                .all(|stmt| !matches!(stmt, MirStmt::Assign(dst, _) if *dst == captured)),
+            "{op}: successor redefined the captured register"
+        );
+        assert!(
+            successor.iter().any(
+                |stmt| matches!(stmt, MirStmt::Assign(_, MirRhs::Copy(src)) if *src == captured)
+            ),
+            "{op}: extraction must read the captured register"
+        );
+    }
+}
+
+/// A valid shared barrier slot computed in the entry block must retain its register
+/// when the successor emits the matching arrival.
+#[test]
+fn bar_slot_vars_do_not_clobber_tier2_slot_register_across_blocks() {
+    use lean_exporter::translate::program::MirStmt;
+
+    let valid_mir = r#"
+builtin.module @bar_slot_tier2 {
+  ^entry():
+    mir.func @bar_slot_tier2_k: builtin.function <(builtin.integer ui32) -> ()>
+      [gpu_kernel: builtin.string "true", launch_contract_domain: builtin.integer <1: ui32>, reqntid_x: builtin.integer <32: ui32>, reqntid_y: builtin.integer <1: ui32>, reqntid_z: builtin.integer <1: ui32>, verify_no_oob_shared: builtin.string "0", verify_uniform_barriers: builtin.string "true"]
+    {
+      ^entry(_n: builtin.integer ui32):
+        lhs_c = mir.constant () [] [value: builtin.integer <1: ui64>]: <() -> (builtin.integer ui64)>;
+        rhs_c = mir.constant () [] [value: builtin.integer <1: ui64>]: <() -> (builtin.integer ui64)>;
+        slot = mir.add (lhs_c, rhs_c) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        bar_base = mir.shared_alloc () [] [alignment: builtin.integer <8: i64>, elem_type: builtin.type builtin.integer ui64, size: builtin.integer <4: i64>, alloc_key: builtin.string "BARS", source_name: builtin.string "k::BARS"]: <() -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;
+        bar_p = mir.ptr_offset (bar_base, slot) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;
+        bar_cast = mir.cast (bar_p) [] [cast_kind: mir.cast_kind PtrToPtr]: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>) -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;
+        cnt32 = mir.constant () [] [value: builtin.integer <32: ui32>]: <() -> (builtin.integer ui32)>;
+        nvvm.mbarrier_init_shared (bar_cast, cnt32) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui32) -> ()>;
+        nvvm.fence_proxy_async_shared_cta () [] []: <() -> ()>;
+        mir.goto () [^use_bar] []: <() -> ()>
+
+      ^use_bar():
+        z0 = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+        z1 = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+        z2 = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+        z3 = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+        nvvm.barrier0 () [] []: <() -> ()>;
+        _tok = nvvm.mbarrier_arrive_shared (bar_cast) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>) -> (builtin.integer ui64)>;
+        mir.return () [] []: <() -> ()>
+    }
+}
+"#;
+    let valid_prog = translate_named_mir_program(valid_mir, "bar_slot_tier2_k");
+    assert_valid_cross_block_registers(&valid_prog, "bar_slot_tier2_k_valid");
+    let slot_reg = find_add_assign_reg(&valid_prog.blocks[0]);
+    assert!(
+        !valid_prog.blocks[1]
+            .stmts
+            .iter()
+            .any(|s| matches!(s, MirStmt::Assign(dst, _) if *dst == slot_reg)),
+        "^use_bar must not clobber barrier slot register {slot_reg}"
+    );
+    assert!(
+        valid_prog.blocks[1]
+            .stmts
+            .iter()
+            .any(|s| matches!(s, MirStmt::MbarArrive(0, sreg, _) if *sreg == slot_reg)),
+        "^use_bar MbarArrive must reference block 0's slot register {slot_reg}"
+    );
+
+    if let Some(lean_dir) = lean_package_dir_if_available() {
+        let valid_lean =
+            export_named_source(valid_mir, "bar_slot_tier2_k").expect("transcribes valid bar slot");
+        lean_exporter::runner::check_generated_lean(&valid_lean, &lean_dir)
+            .expect("Lean 4 must accept valid in-bounds SharedArray<Barrier, 4> slot `1 + 1`");
+    }
+}
+
+/// Ensure wrapper `LocalTag` (`Index1DWrapper`) and aggregate `struct_fields` (`coord_2d_u32`)
+/// captured indirectly through `mir.construct_enum` (`enum_payload_tags`) or `mir.insert_field`
+/// `base_s` (`o_idx == 0`) allocate Tier-1 IDs and survive across blocks.
+#[test]
+fn wrapper_tags_and_fields_carried_through_enum_and_insert_field_survive_across_blocks() {
+    use lean_exporter::translate::program::{MirRhs, MirStmt};
+
+    // Subcase 1: `mir.construct_enum` operand (`idx_w`) carries `LocalTag::Index1DWrapper(idx_vid)`
+    // into `enum_payload_tags` across blocks even when `idx_w` is only used inside `^blk0`.
+    let enum_mir = r#"
+builtin.module @enum_wrapper_tier2 {
+  ^entry():
+    mir.func @_RINvNtNtCs11cuda_device6thread10___internal8index_1d: builtin.function <(mir.ptr <builtin.integer ui8 ,mutable:false,addrspace:0,kind:SharedRef>) -> (builtin.integer ui64)>
+      []
+    {
+      ^entry(_lc: mir.ptr <builtin.integer ui8 ,mutable:false,addrspace:0,kind:SharedRef>):
+        _z = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+        mir.return (_z) [] []: <(builtin.integer ui64) -> ()>
+    };
+    mir.func @enum_idx_wrapper_k: builtin.function <(builtin.integer ui32) -> ()>
+      [gpu_kernel: builtin.string "true", launch_contract_domain: builtin.integer <1: ui32>, reqntid_x: builtin.integer <32: ui32>, reqntid_y: builtin.integer <1: ui32>, reqntid_z: builtin.integer <1: ui32>, verify_uniform_barriers: builtin.string "true"]
+    {
+      ^entry(_n: builtin.integer ui32):
+        z0 = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+        mir.goto () [^blk0] []: <() -> ()>
+
+      ^blk0():
+        lc = mir.alloca () [] []: <() -> (mir.ptr <builtin.integer ui8 ,mutable:true,addrspace:0,kind:Erased>)>;
+        lc_ref = mir.cast (lc) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority Reborrow]: <(mir.ptr <builtin.integer ui8 ,mutable:true,addrspace:0,kind:Erased>) -> (mir.ptr <builtin.integer ui8 ,mutable:false,addrspace:0,kind:SharedRef>)>;
+        idx_w = mir.call (lc_ref) [] [callee: builtin.string "_RINvNtNtCs11cuda_device6thread10___internal8index_1d"]: <(mir.ptr <builtin.integer ui8 ,mutable:false,addrspace:0,kind:SharedRef>) -> (builtin.integer ui64)>;
+        opt = mir.construct_enum (idx_w) [] [construct_enum_variant_index: mir.variant_index 1]: <(builtin.integer ui64) -> (mir.enum <"Option", builtin.integer ui8, ["None", "Some"], [0, 1], [0, 1], [builtin.integer ui64], [8], [8], 0, 16, 8, Direct, Integer, 8, 0, 0, 0, 0, 0, 0, [1, 1]>)>;
+        mir.goto () [^blk1] []: <() -> ()>
+
+      ^blk1():
+        clobber0 = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+        clobber1 = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+        clobber2 = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+        clobber3 = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+        pay = mir.enum_payload (opt) [] [payload_variant_index: mir.variant_index 1, payload_field_index: mir.field_index 0]: <(mir.enum <"Option", builtin.integer ui8, ["None", "Some"], [0, 1], [0, 1], [builtin.integer ui64], [8], [8], 0, 16, 8, Direct, Integer, 8, 0, 0, 0, 0, 0, 0, [1, 1]>) -> (builtin.integer ui64)>;
+        ext_idx = mir.extract_field (pay) [] [index: mir.field_index 0]: <(builtin.integer ui64) -> (builtin.integer ui64)>;
+        mir.return () [] []: <() -> ()>
+
+    }
+}
+"#;
+    let enum_prog = translate_named_mir_program(enum_mir, "enum_idx_wrapper_k");
+    assert_valid_cross_block_registers(&enum_prog, "enum_idx_wrapper_k");
+    let idx_reg = enum_prog.blocks[1]
+        .stmts
+        .iter()
+        .find_map(|s| match s {
+            MirStmt::Assign(dst, MirRhs::Index1D) => Some(*dst),
+            _ => None,
+        })
+        .expect("^blk0 must assign MirRhs::Index1D");
+    assert!(
+        !enum_prog.blocks[2]
+            .stmts
+            .iter()
+            .any(|s| matches!(s, MirStmt::Assign(dst, _) if *dst == idx_reg)),
+        "^blk1 must not clobber enum-wrapped Index1D register {idx_reg}"
+    );
+    assert!(
+        enum_prog.blocks[2]
+            .stmts
+            .iter()
+            .any(|s| matches!(s, MirStmt::Assign(_, MirRhs::Copy(src)) if *src == idx_reg)),
+        "^blk1 extract_field on enum payload must copy Index1D register {idx_reg}"
+    );
+
+    // Subcase 2: `mir.insert_field` `base_s` (`o_idx == 0`) retains unreplaced slots in
+    // `struct_fields` even when `base_s` is a tuple whose own SSA value is used only in `^blk0`.
+    let insert_base_mir = r#"
+builtin.module @insert_base_coord_tier2 {
+  ^entry():
+    mir.func @_RINvNtCs11cuda_device6thread11coord_2d_u32: builtin.function <(mir.ptr <builtin.integer ui8 ,mutable:false,addrspace:0,kind:SharedRef>) -> (mir.tuple <[builtin.integer ui64, builtin.integer ui64], [], [], 16, 8>)>
+      []
+    {
+      ^entry(_lc: mir.ptr <builtin.integer ui8 ,mutable:false,addrspace:0,kind:SharedRef>):
+        _z = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+        _tup = mir.construct_tuple (_z, _z) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (mir.tuple <[builtin.integer ui64, builtin.integer ui64], [], [], 16, 8>)>;
+        mir.return (_tup) [] []: <(mir.tuple <[builtin.integer ui64, builtin.integer ui64], [], [], 16, 8>) -> ()>
+    };
+    mir.func @insert_base_coord_k: builtin.function <(builtin.integer ui32) -> ()>
+      [gpu_kernel: builtin.string "true", launch_contract_domain: builtin.integer <1: ui32>, reqntid_x: builtin.integer <32: ui32>, reqntid_y: builtin.integer <1: ui32>, reqntid_z: builtin.integer <1: ui32>, verify_uniform_barriers: builtin.string "true"]
+    {
+      ^entry(_n: builtin.integer ui32):
+        c0 = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+        mir.goto () [^blk0] []: <() -> ()>
+
+      ^blk0():
+        lc = mir.alloca () [] []: <() -> (mir.ptr <builtin.integer ui8 ,mutable:true,addrspace:0,kind:Erased>)>;
+        lc_ref = mir.cast (lc) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority Reborrow]: <(mir.ptr <builtin.integer ui8 ,mutable:true,addrspace:0,kind:Erased>) -> (mir.ptr <builtin.integer ui8 ,mutable:false,addrspace:0,kind:SharedRef>)>;
+        coord_w = mir.call (lc_ref) [] [callee: builtin.string "_RINvNtCs11cuda_device6thread11coord_2d_u32"]: <(mir.ptr <builtin.integer ui8 ,mutable:false,addrspace:0,kind:SharedRef>) -> (mir.tuple <[builtin.integer ui64, builtin.integer ui64], [], [], 16, 8>)>;
+        t1 = mir.insert_field (coord_w, c0) [] [insert_index: mir.field_index 1]: <(mir.tuple <[builtin.integer ui64, builtin.integer ui64], [], [], 16, 8>, builtin.integer ui64) -> (mir.tuple <[builtin.integer ui64, builtin.integer ui64], [], [], 16, 8>)>;
+        mir.goto () [^blk1] []: <() -> ()>
+
+      ^blk1():
+        clobber0 = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+        clobber1 = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+        clobber2 = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+        clobber3 = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+        ext_c = mir.extract_field (t1) [] [index: mir.field_index 0]: <(mir.tuple <[builtin.integer ui64, builtin.integer ui64], [], [], 16, 8>) -> (builtin.integer ui64)>;
+        mir.return () [] []: <() -> ()>
+
+    }
+}
+"#;
+    let base_prog = translate_named_mir_program(insert_base_mir, "insert_base_coord_k");
+    assert_valid_cross_block_registers(&base_prog, "insert_base_coord_k");
+    let coord_reg = base_prog.blocks[1]
+        .stmts
+        .iter()
+        .find_map(|s| match s {
+            MirStmt::Assign(dst, MirRhs::Coord2DU32) => Some(*dst),
+            _ => None,
+        })
+        .expect("^blk0 must assign MirRhs::Coord2DU32");
+    assert!(
+        !base_prog.blocks[2]
+            .stmts
+            .iter()
+            .any(|s| matches!(s, MirStmt::Assign(dst, _) if *dst == coord_reg)),
+        "^blk1 must not clobber insert_field base_s Coord2DU32 register {coord_reg}"
+    );
+    assert!(
+        base_prog.blocks[2]
+            .stmts
+            .iter()
+            .any(|s| matches!(s, MirStmt::Assign(_, MirRhs::Copy(src)) if *src == coord_reg)),
+        "^blk1 extract_field on t1 field 0 must copy Coord2DU32 register {coord_reg}"
+    );
+}
+
+/// Ensure block-local Tier-2 register IDs inserted into `smem_desc_ready` in an earlier block are
+/// evicted at block boundaries so recycled Tier-2 slots in a later block still emit the `>> 4`
+/// shift on `Tcgen05SmemDescriptor`.
+#[test]
+fn smem_desc_ready_evicts_tier2_ids_at_block_boundary() {
+    use lean_exporter::translate::program::{MirRhs, MirStmt};
+
+    let mir_src = r#"
+builtin.module @smem_desc_ready_evict {
+  ^entry():
+    mir.func @_RINvNtCs11cuda_device7tcgen0521Tcgen05SmemDescriptor3new: builtin.function <(builtin.integer ui64) -> (builtin.integer ui64)>
+      []
+    {
+      ^entry(_raw: builtin.integer ui64):
+        mir.return (_raw) [] []: <(builtin.integer ui64) -> ()>
+    };
+    mir.func @smem_desc_ready_evict_k: builtin.function <(builtin.integer ui32) -> ()>
+      [gpu_kernel: builtin.string "true", launch_contract_domain: builtin.integer <1: ui32>, reqntid_x: builtin.integer <32: ui32>, reqntid_y: builtin.integer <1: ui32>, reqntid_z: builtin.integer <1: ui32>, verify_no_data_race: builtin.string "0", verify_no_oob_shared: builtin.string "0", verify_uniform_barriers: builtin.string "true"]
+    {
+      ^entry(_n: builtin.integer ui32):
+        z0 = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+        c4 = mir.constant () [] [value: builtin.integer <4: ui64>]: <() -> (builtin.integer ui64)>;
+        s = mir.shared_alloc () [] [alignment: builtin.integer <16: i64>, elem_type: builtin.type builtin.integer ui64, size: builtin.integer <16: i64>, alloc_key: builtin.string "SMEM", source_name: builtin.string "k::SMEM"]: <() -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;
+        sp = mir.ptr_offset (s, z0) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;
+        _lv = mir.load (sp) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>) -> (builtin.integer ui64)>;
+        mir.goto () [^blk0] []: <() -> ()>
+
+      ^blk0():
+        raw0 = nvvm.cvta_generic_to_shared_offset (s) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>) -> (builtin.integer ui64)>;
+        _shr0 = mir.shr (raw0, c4) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        mir.goto () [^blk1] []: <() -> ()>
+
+      ^blk1():
+        pad0 = mir.constant () [] [value: builtin.integer <1: ui64>]: <() -> (builtin.integer ui64)>;
+        raw1 = nvvm.cvta_generic_to_shared_offset (s) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>) -> (builtin.integer ui64)>;
+        _desc = mir.call (raw1) [] [callee: builtin.string "_RINvNtCs11cuda_device7tcgen0521Tcgen05SmemDescriptor3new"]: <(builtin.integer ui64) -> (builtin.integer ui64)>;
+        mir.return () [] []: <() -> ()>
+    }
+}
+"#;
+    let prog = translate_named_mir_program(mir_src, "smem_desc_ready_evict_k");
+    assert_valid_cross_block_registers(&prog, "smem_desc_ready_evict_k");
+    assert_eq!(prog.blocks.len(), 3);
+    let blk0_shr_dst = prog.blocks[1]
+        .stmts
+        .iter()
+        .find_map(|s| match s {
+            MirStmt::Assign(dst, MirRhs::BinOp("shr", 64, _, _)) => Some(*dst),
+            _ => None,
+        })
+        .expect("block 1 computes `shr0`");
+    let blk1_raw_dst = prog.blocks[2]
+        .stmts
+        .iter()
+        .find_map(|s| match s {
+            MirStmt::Assign(dst, MirRhs::CvtaShared(_)) => Some(*dst),
+            _ => None,
+        })
+        .expect("block 2 computes `raw1`");
+    assert_eq!(
+        blk0_shr_dst, blk1_raw_dst,
+        "test requires `shr0` and `raw1` to share the same recycled Tier-2 slot"
+    );
+    let has_blk1_shr = prog.blocks[2]
+        .stmts
+        .iter()
+        .any(|s| matches!(s, MirStmt::Assign(_, MirRhs::BinOp("shr", 64, src, _)) if *src == blk1_raw_dst));
+    assert!(
+        has_blk1_shr,
+        "block 2 Tcgen05SmemDescriptor must emit `>> 4` after Tier-2 smem_desc_ready eviction: {:?}",
+        prog.blocks[2].stmts
+    );
+}
+
+/// Verify across all shipped `MirFunc` exporter fixtures that no block reads an undefined,
+/// non-dominated, or clobbered cross-block register ID.
+#[test]
+fn all_mir_program_fixtures_preserve_cross_block_register_disjointness() {
+    for (name, src, fn_name) in [
+        ("vecadd", VECADD_FIXTURE, "vecadd"),
+        (
+            "sgemm_tiled_views",
+            SGEMM_TILED_FIXTURE,
+            "sgemm_tiled_views",
+        ),
+        ("sgemm_tiled_raw", SGEMM_TILED_FIXTURE, "sgemm_tiled_raw"),
+        ("warp_reduce_sum", WARP_REDUCE_FIXTURE, "warp_reduce_sum"),
+        ("block_reduce_sum", WARP_REDUCE_FIXTURE, "block_reduce_sum"),
+        (
+            "subwarp_bit_split_stage",
+            SUBWARP_MULTIBUF_FIXTURE,
+            "subwarp_bit_split_stage",
+        ),
+        (
+            "multibuf_subwarp_stage",
+            SUBWARP_MULTIBUF_FIXTURE,
+            "multibuf_subwarp_stage",
+        ),
+        ("async_copy_stage", ASYNC_COPY_FIXTURE, "async_copy_stage"),
+        (
+            "tcgen05_matmul_verified",
+            TCGEN05_MATMUL_FIXTURE,
+            "tcgen05_matmul_verified",
+        ),
+        ("warp_ring_stage", WARP_RING_FIXTURE, "warp_ring_stage"),
+        (
+            "cluster_clc_stage",
+            CLUSTER_CLC_FIXTURE,
+            "cluster_clc_stage",
+        ),
+    ] {
+        let prog = translate_named_mir_program(src, fn_name);
+        assert_valid_cross_block_registers(&prog, name);
+    }
+    let scalar_lean = export(FIXTURE);
+    assert!(scalar_lean.contains("CudaOxide.Mir.Scalar.Expr"));
 }

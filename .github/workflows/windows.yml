@@ -31,19 +31,6 @@ jobs:
           git config --global --add safe.directory "$env:GITHUB_WORKSPACE"
           git config --global core.longpaths true
 
-      - name: Set up Python 3 (for verify-code-shape.sh scripts)
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Provide python3.exe alias ahead of WindowsApps stub
-        run: |
-          $ErrorActionPreference = "Stop"
-          $pyExe = (Get-Command python.exe -ErrorAction Stop).Source
-          $pyDir = Split-Path -Parent $pyExe
-          Copy-Item -LiteralPath $pyExe -Destination (Join-Path $pyDir "python3.exe") -Force
-          $pyDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
       # NVIDIA's self-hosted Windows Server 2025 VM image ships git, pwsh, bash,
       # zstd, and tar, but no Visual Studio C++ Build Tools. Install VCTools +
       # the recommended Windows SDK silently when absent, then activate x64 env.
@@ -84,6 +71,11 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
+
+      - name: Set up Python 3 (for verify-code-shape.sh scripts)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
       # Cache the assembled CUDA 13.3.1 Windows redistributable subset, LLVM
       # 23.1.6 (clang, libclang, lld-link, llc, opt), and prebuilt MSVC libffi

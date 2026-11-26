@@ -390,8 +390,9 @@ fn is_cute_recognition_stub_identity(
 use oxide_tile_export::TileExportDesc;
 use reserved_oxide_symbols::{
     device_base_name, device_extern_base_name, is_current_device_symbol, is_current_kernel_symbol,
-    is_device_extern_symbol, is_device_symbol, is_kernel_symbol, is_legacy_kernel_symbol,
-    is_ptx_merge_required_marker, is_tile_export_meta_symbol, kernel_base_name,
+    is_device_extern_symbol, is_device_symbol, is_exported_device_symbol, is_kernel_symbol,
+    is_legacy_kernel_symbol, is_ptx_merge_required_marker, is_tile_export_meta_symbol,
+    kernel_base_name,
 };
 
 /// Sanitize a symbol name for use as a PTX identifier.
@@ -1339,12 +1340,16 @@ pub fn collect_device_functions<'tcx>(
         }
     }
 
-    // Find standalone device function roots (Phase 2: device functions without kernels).
-    // Only scan when there are NO kernels — when kernels exist, device functions are
-    // already collected transitively via the call graph walk. Tile export
-    // implementations were rooted above and are skipped here so their export
-    // names are not computed twice.
-    if !has_kernels {
+    // Find standalone and explicitly exported device function roots (Phase 2).
+    // When kernels exist, ordinary `#[device]` helpers are collected transitively
+    // via the call-graph walk, while `#[device(export)]` and
+    // `#[device(export_name = "...")]` functions (`is_exported_device_symbol`)
+    // remain roots so external callers (C++ interop, dynamic parallelism,
+    // function tables, or OptiX callable programs) can resolve them as
+    // `.visible .func` definitions alongside kernels. Tile export implementations
+    // were rooted above and are skipped here so their export names are not
+    // computed twice.
+    {
         for cgu in cgus {
             for (item, _data) in cgu.items() {
                 if let MonoItem::Fn(instance) = item
@@ -1358,6 +1363,9 @@ pub fn collect_device_functions<'tcx>(
 
                     // Skip closures inside device functions
                     if raw_name.contains("{closure") || raw_name.contains("::closure") {
+                        continue;
+                    }
+                    if has_kernels && !is_exported_device_symbol(&raw_name) {
                         continue;
                     }
 
@@ -3767,5 +3775,36 @@ mod tests {
             let ascii = "a".repeat(count);
             assert_eq!(truncate_path_for_box(&ascii, 48).chars().count(), 48);
         }
+    }
+}
+
+#[cfg(test)]
+mod exported_device_tests {
+    use super::unsupported_codegen_protocol_root;
+    use reserved_oxide_symbols::{
+        device_base_name, device_export_symbol, device_symbol, is_exported_device_symbol,
+    };
+
+    #[test]
+    fn exported_device_functions_use_explicit_marker_not_name_prefixes() {
+        let exported = format!("my_crate::shaders::{}", device_export_symbol("shade"));
+        let custom = format!(
+            "my_crate::shaders::{}",
+            device_export_symbol("__direct_callable__shade")
+        );
+        let unexported_optix_name = format!(
+            "my_crate::shaders::{}",
+            device_symbol("__direct_callable__shade")
+        );
+
+        assert!(is_exported_device_symbol(&exported));
+        assert!(is_exported_device_symbol(&custom));
+        assert!(!is_exported_device_symbol(&format!("{exported}::closure")));
+        assert!(!is_exported_device_symbol(&unexported_optix_name));
+        assert_eq!(device_base_name(&exported), Some("shade"));
+        assert_eq!(device_base_name(&custom), Some("__direct_callable__shade"));
+        assert!(!unsupported_codegen_protocol_root(&device_export_symbol(
+            "shade"
+        )));
     }
 }

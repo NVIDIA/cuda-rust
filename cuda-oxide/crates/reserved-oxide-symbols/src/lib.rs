@@ -132,6 +132,16 @@ pub const LEGACY_KERNEL_PREFIX: &str = "cuda_oxide_kernel_246e25db_";
 /// legacy prefix remains embedded for older-backend compatibility.
 pub const DEVICE_PREFIX: &str = "cuda_oxide_codegen_v1_cuda_oxide_device_246e25db_";
 
+/// Prefix added to explicitly exported `#[device(export)]` /
+/// `#[device(export_name = "...")]` functions.
+///
+/// Unlike plain `#[device]` helpers, exported device functions remain collector
+/// roots even when the crate also defines `#[kernel]` entry points (for example
+/// C++ device FFI, dynamic parallelism, function tables, or OptiX callable
+/// programs). LLVM export strips this prefix to the exported `.visible .func`
+/// symbol name.
+pub const DEVICE_EXPORT_PREFIX: &str = "cuda_oxide_codegen_v1_cuda_oxide_device_export_246e25db_";
+
 /// Device-function prefix emitted before the scoped Cargo cache protocol.
 pub const LEGACY_DEVICE_PREFIX: &str = "cuda_oxide_device_246e25db_";
 
@@ -244,6 +254,19 @@ pub fn kernel_symbol(base: &str) -> String {
 /// ```
 pub fn device_symbol(base: &str) -> String {
     format!("{DEVICE_PREFIX}{base}")
+}
+
+/// Build the mangled `#[device(export)]` symbol for a given exported base name.
+///
+/// ```
+/// use reserved_oxide_symbols::device_export_symbol;
+/// assert_eq!(
+///     device_export_symbol("shade"),
+///     "cuda_oxide_codegen_v1_cuda_oxide_device_export_246e25db_shade",
+/// );
+/// ```
+pub fn device_export_symbol(base: &str) -> String {
+    format!("{DEVICE_EXPORT_PREFIX}{base}")
 }
 
 /// Build the mangled `#[device] extern` symbol for a given base name.
@@ -418,15 +441,28 @@ pub fn is_legacy_kernel_symbol(name: &str) -> bool {
 /// assert!(!is_device_symbol(&device_extern_symbol("foo")));
 /// ```
 pub fn is_device_symbol(name: &str) -> bool {
-    name.contains(DEVICE_PREFIX) || name.contains(LEGACY_DEVICE_PREFIX)
+    name.contains(DEVICE_PREFIX)
+        || name.contains(DEVICE_EXPORT_PREFIX)
+        || name.contains(LEGACY_DEVICE_PREFIX)
 }
 
 /// Returns `true` only for a device function emitted by the scoped-cache
 /// protocol.
 pub fn is_current_device_symbol(name: &str) -> bool {
+    name.rsplit("::").next().is_some_and(|item| {
+        item.starts_with(DEVICE_PREFIX) || item.starts_with(DEVICE_EXPORT_PREFIX)
+    })
+}
+
+/// Returns `true` when the final path component of `name` is an explicitly
+/// exported `#[device(export)]` / `#[device(export_name = "...")]` function.
+///
+/// Checking the final `::` component avoids classifying nested closures or
+/// inner helpers inside an exported device function as separate roots.
+pub fn is_exported_device_symbol(name: &str) -> bool {
     name.rsplit("::")
         .next()
-        .is_some_and(|item| item.starts_with(DEVICE_PREFIX))
+        .is_some_and(|item| item.starts_with(DEVICE_EXPORT_PREFIX))
 }
 
 /// Returns `true` only for a device function emitted before the scoped-cache
@@ -551,8 +587,12 @@ pub fn kernel_base_name(name: &str) -> Option<&str> {
 /// assert_eq!(device_base_name("cuda_oxide_device_extern_246e25db_foo"), None);
 /// ```
 pub fn device_base_name(name: &str) -> Option<&str> {
-    name.find(DEVICE_PREFIX)
-        .map(|pos| &name[pos + DEVICE_PREFIX.len()..])
+    name.find(DEVICE_EXPORT_PREFIX)
+        .map(|pos| &name[pos + DEVICE_EXPORT_PREFIX.len()..])
+        .or_else(|| {
+            name.find(DEVICE_PREFIX)
+                .map(|pos| &name[pos + DEVICE_PREFIX.len()..])
+        })
         .or_else(|| {
             name.find(LEGACY_DEVICE_PREFIX)
                 .map(|pos| &name[pos + LEGACY_DEVICE_PREFIX.len()..])
@@ -732,6 +772,7 @@ mod tests {
             KERNEL_PREFIX,
             LEGACY_KERNEL_PREFIX,
             DEVICE_PREFIX,
+            DEVICE_EXPORT_PREFIX,
             LEGACY_DEVICE_PREFIX,
             DEVICE_EXTERN_PREFIX,
             INSTANTIATE_PREFIX,
@@ -754,10 +795,30 @@ mod tests {
     /// `is_device_symbol` skip the historical extern-exclusion dance.
     #[test]
     fn device_and_device_extern_are_mutually_exclusive_substrings() {
-        // DEVICE_EXTERN_PREFIX never contains DEVICE_PREFIX
+        // DEVICE_EXTERN_PREFIX never contains DEVICE_PREFIX or DEVICE_EXPORT_PREFIX
         assert!(!DEVICE_EXTERN_PREFIX.contains(DEVICE_PREFIX));
-        // ...and vice versa
         assert!(!DEVICE_PREFIX.contains(DEVICE_EXTERN_PREFIX));
+        assert!(!DEVICE_EXTERN_PREFIX.contains(DEVICE_EXPORT_PREFIX));
+        assert!(!DEVICE_EXPORT_PREFIX.contains(DEVICE_EXTERN_PREFIX));
+        assert!(!DEVICE_EXPORT_PREFIX.contains(DEVICE_PREFIX));
+        assert!(!DEVICE_PREFIX.contains(DEVICE_EXPORT_PREFIX));
+        assert!(!DEVICE_EXPORT_PREFIX.contains(LEGACY_DEVICE_PREFIX));
+
+        let exported = device_export_symbol("__direct_callable__shade");
+        assert!(is_device_symbol(&exported));
+        assert!(is_current_device_symbol(&exported));
+        assert!(is_exported_device_symbol(&exported));
+        assert!(is_exported_device_symbol(&format!(
+            "my_crate::mod_a::{exported}"
+        )));
+        assert!(!is_exported_device_symbol(&format!("{exported}::closure")));
+        assert!(!is_exported_device_symbol(&device_symbol(
+            "__direct_callable__shade"
+        )));
+        assert_eq!(
+            device_base_name(&exported),
+            Some("__direct_callable__shade")
+        );
     }
 
     /// The backend finds `#[tile_export]` metadata functions by definition
@@ -771,6 +832,7 @@ mod tests {
             KERNEL_PREFIX,
             LEGACY_KERNEL_PREFIX,
             DEVICE_PREFIX,
+            DEVICE_EXPORT_PREFIX,
             LEGACY_DEVICE_PREFIX,
             DEVICE_EXTERN_PREFIX,
         ] {

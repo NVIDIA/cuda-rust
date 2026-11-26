@@ -974,9 +974,28 @@ pub fn cooperative_launch(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///     let result = unsafe { cub_block_reduce_sum_f32(*data, temp_ptr) };
 /// }
 /// ```
+/// # Exporting Uncalled `.func` Roots Alongside Kernels
+///
+/// When a crate also contains `#[kernel]` entry points, plain `#[device]`
+/// functions are collected transitively from those kernels. Use
+/// `#[device(export)]` (or `#[device(export_name = "...")]`) to keep a concrete
+/// `.visible .func` rooted for external callers such as C++ LTOIR linkers,
+/// dynamic parallelism, or OptiX Shader Binding Table callables:
+///
+/// ```ignore
+/// use cuda_device::{device, kernel};
+///
+/// #[device(export_name = "__direct_callable__shade")]
+/// pub fn shade(x: f32) -> f32 {
+///     x * 2.0 + 1.0
+/// }
+///
+/// #[kernel]
+/// pub fn raygen() {}
+/// ```
 #[proc_macro_attribute]
-pub fn device(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    device::device_entry(_attr, item)
+pub fn device(attr: TokenStream, item: TokenStream) -> TokenStream {
+    device::device_entry(attr, item)
 }
 
 /// Exports a device function to cuTile programs through a tile library.

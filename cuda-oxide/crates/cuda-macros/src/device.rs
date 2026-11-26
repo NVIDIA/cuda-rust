@@ -5,14 +5,20 @@
 
 //! `#[device]` functions and extern blocks, plus `#[constant]` statics.
 
-use crate::common::{impl_trait_parameter_error, reject_reserved_name, track_codegen_environment};
+use crate::common::{
+    impl_trait_parameter_error, reject_reserved_name, reserved_name_error,
+    track_codegen_environment,
+};
 use crate::cuda_module::constants::extract_constant_inner_ty;
 use crate::cuda_module::launchers::{codegen_generic_arguments, has_codegen_generics};
 use crate::kernel::scope::{forwarding_inputs, inject_device_thread_index_scope};
 use crate::launch_attrs::rewrite_loop_unroll_attrs;
 use proc_macro::TokenStream;
+use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use reserved_oxide_symbols::{DEVICE_EXTERN_PREFIX, DEVICE_PREFIX, constant_symbol};
+use reserved_oxide_symbols::{
+    DEVICE_EXPORT_PREFIX, DEVICE_EXTERN_PREFIX, DEVICE_PREFIX, constant_symbol,
+};
 use syn::{
     ForeignItem, Ident, ItemFn, ItemForeignMod, LitStr, Token,
     parse::{Parse, ParseStream},
@@ -98,21 +104,110 @@ pub(crate) fn constant_entry(attr: TokenStream, item: TokenStream) -> TokenStrea
     .into()
 }
 
-pub(crate) fn device_entry(_attr: TokenStream, item: TokenStream) -> TokenStream {
+/// Optional export directive on `#[device]`:
+/// - `#[device]` -> helper collected transitively when kernels exist, or rooted
+///   only in kernel-less standalone libraries.
+/// - `#[device(export)]` -> always rooted as `.visible .func` under its Rust
+///   declaration name, even alongside `#[kernel]` entry points.
+/// - `#[device(export_name = "...")]` -> always rooted as `.visible .func`
+///   under an explicit PTX symbol name while keeping the Rust function name for
+///   in-crate callers.
+pub(crate) enum DeviceExport {
+    DeclarationName,
+    CustomName(Ident),
+}
+
+pub(crate) struct DeviceArgs {
+    pub(crate) export: Option<DeviceExport>,
+}
+
+impl Parse for DeviceArgs {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        if input.is_empty() {
+            return Ok(Self { export: None });
+        }
+
+        let key: Ident = input.parse()?;
+        let export = if key == "export" {
+            if input.peek(Token![=]) {
+                return Err(syn::Error::new_spanned(
+                    key,
+                    "expected `#[device(export)]` or `#[device(export_name = \"...\")]`",
+                ));
+            }
+            DeviceExport::DeclarationName
+        } else if key == "export_name" {
+            input.parse::<Token![=]>()?;
+            let lit: LitStr = input.parse()?;
+            let value = lit.value();
+            let valid = !value.is_empty()
+                && value.chars().enumerate().all(|(idx, ch)| {
+                    ch.is_ascii_alphabetic() || ch == '_' || (idx > 0 && ch.is_ascii_digit())
+                });
+            if !valid {
+                return Err(syn::Error::new_spanned(
+                    &lit,
+                    "`export_name` must be a non-empty identifier (`[A-Za-z_][A-Za-z0-9_]*`)",
+                ));
+            }
+            if value.starts_with("llvm_") {
+                return Err(syn::Error::new_spanned(
+                    &lit,
+                    "`export_name` cannot start with `llvm_`, which cuda-oxide reserves for LLVM intrinsics",
+                ));
+            }
+            let ident = Ident::new(&value, lit.span());
+            if let Some(err) = reserved_name_error(&ident) {
+                return Err(err);
+            }
+            DeviceExport::CustomName(ident)
+        } else {
+            return Err(syn::Error::new_spanned(
+                key,
+                "unsupported #[device] argument; expected `export` or `export_name = \"...\"`",
+            ));
+        };
+
+        if !input.is_empty() {
+            input.parse::<Token![,]>()?;
+            if !input.is_empty() {
+                return Err(input.error("unexpected tokens in #[device(...)]"));
+            }
+        }
+
+        Ok(Self {
+            export: Some(export),
+        })
+    }
+}
+
+pub(crate) fn device_entry(attr: TokenStream, item: TokenStream) -> TokenStream {
     track_codegen_environment();
+    let args = parse_macro_input!(attr as DeviceArgs);
     // Try parsing as a function definition first
     if let Ok(input) = syn::parse::<ItemFn>(item.clone()) {
-        return generate_device_function(input);
+        return match expand_device_function(args, input) {
+            Ok(tokens) => tokens.into(),
+            Err(err) => err.to_compile_error().into(),
+        };
     }
 
     // Try parsing as an extern block
     if let Ok(input) = syn::parse::<ItemForeignMod>(item.clone()) {
+        if args.export.is_some() {
+            return syn::Error::new_spanned(
+                &input.abi,
+                "#[device] extern blocks cannot use `export` or `export_name`",
+            )
+            .to_compile_error()
+            .into();
+        }
         return generate_device_extern_block(input);
     }
 
     // Neither worked - emit error
     syn::Error::new_spanned(
-        proc_macro2::TokenStream::from(item),
+        TokenStream2::from(item),
         "#[device] can only be applied to functions or extern blocks",
     )
     .to_compile_error()
@@ -121,9 +216,10 @@ pub(crate) fn device_entry(_attr: TokenStream, item: TokenStream) -> TokenStream
 
 /// Generate a device function definition.
 ///
-/// Renames the function into the reserved `cuda_oxide_device_<hash>_` namespace
-/// for collector detection, and generates a thin wrapper with the original name
-/// so user code can call `my_func()` rather than the mangled internal symbol.
+/// Renames the function into the reserved `cuda_oxide_device_<hash>_` (or
+/// `cuda_oxide_device_export_<hash>_`) namespace for collector detection, and
+/// generates a thin wrapper with the original name so user code can call
+/// `my_func()` rather than the mangled internal symbol.
 ///
 /// Handles both non-generic and generic device functions:
 /// - **Non-generic**: `#[no_mangle]` on the prefixed function, `#[inline(always)]` wrapper.
@@ -133,24 +229,38 @@ pub(crate) fn device_entry(_attr: TokenStream, item: TokenStream) -> TokenStream
 ///
 /// This mirrors the pattern used by `#[kernel]` for generic kernels
 /// (see `generate_generic_kernel_no_instantiation`).
-fn generate_device_function(mut input: ItemFn) -> TokenStream {
-    if let Some(err) = reject_reserved_name(&input.sig.ident) {
-        return err;
+pub(crate) fn expand_device_function(
+    args: DeviceArgs,
+    mut input: ItemFn,
+) -> syn::Result<TokenStream2> {
+    if let Some(err) = reserved_name_error(&input.sig.ident) {
+        return Err(err);
     }
     if let Some(err) = impl_trait_parameter_error(&input, "device function") {
-        return err.to_compile_error().into();
+        return Err(err);
     }
-    if let Err(err) = rewrite_loop_unroll_attrs(&mut input) {
-        return err.to_compile_error().into();
-    }
+    rewrite_loop_unroll_attrs(&mut input)?;
     inject_device_thread_index_scope(&mut input);
 
     let fn_name = input.sig.ident.clone();
     let vis = input.vis.clone();
-    let new_name = format_ident!("{}{}", DEVICE_PREFIX, fn_name);
 
     // Type and const parameters both create device monomorphizations.
     let has_generics = has_codegen_generics(&input.sig.generics);
+    if args.export.is_some() && has_generics {
+        return Err(syn::Error::new_spanned(
+            &input.sig.generics,
+            "#[device(export)] functions cannot have generic parameters; export a concrete wrapper instead",
+        ));
+    }
+
+    let new_name = match &args.export {
+        None => format_ident!("{}{}", DEVICE_PREFIX, fn_name),
+        Some(DeviceExport::DeclarationName) => format_ident!("{}{}", DEVICE_EXPORT_PREFIX, fn_name),
+        Some(DeviceExport::CustomName(export_ident)) => {
+            format_ident!("{}{}", DEVICE_EXPORT_PREFIX, export_ident)
+        }
+    };
 
     let return_type = &input.sig.output;
     let generics = &input.sig.generics;
@@ -159,10 +269,7 @@ fn generate_device_function(mut input: ItemFn) -> TokenStream {
     let unsafety = &input.sig.unsafety;
     let abi = &input.sig.abi;
 
-    let (wrapper_inputs, params) = match forwarding_inputs(&input.sig.inputs) {
-        Ok(forwarding) => forwarding,
-        Err(err) => return err.to_compile_error().into(),
-    };
+    let (wrapper_inputs, params) = forwarding_inputs(&input.sig.inputs)?;
 
     // Rename the original function with the prefix
     input.sig.ident = new_name.clone();
@@ -170,11 +277,11 @@ fn generate_device_function(mut input: ItemFn) -> TokenStream {
     if has_generics {
         // Generic device function: mirrors the generic kernel pattern.
         //
-        // - No #[no_mangle] — generic functions use mangled symbol names per
+        // - No #[no_mangle] - generic functions use mangled symbol names per
         //   monomorphization (e.g., `cuda_oxide_device_<hash>_add::<f32>` gets a
         //   unique mangled name). #[no_mangle] requires a single concrete symbol.
         //
-        // - #[inline(never)] on the prefixed function — ensures each monomorphization
+        // - #[inline(never)] on the prefixed function - ensures each monomorphization
         //   appears as a distinct CGU item so the collector can find it. If it were
         //   inlined, the function would disappear from the CGU. It is a host-side
         //   boundary only: the backend does not turn it into device `noinline`
@@ -192,7 +299,7 @@ fn generate_device_function(mut input: ItemFn) -> TokenStream {
             call
         };
 
-        let expanded = quote! {
+        Ok(quote! {
             #[inline(never)]
             #input
 
@@ -201,9 +308,7 @@ fn generate_device_function(mut input: ItemFn) -> TokenStream {
             #vis #constness #unsafety #abi fn #fn_name #generics (#(#wrapper_inputs),*) #return_type #where_clause {
                 #call
             }
-        };
-
-        TokenStream::from(expanded)
+        })
     } else {
         let call = quote! { #new_name(#(#params),*) };
         let call = if unsafety.is_some() {
@@ -212,7 +317,8 @@ fn generate_device_function(mut input: ItemFn) -> TokenStream {
             call
         };
         // Non-generic device function: simple case.
-        let expanded = quote! {
+        Ok(quote! {
+            #[allow(non_snake_case)]
             #[unsafe(no_mangle)]
             #input
 
@@ -221,9 +327,7 @@ fn generate_device_function(mut input: ItemFn) -> TokenStream {
             #vis #constness #unsafety #abi fn #fn_name #generics (#(#wrapper_inputs),*) #return_type #where_clause {
                 #call
             }
-        };
-
-        TokenStream::from(expanded)
+        })
     }
 }
 

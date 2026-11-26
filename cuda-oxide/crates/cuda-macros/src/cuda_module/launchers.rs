@@ -454,9 +454,10 @@ fn generate_cuda_module_prepared_launch_method(kernel: &CudaModuleKernel) -> Tok
     let unchecked_function_binding = cuda_module_function_binding(kernel);
     let launch_call = cuda_module_launch_call(kernel);
     let unchecked_launch_call = cuda_module_launch_call(kernel);
-    let requires_checks = generate_requires_checks(kernel, RequiresLenAccess::SyncBuffer);
     let stream = internal_ident("__cuda_oxide_stream");
     let prepared = internal_ident("__cuda_oxide_prepared");
+    let requires_checks =
+        generate_requires_checks(kernel, RequiresLenAccess::SyncBuffer, &prepared);
     let function = internal_ident("__cuda_oxide_function");
     let config = internal_ident("__cuda_oxide_config");
     let args = internal_ident("__cuda_oxide_args");
@@ -615,7 +616,7 @@ fn generate_cuda_module_prepared_async_launch_method(kernel: &CudaModuleKernel) 
     let unchecked_cooperative = kernel.cooperative.then(|| {
         quote! { ::cuda_host::set_async_kernel_cooperative(&mut #launch, true); }
     });
-    let requires_checks = generate_requires_checks(kernel, RequiresLenAccess::AsyncRef);
+    let requires_checks = generate_requires_checks(kernel, RequiresLenAccess::AsyncRef, &prepared);
     let launch_ty = quote! {
         ::cuda_host::PreparedAsyncKernelLaunch<#async_lifetime, #marker_ty>
     };
@@ -887,7 +888,8 @@ fn generate_cuda_module_prepared_owned_async_launch_method(
     } else {
         quote! { (#(#unchecked_resource_names),*) }
     };
-    let requires_checks = generate_requires_checks(kernel, RequiresLenAccess::OwnedValue);
+    let requires_checks =
+        generate_requires_checks(kernel, RequiresLenAccess::OwnedValue, &prepared);
     let launch_ty = quote! {
         ::cuda_host::PreparedOwnedAsyncKernelLaunch<#resources_ty, #marker_ty>
     };

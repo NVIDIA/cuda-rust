@@ -83,6 +83,7 @@ for test_target in \
     num_tiles_jit \
     optimization_hints \
     partition_index_schedules \
+    pointer_padding \
     reduce_scan_ops \
     registry_phase_a \
     span_source_location \

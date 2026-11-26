@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 458" width="1240" height="458" role="img"
-  aria-label="Targets: CuTeDSL 4.7 compiles for every listed architecture; the cute-rs preview compiles for sm_100a, sm_103a and sm_120a and rejects the rest">
+  aria-label="Targets: CuTeDSL 4.8 compiles for every listed architecture; the cute-rs preview compiles for sm_100a, sm_103a, sm_107a and sm_120a and rejects the rest">
 <style>
   :root, svg {
   --bg: #f4f6f8; --fg: #1a232e; --muted: #5d6b7a; --line: #9aa7b4; --panel: #ffffff;
@@ -14,10 +14,10 @@
 </style>
 <rect x="0" y="0" width="1240" height="458" style="fill: var(--bg)"/>
 <text x="40" y="34" text-anchor="start" style="font: 600 17px var(--sans); fill: var(--fg)">Targets</text>
-<text x="40" y="56" text-anchor="start" style="font: 400 12.5px var(--sans); fill: var(--muted)">CuTeDSL 4.7 compiles for all of these. The preview compiles for three and rejects the rest before any MLIR is built.</text>
+<text x="40" y="56" text-anchor="start" style="font: 400 12.5px var(--sans); fill: var(--muted)">CuTeDSL 4.8 compiles for all of these. The preview compiles for four and rejects the rest before any MLIR is built.</text>
 <text x="40" y="92" text-anchor="start" style="font: 600 11px var(--sans); fill: var(--muted)">TARGET</text>
 <text x="520" y="92" text-anchor="start" style="font: 600 11px var(--sans); fill: var(--muted)">GPU</text>
-<text x="880" y="92" text-anchor="middle" style="font: 600 11px var(--sans); fill: var(--muted)">CuTeDSL 4.7</text>
+<text x="880" y="92" text-anchor="middle" style="font: 600 11px var(--sans); fill: var(--muted)">CuTeDSL 4.8</text>
 <text x="1000" y="92" text-anchor="middle" style="font: 600 11px var(--sans); fill: var(--muted)">cute-rs preview</text>
 <rect x="32" y="102" width="1176" height="40" rx="3" style="fill: var(--panel)"/>
 <rect x="40" y="113" width="50.0" height="19" rx="4" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1"/><text x="47" y="127" text-anchor="start" style="font: 600 11px var(--mono); fill: var(--meta)">sm_80</text>
@@ -40,7 +40,8 @@
 <text x="986" y="206" text-anchor="start" style="font: 400 11.5px var(--sans); fill: var(--muted)">rejected before compilation</text>
 <rect x="40" y="233" width="64.4" height="19" rx="4" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1"/><text x="47" y="247" text-anchor="start" style="font: 600 11px var(--mono); fill: var(--meta)">sm_100a</text>
 <rect x="112.4" y="233" width="64.4" height="19" rx="4" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1"/><text x="119.4" y="247" text-anchor="start" style="font: 600 11px var(--mono); fill: var(--meta)">sm_103a</text>
-<text x="520" y="247" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Blackwell datacenter, B200 / B300 class</text>
+<rect x="184.8" y="233" width="64.4" height="19" rx="4" style="fill: var(--meta-fill); stroke: var(--meta); stroke-width: 1"/><text x="191.8" y="247" text-anchor="start" style="font: 600 11px var(--mono); fill: var(--meta)">sm_107a</text>
+<text x="520" y="247" text-anchor="start" style="font: 500 12px var(--sans); fill: var(--fg)">Blackwell &amp; Vera Rubin datacenter (B200 / B300 / VR200)</text>
 <circle cx="880" cy="242" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
 <circle cx="972" cy="242" r="7" style="fill: var(--meta); stroke: var(--meta); stroke-width: 1.2"/>
 <text x="986" y="246" text-anchor="start" style="font: 600 11.5px var(--sans); fill: var(--fg)">yes</text>
@@ -69,5 +70,5 @@
 <text x="62" y="408" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">compiles</text>
 <circle cx="153" cy="404" r="7" style="fill: var(--panel); stroke: var(--line); stroke-width: 1.4"/>
 <text x="168" y="408" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">rejected by the profile gate</text>
-<text x="40" y="434" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">Within the validated set, tcgen05 operations need sm_100a or sm_103a and MXF4 register MMA needs sm_120a. cargo oxide run uses the detected GPU; cargo oxide build needs --arch.</text>
+<text x="40" y="434" text-anchor="start" style="font: 400 11px var(--sans); fill: var(--muted)">Within the validated set, tcgen05 needs sm_100a/103a/107a, SM107 MXF8F6F4 needs sm_107a, and MXF4 mma.sync needs sm_120a. cargo oxide build needs --arch.</text>
 </svg>

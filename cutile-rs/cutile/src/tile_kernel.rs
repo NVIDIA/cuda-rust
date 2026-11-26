@@ -129,6 +129,12 @@ pub struct TileFunctionKey {
     pub spec_args: Vec<(String, SpecializationBits)>,
     pub scalar_hints: Vec<(String, DivHint)>,
     pub grid: Option<(u32, u32, u32)>,
+    /// The options the kernel compiles with, except the tile libraries:
+    /// `tile_libraries` is empty here, and [`Self::tile_libraries_digest`]
+    /// identifies the libraries instead. Every spelling of one set of
+    /// libraries (a default the launch names again, a path given relative
+    /// or absolute) links the same files, so it must compile once and
+    /// share one loaded module, with one copy of each `Global`.
     pub compile_options: CompileOptions,
     source_hash: String,
     device_id: usize,
@@ -304,6 +310,9 @@ impl FunctionKey for TileFunctionKey {}
 pub struct Specialization<F: Fn() -> Module> {
     module_ast_fn: F,
     key: TileFunctionKey,
+    /// The options the kernel compiles with, the default tile libraries
+    /// included. The key holds them without the libraries.
+    compile_options: CompileOptions,
     /// The tile libraries the key's digest was taken from, which the
     /// compile links.
     tile_libraries: TileLibrarySnapshot,
@@ -354,7 +363,7 @@ impl<F: Fn() -> Module> Specialization<F> {
         .strides(&stride_refs)
         .spec_args(&spec_refs)
         .scalar_hints(&scalar_hint_refs)
-        .options(self.key.compile_options.clone());
+        .options(self.compile_options.clone());
         if let Some(grid) = self.key.grid {
             compiler = compiler.grid(grid);
         }
@@ -394,12 +403,18 @@ pub fn _specialization_from_context<F: Fn() -> Module>(
     let compile_options = compile_options.with_default_tile_libraries();
     let tile_libraries =
         TileLibrarySnapshot::new(tile_library_generation, &compile_options.tile_libraries);
+    // The digest identifies the libraries by their resolved, de-duplicated
+    // set; the list as written would key the same libraries differently.
+    let key_options = CompileOptions {
+        tile_libraries: Vec::new(),
+        ..compile_options.clone()
+    };
     let mut key_builder = TileFunctionKey::builder(module_name, function_name)
         .generics(function_generics)
         .stride_args(stride_args)
         .spec_args(spec_args)
         .scalar_hints(scalar_hints)
-        .compile_options(compile_options)
+        .compile_options(key_options)
         .source_hash(source_hash)
         .device_id(device_id)
         .gpu_name(gpu_name)
@@ -412,6 +427,7 @@ pub fn _specialization_from_context<F: Fn() -> Module>(
     Specialization {
         module_ast_fn,
         key: key_builder.build(),
+        compile_options,
         tile_libraries,
     }
 }
@@ -1163,7 +1179,7 @@ fn compile_for_launch_site<F: Fn() -> Module>(
                 &key.scalar_hints,
                 const_grid,
                 &gpu_name,
-                &key.compile_options,
+                &specialization.compile_options,
                 &specialization.tile_libraries,
                 ToolkitCapabilities::for_device(device_id)?,
                 &key.display_hash(),
@@ -2350,6 +2366,7 @@ mod tests {
         let specialization = Specialization {
             module_ast_fn: unexpected_ast_provider as ModuleAstFn,
             key: expected.clone(),
+            compile_options: CompileOptions::default(),
             tile_libraries: TileLibrarySnapshot::new(0, &[]),
         };
 

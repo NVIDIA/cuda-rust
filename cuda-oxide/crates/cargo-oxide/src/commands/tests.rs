@@ -28,6 +28,7 @@ const COMMANDS_SOURCE: &str = concat!(
     include_str!("fmt.rs"),
     include_str!("host_cargo.rs"),
     include_str!("interop.rs"),
+    include_str!("lean_export.rs"),
     include_str!("ltoir.rs"),
     include_str!("materialize.rs"),
     include_str!("passthrough.rs"),
@@ -4125,17 +4126,23 @@ fn format_sm_arch_uses_cuda_target_spelling() {
     assert_eq!(format_sm_arch((10, 1)), "sm_101a");
     assert_eq!(format_sm_arch((10, 3)), "sm_103a");
     assert_eq!(format_sm_arch((12, 0)), "sm_120a"); // consumer Blackwell
+    assert_eq!(format_sm_arch((12, 1)), "sm_121a"); // GB10 / DGX Spark
 }
 
 #[test]
 fn parse_compute_cap_accepts_real_nvidia_smi_output() {
     assert_eq!(parse_compute_cap("12.0\n"), Some((12, 0)));
+    assert_eq!(parse_compute_cap("12.1\n"), Some((12, 1)));
     assert_eq!(parse_compute_cap("7.5\n"), Some((7, 5)));
     assert_eq!(parse_compute_cap("10.3"), Some((10, 3)));
     // End-to-end with format_sm_arch: the values the backend sees.
     assert_eq!(
         format_sm_arch(parse_compute_cap("12.0\n").unwrap()),
         "sm_120a"
+    );
+    assert_eq!(
+        format_sm_arch(parse_compute_cap("12.1\n").unwrap()),
+        "sm_121a"
     );
     assert_eq!(format_sm_arch(parse_compute_cap("7.5\n").unwrap()), "sm_75");
 }

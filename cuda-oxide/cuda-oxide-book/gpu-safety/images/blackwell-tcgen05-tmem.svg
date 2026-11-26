@@ -1,0 +1,140 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 355" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <style>
+    :root, svg {
+      --bg: #ffffff;
+      --bg-stroke: #e2e8f0;
+      --panel: #f8fafc;
+      --panel-stroke: #cbd5e1;
+      --box: #ffffff;
+      --box-stroke: #cbd5e1;
+      --fg: #0f172a;
+      --text: #334155;
+      --sub: #475569;
+      --muted: #64748b;
+      --green: #15803d;
+      --green-text: #14532d;
+      --green-sub: #166534;
+      --green-soft: #f0fdf4;
+      --green-border: #86efac;
+      --blue: #2563eb;
+      --blue-text: #1e3a8a;
+      --blue-soft: #eff6ff;
+      --blue-border: #93c5fd;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root, svg {
+        --bg: #161b22;
+        --bg-stroke: #30363d;
+        --panel: #1e242c;
+        --panel-stroke: #3d444d;
+        --box: #13171d;
+        --box-stroke: #3d444d;
+        --fg: #f0f6fc;
+        --text: #c9d1d9;
+        --sub: #b1bac4;
+        --muted: #8b949e;
+        --green: #3fb950;
+        --green-text: #7ee787;
+        --green-sub: #56d364;
+        --green-soft: #12261e;
+        --green-border: #2ea043;
+        --blue: #58a6ff;
+        --blue-text: #a5d6ff;
+        --blue-soft: #132238;
+        --blue-border: #388bfd;
+      }
+    }
+  </style>
+  <defs>
+    <marker id="arrow-s6" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M 0 0.8 L 7.5 4 L 0 7.2 Z" style="fill: var(--sub)"/>
+    </marker>
+    <marker id="arrow-g6" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M 0 0.8 L 7.5 4 L 0 7.2 Z" style="fill: var(--green)"/>
+    </marker>
+  </defs>
+
+  <rect width="1080" height="355" rx="14" style="fill: var(--bg); stroke: var(--bg-stroke)" stroke-width="1.5"/>
+
+  <text x="40" y="40" font-size="18" font-weight="700" style="fill: var(--fg)">Blackwell Tensor Core &amp; Tensor Memory (TMEM) Lifecycle</text>
+  <text x="40" y="62" font-size="13" style="fill: var(--muted)">Lean 4 verifies full-warp allocation, MMA-to-epilogue ordering, 32-lane warpgroup slices, and deallocation.</text>
+
+  <!-- Card 1: Alloc -->
+  <g transform="translate(36, 88)">
+    <rect width="228" height="230" rx="10" style="fill: var(--panel); stroke: var(--panel-stroke)" stroke-width="1.5"/>
+    <text x="114" y="28" text-anchor="middle" font-size="14" font-weight="700" style="fill: var(--fg)">1. TMEM Allocate</text>
+    <text x="114" y="47" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11.5" style="fill: var(--green)">if warp_id == 0</text>
+
+    <rect x="16" y="66" width="196" height="50" rx="6" style="fill: var(--box); stroke: var(--box-stroke)"/>
+    <text x="114" y="88" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--fg)">tcgen05_alloc(128)</text>
+    <text x="114" y="106" text-anchor="middle" font-size="10.5" style="fill: var(--muted)">128 lanes x 128 cols</text>
+
+    <rect x="16" y="128" width="196" height="44" rx="6" style="fill: var(--green-soft); stroke: var(--green-border)"/>
+    <text x="114" y="154" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--green-text)">sync_threads()</text>
+
+    <text x="114" y="204" text-anchor="middle" font-size="11.5" style="fill: var(--text)">Broadcasts TMEM_ADDR[0]</text>
+  </g>
+
+  <line x1="264" y1="203" x2="292" y2="203" style="stroke: var(--sub)" stroke-width="1.8" marker-end="url(#arrow-s6)"/>
+
+  <!-- Card 2: MMA + Commit -->
+  <g transform="translate(296, 88)">
+    <rect width="228" height="230" rx="10" style="fill: var(--blue-soft); stroke: var(--blue-border)" stroke-width="1.5"/>
+    <text x="114" y="28" text-anchor="middle" font-size="14" font-weight="700" style="fill: var(--blue-text)">2. Issue &amp; Commit</text>
+    <text x="114" y="47" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11.5" style="fill: var(--blue)">if tid == 0</text>
+
+    <rect x="16" y="66" width="196" height="50" rx="6" style="fill: var(--box); stroke: var(--blue-border)"/>
+    <text x="114" y="88" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--fg)">tcgen05_mma_f16(...)</text>
+    <text x="114" y="106" text-anchor="middle" font-size="10.5" style="fill: var(--muted)">SMEM_A x SMEM_B -&gt; TMEM</text>
+
+    <rect x="16" y="128" width="196" height="44" rx="6" style="fill: var(--box); stroke: var(--blue-border)"/>
+    <text x="114" y="154" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--blue-text)">commit + wait MMA_BAR</text>
+
+    <text x="114" y="204" text-anchor="middle" font-size="11.5" style="fill: var(--blue-text)">Accumulators ready to read</text>
+  </g>
+
+  <line x1="524" y1="203" x2="552" y2="203" style="stroke: var(--green)" stroke-width="2" marker-end="url(#arrow-g6)"/>
+
+  <!-- Card 3: Warpgroup 32-lane slices -->
+  <g transform="translate(556, 88)">
+    <rect width="228" height="230" rx="10" style="fill: var(--green-soft); stroke: var(--green)" stroke-width="1.8"/>
+    <text x="114" y="28" text-anchor="middle" font-size="14" font-weight="700" style="fill: var(--green-text)">3. Warpgroup Slices</text>
+    <text x="114" y="47" text-anchor="middle" font-size="11.5" style="fill: var(--green-sub)">32 TMEM lanes per warp</text>
+
+    <rect x="16" y="64" width="94" height="46" rx="5" style="fill: var(--box); stroke: var(--green-border)"/>
+    <text x="63" y="84" text-anchor="middle" font-size="10.5" font-weight="600" style="fill: var(--green-text)">Warp 0</text>
+    <text x="63" y="100" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="10" style="fill: var(--muted)">lanes 0..31</text>
+
+    <rect x="118" y="64" width="94" height="46" rx="5" style="fill: var(--box); stroke: var(--green-border)"/>
+    <text x="165" y="84" text-anchor="middle" font-size="10.5" font-weight="600" style="fill: var(--green-text)">Warp 1</text>
+    <text x="165" y="100" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="10" style="fill: var(--muted)">lanes 32..63</text>
+
+    <rect x="16" y="118" width="94" height="46" rx="5" style="fill: var(--box); stroke: var(--green-border)"/>
+    <text x="63" y="138" text-anchor="middle" font-size="10.5" font-weight="600" style="fill: var(--green-text)">Warp 2</text>
+    <text x="63" y="154" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="10" style="fill: var(--muted)">lanes 64..95</text>
+
+    <rect x="118" y="118" width="94" height="46" rx="5" style="fill: var(--box); stroke: var(--green-border)"/>
+    <text x="165" y="138" text-anchor="middle" font-size="10.5" font-weight="600" style="fill: var(--green-text)">Warp 3</text>
+    <text x="165" y="154" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="10" style="fill: var(--muted)">lanes 96..127</text>
+
+    <text x="114" y="204" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--green-text)">tcgen05_ld + load_wait()</text>
+  </g>
+
+  <line x1="784" y1="203" x2="812" y2="203" style="stroke: var(--sub)" stroke-width="1.8" marker-end="url(#arrow-s6)"/>
+
+  <!-- Card 4: Sync & Free -->
+  <g transform="translate(816, 88)">
+    <rect width="228" height="230" rx="10" style="fill: var(--panel); stroke: var(--panel-stroke)" stroke-width="1.5"/>
+    <text x="114" y="28" text-anchor="middle" font-size="14" font-weight="700" style="fill: var(--fg)">4. Sync &amp; Dealloc</text>
+    <text x="114" y="47" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11.5" style="fill: var(--green)">if warp_id == 0</text>
+
+    <rect x="16" y="66" width="196" height="44" rx="6" style="fill: var(--green-soft); stroke: var(--green-border)"/>
+    <text x="114" y="92" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--green-text)">sync_threads()</text>
+
+    <rect x="16" y="122" width="196" height="50" rx="6" style="fill: var(--box); stroke: var(--box-stroke)"/>
+    <text x="114" y="144" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--fg)">tcgen05_dealloc(128)</text>
+    <text x="114" y="162" text-anchor="middle" font-size="10.5" style="fill: var(--muted)">Frees all 128 columns</text>
+
+    <text x="114" y="204" text-anchor="middle" font-size="11.5" style="fill: var(--text)">Symmetric alloc &amp; free</text>
+  </g>
+</svg>

@@ -25,4 +25,14 @@ cuda_tile.module @cutile_test_lib {
   preview$func extern @lane_ids(
       %ids: tile<32xi32> {cuda_tile.preview$access = #cuda_tile<preview$access<out>>}
     ) -> (tile<32xi32>)
+  // Pointer operands: rank-0 `ptr` tiles, always `in`, even when the
+  // library writes through them.
+  preview$func extern @store_to(
+      %x: tile<32xf32> {cuda_tile.preview$access = #cuda_tile<preview$access<in>>},
+      %dst: tile<ptr<f32>> {cuda_tile.preview$access = #cuda_tile<preview$access<in>>}
+    ) -> ()
+  preview$func extern @load_from(
+      %src: tile<ptr<f32>> {cuda_tile.preview$access = #cuda_tile<preview$access<in>>},
+      %out: tile<32xf32> {cuda_tile.preview$access = #cuda_tile<preview$access<out>>}
+    ) -> (tile<32xf32>)
 }

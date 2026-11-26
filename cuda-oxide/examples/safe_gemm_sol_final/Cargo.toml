@@ -1,0 +1,15 @@
+[package]
+name = "safe_gemm_sol_final"
+version = "0.1.0"
+edition = "2024"
+authors = ["Nihal Pasham <nihalp@nvidia.com>"]
+license = "Apache-2.0"
+
+[workspace]
+
+[dependencies]
+cuda-device = { path = "../../crates/cuda-device" }
+cuda-host = { path = "../../crates/cuda-host" }
+cuda-core = { path = "../../../cuda-core" }
+half = "2.4"
+ptx-parse = { path = "../../crates/ptx-parse" }

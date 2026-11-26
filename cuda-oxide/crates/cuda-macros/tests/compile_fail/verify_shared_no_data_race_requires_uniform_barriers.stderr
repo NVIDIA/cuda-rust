@@ -1,0 +1,5 @@
+error: `no_data_race(TILE)` on a `SharedArray` requires `uniform_barriers`
+ --> tests/compile_fail/verify_shared_no_data_race_requires_uniform_barriers.rs:9:58
+  |
+9 |     #[cuda_macros::verify(no_oob_idx(TILE), no_data_race(TILE))]
+  |                                                          ^^^^

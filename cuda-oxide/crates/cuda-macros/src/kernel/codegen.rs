@@ -18,6 +18,7 @@ use crate::kernel::scope::{
     top_level_kernel_configuration_markers, unchecked_indexing_impl_clone,
 };
 use crate::launch_attrs::validate_routed_launch_contract_requires;
+use crate::verify::validate_routed_verify_attrs;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
@@ -46,6 +47,14 @@ pub(crate) fn generic_kernel_no_instantiation_tokens(
     // original signature is still in scope.
     if let Err(error) = validate_routed_launch_contract_requires(&input.attrs, &entry_inputs) {
         return error.to_compile_error();
+    }
+    let routed_verify_markers =
+        match validate_routed_verify_attrs(&input.attrs, &entry_inputs, &mut input.block.stmts) {
+            Ok(markers) => markers,
+            Err(error) => return error.to_compile_error(),
+        };
+    if !routed_verify_markers.is_empty() {
+        input.block.stmts.splice(0..0, routed_verify_markers);
     }
     let has_explicit_scope = explicit_scope.is_some();
     let rewritten_scope = if let Some(ident) = explicit_scope {
@@ -253,6 +262,7 @@ pub(crate) fn route_generic_kernel_attrs(
             || attr_path_ends_with(attr, "launch_contract")
             || attr_path_ends_with(attr, "cluster_launch")
             || attr_path_ends_with(attr, "cooperative_launch")
+            || attr_path_ends_with(attr, "verify")
     };
 
     let cfg_attrs = attrs.iter().filter(|attr| is_cfg(attr)).cloned().collect();
@@ -500,6 +510,14 @@ pub(crate) fn generic_kernel_instantiation_tokens(
     // names before they are lost to the generated wrappers.
     if let Err(error) = validate_routed_launch_contract_requires(&input.attrs, &entry_inputs) {
         return error.to_compile_error();
+    }
+    let routed_verify_markers =
+        match validate_routed_verify_attrs(&input.attrs, &entry_inputs, &mut input.block.stmts) {
+            Ok(markers) => markers,
+            Err(error) => return error.to_compile_error(),
+        };
+    if !routed_verify_markers.is_empty() {
+        input.block.stmts.splice(0..0, routed_verify_markers);
     }
     let has_explicit_scope = explicit_scope.is_some();
     let rewritten_scope = if let Some(ident) = explicit_scope {

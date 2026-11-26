@@ -1,9 +1,9 @@
 # cute-rs: CuTe kernels in Rust (preview)
 
 > **Preview.** `cute-rs` compiles Rust CuTe kernels ahead of time through the pinned
-> CUTLASS 4.7 compiler for three targets, `sm_100a` (B200 class), `sm_103a`
-> (B300 class) and `sm_120a` (RTX 50 series). Every other architecture is rejected before compilation. It covers
-> a validated subset of CuTeDSL 4.7, not feature parity; the
+> CUTLASS 4.8.1 compiler for four targets: `sm_100a` (B200 class), `sm_103a`
+> (B300 class), `sm_107a` (Vera Rubin class), and `sm_120a` (RTX 50 series). Every other architecture is rejected before compilation. It covers
+> a validated subset of CuTeDSL 4.8, not feature parity; the
 > [support matrix](../cuda-oxide-book/cute/support-matrix.md) lists what is in and
 > what is not. APIs can change between releases.
 
@@ -54,6 +54,8 @@ the options and the failure rules.
 | [`sm100_fmha_prefill_cute`](examples/sm100_fmha_prefill_cute) | `sm_100a` | FP16 D128 prefill, MHA or GQA, warp specialized |
 | [`sm100_mla_decode_fp16_cute`](examples/sm100_mla_decode_fp16_cute) | `sm_100a` | MLA decode with a paged latent cache and two-CTA clusters |
 | [`sm100_qkv_epilogue_cute`](examples/sm100_qkv_epilogue_cute) | `sm_100a` | two-CTA GEMM + fused RMSNorm + FP8 (`E4M3`) quantization + paged KV scatter ([visual guide](examples/sm100_qkv_epilogue_cute/visual.md)) |
+| [`sm107_bf16_gemm_cute`](examples/sm107_bf16_gemm_cute) | `sm_107a`, `sm_100a`, `sm_103a` | two-CTA persistent BF16 GEMM (`MmaSs<..., BFloat16>`), TMEM ping-pong, and Programmatic Dependent Launch (`PDL`) |
+| [`sm107_mxfp8_gemm_cute`](examples/sm107_mxfp8_gemm_cute) | `sm_107a` | Rubin persistent MXFP8 (`E4M3 + UE8M0 SF=32`, `K=64`) block-scaled GEMM with hardware B-collector reuse and `PDL` |
 
 | Model | Target | Scope |
 | --- | --- | --- |

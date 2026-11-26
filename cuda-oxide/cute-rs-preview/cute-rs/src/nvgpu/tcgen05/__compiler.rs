@@ -143,7 +143,7 @@ accumulator_marker!(#[doc = "Fence completed epilogue reads and elect one arriva
 /// # Safety
 /// The public `MmaSs::gemm` participation, completion and storage contracts apply.
 #[inline(never)]
-pub unsafe fn mma_ss<AL, BL, const M: u32, const N: u32, const K: u32, const G: u32>(
+pub unsafe fn mma_ss<AL, BL, const M: u32, const N: u32, const K: u32, const G: u32, T>(
     dst: u32,
     a: *mut f16,
     b: *mut f16,
@@ -151,7 +151,15 @@ pub unsafe fn mma_ss<AL, BL, const M: u32, const N: u32, const K: u32, const G: 
     a_byte_offset: u32,
     b_byte_offset: u32,
 ) {
-    let _ = (dst, a, b, accumulate, a_byte_offset, b_byte_offset);
+    let _ = (
+        dst,
+        a,
+        b,
+        accumulate,
+        a_byte_offset,
+        b_byte_offset,
+        PhantomData::<T>,
+    );
     unreachable!("CuTe compiler marker")
 }
 
@@ -177,7 +185,7 @@ pub unsafe fn mma_ts<BL, const M: u32, const N: u32, const K: u32, const G: u32>
 /// The producer warp must supply matching live storage and a correctly initialized group completion barrier.
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
-pub unsafe fn tma_load<L, const G: u32>(
+pub unsafe fn tma_load<L, const G: u32, T>(
     desc: *const TensorMap<f16, L>,
     dst: *mut f16,
     c0: i32,
@@ -186,7 +194,7 @@ pub unsafe fn tma_load<L, const G: u32>(
     bar: *mut Barrier,
     rank: u32,
 ) {
-    let _ = (desc, dst, c0, c1, c2, bar, rank);
+    let _ = (desc, dst, c0, c1, c2, bar, rank, PhantomData::<T>);
     unreachable!("CuTe compiler marker")
 }
 
@@ -195,14 +203,14 @@ pub unsafe fn tma_load<L, const G: u32>(
 /// # Safety
 /// The elected issuer must publish shared writes and retain storage until the copy stops reading it.
 #[inline(never)]
-pub unsafe fn tma_store<L, const G: u32>(
+pub unsafe fn tma_store<L, const G: u32, T>(
     desc: *const TensorMap<f16, L>,
     src: *mut f16,
     c0: i32,
     c1: i32,
     c2: i32,
 ) {
-    let _ = (desc, src, c0, c1, c2);
+    let _ = (desc, src, c0, c1, c2, PhantomData::<T>);
     unreachable!("CuTe compiler marker")
 }
 
@@ -246,4 +254,53 @@ pub unsafe fn sm100_block_scaled_gemm<AL, BL, const M: u32, const K: u32>(
         PhantomData::<(AL, BL)>,
     );
     unreachable!("SM100 CuTe marker requires device compilation")
+}
+
+/// Device-only marker copying one 512-byte `(32, 4, 4)` `UE8M0` scale atom into TMEM for `GROUP` CTAs.
+///
+/// # Safety
+/// The elected leader lane must supply a 128-byte-aligned shared scale pointer and 4-column TMEM destination.
+#[inline(never)]
+pub unsafe fn sm107_block_scaled_copy<const GROUP: u32>(
+    tmem_col: u32,
+    s_scale: *mut u32,
+    step: u32,
+) {
+    let _ = (tmem_col, s_scale, step);
+    unreachable!("SM107 CuTe marker requires device compilation")
+}
+
+/// Device-only marker issuing one `K = 64` sub-step of an SM107 `mxf8f6f4` block-scaled MMA.
+///
+/// # Safety
+/// The elected leader lane must supply live shared operand tiles and populated TMEM scale columns.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+pub unsafe fn sm107_block_scaled_gemm<
+    AL,
+    BL,
+    const M: u32,
+    const N: u32,
+    const GROUP: u32,
+    BCollector,
+>(
+    tmem_d: u32,
+    a: *mut f16,
+    b: *mut f16,
+    sfa_tmem: u32,
+    sfb_tmem: u32,
+    sub_k: u32,
+    accumulate: bool,
+) {
+    let _ = (
+        tmem_d,
+        a,
+        b,
+        sfa_tmem,
+        sfb_tmem,
+        sub_k,
+        accumulate,
+        PhantomData::<(AL, BL, BCollector)>,
+    );
+    unreachable!("SM107 CuTe marker requires device compilation")
 }

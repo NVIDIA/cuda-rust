@@ -83,7 +83,7 @@ fn ensure_static_global_alloc(
 
     // Checked here, where the static becomes a global, so each static is
     // checked once and the first failure stops translation.
-    if let Some(shared_name) = nested_shared_type_name(static_def.ty()) {
+    if let Some(shared_name) = nested_shared_type_name(crate::device_static_ty(static_def)) {
         return input_err!(
             loc,
             TranslationErr::unsupported(format!(
@@ -98,7 +98,7 @@ fn ensure_static_global_alloc(
     let initializer = static_initializer_data(static_def, loc.clone())?;
     let allocation_size = initializer.bytes.len() as u64;
     let initializer_hex = bytes_to_hex(&initializer.bytes);
-    let static_ty = static_def.ty();
+    let static_ty = crate::device_static_ty(static_def);
     let global_ty = types::translate_type(ctx, &static_ty)?;
 
     if let Some(union_name) = stored_type_union_name(static_ty, &mut Vec::new()) {

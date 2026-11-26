@@ -178,6 +178,8 @@ struct DeviceGlobalSpec<'a> {
 /// An ordinary device global is named `__device_global_<hash>` after its
 /// `global_key`, so its symbol depends neither on the module's MIR walk
 /// order nor on other modules lowered earlier in the process (#706, #1477).
+/// A static the user named (`#[no_mangle]`, `#[export_name]`, carried by its
+/// key's export domain) keeps that name and stays rooted for host lookup.
 fn create_device_global(
     ctx: &mut Context,
     op: Ptr<Operation>,
@@ -220,7 +222,10 @@ fn create_device_global(
 
     // Constant-memory globals reuse the Rust-side mangled name so host code can
     // resolve them by name via `cuModuleGetGlobal`. Ordinary device globals
-    // are private to the kernel and get a name hashed from their key.
+    // get a name hashed from their key, unless the user named the static
+    // (`#[no_mangle]`, `#[export_name]`): host code (`cuModuleGetGlobal`,
+    // `optixPipelineSymbolMemcpyAsync`) then looks it up by that name.
+    let exported_symbol = dialect_mir::ops::exported_rust_static_symbol_from_global_key(spec.key);
     let name: pliron::identifier::Identifier =
         if spec.addr_space == llvm_export::types::address_space::CONSTANT {
             let symbol = dialect_mir::ops::rust_static_symbol_from_global_key(spec.key)
@@ -237,17 +242,24 @@ fn create_device_global(
                 ))
             })?
         } else {
-            let name = keyed_global_name(ctx, "__device_global", spec.key);
+            let name = match exported_symbol {
+                Some(symbol) => symbol.to_string(),
+                None => keyed_global_name(ctx, "__device_global", spec.key),
+            };
             if let Some((other, _)) = device_globals
                 .iter()
                 .find(|(_, record)| record.symbol.to_string() == name)
             {
                 return Err(anyhow_to_pliron(anyhow::anyhow!(
-                    "global_keys {other:?} and {:?} hash to the same symbol `{name}`",
+                    "global_keys {other:?} and {:?} map to the same symbol `{name}`",
                     spec.key
                 )));
             }
-            name.try_into().unwrap()
+            name.as_str().try_into().map_err(|e| {
+                anyhow_to_pliron(anyhow::anyhow!(
+                    "device global symbol {name:?} is not a valid identifier: {e:?}"
+                ))
+            })?
         };
 
     let global_op = if alignment > 0 {
@@ -262,6 +274,14 @@ fn create_device_global(
         // the symbol rooted (`@llvm.used`) even when every read of it is
         // optimized away, so the host's `cuModuleGetGlobal` still resolves it,
         // and stop optimizers from treating its initializer as the value read.
+        global_op.mark_retained(ctx);
+        global_op.mark_host_written(ctx);
+    } else if exported_symbol.is_some() {
+        // A user-named global exists for host lookup (`cuModuleGetGlobal`,
+        // `optixPipelineSymbolMemcpyAsync`): keep it rooted and mark it
+        // host-written (`externally_initialized`) so whole-program LTO never
+        // internalizes a never-device-stored global or folds loads to its
+        // compile-time initializer.
         global_op.mark_retained(ctx);
         global_op.mark_host_written(ctx);
     }

@@ -1163,6 +1163,7 @@ impl Verify for MirSharedAllocOp {
 // ============================================================================
 
 const RUST_STATIC_GLOBAL_KEY_PREFIX: &str = "cuda-oxide:rust-static:v1:";
+const EXPORTED_RUST_STATIC_GLOBAL_KEY_PREFIX: &str = "cuda-oxide:rust-static-export:v1:";
 const PROMOTED_GLOBAL_KEY_PREFIX: &str = "cuda-oxide:promoted:v1:";
 
 fn encode_device_global_key(prefix: &str, payload: &str) -> String {
@@ -1179,20 +1180,45 @@ pub fn encode_rust_static_global_key(symbol: &str) -> String {
     encode_device_global_key(RUST_STATIC_GLOBAL_KEY_PREFIX, symbol)
 }
 
+/// Encode a static whose symbol the user named (`#[no_mangle]` or
+/// `#[export_name = "..."]`) as a domain-tagged lowering key.
+///
+/// A separate domain from [`encode_rust_static_global_key`] so lowering can
+/// tell a user-chosen linkage name, which host code looks up
+/// (`cuModuleGetGlobal`, `optixPipelineSymbolMemcpyAsync`), from rustc's
+/// mangled one, which nobody outside the compilation knows.
+pub fn encode_exported_rust_static_global_key(symbol: &str) -> String {
+    encode_device_global_key(EXPORTED_RUST_STATIC_GLOBAL_KEY_PREFIX, symbol)
+}
+
 /// Encode one compiler-made promoted allocation fingerprint.
 pub fn encode_promoted_global_key(fingerprint: &str) -> String {
     encode_device_global_key(PROMOTED_GLOBAL_KEY_PREFIX, fingerprint)
 }
 
-/// Recover the exact rustc symbol payload from a tagged static key.
+fn decode_device_global_key<'k>(prefix: &str, key: &'k str) -> Option<&'k str> {
+    let encoded = key.strip_prefix(prefix)?;
+    let (length, symbol) = encoded.split_once(':')?;
+    (length.parse::<usize>().ok()? == symbol.len()).then_some(symbol)
+}
+
+/// Recover the exact rustc symbol payload from a tagged static key, mangled
+/// or user-named.
 ///
 /// Constant-memory globals use the payload as their externally visible
 /// linkage name; the tagged key itself remains internal to lowering and
 /// relocation lookup.
 pub fn rust_static_symbol_from_global_key(key: &str) -> Option<&str> {
-    let encoded = key.strip_prefix(RUST_STATIC_GLOBAL_KEY_PREFIX)?;
-    let (length, symbol) = encoded.split_once(':')?;
-    (length.parse::<usize>().ok()? == symbol.len()).then_some(symbol)
+    decode_device_global_key(RUST_STATIC_GLOBAL_KEY_PREFIX, key)
+        .or_else(|| exported_rust_static_symbol_from_global_key(key))
+}
+
+/// The user-chosen symbol of a static key from
+/// [`encode_exported_rust_static_global_key`]; `None` for any other key.
+///
+/// Ordinary device globals keep this name instead of a generated one.
+pub fn exported_rust_static_symbol_from_global_key(key: &str) -> Option<&str> {
+    decode_device_global_key(EXPORTED_RUST_STATIC_GLOBAL_KEY_PREFIX, key)
 }
 
 /// MIR device-global address operation.
@@ -1339,6 +1365,36 @@ mod device_global_key_tests {
             Some(adversarial)
         );
         assert_eq!(rust_static_symbol_from_global_key(&promoted_key), None);
+    }
+
+    /// A user-named static keeps its symbol through either decoder, while
+    /// only the export decoder accepts it; a mangled static never decodes as
+    /// exported, and the two domains never produce the same key.
+    #[test]
+    fn exported_static_keys_are_a_separate_domain() {
+        use super::{
+            encode_exported_rust_static_global_key, exported_rust_static_symbol_from_global_key,
+        };
+        let exported = encode_exported_rust_static_global_key("ODT_SYM_IN");
+        let mangled = encode_rust_static_global_key("ODT_SYM_IN");
+        assert_ne!(exported, mangled);
+        assert_eq!(
+            rust_static_symbol_from_global_key(&exported),
+            Some("ODT_SYM_IN")
+        );
+        assert_eq!(
+            exported_rust_static_symbol_from_global_key(&exported),
+            Some("ODT_SYM_IN")
+        );
+        assert_eq!(exported_rust_static_symbol_from_global_key(&mangled), None);
+        assert_eq!(
+            exported_rust_static_symbol_from_global_key(&encode_promoted_global_key("x")),
+            None
+        );
+        assert_eq!(
+            exported_rust_static_symbol_from_global_key("cuda-oxide:rust-static-export:v1:9:short"),
+            None
+        );
     }
 
     #[test]

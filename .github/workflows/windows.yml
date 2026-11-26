@@ -242,6 +242,7 @@ jobs:
             "CUDA_TOOLKIT_PATH=$cudaDir",
             "LIBCLANG_PATH=$llvmBin",
             "CUDA_OXIDE_LLC=$llvmBin\llc.exe",
+            "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$llvmBin\lld-link.exe",
             "LIBFFI_LIB_DIR=$ffiLib",
             "LIBFFI_BIN_DIR=$ffiBin",
             "LIB=$ffiLib;$cudaDir\lib\x64;$env:LIB",
@@ -356,6 +357,8 @@ jobs:
 
           $cargoOxideDir = Join-Path (Get-Location) "target\debug"
           $cargoOxide = Join-Path $cargoOxideDir "cargo-oxide.exe"
+          $cargoBin = Join-Path $env:USERPROFILE ".cargo\bin"
+          Copy-Item -LiteralPath $cargoOxide -Destination (Join-Path $cargoBin "cargo-oxide.exe") -Force
           $cargoOxideDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
           & $cargoOxide setup

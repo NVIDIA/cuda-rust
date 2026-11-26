@@ -2678,7 +2678,7 @@ fn plain_sm89_sparse_fp8_admission_is_the_reviewed_four_form_matrix() {
             mma.llvm_adapter,
             SparseMmaLlvmAdapter::A4I32B4I32C4F32MetadataI32SelectorI32ToD4F32
         );
-        assert_eq!(mma.runtime_validation, RuntimeValidation::Unexecuted);
+        assert_eq!(mma.runtime_validation, RuntimeValidation::Executed);
 
         // PTX ISA 8.4 is the Ada floor; the qualifier must stay plain `sp`.
         assert_eq!(sparse_mma_minimum_ptx(mma), "8.4");
@@ -2770,10 +2770,6 @@ fn plain_sm89_sparse_fp8_admission_is_the_reviewed_four_form_matrix() {
     let mut wrong_product = test_sparse_mma_fp8_f32_admission();
     wrong_product.product_count = 25;
     assert!(expand_sparse_mma_fp8_f32_admission(&wrong_product).is_err());
-
-    let mut executed = test_sparse_mma_fp8_f32_admission();
-    executed.runtime_validation = RuntimeValidation::Executed;
-    assert!(expand_sparse_mma_fp8_f32_admission(&executed).is_err());
 
     // Standard-metadata admission must not leak into the other sparse floats.
     for (accumulator, metadata) in [

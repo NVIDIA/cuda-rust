@@ -822,6 +822,34 @@ def main():
             raise RuntimeError(f"Expected tcgen05_commit_cg2 without tcgen05_mma_cg2 to fail TmemLifecycle in Lean:\n{res_stage10_no_mma.stdout}")
         print("REJECTED as expected: `tcgen05_commit_cg2` without any `tcgen05_mma_cg2` fails `tmem_lifecycle`.", flush=True)
 
+        # Pure float math intrinsic placeholder (`.sin()`) positive + un-inlined float helper negative check:
+        vecadd_sin_mir = temporary / "vecadd_sin.mir"
+        vecadd_sin_mir.write_text(
+            vecadd_source.replace(
+                "sum = mir.add (a_val, b_val) [] []: <(builtin.fp32, builtin.fp32) -> (builtin.fp32)>;",
+                'a_sin = mir.call (a_val) [] [callee: builtin.string "__cuda_oxide_rust_intrinsic_sinf32"]: <(builtin.fp32) -> (builtin.fp32)>;\n    sum = mir.add (a_sin, b_val) [] []: <(builtin.fp32, builtin.fp32) -> (builtin.fp32)>;',
+                1,
+            )
+        )
+        vecadd_sin_lean = require_export(vecadd_sin_mir, "vecadd")
+        vecadd_sin_file = temporary / "VecaddSinValid.lean"
+        vecadd_sin_file.write_text(vecadd_sin_lean)
+        require_success("env", "lean", str(vecadd_sin_file))
+        print("PASS: pure compiler math intrinsic placeholder (`sinf32`) exports as `.unk` and proves vecadd safety.", flush=True)
+
+        vecadd_sneaky_float_mir = temporary / "vecadd_sneaky_float.mir"
+        vecadd_sneaky_float_mir.write_text(
+            vecadd_source.replace(
+                "sum = mir.add (a_val, b_val) [] []: <(builtin.fp32, builtin.fp32) -> (builtin.fp32)>;",
+                'a_tmp = mir.call (a_val) [] [callee: builtin.string "user_crate::sneaky_sync_helper"]: <(builtin.fp32) -> (builtin.fp32)>;\n    sum = mir.add (a_tmp, b_val) [] []: <(builtin.fp32, builtin.fp32) -> (builtin.fp32)>;',
+                1,
+            )
+        )
+        sneaky_rejected = export(vecadd_sneaky_float_mir, "vecadd")
+        if sneaky_rejected.returncode <= 0 or sneaky_rejected.stdout or "unmodeled function call" not in sneaky_rejected.stderr:
+            raise RuntimeError(f"Expected un-inlined float helper to fail closed:\n{sneaky_rejected.stderr}")
+        print("REJECTED as expected: un-inlined user `f32 -> f32` helper fails closed without emitting Lean.", flush=True)
+
     print("Exporter checks passed for scalar, 1D vecadd, 2D SGEMM, Stage 3 warp/block reductions, Stage 4 sub-warp multi-buffer, Stage 5 async mbarrier, Stage 6 Blackwell tcgen05/TMEM, Stage 8 warp-specialized ring, Stage 9 2-CTA cluster + CLC, and Stage 10 dual-commit `_cg2` fixtures.")
 
 

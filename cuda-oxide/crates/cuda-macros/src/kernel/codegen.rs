@@ -45,9 +45,11 @@ pub(crate) fn generic_kernel_no_instantiation_tokens(
     // wrapper, whose synthetic parameter names cannot resolve source-level
     // `requires` identifiers, so those relations are validated here while the
     // original signature is still in scope.
-    if let Err(error) = validate_routed_launch_contract_requires(&input.attrs, &entry_inputs) {
-        return error.to_compile_error();
-    }
+    let routed_requires_markers =
+        match validate_routed_launch_contract_requires(&input.attrs, &entry_inputs) {
+            Ok(markers) => markers,
+            Err(error) => return error.to_compile_error(),
+        };
     let routed_verify_markers =
         match validate_routed_verify_attrs(&input.attrs, &entry_inputs, &mut input.block.stmts) {
             Ok(markers) => markers,
@@ -55,6 +57,9 @@ pub(crate) fn generic_kernel_no_instantiation_tokens(
         };
     if !routed_verify_markers.is_empty() {
         input.block.stmts.splice(0..0, routed_verify_markers);
+    }
+    if !routed_requires_markers.is_empty() {
+        input.block.stmts.splice(0..0, routed_requires_markers);
     }
     let has_explicit_scope = explicit_scope.is_some();
     let rewritten_scope = if let Some(ident) = explicit_scope {
@@ -508,9 +513,11 @@ pub(crate) fn generic_kernel_instantiation_tokens(
     // Same as the no-instantiation path: `requires` relations of a routed
     // `#[launch_contract]` must be validated against the source parameter
     // names before they are lost to the generated wrappers.
-    if let Err(error) = validate_routed_launch_contract_requires(&input.attrs, &entry_inputs) {
-        return error.to_compile_error();
-    }
+    let routed_requires_markers =
+        match validate_routed_launch_contract_requires(&input.attrs, &entry_inputs) {
+            Ok(markers) => markers,
+            Err(error) => return error.to_compile_error(),
+        };
     let routed_verify_markers =
         match validate_routed_verify_attrs(&input.attrs, &entry_inputs, &mut input.block.stmts) {
             Ok(markers) => markers,
@@ -518,6 +525,9 @@ pub(crate) fn generic_kernel_instantiation_tokens(
         };
     if !routed_verify_markers.is_empty() {
         input.block.stmts.splice(0..0, routed_verify_markers);
+    }
+    if !routed_requires_markers.is_empty() {
+        input.block.stmts.splice(0..0, routed_requires_markers);
     }
     let has_explicit_scope = explicit_scope.is_some();
     let rewritten_scope = if let Some(ident) = explicit_scope {

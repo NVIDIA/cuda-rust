@@ -81,12 +81,14 @@ pub fn setup(ctx: &Context) {
 }
 
 /// Builds the workspace backend source in `codegen_crate` and publishes the
-/// result to the shared cache.
+/// result to the shared cache, prebuilding the Lean 4 proof library when `lake`
+/// is installed.
 fn build_and_publish(codegen_crate: &Path) {
     println!("Building cuda-oxide codegen backend...");
     println!();
 
     let built_so = backend::build_backend_from_source(codegen_crate);
+    backend::prebuild_lean_proofs_for_codegen_crate(codegen_crate);
 
     println!();
     println!("✓ Backend is ready. You can now use:");

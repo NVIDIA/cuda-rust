@@ -972,7 +972,8 @@ fn clear_cache_contents(cache_dir: &Path) {
 /// Rebuild the backend for the project in `project_dir` (external projects):
 /// from the commit its cuda-oxide dependency resolves to, in place for a path
 /// dependency, or from a fresh `main` clone without any dependency. The shared
-/// cache is cleared first whenever the project uses it.
+/// cache is cleared first whenever the project uses it. Also prebuilds the
+/// Lean 4 proof library (`oxide-proofs-preview`) when `lake` is installed.
 ///
 /// Returns the path to the freshly built `.so`.
 pub fn refresh_cached_backend(project_dir: &Path) -> PathBuf {
@@ -983,7 +984,124 @@ pub fn refresh_cached_backend(project_dir: &Path) -> PathBuf {
     if clears_cache {
         let _ = clear_cached_backend();
     }
-    backend_for_dependency(source)
+    let dep_codegen_crate = source.as_ref().map(DependencySource::codegen_crate);
+    let so_path = backend_for_dependency(source);
+    if let Some(codegen_crate) = dep_codegen_crate
+        .or_else(|| cache_directory().map(|dir| codegen_crate_path(&dir.join("src"))))
+    {
+        prebuild_lean_proofs_for_codegen_crate(&codegen_crate);
+    }
+    so_path
+}
+
+/// Locate the `oxide-proofs-preview` Lean 4 package directory sibling to
+/// `crates/rustc-codegen-cuda` inside a SIMT workspace or checkout.
+pub fn lean_package_dir_for_codegen_crate(codegen_crate: &Path) -> Option<PathBuf> {
+    let candidate = codegen_crate
+        .parent()?
+        .parent()?
+        .join("oxide-proofs-preview");
+    (candidate.join("lakefile.toml").is_file() || candidate.join("lakefile.lean").is_file())
+        .then_some(candidate)
+}
+
+/// Locate the `lake` executable on `paths` (`PATH`) or inside `elan_home` /
+/// `~/.elan/bin` when Lean 4 is installed on the host.
+pub(crate) fn find_lake_executable_with_env(
+    paths: Option<&OsStr>,
+    elan_home: Option<&OsStr>,
+    home: Option<&OsStr>,
+) -> Option<PathBuf> {
+    let lake_name = if cfg!(windows) { "lake.exe" } else { "lake" };
+    if let Some(paths) = paths {
+        for dir in std::env::split_paths(paths) {
+            let candidate = dir.join(lake_name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    let elan_dir = elan_home
+        .map(PathBuf::from)
+        .or_else(|| home.map(|h| PathBuf::from(h).join(".elan")))?;
+    let candidate = elan_dir.join("bin").join(lake_name);
+    candidate.is_file().then_some(candidate)
+}
+
+/// Outcome of prebuilding `oxide-proofs-preview` with `lake build`.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum LeanPrebuildOutcome {
+    /// No `oxide-proofs-preview` directory or `lake` executable was found.
+    Skipped,
+    /// `lake build` succeeded in `lean_dir`.
+    Built(PathBuf),
+    /// `lake build` returned an error (non-fatal during `setup` / `update`).
+    Failed { lean_dir: PathBuf, reason: String },
+}
+
+/// Run `lake build` in the `oxide-proofs-preview` directory corresponding to
+/// `codegen_crate` when `lake` is available.
+pub(crate) fn prebuild_lean_proofs_with_lake(
+    codegen_crate: &Path,
+    lake: Option<&Path>,
+) -> LeanPrebuildOutcome {
+    let (Some(lean_dir), Some(lake)) = (lean_package_dir_for_codegen_crate(codegen_crate), lake)
+    else {
+        return LeanPrebuildOutcome::Skipped;
+    };
+    match Command::new(lake)
+        .arg("build")
+        .current_dir(&lean_dir)
+        .output()
+    {
+        Ok(output) if output.status.success() => LeanPrebuildOutcome::Built(lean_dir),
+        Ok(output) => {
+            let combined = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            LeanPrebuildOutcome::Failed {
+                lean_dir,
+                reason: combined.trim().to_string(),
+            }
+        }
+        Err(error) => LeanPrebuildOutcome::Failed {
+            lean_dir,
+            reason: error.to_string(),
+        },
+    }
+}
+
+/// Prebuild the Lean 4 formal-verification library (`oxide-proofs-preview`)
+/// during `cargo oxide setup` / `cargo oxide update` when `lake` is installed.
+///
+/// Lean 4 is only needed for `#[verify(...)]` kernels, so missing `lake` is a
+/// silent no-op and a failed `lake build` emits a warning without aborting
+/// Rust backend setup.
+pub fn prebuild_lean_proofs_for_codegen_crate(codegen_crate: &Path) {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
+    let lake = find_lake_executable_with_env(
+        std::env::var_os("PATH").as_deref(),
+        std::env::var_os("ELAN_HOME").as_deref(),
+        home.as_deref(),
+    );
+    if lake.is_some() && lean_package_dir_for_codegen_crate(codegen_crate).is_some() {
+        println!();
+        println!("Building Lean 4 proof library (oxide-proofs-preview)...");
+    }
+    match prebuild_lean_proofs_with_lake(codegen_crate, lake.as_deref()) {
+        LeanPrebuildOutcome::Skipped => {}
+        LeanPrebuildOutcome::Built(lean_dir) => {
+            println!("✓ Lean 4 proof library ready: {}", lean_dir.display());
+        }
+        LeanPrebuildOutcome::Failed { lean_dir, reason } => {
+            eprintln!(
+                "Warning: `lake build` failed in {} (only needed for #[verify] kernels): {reason}",
+                lean_dir.display()
+            );
+        }
+    }
 }
 
 /// The dependency a refresh of `project_dir` rebuilds from, and whether the

@@ -129,7 +129,8 @@ pub(crate) fn requires_params_from_inputs(
 
 /// Validate the `requires` relations of any `#[launch_contract]` attribute
 /// that `#[kernel]` is about to route onto a generated generic entry
-/// wrapper.
+/// wrapper, and return `__launch_contract_requires_len_ge_config` markers
+/// resolved against the original parameter names.
 ///
 /// The wrapper's parameters carry synthetic `__cuda_oxide_arg_*` names, so
 /// when the attribute macro finally expands there it cannot resolve
@@ -141,7 +142,8 @@ pub(crate) fn requires_params_from_inputs(
 pub(crate) fn validate_routed_launch_contract_requires(
     attrs: &[syn::Attribute],
     source_inputs: &syn::punctuated::Punctuated<FnArg, syn::token::Comma>,
-) -> syn::Result<()> {
+) -> syn::Result<Vec<syn::Stmt>> {
+    let mut markers = Vec::new();
     for attr in attrs {
         if !attr_path_ends_with(attr, "launch_contract") {
             continue;
@@ -154,9 +156,16 @@ pub(crate) fn validate_routed_launch_contract_requires(
         }
         if let Some(params) = requires_params_from_inputs(source_inputs) {
             validate_requires_relations(&args.requires, &params)?;
+            for (lhs_idx, rhs_idx) in
+                crate::verify::extract_requires_len_ge_pairs(&args.requires, &params)
+            {
+                markers.push(parse_quote! {
+                    ::cuda_device::thread::__launch_contract_requires_len_ge_config::<#lhs_idx, #rhs_idx>();
+                });
+            }
         }
     }
-    Ok(())
+    Ok(markers)
 }
 
 pub(crate) fn inject_launch_contract_markers(args: &LaunchContractArgs, input: &mut ItemFn) {

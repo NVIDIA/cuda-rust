@@ -1786,8 +1786,12 @@ mod tests {
     /// cargo-oxide builds or looks for `librustc_codegen_cuda.so`.
     #[test]
     fn backend_build_command_isolates_target_dir_and_forces_the_host() {
-        let command =
-            backend_build_command_in(Path::new("/tmp/codegen"), None, Some("/tmp/rustc/lib"));
+        let root = tempdir();
+        let codegen = root.join("codegen");
+        let rustc_lib = root.join("rustc").join("lib");
+        let target_dir = codegen.join("target");
+        let rustc_lib_str = rustc_lib.to_string_lossy().into_owned();
+        let command = backend_build_command_in(&codegen, None, Some(&rustc_lib_str));
 
         let cargo_target_dir = command
             .get_envs()
@@ -1818,20 +1822,18 @@ mod tests {
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
+        let target_dir_arg = target_dir.to_string_lossy().into_owned();
 
-        assert_eq!(
-            cargo_target_dir.flatten(),
-            Some(OsStr::new("/tmp/codegen/target"))
-        );
+        assert_eq!(cargo_target_dir.flatten(), Some(target_dir.as_os_str()));
         assert_eq!(cargo_build_target, Some(None));
-        assert_eq!(command.get_current_dir(), Some(Path::new("/tmp/codegen")));
+        assert_eq!(command.get_current_dir(), Some(codegen.as_path()));
         assert!(
             args.windows(2)
                 .any(|args| args == ["--target", "host-tuple"])
         );
         assert!(
             args.windows(2)
-                .any(|args| args == ["--target-dir", "/tmp/codegen/target"])
+                .any(|args| args[0] == "--target-dir" && args[1] == target_dir_arg)
         );
         assert!(
             args.iter()
@@ -1936,15 +1938,18 @@ mod tests {
     #[test]
     fn clear_cache_contents_removes_so_src_tree_and_commit_record() {
         let dir = tempdir();
+        let host_backend = dir.join(backend_filename_for_target(&active_host_target()));
         let so = dir.join("librustc_codegen_cuda.so");
         let src = dir.join("src/crates/rustc-codegen-cuda");
         std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(&host_backend, b"old").unwrap();
         std::fs::write(&so, b"old").unwrap();
         std::fs::write(src.join("lib.rs"), b"fn main() {}").unwrap();
         std::fs::write(dir.join(SOURCE_REV_FILE), "aaaa1111").unwrap();
 
         clear_cache_contents(&dir);
 
+        assert!(!host_backend.exists());
         assert!(!so.exists());
         assert!(!dir.join("src").exists());
         assert!(
@@ -2217,7 +2222,7 @@ mod tests {
 
         assert_eq!(
             installed,
-            cache.join("librustc_codegen_cuda.so"),
+            cache.join(backend_filename_for_target(&active_host_target())),
             "the backend must land under the cache directory"
         );
         assert_eq!(
@@ -2244,7 +2249,8 @@ mod tests {
         let dir = tempdir();
         let cache = dir.join("cache");
         std::fs::create_dir_all(&cache).unwrap();
-        std::fs::write(cache.join("librustc_codegen_cuda.so"), b"stale").unwrap();
+        let cached_name = backend_filename_for_target(&active_host_target());
+        std::fs::write(cache.join(&cached_name), b"stale").unwrap();
 
         let source = dir.join("built.so");
         std::fs::write(&source, b"fresh").unwrap();
@@ -2406,7 +2412,8 @@ mod tests {
     fn a_failed_rename_removes_the_temporary_copy() {
         let dir = tempdir();
         let cache = dir.join("cache");
-        std::fs::create_dir_all(cache.join("librustc_codegen_cuda.so").join("occupied")).unwrap();
+        let cached_name = backend_filename_for_target(&active_host_target());
+        std::fs::create_dir_all(cache.join(cached_name).join("occupied")).unwrap();
         let source = dir.join("built.so");
         std::fs::write(&source, b"built").unwrap();
 
@@ -2564,7 +2571,7 @@ mod tests {
         };
         let year = Duration::from_secs(365 * 24 * 60 * 60);
         let dir = tempdir();
-        let so = dir.join("librustc_codegen_cuda.so");
+        let so = dir.join(backend_filename_for_target(&active_host_target()));
         write_with_mtime(&so, b"built", SystemTime::now() + year);
         std::fs::write(dir.join(TOOLCHAIN_FINGERPRINT_FILE), fp).unwrap();
         std::fs::write(dir.join(TOOLCHAIN_HEAL_MARKER_FILE), "stale heal memory").unwrap();
@@ -2721,7 +2728,7 @@ mod tests {
     fn dependency_mismatch_keeps_the_old_cache_until_replaced() {
         let year = Duration::from_secs(365 * 24 * 60 * 60);
         let dir = tempdir();
-        let so = dir.join("librustc_codegen_cuda.so");
+        let so = dir.join(backend_filename_for_target(&active_host_target()));
         write_with_mtime(&so, b"built", SystemTime::now() + year);
         std::fs::write(dir.join(SOURCE_REV_FILE), "aaaa1111\n").unwrap();
 
@@ -2759,7 +2766,7 @@ mod tests {
         };
         let year = Duration::from_secs(365 * 24 * 60 * 60);
         let dir = tempdir();
-        let so = dir.join("librustc_codegen_cuda.so");
+        let so = dir.join(backend_filename_for_target(&active_host_target()));
         write_with_mtime(&so, b"built", SystemTime::now() + year);
         let recorded = "rustc 0.0.0 (deadbeef 1970-01-01)";
         std::fs::write(dir.join(TOOLCHAIN_FINGERPRINT_FILE), recorded).unwrap();
@@ -2802,36 +2809,34 @@ mod tests {
     /// Cargo's checkout; the in-repo default stays `<crate>/target`.
     #[test]
     fn backend_build_command_honours_a_target_dir_override() {
-        let command = backend_build_command_in(
-            Path::new("/tmp/codegen"),
-            Some(Path::new("/tmp/cache/target")),
-            None,
-        );
+        let dir = tempdir();
+        let codegen = dir.join("codegen");
+        let target = dir.join("cache").join("target");
+        let target_arg = target.to_string_lossy().into_owned();
+        let default_target_arg = codegen.join("target").to_string_lossy().into_owned();
+        let command = backend_build_command_in(&codegen, Some(&target), None);
         let args = command
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
         assert!(
             args.windows(2)
-                .any(|args| args == ["--target-dir", "/tmp/cache/target"])
+                .any(|args| args[0] == "--target-dir" && args[1] == target_arg)
         );
         let cargo_target_dir = command
             .get_envs()
             .find_map(|(key, value)| (key == OsStr::new("CARGO_TARGET_DIR")).then_some(value));
-        assert_eq!(
-            cargo_target_dir.flatten(),
-            Some(OsStr::new("/tmp/cache/target"))
-        );
-        assert_eq!(command.get_current_dir(), Some(Path::new("/tmp/codegen")));
+        assert_eq!(cargo_target_dir.flatten(), Some(target.as_os_str()));
+        assert_eq!(command.get_current_dir(), Some(codegen.as_path()));
 
-        let default = backend_build_command_in(Path::new("/tmp/codegen"), None, None);
+        let default = backend_build_command_in(&codegen, None, None);
         let args = default
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
         assert!(
             args.windows(2)
-                .any(|args| args == ["--target-dir", "/tmp/codegen/target"])
+                .any(|args| args[0] == "--target-dir" && args[1] == default_target_arg)
         );
     }
 
@@ -3221,7 +3226,9 @@ mod tests {
 
     /// Names in `cache` other than the backend and the two records beside it.
     fn unexpected_cache_entries(cache: &Path) -> Vec<String> {
+        let backend_filename = backend_filename_for_target(&active_host_target());
         let known = [
+            backend_filename.as_str(),
             "librustc_codegen_cuda.so",
             TOOLCHAIN_FINGERPRINT_FILE,
             SOURCE_REV_FILE,

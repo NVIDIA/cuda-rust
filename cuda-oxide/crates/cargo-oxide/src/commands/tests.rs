@@ -4486,7 +4486,7 @@ fn setup_outside_the_workspace_refreshes_from_the_dependency_after_a_build_free_
         "backend = \"missing/librustc_codegen_cuda.so\"\n",
     )
     .unwrap();
-    let pinned = root.join(".cargo/missing/librustc_codegen_cuda.so");
+    let pinned = root.join(".cargo").join("missing/librustc_codegen_cuda.so");
 
     let mut ctx = setup_context_in(&root).expect("fixture is a standalone project");
     assert!(!ctx.is_workspace);
@@ -6739,13 +6739,22 @@ fn tilelib_paths_and_the_tileiras_invocation_follow_the_crate_stem() {
     assert_eq!(
         create_tile_lib_command(Path::new("/opt/cuda/bin/tileiras"), &custom),
         [
-            "/opt/cuda/bin/tileiras",
-            "--preview-create-tile-lib",
-            "--preview-interface=/tmp/cargo-oxide-tilelib/my_lib.iface.tilebc",
-            "--preview-implementation=/tmp/cargo-oxide-tilelib/my_lib.impl.tilebc",
-            "--preview-implementation=/tmp/cargo-oxide-tilelib/my_lib.ltoir",
-            "-o",
-            "out/lib.tilelib",
+            "/opt/cuda/bin/tileiras".to_string(),
+            "--preview-create-tile-lib".to_string(),
+            format!(
+                "--preview-interface={}",
+                dir.join("my_lib.iface.tilebc").display()
+            ),
+            format!(
+                "--preview-implementation={}",
+                dir.join("my_lib.impl.tilebc").display()
+            ),
+            format!(
+                "--preview-implementation={}",
+                dir.join("my_lib.ltoir").display()
+            ),
+            "-o".to_string(),
+            "out/lib.tilelib".to_string(),
         ]
     );
     // tileiras resolves like every other toolkit tool.
@@ -7004,11 +7013,17 @@ fn the_generated_provider_crate_names_everything_it_needs() {
         vec![
             "/opt/cuda/bin/tileiras".to_string(),
             "--preview-create-tile-lib".to_string(),
-            "--preview-interface=/crate/my_lib.iface.tilebc".to_string(),
+            format!(
+                "--preview-interface={}",
+                Path::new("/crate").join("my_lib.iface.tilebc").display()
+            ),
             "--preview-implementation=/crate/target/oxide-provider/my_lib/target/release/libmy_lib_provider.so"
                 .to_string(),
             "-o".to_string(),
-            "/crate/my_lib.tilelib".to_string(),
+            Path::new("/crate")
+                .join("my_lib.tilelib")
+                .display()
+                .to_string(),
         ]
     );
 }

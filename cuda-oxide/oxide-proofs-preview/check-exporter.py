@@ -611,6 +611,42 @@ def main():
             raise RuntimeError(f"Expected racy `c[idx] = ... + c[idx + 1]` on `&mut [f32]` to fail in Lean:\n{res_racy_mut.stdout}")
         print("REJECTED as expected: cross-thread `c[idx + 1]` read alongside `c[idx]` write on `&mut [f32]` fails in Lean 4.", flush=True)
 
+        # Reverse-indexed `c[c.len() - 1 - idx]` positive + trapping `mir.assert` negative check:
+        rev_mut_mir = temporary / "vecadd_mut_rev.mir"
+        rev_mut_source = mut_slice_source.replace(
+            "    c_elem = mir.ptr_offset (c_ptr, idx)",
+            "    one_rev = mir.constant () [] [value: builtin.integer <1: ui64>]: <() -> (builtin.integer ui64)>;\n    last_rev = mir.sub (c_len, one_rev) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;\n    rev_idx = mir.sub (last_rev, idx) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;\n    c_elem = mir.ptr_offset (c_ptr, rev_idx)",
+            1,
+        )
+        rev_mut_mir.write_text(rev_mut_source)
+        rev_mut_lean = require_export(rev_mut_mir, "vecadd_mut_slice")
+        rev_mut_file = temporary / "VecaddMutRev.lean"
+        rev_mut_file.write_text(rev_mut_lean)
+        require_success("env", "lean", str(rev_mut_file))
+        print("PASS: reverse-indexed `c[c.len() - 1 - idx]` proves MirNoOobGlobal, MirDisjointWrites, and MirWritesAllElems.", flush=True)
+
+        trapping_wae_mir = temporary / "vecadd_trapping_wae.mir"
+        trapping_wae_source = (
+            rev_mut_source
+            .replace('contract_requires_len_ge: builtin.string "0>=2,1>=2", ', 'contract_requires_len_ge: builtin.string "1>=2", ', 1)
+            .replace('verify_no_oob_idx: builtin.string "0,1,2"', 'verify_no_oob_idx: builtin.string "1,2"', 1)
+            .replace(
+                "  ^active():\n",
+                "  ^active():\n    a_len_chk = mir.extract_field (a) [] [index: mir.field_index 1]: <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>) -> (builtin.integer ui64)>;\n    a_ok_chk = mir.lt (idx, a_len_chk) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;\n    mir.assert (a_ok_chk) [] []: <(builtin.integer i1) -> ()>;\n",
+                1,
+            )
+        )
+        trapping_wae_mir.write_text(trapping_wae_source)
+        trapping_wae_lean = require_export(trapping_wae_mir, "vecadd_mut_slice")
+        trapping_wae_file = temporary / "VecaddTrappingWae.lean"
+        trapping_wae_file.write_text(
+            "\n".join(line for line in trapping_wae_lean.splitlines() if not line.startswith("#print axioms"))
+        )
+        res_trapping_wae = run_lake("env", "lean", str(trapping_wae_file))
+        if res_trapping_wae.returncode == 0 or "error: omega could not prove the goal:" not in res_trapping_wae.stdout:
+            raise RuntimeError(f"Expected trapping mir.assert before store to fail MirWritesAllElems in Lean:\n{res_trapping_wae.stdout}")
+        print("REJECTED as expected: unproved `mir.assert` before store fails `MirWritesAllElems` in Lean 4.", flush=True)
+
         # Stage 8: Warp-specialized 4-stage TMA + metadata + SharedArray<Barrier, 4, 8> ring
         ring_source = WARP_RING_FIXTURE.read_text()
         ring_lean = require_export(WARP_RING_FIXTURE, "warp_ring_stage")

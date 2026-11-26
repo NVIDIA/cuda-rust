@@ -759,6 +759,7 @@ pub fn launch_contract(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// hardware contracts:
 /// - `no_oob_idx(a, TILE)`: every indexed read or write stays in bounds
 /// - `no_data_race(TILE)`: no two CTA threads conflict on shared memory in one phase
+///   (requires `uniform_barriers` on `SharedArray` statics)
 /// - `disjoint_writes(c)`: distinct launched threads never write the same slot
 /// - `writes_all_elems(c)`: every element in `0..c.len()` has a writer thread
 /// - `uniform_barriers`: CTA/cluster barriers and `mbarrier` waits are safe

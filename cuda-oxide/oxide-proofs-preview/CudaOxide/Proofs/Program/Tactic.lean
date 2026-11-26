@@ -434,7 +434,7 @@ elab "mir_solve_vc" : tactic => solveVcGoals 512 16
 macro "mir_vc" f:ident : tactic =>
   `(tactic| (
       unfold CudaOxide.Mir.Program.MirFunc.validInput CudaOxide.Mir.Program.MirFunc.validThread
-      dsimp only [$f:ident, List.foldr, symSlotGuardOpt, symPairRaceOblig, Option.getD]
+      dsimp only [$f:ident, List.foldr, List.all, Option.isNone, buildWriteWitnessSym, symSlotGuardOpt, symPairRaceOblig, Option.getD]
       mir_solve_vc))
 
 end CudaOxide.Proofs.Program

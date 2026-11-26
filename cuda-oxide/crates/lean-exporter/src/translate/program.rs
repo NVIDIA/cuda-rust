@@ -486,10 +486,14 @@ pub(super) fn translate_mir_program(
         for op_ptr in blk.iter(ctx) {
             let name = op_name(ctx, op_ptr);
             let is_term = matches!(name.as_str(), "mir.goto" | "mir.cond_br");
+            let is_store = name == "mir.store";
             let op = op_ptr.deref(ctx);
             for o_idx in 0..op.get_num_operands() {
                 let ov = op.get_operand(o_idx);
-                if is_term || def_block.get(&ov).copied() != Some(old_idx) {
+                if is_term
+                    || (is_store && o_idx == 1)
+                    || def_block.get(&ov).copied() != Some(old_idx)
+                {
                     cross_vals.insert(ov);
                 }
             }
@@ -2923,6 +2927,33 @@ pub(super) fn translate_mir_program(
                             tags.insert(res, LocalTag::SmemDescSource(sid));
                             struct_fields
                                 .insert(res, vec![(res_vid, Some(LocalTag::SmemDescSource(sid)))]);
+                        } else if is_cuda_dev
+                            && (callee.contains("ThreadIndex") || callee.contains("Uniform"))
+                            && callee.contains("3get")
+                            && op.get_num_operands() == 1
+                            && let Some((src_vid, wrap_tag)) = op.operands().next().and_then(|ov| {
+                                if let Some(
+                                    &t @ (LocalTag::Index1DWrapper(sv)
+                                    | LocalTag::ScalarWrapper(sv)),
+                                ) = tags.get(&ov)
+                                {
+                                    return Some((sv, t));
+                                }
+                                alloca_vars.get(&ov).and_then(|fs| fs.first()).and_then(
+                                    |&(sv, t_opt)| match t_opt {
+                                        Some(
+                                            t @ (LocalTag::Index1DWrapper(_)
+                                            | LocalTag::ScalarWrapper(_)),
+                                        ) => Some((sv, t)),
+                                        _ => None,
+                                    },
+                                )
+                            })
+                        {
+                            if matches!(wrap_tag, LocalTag::Index1DWrapper(_)) {
+                                idx1d_vals.insert(res);
+                            }
+                            stmts.push(MirStmt::Assign(res_vid, MirRhs::Copy(src_vid)));
                         } else if let Some(&pid) = enum_payload_ids.get(&res) {
                             stmts.push(MirStmt::Assign(
                                 res_vid,
@@ -3034,6 +3065,9 @@ pub(super) fn translate_mir_program(
                     {
                         if let Some(&t) = tags.get(&src) {
                             tags.insert(res, t);
+                        }
+                        if let Some(av) = alloca_vars.get(&src).cloned() {
+                            alloca_vars.insert(res, av);
                         }
                         if let Some(&sv) = bar_slot_vars.get(&src) {
                             bar_slot_vars.insert(res, sv);
@@ -3549,8 +3583,16 @@ pub(super) fn translate_mir_program(
                                     pos_counted_lt.insert(res);
                                 }
                             }
+                        } else if opid == "mir.gt"
+                            && let Some(&gp) = slice_len_vals.get(&l)
+                        {
+                            lt_slice_len.insert(res, gp);
                         } else if opid == "mir.ge"
                             && let Some(&gp) = slice_len_vals.get(&r)
+                        {
+                            ge_slice_len.insert(res, gp);
+                        } else if opid == "mir.le"
+                            && let Some(&gp) = slice_len_vals.get(&l)
                         {
                             ge_slice_len.insert(res, gp);
                         } else if opid == "mir.eq"

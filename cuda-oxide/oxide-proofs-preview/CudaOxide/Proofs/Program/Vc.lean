@@ -10,7 +10,9 @@ import CudaOxide.Proofs.Program.Invariant
 -/
 namespace CudaOxide.Proofs.Program
 open CudaOxide.Mir.Program
+open CudaOxide.Mir.ControlFlow
 open CudaOxide.Contracts.Program
+open CudaOxide.Contracts.ControlFlow
 
 /-- Helper: extract a list-conjunction obligation at `x ∈ xs`. -/
 theorem foldr_and_of_mem {α : Type} {P : α → Prop} :
@@ -792,11 +794,13 @@ theorem mem_upperTriPairs {α : Type} {x y : α} :
       | Or.inl h1 => Or.inl (List.mem_append_right _ h1)
       | Or.inr h2 => Or.inr (List.mem_append_right _ h2)
 
-/-- Bridge theorem for `MirNoSharedRace`: prunes barrier-disjoint, mbarrier-ordered,
-    same-single-thread, and symmetric duplicate event pairs, reducing remaining conflicts on `sharedId` to `tx₁ = tx₂ ∧ ty₁ = ty₂`. -/
-theorem vcNoSharedRace_of_table {f : MirFunc} {tbl : List SymBlockInv}
+/-- Bridge theorem for `MirNoSharedRace`: requires `UniformBarriers cfg` to align barrier
+    phases across CTA threads, then prunes barrier-disjoint, mbarrier-ordered, same-single-thread,
+    and symmetric duplicate event pairs, reducing remaining conflicts on `sharedId` to `tx₁ = tx₂ ∧ ty₁ = ty₂`. -/
+theorem vcNoSharedRace_of_table {f : MirFunc} {cfg : ControlFlowCfg} {tbl : List SymBlockInv}
     {memEvs : List SymMemEvent} {sharedId : Nat}
     {pairs : List (SymMemEvent × SymMemEvent × Option (SymInt × SymInt))}
+    (hunif : UniformBarriers cfg)
     (hvalid : validSymFunc f tbl = true)
     (hmem : collectSymMemEvents f tbl = memEvs)
     (hpairs : (let sevs := dedupEvents (memEvs.filter fun s => s.space == .shared && s.bufId == sharedId)
@@ -817,7 +821,8 @@ theorem vcNoSharedRace_of_table {f : MirFunc} {tbl : List SymBlockInv}
              ((p.1.indexOpt.getD (.const 0)).eval env t₁ h₁)
              ((p.2.1.indexOpt.getD (.const 0)).eval env t₂ h₂)
              (t₁.tx = t₂.tx ∧ t₁.ty = t₂.ty))) ∧ acc) True) :
-    MirNoSharedRace f sharedId := by
+    MirNoSharedRace f cfg sharedId := by
+  refine ⟨hunif, ?_⟩                                        -- Supply `UniformBarriers cfg` for phase alignment
   intro env t₁ t₂ ev₁ ev₂ hIn hT1 hT2 hbx hby hem1 hem2 hsp1 hsp2 hb1 hb2 hph hnotOrd hw hidx
   obtain ⟨h₁, s1, hs1, i1, k1, hk1, hd1, hw1, hssp1, hsbid1, hab1, ho1, hi1, hpc1, hps1⟩ :=
     emitsEvent_mem_collect hvalid hIn hem1
@@ -1092,36 +1097,61 @@ theorem vcNoOobClusterRank_of_table {f : MirFunc} {tbl : List SymBlockInv}
   | none => rw [hro] at hp; contradiction
   | some rSym => rw [hro] at hp; dsimp only at hp; rw [← hrEq rSym hro]; exact hp
 
-/-- Scan a single basic block's statements for a guaranteed 1-element global store to `paramId`. -/
+/-- Converse of `symBool_conj_true`: `SymBool.conj a b` evaluates to `true` only if both `a` and `b` do. -/
+theorem symBool_conj_true_elim {env : InputEnv} {t : ThreadCtx} {havoc : Nat → Nat}
+    {a b : SymBool} (h : (SymBool.conj a b).eval env t havoc = true) :
+    a.eval env t havoc = true ∧ b.eval env t havoc = true := by
+  unfold SymBool.conj at h
+  split at h                                                  -- Case `a == .lit true`
+  · rename_i ha; rw [beq_iff_eq.mp ha]; exact ⟨rfl, h⟩
+  · split at h                                                -- Case `b == .lit true`
+    · rename_i _ hb; rw [beq_iff_eq.mp hb]; exact ⟨h, rfl⟩
+    · split at h                                              -- Case `a == .lit false || b == .lit false`
+      · contradiction
+      · split at h                                            -- Case `a == b`
+        · rename_i _ _ _ hab; rw [← beq_iff_eq.mp hab]; exact ⟨h, h⟩
+        · simpa [SymBool.eval] using h                        -- General `.and a b` case
+
+/-- Scan a basic block's statements for a guaranteed 1-element global store to `paramId` while
+    conjoining every intra-block `Stmt.assertCond` predicate (`none` if any assert condition is `.unk`). -/
 def findBlockGlobalWrite (f : MirFunc) (paramId : Nat) (pCond : SymBool) (sregs : SymRegList) :
-    List Stmt → SymRegList × Option SymInt
-  | [] => (sregs, none)
+    List Stmt → SymRegList × Option SymInt × Option SymBool
+  | [] => (sregs, none, some (.lit true))
   | .assign dst (.load _) :: rest =>
       findBlockGlobalWrite f paramId pCond (sregs.setVar dst .unk) rest
   | .assign dst (.loadTmemBase _ cols) :: rest =>
       findBlockGlobalWrite f paramId pCond (sregs.setVar dst (.tmemPtr cols (.const 0))) rest
   | .assign dst rhs :: rest =>
       findBlockGlobalWrite f paramId pCond (sregs.setVar dst (symEvalRhs f sregs rhs)) rest
+  | .assertCond _ cond :: rest =>
+      let (r', wOpt, aOpt) := findBlockGlobalWrite f paramId pCond sregs rest
+      let curA := match sregs.getVar cond, aOpt with
+        | .bool cSym, some restSym => some (SymBool.conj cSym restSym)
+        | _, _ => none
+      (r', wOpt, curA)
   | .store ptr _ :: rest =>
       let sev := symSinglePtrEvent pCond .any true (sregs.getVar ptr)
       let cur := if sev.space == .global && sev.bufId == paramId then sev.indexOpt else none
-      let (r', later) := findBlockGlobalWrite f paramId pCond sregs rest
-      (r', cur.orElse fun _ => later)
+      let (r', later, aOpt) := findBlockGlobalWrite f paramId pCond sregs rest
+      (r', cur.orElse (fun _ => later), aOpt)
   | _ :: rest =>
       findBlockGlobalWrite f paramId pCond sregs rest
 
-/-- Soundness of `findBlockGlobalWrite`: preserves symbolic register correspondence across `stmts`
-    and witnesses a concrete global write `MemEvent` to `paramId` whenever `some idxSym` is returned. -/
+/-- Soundness of `findBlockGlobalWrite`: preserves symbolic register correspondence, certifies
+    `stmtsNoTrap` whenever the returned assertion predicate holds, and witnesses a concrete global
+    write `MemEvent` to `paramId` whenever `some idxSym` is returned. -/
 theorem findBlockGlobalWrite_sound (f : MirFunc) (paramId : Nat) (env : InputEnv) (t : ThreadCtx)
     (havoc : Nat → Nat) (pCond : SymBool) (hpc : pCond.eval env t havoc = true) (term : Terminator) :
     ∀ stmts : List Stmt, ∀ regs : RegFile, ∀ sregs : SymRegList, ∀ phase : Nat,
       (∀ v, (sregs.getVar v).matchesVal env t havoc (regs v)) →
       (∀ v, ((findBlockGlobalWrite f paramId pCond sregs stmts).1.getVar v).matchesVal env t havoc
               ((execStmts f env t regs phase term stmts).1 v)) ∧
-      (∀ idxSym : SymInt, (findBlockGlobalWrite f paramId pCond sregs stmts).2 = some idxSym →
+      (∀ aSym : SymBool, (findBlockGlobalWrite f paramId pCond sregs stmts).2.2 = some aSym →
+        aSym.eval env t havoc = true → stmtsNoTrap f env t regs phase term stmts = true) ∧
+      (∀ idxSym : SymInt, (findBlockGlobalWrite f paramId pCond sregs stmts).2.1 = some idxSym →
         ∃ ev ∈ (execStmts f env t regs phase term stmts).2.2.1,
           ev.isWrite = true ∧ ev.space = .global ∧ ev.bufId = paramId ∧ ev.index = idxSym.eval env t havoc)
-  | [], _, _, _, hmatch => ⟨hmatch, fun _ h => by contradiction⟩ -- Base case: empty statement list emits no write
+  | [], _, _, _, hmatch => ⟨hmatch, fun _ _ _ => rfl, fun _ h => by contradiction⟩ -- Base case: empty block
   | stmt :: rest, regs, sregs, phase, hmatch => by
       cases stmt with                                         -- Step through the head statement `stmt`
       | assign dst rhs =>
@@ -1136,8 +1166,8 @@ theorem findBlockGlobalWrite_sound (f : MirFunc) (paramId : Nat) (env : InputEnv
               have hnext : ∀ v, ((sregs.setVar dst .unk).getVar v).matchesVal env t havoc ((regs.set dst .unk) v) := by
                 intro v; unfold RegFile.set; rw [getVar_setVar]
                 by_cases hv : (v == dst) = true <;> simp [hv, SymVal.matchesVal]; exact hmatch v
-              obtain ⟨hr, hw⟩ := findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest (regs.set dst .unk) (sregs.setVar dst .unk) phase hnext
-              exact ⟨hr, fun idxSym hs => by
+              obtain ⟨hr, hnt, hw⟩ := findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest (regs.set dst .unk) (sregs.setVar dst .unk) phase hnext
+              exact ⟨hr, hnt, fun idxSym hs => by
                 obtain ⟨ev, hev, hprops⟩ := hw idxSym hs
                 exact ⟨ev, List.mem_append_right _ hev, hprops⟩⟩
           | loadTmemBase ptr cols =>
@@ -1145,17 +1175,34 @@ theorem findBlockGlobalWrite_sound (f : MirFunc) (paramId : Nat) (env : InputEnv
                   ((regs.set dst (.tmemPtr cols 0)) v) := by
                 intro v; unfold RegFile.set; rw [getVar_setVar]
                 by_cases hv : (v == dst) = true <;> simp [hv, SymVal.matchesVal, SymInt.eval]; exact hmatch v
-              obtain ⟨hr, hw⟩ := findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest (regs.set dst (.tmemPtr cols 0)) (sregs.setVar dst (.tmemPtr cols (.const 0))) phase hnext
-              exact ⟨hr, fun idxSym hs => by
+              obtain ⟨hr, hnt, hw⟩ := findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest (regs.set dst (.tmemPtr cols 0)) (sregs.setVar dst (.tmemPtr cols (.const 0))) phase hnext
+              exact ⟨hr, hnt, fun idxSym hs => by
                 obtain ⟨ev, hev, hprops⟩ := hw idxSym hs
                 exact ⟨ev, List.mem_append_right _ hev, hprops⟩⟩
           | copy _ | constInt _ _ | constBool _ | sreg _ | index1D | coord2DU32 | paramScalar _ | slicePtr _
           | sliceLen _ | sharedBase _ | binOp _ _ _ _ | checkedOvf _ _ _ _ | cmpOp _ _ _ | notBool _ | intCast _ _
           | ptrOffset _ _ | mbarTryWait _ _ | cvtaShared _ | opaqueUint _ _ | opaqueVal =>
               exact findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest _ _ phase hnextGen
+      | assertCond aid cond =>
+          obtain ⟨hr, hnt, hw⟩ := findBlockGlobalWrite f paramId pCond sregs rest |> fun _ =>
+            findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest regs sregs phase hmatch
+          refine ⟨hr, fun aSym ha hev => ?_, hw⟩
+          dsimp only [findBlockGlobalWrite] at ha
+          have hmc := hmatch cond
+          cases hsc : sregs.getVar cond <;>
+            cases hrestA : (findBlockGlobalWrite f paramId pCond sregs rest).2.2 <;>
+            rw [hsc, hrestA] at ha <;> try contradiction
+          rename_i cSym restSym
+          injection ha with haEq; subst haEq
+          obtain ⟨hcTrue, hrestTrue⟩ := symBool_conj_true_elim hev
+          rw [hsc] at hmc; dsimp only [SymVal.matchesVal] at hmc
+          rw [hcTrue] at hmc
+          dsimp only [stmtsNoTrap]
+          rw [hmc]
+          simpa using hnt restSym hrestA hrestTrue
       | store ptr val =>
-          obtain ⟨hr, hw⟩ := findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest regs sregs phase hmatch
-          refine ⟨hr, fun idxSym hs => ?_⟩
+          obtain ⟨hr, hnt, hw⟩ := findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest regs sregs phase hmatch
+          refine ⟨hr, hnt, fun idxSym hs => ?_⟩
           dsimp only [findBlockGlobalWrite] at hs
           let sev := symSinglePtrEvent pCond .any true (sregs.getVar ptr)
           cases hcur : (if sev.space == .global && sev.bufId == paramId then sev.indexOpt else none) with
@@ -1202,11 +1249,11 @@ theorem findBlockGlobalWrite_sound (f : MirFunc) (paramId : Nat) (env : InputEnv
       | syncThreads =>
           exact findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest regs sregs (phase + 1) hmatch
       | barrierSlotCheck _ | tmaCopyG2S _ _ _ _ | tmemAlloc _ _ | smemDescRead _ _ =>
-          obtain ⟨hr, hw⟩ := findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest regs sregs phase hmatch
-          exact ⟨hr, fun idxSym hs => by
+          obtain ⟨hr, hnt, hw⟩ := findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest regs sregs phase hmatch
+          exact ⟨hr, hnt, fun idxSym hs => by
             obtain ⟨ev, hev, hprops⟩ := hw idxSym hs
             exact ⟨ev, List.mem_append_right _ hev, hprops⟩⟩
-      | assertCond _ _ | clusterRankCheck _ | mbarArrive _ _ | mbarArriveExpectTx _ _ _ | tmemAccess _ _ _ _ =>
+      | clusterRankCheck _ | mbarArrive _ _ | mbarArriveExpectTx _ _ _ | tmemAccess _ _ _ _ =>
           exact findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest regs sregs phase hmatch
 
 /-- Symbolic leaf collected from entry block `0` for `MirWritesAllElems`:
@@ -1214,202 +1261,264 @@ theorem findBlockGlobalWrite_sound (f : MirFunc) (paramId : Nat) (env : InputEnv
 structure SymWriteLeaf where
   /-- Conjoined branch predicate accumulated from entry block `0` to this leaf. -/
   pathCond : SymBool
+  /-- Conjoined `Stmt.assertCond` predicates accumulated along the path up through this leaf. -/
+  assertsCond : SymBool := .lit true
   /-- `some idxSym` when the path hit a global store to `paramId`, or `none` on a non-writing exit. -/
   writeIdxOpt : Option SymInt
   deriving Repr, DecidableEq, Lean.ToExpr
 
-/-- Exhaustively enumerate symbolic execution paths from `(b, pCond, sregs)` until hitting a global
-    write to `paramId` (`writeIdxOpt = some idx`) or a non-writing exit (`writeIdxOpt = none`).
-    Returns `none` (failing closed) if `fuel` runs out (cycles) or a branch condition is `.unk`. -/
+/-- Exhaustively enumerate symbolic execution paths from `(b, pCond, aAcc, sregs)` until hitting a
+    global write to `paramId` (`writeIdxOpt = some idx`) or a non-writing exit (`writeIdxOpt = none`).
+    Returns `none` (failing closed) if `fuel` runs out (cycles), a branch condition is `.unk`, or an
+    intermediate `Stmt.assertCond` condition is `.unk`. -/
 def collectWriteLeaves (f : MirFunc) (paramId : Nat) :
-    Nat → Nat → SymBool → SymRegList → Option (List SymWriteLeaf)
-  | 0, _, _, _ => none
-  | fuel + 1, b, pCond, sregs =>
+    Nat → Nat → SymBool → SymBool → SymRegList → Option (List SymWriteLeaf)
+  | 0, _, _, _, _ => none
+  | fuel + 1, b, pCond, aAcc, sregs =>
       if b ≥ f.blocks.length then none
       else
         let blk := f.blockAt b
-        let (outSR, wOpt) := findBlockGlobalWrite f paramId pCond sregs blk.stmts
-        match wOpt with
-        | some idxSym => some [{ pathCond := pCond, writeIdxOpt := some idxSym }]
-        | none =>
-            match blk.term with
-            | .ret | .unreachable => some [{ pathCond := pCond, writeIdxOpt := none }]
-            | .goto dst args =>
-                collectWriteLeaves f paramId fuel dst pCond
-                  (bindSymBlockArgs outSR outSR (f.blockAt dst).args args)
-            | .condBr cv tBlk tArgs fBlk fArgs =>
-                match outSR.getVar cv with
-                | .bool cSym =>
-                    match collectWriteLeaves f paramId fuel tBlk (.and pCond cSym)
-                            (bindSymBlockArgs outSR outSR (f.blockAt tBlk).args tArgs),
-                          collectWriteLeaves f paramId fuel fBlk (.and pCond (.not cSym))
-                            (bindSymBlockArgs outSR outSR (f.blockAt fBlk).args fArgs) with
-                    | some l1, some l2 => some (l1 ++ l2)
-                    | _, _ => none
-                | _ => none
+        let (outSR, wOpt, aOpt) := findBlockGlobalWrite f paramId pCond sregs blk.stmts
+        match aOpt with
+        | none => none
+        | some blkA =>
+            let aAcc' := SymBool.conj aAcc blkA
+            match wOpt with
+            | some idxSym =>
+                some [{ pathCond := pCond, assertsCond := aAcc', writeIdxOpt := some idxSym }]
+            | none =>
+                match blk.term with
+                | .ret | .unreachable =>
+                    some [{ pathCond := pCond, assertsCond := aAcc', writeIdxOpt := none }]
+                | .goto dst args =>
+                    collectWriteLeaves f paramId fuel dst pCond aAcc'
+                      (bindSymBlockArgs outSR outSR (f.blockAt dst).args args)
+                | .condBr cv tBlk tArgs fBlk fArgs =>
+                    match outSR.getVar cv with
+                    | .bool cSym =>
+                        match collectWriteLeaves f paramId fuel tBlk (.and pCond cSym) aAcc'
+                                (bindSymBlockArgs outSR outSR (f.blockAt tBlk).args tArgs),
+                              collectWriteLeaves f paramId fuel fBlk (.and pCond (.not cSym)) aAcc'
+                                (bindSymBlockArgs outSR outSR (f.blockAt fBlk).args fArgs) with
+                        | some l1, some l2 => some (l1 ++ l2)
+                        | _, _ => none
+                    | _ => none
 
-/-- Soundness of `collectWriteLeaves`: every concrete execution from reachable block `b` lands in
-    at least one symbolic leaf `leaf ∈ leaves` whose `pathCond` holds and whose `some idxSym`
-    witnesses a reachable `EmitsEvent` global write to `paramId`. -/
+/-- Soundness of `collectWriteLeaves`: every concrete execution from `(b, regs, phase)` lands in at
+    least one symbolic leaf `leaf ∈ leaves` whose `pathCond` holds and whose `some idxSym` (once
+    `leaf.assertsCond` holds) witnesses a trap-free `EmitsTrapFreeEvent` global write to `paramId`. -/
 theorem collectWriteLeaves_sound (f : MirFunc) (paramId : Nat) (env : InputEnv) (t : ThreadCtx)
     (havoc : Nat → Nat) :
-    ∀ (fuel b phase : Nat) (pCond : SymBool) (regs : RegFile) (sregs : SymRegList) (leaves : List SymWriteLeaf),
-      Reachable f env t b regs phase →
+    ∀ (fuel b phase : Nat) (pCond aAcc : SymBool) (regs : RegFile) (sregs : SymRegList) (leaves : List SymWriteLeaf),
+      (aAcc.eval env t havoc = true → ReachableTrapFree f env t b regs phase) →
       pCond.eval env t havoc = true →
       (∀ v, (sregs.getVar v).matchesVal env t havoc (regs v)) →
-      collectWriteLeaves f paramId fuel b pCond sregs = some leaves →
+      collectWriteLeaves f paramId fuel b pCond aAcc sregs = some leaves →
       ∃ leaf ∈ leaves,
         leaf.pathCond.eval env t havoc = true ∧
-        ∀ idxSym : SymInt, leaf.writeIdxOpt = some idxSym →
-          ∃ ev : MemEvent, EmitsEvent f env t ev ∧
-            ev.isWrite = true ∧ ev.space = .global ∧ ev.bufId = paramId ∧ ev.index = idxSym.eval env t havoc
-  | 0, _, _, _, _, _, _, _, _, _, hcol => by contradiction    -- Exhausted fuel returns `none`, contradiction
-  | fuel + 1, b, phase, pCond, regs, sregs, leaves, hreach, hpc, hmatch, hcol => by
+        (leaf.assertsCond.eval env t havoc = true →
+          ∀ idxSym : SymInt, leaf.writeIdxOpt = some idxSym →
+            ∃ ev : MemEvent, EmitsTrapFreeEvent f env t ev ∧
+              ev.isWrite = true ∧ ev.space = .global ∧ ev.bufId = paramId ∧ ev.index = idxSym.eval env t havoc)
+  | 0, _, _, _, _, _, _, _, _, _, _, hcol => by contradiction  -- Exhausted fuel returns `none`, contradiction
+  | fuel + 1, b, phase, pCond, aAcc, regs, sregs, leaves, hreach, hpc, hmatch, hcol => by
       dsimp only [collectWriteLeaves] at hcol                 -- Unfold one step of `collectWriteLeaves`
       by_cases hge : b ≥ f.blocks.length
       · rw [if_pos hge] at hcol; contradiction                -- Out-of-range block index fails closed
       · rw [if_neg hge] at hcol
-        have hlt : b < f.blocks.length := Nat.lt_of_not_ge hge
-        obtain ⟨hmOut, hwOut⟩ := findBlockGlobalWrite_sound f paramId env t havoc pCond hpc (f.blockAt b).term (f.blockAt b).stmts regs sregs phase hmatch
-        cases hw : (findBlockGlobalWrite f paramId pCond sregs (f.blockAt b).stmts).2 with
-        | some idxSym =>                                      -- Case 1: Block `b` itself writes `paramId` at `idxSym`
-            rw [hw] at hcol; injection hcol with hl; subst hl
-            refine ⟨{ pathCond := pCond, writeIdxOpt := some idxSym }, List.Mem.head _, hpc, ?_⟩
-            intro i0 hi0; injection hi0 with hi; subst hi
-            obtain ⟨ev, hev, hprops⟩ := hwOut idxSym hw
-            exact ⟨ev, ⟨b, phase, regs, hreach, hev⟩, hprops⟩
-        | none =>                                             -- Case 2: Block `b` did not write; follow terminator
-            rw [hw] at hcol; dsimp only at hcol
-            cases hterm : (f.blockAt b).term with
-            | ret | unreachable =>                            -- Non-writing exit records `writeIdxOpt := none`
-                rw [hterm] at hcol; injection hcol with hl; subst hl
-                exact ⟨{ pathCond := pCond, writeIdxOpt := none }, List.Mem.head _, hpc, fun _ h => by contradiction⟩
-            | goto dst args =>                                -- Unconditional `goto` steps via `Reachable.stepGoto`
-                rw [hterm] at hcol
-                have hdstLt : dst < f.blocks.length := by
-                  cases fuel with
-                  | zero => simp [collectWriteLeaves] at hcol
-                  | succ f' =>
-                      dsimp only [collectWriteLeaves] at hcol
-                      by_cases hd : dst ≥ f.blocks.length
-                      · rw [if_pos hd] at hcol; contradiction
-                      · exact Nat.lt_of_not_ge hd
-                cases hex : execStmts f env t regs phase (f.blockAt b).term (f.blockAt b).stmts with
-                | mk outR restPair =>
-                    rcases restPair with ⟨outP, evs, tevs⟩
-                    have hmOut' : ∀ v, ((findBlockGlobalWrite f paramId pCond sregs (f.blockAt b).stmts).1.getVar v).matchesVal env t havoc (outR v) := by
-                      intro v; have := hmOut v; rw [hex] at this; exact this
-                    have hrNext := Reachable.stepGoto hreach hex hterm hdstLt
-                    have hbind := bindSymBlockArgs_correct hmOut' (f.blockAt dst).args args outR _ hmOut'
-                    exact collectWriteLeaves_sound f paramId env t havoc fuel dst outP pCond _ _ leaves hrNext hpc hbind hcol
-            | condBr cv tBlk tArgs fBlk fArgs =>              -- Conditional branch splits into `tBlk` (`cSym`) and `fBlk` (`¬cSym`)
-                rw [hterm] at hcol; dsimp only at hcol
-                cases hcv : (findBlockGlobalWrite f paramId pCond sregs (f.blockAt b).stmts).1.getVar cv <;>
-                  rw [hcv] at hcol <;> try contradiction
-                rename_i cSym
-                dsimp only at hcol
-                cases hl1 : collectWriteLeaves f paramId fuel tBlk (.and pCond cSym)
-                        (bindSymBlockArgs (findBlockGlobalWrite f paramId pCond sregs (f.blockAt b).stmts).1
-                                          (findBlockGlobalWrite f paramId pCond sregs (f.blockAt b).stmts).1
-                                          (f.blockAt tBlk).args tArgs) <;>
-                  cases hl2 : collectWriteLeaves f paramId fuel fBlk (.and pCond (.not cSym))
-                        (bindSymBlockArgs (findBlockGlobalWrite f paramId pCond sregs (f.blockAt b).stmts).1
-                                          (findBlockGlobalWrite f paramId pCond sregs (f.blockAt b).stmts).1
-                                          (f.blockAt fBlk).args fArgs) <;>
-                  rw [hl1, hl2] at hcol <;> try contradiction
-                rename_i l1 l2
-                injection hcol with hl; subst hl
-                cases hex : execStmts f env t regs phase (f.blockAt b).term (f.blockAt b).stmts with
-                | mk outR restPair =>
-                    rcases restPair with ⟨outP, evs, tevs⟩
-                    have hmOut' : ∀ v, ((findBlockGlobalWrite f paramId pCond sregs (f.blockAt b).stmts).1.getVar v).matchesVal env t havoc (outR v) := by
-                      intro v; have := hmOut v; rw [hex] at this; exact this
-                    have hcvMatch := hmOut' cv
-                    rw [hcv] at hcvMatch; dsimp only [SymVal.matchesVal] at hcvMatch
-                    cases hce : cSym.eval env t havoc
-                    · rw [hce] at hcvMatch
-                      have hfl : fBlk < f.blocks.length := by
-                        cases fuel with
-                        | zero => simp [collectWriteLeaves] at hl2
-                        | succ _ =>
-                            dsimp only [collectWriteLeaves] at hl2
-                            by_cases hd : fBlk ≥ f.blocks.length
-                            · rw [if_pos hd] at hl2; contradiction
-                            · exact Nat.lt_of_not_ge hd
-                      have hrF := Reachable.stepCondFalse hreach hex hterm hcvMatch hfl
-                      have hpcF : (SymBool.and pCond (.not cSym)).eval env t havoc = true := by
-                        simp [SymBool.eval, hpc, hce]
-                      have hbind := bindSymBlockArgs_correct hmOut' (f.blockAt fBlk).args fArgs outR _ hmOut'
-                      obtain ⟨lf, hlfMem, hlfProps⟩ := collectWriteLeaves_sound f paramId env t havoc fuel fBlk outP (.and pCond (.not cSym)) _ _ l2 hrF hpcF hbind hl2
-                      exact ⟨lf, List.mem_append_right _ hlfMem, hlfProps⟩
-                    · rw [hce] at hcvMatch
-                      have htl : tBlk < f.blocks.length := by
-                        cases fuel with
-                        | zero => simp [collectWriteLeaves] at hl1
-                        | succ _ =>
-                            dsimp only [collectWriteLeaves] at hl1
-                            by_cases hd : tBlk ≥ f.blocks.length
-                            · rw [if_pos hd] at hl1; contradiction
-                            · exact Nat.lt_of_not_ge hd
-                      have hrT := Reachable.stepCondTrue hreach hex hterm hcvMatch htl
-                      have hpcT' : (SymBool.and pCond cSym).eval env t havoc = true := by
-                        simp [SymBool.eval, hpc, hce]
-                      have hbind := bindSymBlockArgs_correct hmOut' (f.blockAt tBlk).args tArgs outR _ hmOut'
-                      obtain ⟨lf, hlfMem, hlfProps⟩ := collectWriteLeaves_sound f paramId env t havoc fuel tBlk outP (.and pCond cSym) _ _ l1 hrT hpcT' hbind hl1
-                      exact ⟨lf, List.mem_append_left _ hlfMem, hlfProps⟩
+        obtain ⟨hmOut, hntOut, hwOut⟩ := findBlockGlobalWrite_sound f paramId env t havoc pCond hpc (f.blockAt b).term (f.blockAt b).stmts regs sregs phase hmatch
+        cases ha : (findBlockGlobalWrite f paramId pCond sregs (f.blockAt b).stmts).2.2 with
+        | none => rw [ha] at hcol; contradiction              -- Unresolved assert condition fails closed
+        | some blkA =>
+            rw [ha] at hcol; dsimp only at hcol
+            cases hw : (findBlockGlobalWrite f paramId pCond sregs (f.blockAt b).stmts).2.1 with
+            | some idxSym =>                                  -- Case 1: Block `b` itself writes `paramId` at `idxSym`
+                rw [hw] at hcol; injection hcol with hl; subst hl
+                refine ⟨{ pathCond := pCond, assertsCond := SymBool.conj aAcc blkA, writeIdxOpt := some idxSym },
+                        List.Mem.head _, hpc, ?_⟩
+                intro haAll i0 hi0; injection hi0 with hi; subst hi
+                obtain ⟨haAccT, hblkAT⟩ := symBool_conj_true_elim haAll
+                obtain ⟨ev, hev, hprops⟩ := hwOut idxSym hw
+                exact ⟨ev, ⟨b, phase, regs, hreach haAccT, hntOut blkA ha hblkAT, hev⟩, hprops⟩
+            | none =>                                         -- Case 2: Block `b` did not write; follow terminator
+                rw [hw] at hcol; dsimp only at hcol
+                cases hterm : (f.blockAt b).term with
+                | ret | unreachable =>                        -- Non-writing exit records `writeIdxOpt := none`
+                    rw [hterm] at hcol; injection hcol with hl; subst hl
+                    exact ⟨{ pathCond := pCond, assertsCond := SymBool.conj aAcc blkA, writeIdxOpt := none },
+                           List.Mem.head _, hpc, fun _ _ h => by contradiction⟩
+                | goto dst args =>                            -- Unconditional `goto` steps via `ReachableTrapFree.stepGoto`
+                    rw [hterm] at hcol
+                    have hdstLt : dst < f.blocks.length := by
+                      cases fuel with
+                      | zero => simp [collectWriteLeaves] at hcol
+                      | succ _ =>
+                          dsimp only [collectWriteLeaves] at hcol
+                          by_cases hd : dst ≥ f.blocks.length
+                          · rw [if_pos hd] at hcol; contradiction
+                          · exact Nat.lt_of_not_ge hd
+                    cases hex : execStmts f env t regs phase (f.blockAt b).term (f.blockAt b).stmts with
+                    | mk outR restPair =>
+                        rcases restPair with ⟨outP, evs, tevs⟩
+                        have hmOut' : ∀ v, ((findBlockGlobalWrite f paramId pCond sregs (f.blockAt b).stmts).1.getVar v).matchesVal env t havoc (outR v) := by
+                          intro v; have := hmOut v; rw [hex] at this; exact this
+                        have hrNext : (SymBool.conj aAcc blkA).eval env t havoc = true →
+                            ReachableTrapFree f env t dst (bindBlockArgs outR outR (f.blockAt dst).args args) outP := by
+                          intro hconj
+                          obtain ⟨ha1, ha2⟩ := symBool_conj_true_elim hconj
+                          exact ReachableTrapFree.stepGoto (hreach ha1) (hntOut blkA ha ha2) hex hterm hdstLt
+                        have hbind := bindSymBlockArgs_correct hmOut' (f.blockAt dst).args args outR _ hmOut'
+                        exact collectWriteLeaves_sound f paramId env t havoc fuel dst outP pCond (SymBool.conj aAcc blkA) _ _ leaves hrNext hpc hbind hcol
+                | condBr cv tBlk tArgs fBlk fArgs =>          -- Conditional branch splits into `tBlk` (`cSym`) and `fBlk` (`¬cSym`)
+                    rw [hterm] at hcol; dsimp only at hcol
+                    cases hcv : (findBlockGlobalWrite f paramId pCond sregs (f.blockAt b).stmts).1.getVar cv <;>
+                      rw [hcv] at hcol <;> try contradiction
+                    rename_i cSym
+                    dsimp only at hcol
+                    cases hl1 : collectWriteLeaves f paramId fuel tBlk (.and pCond cSym) (SymBool.conj aAcc blkA)
+                            (bindSymBlockArgs (findBlockGlobalWrite f paramId pCond sregs (f.blockAt b).stmts).1
+                                              (findBlockGlobalWrite f paramId pCond sregs (f.blockAt b).stmts).1
+                                              (f.blockAt tBlk).args tArgs) <;>
+                      cases hl2 : collectWriteLeaves f paramId fuel fBlk (.and pCond (.not cSym)) (SymBool.conj aAcc blkA)
+                            (bindSymBlockArgs (findBlockGlobalWrite f paramId pCond sregs (f.blockAt b).stmts).1
+                                              (findBlockGlobalWrite f paramId pCond sregs (f.blockAt b).stmts).1
+                                              (f.blockAt fBlk).args fArgs) <;>
+                      rw [hl1, hl2] at hcol <;> try contradiction
+                    rename_i l1 l2
+                    injection hcol with hl; subst hl
+                    cases hex : execStmts f env t regs phase (f.blockAt b).term (f.blockAt b).stmts with
+                    | mk outR restPair =>
+                        rcases restPair with ⟨outP, evs, tevs⟩
+                        have hmOut' : ∀ v, ((findBlockGlobalWrite f paramId pCond sregs (f.blockAt b).stmts).1.getVar v).matchesVal env t havoc (outR v) := by
+                          intro v; have := hmOut v; rw [hex] at this; exact this
+                        have hcvMatch := hmOut' cv
+                        rw [hcv] at hcvMatch; dsimp only [SymVal.matchesVal] at hcvMatch
+                        cases hce : cSym.eval env t havoc
+                        · rw [hce] at hcvMatch
+                          have hfl : fBlk < f.blocks.length := by
+                            cases fuel with
+                            | zero => simp [collectWriteLeaves] at hl2
+                            | succ _ =>
+                                dsimp only [collectWriteLeaves] at hl2
+                                by_cases hd : fBlk ≥ f.blocks.length
+                                · rw [if_pos hd] at hl2; contradiction
+                                · exact Nat.lt_of_not_ge hd
+                          have hrF : (SymBool.conj aAcc blkA).eval env t havoc = true →
+                              ReachableTrapFree f env t fBlk (bindBlockArgs outR outR (f.blockAt fBlk).args fArgs) outP := by
+                            intro hconj
+                            obtain ⟨ha1, ha2⟩ := symBool_conj_true_elim hconj
+                            exact ReachableTrapFree.stepCondFalse (hreach ha1) (hntOut blkA ha ha2) hex hterm hcvMatch hfl
+                          have hpcF : (SymBool.and pCond (.not cSym)).eval env t havoc = true := by
+                            simp [SymBool.eval, hpc, hce]
+                          have hbind := bindSymBlockArgs_correct hmOut' (f.blockAt fBlk).args fArgs outR _ hmOut'
+                          obtain ⟨lf, hlfMem, hlfProps⟩ := collectWriteLeaves_sound f paramId env t havoc fuel fBlk outP (.and pCond (.not cSym)) (SymBool.conj aAcc blkA) _ _ l2 hrF hpcF hbind hl2
+                          exact ⟨lf, List.mem_append_right _ hlfMem, hlfProps⟩
+                        · rw [hce] at hcvMatch
+                          have htl : tBlk < f.blocks.length := by
+                            cases fuel with
+                            | zero => simp [collectWriteLeaves] at hl1
+                            | succ _ =>
+                                dsimp only [collectWriteLeaves] at hl1
+                                by_cases hd : tBlk ≥ f.blocks.length
+                                · rw [if_pos hd] at hl1; contradiction
+                                · exact Nat.lt_of_not_ge hd
+                          have hrT : (SymBool.conj aAcc blkA).eval env t havoc = true →
+                              ReachableTrapFree f env t tBlk (bindBlockArgs outR outR (f.blockAt tBlk).args tArgs) outP := by
+                            intro hconj
+                            obtain ⟨ha1, ha2⟩ := symBool_conj_true_elim hconj
+                            exact ReachableTrapFree.stepCondTrue (hreach ha1) (hntOut blkA ha ha2) hex hterm hcvMatch htl
+                          have hpcT' : (SymBool.and pCond cSym).eval env t havoc = true := by
+                            simp [SymBool.eval, hpc, hce]
+                          have hbind := bindSymBlockArgs_correct hmOut' (f.blockAt tBlk).args tArgs outR _ hmOut'
+                          obtain ⟨lf, hlfMem, hlfProps⟩ := collectWriteLeaves_sound f paramId env t havoc fuel tBlk outP (.and pCond cSym) (SymBool.conj aAcc blkA) _ _ l1 hrT hpcT' hbind hl1
+                          exact ⟨lf, List.mem_append_left _ hlfMem, hlfProps⟩
 
-/-- Propositional obligation for one `SymWriteLeaf` on witness thread `t` for output element `elemIdx`. -/
+/-- Propositional obligation for one `SymWriteLeaf` on witness thread `t` for output element `elemIdx`:
+    non-writing leaves must be unreachable (`False`), every `Stmt.assertCond` along the path must pass,
+    and the written element index must equal `elemIdx`. -/
 def symWriteLeafOblig (leaf : SymWriteLeaf) (env : InputEnv) (t : ThreadCtx) (elemIdx : Nat) : Prop :=
   match leaf.writeIdxOpt with
   | none => False
-  | some idxSym => idxSym.eval env t (fun _ => 0) = elemIdx
+  | some idxSym =>
+      leaf.assertsCond.holds env t (fun _ => 0) ∧
+      idxSym.eval env t (fun _ => 0) = elemIdx
 
-/-- Bridge theorem for `MirWritesAllElems`: instantiates the 1D witness thread
-    `t = (elemIdx / blockDimX, elemIdx % blockDimX, 0, 0)` and reduces full output coverage from
-    entry block `0` to `omega` obligations over `collectWriteLeaves`. -/
+/-- Synthesize a candidate 1D linear witness-thread index expression from `leaves`:
+    evaluates the writing leaf's `SymInt` index on `t₀ = (elemIdx / blockDimX, elemIdx % blockDimX)`,
+    supporting identity (`idx`), reverse (`len - 1 - idx`), XOR swaps (`idx ^ mask`), and piecewise
+    involutions uniformly while `vcWritesAllElems` + `omega` verify bounds and surjectivity. -/
+def buildWriteWitnessSym (f : MirFunc) : List SymWriteLeaf → SymInt
+  | [] => .index1D f.blockDimX
+  | [lf] => lf.writeIdxOpt.getD (.index1D f.blockDimX)
+  | lf :: rest =>
+      match lf.writeIdxOpt with
+      | some idxSym =>
+          if rest.all (·.writeIdxOpt.isNone) then idxSym
+          else .ite lf.pathCond idxSym (buildWriteWitnessSym f rest)
+      | none => buildWriteWitnessSym f rest
+
+/-- Bridge theorem for `MirWritesAllElems`: instantiates the candidate 1D witness thread `wt` from
+    `buildWriteWitnessSym f leaves` evaluated at `t₀ = (elemIdx / blockDimX, elemIdx % blockDimX, 0, 0)`
+    and reduces trap-free full output coverage from entry block `0` to `omega` obligations. -/
 theorem vcWritesAllElems {f : MirFunc} {paramId : Nat} {leaves : List SymWriteLeaf}
     (hdims : (decide (0 < f.blocks.length) && decide (0 < f.blockDimX) && decide (0 < f.blockDimY)) = true)
-    (hleaves : collectWriteLeaves f paramId f.blocks.length 0 (.lit true) (initialSymRegs f) = some leaves)
-    (hvc : ∀ env : InputEnv, ∀ elemIdx : Nat, ∀ t : ThreadCtx,
+    (hleaves : collectWriteLeaves f paramId f.blocks.length 0 (.lit true) (.lit true) (initialSymRegs f) = some leaves)
+    (hvc : ∀ env : InputEnv, ∀ elemIdx : Nat, ∀ t₀ wt : ThreadCtx,
       f.validInput env →
       (f.u32Coords = true → env.sliceLen paramId < 4294967296) →
       elemIdx < env.sliceLen paramId →
-      f.validThread t →
-      t.ty = 0 → t.by_ = 0 →
-      t.bx * f.blockDimX + t.tx = elemIdx →
-      leaves.foldr (fun lf acc =>
-        (lf.pathCond.holds env t (fun _ => 0) →
-         symWriteLeafOblig lf env t elemIdx) ∧ acc) True) :
+      f.validThread t₀ →
+      t₀.ty = 0 → t₀.by_ = 0 →
+      t₀.bx * f.blockDimX + t₀.tx = elemIdx →
+      let lin := (buildWriteWitnessSym f leaves).eval env t₀ (fun _ => 0)
+      (lin < env.sliceLen paramId) ∧
+      (f.validThread wt →
+       wt.ty = 0 → wt.by_ = 0 →
+       wt.bx * f.blockDimX + wt.tx = lin →
+       leaves.foldr (fun lf acc =>
+         (lf.pathCond.holds env wt (fun _ => 0) →
+          symWriteLeafOblig lf env wt elemIdx) ∧ acc) True)) :
     MirWritesAllElems f paramId := by
   simp only [Bool.and_eq_true, decide_eq_true_eq] at hdims    -- Unpack positive block/CTA dimension bounds
   rcases hdims with ⟨⟨hblkPos, hbxPos⟩, hbyPos⟩
   intro env gridDimX gridDimY hIn hgxU32 hgyPos hu32 hcov elemIdx helem
-  let wt : ThreadCtx := { bx := elemIdx / f.blockDimX, by_ := 0, tx := elemIdx % f.blockDimX, ty := 0 } -- Construct witness thread `wt`
-  have hlin : wt.bx * f.blockDimX + wt.tx = elemIdx := by     -- Prove `wt`'s linear 1D coordinate equals `elemIdx`
-    dsimp only [wt]; rw [Nat.mul_comm]; exact Nat.div_add_mod elemIdx f.blockDimX
-  have hbxLt : wt.bx < gridDimX := by                         -- Prove `wt.bx` falls within the host-checked `gridDimX`
-    dsimp only [wt]
-    exact (Nat.div_lt_iff_lt_mul hbxPos).mpr (Nat.lt_of_lt_of_le helem hcov)
-  have hbxU32 : wt.bx < 4294967296 := Nat.lt_of_lt_of_le hbxLt hgxU32
-  have hwtValid : f.validThread wt := by                      -- Prove `wt` satisfies `MirFunc.validThread`
-    refine ⟨Nat.mod_lt elemIdx hbxPos, hbyPos, hbxU32, by dsimp [wt]; omega, ?_, ?_⟩
+  let t₀ : ThreadCtx := { bx := elemIdx / f.blockDimX, by_ := 0, tx := elemIdx % f.blockDimX, ty := 0 } -- Seed coordinate `t₀`
+  have hlin0 : t₀.bx * f.blockDimX + t₀.tx = elemIdx := by   -- Prove `t₀`'s linear coordinate equals `elemIdx`
+    dsimp only [t₀]; rw [Nat.mul_comm]; exact Nat.div_add_mod elemIdx f.blockDimX
+  have hbx0Lt : t₀.bx < gridDimX :=                           -- Prove `t₀.bx < gridDimX` from `elemIdx < out.len()`
+    (Nat.div_lt_iff_lt_mul hbxPos).mpr (Nat.lt_of_lt_of_le helem hcov)
+  have ht0Valid : f.validThread t₀ := by                      -- Prove `t₀` satisfies `MirFunc.validThread`
+    refine ⟨Nat.mod_lt elemIdx hbxPos, hbyPos, Nat.lt_of_lt_of_le hbx0Lt hgxU32, by dsimp [t₀]; omega, ?_, ?_⟩
     · split <;> trivial
     · split
-      · rename_i hc32
-        rw [hlin]
-        exact Nat.lt_trans helem (hu32 hc32)
+      · rename_i hc32; rw [hlin0]; exact Nat.lt_trans helem (hu32 hc32)
+      · trivial
+  let lin := (buildWriteWitnessSym f leaves).eval env t₀ (fun _ => 0) -- Evaluate inverse witness index `lin`
+  let wt : ThreadCtx := { bx := lin / f.blockDimX, by_ := 0, tx := lin % f.blockDimX, ty := 0 } -- Witness thread `wt`
+  obtain ⟨hlinLt, hvcWt⟩ := hvc env elemIdx t₀ wt hIn hu32 helem ht0Valid rfl rfl hlin0
+  have hlinWt : wt.bx * f.blockDimX + wt.tx = lin := by       -- Prove `wt`'s linear coordinate equals `lin`
+    dsimp only [wt]; rw [Nat.mul_comm]; exact Nat.div_add_mod lin f.blockDimX
+  have hbxLt : wt.bx < gridDimX :=                            -- Prove `wt.bx` falls within the host-checked `gridDimX`
+    (Nat.div_lt_iff_lt_mul hbxPos).mpr (Nat.lt_of_lt_of_le hlinLt hcov)
+  have hwtValid : f.validThread wt := by                      -- Prove `wt` satisfies `MirFunc.validThread`
+    refine ⟨Nat.mod_lt lin hbxPos, hbyPos, Nat.lt_of_lt_of_le hbxLt hgxU32, by dsimp [wt]; omega, ?_, ?_⟩
+    · split <;> trivial
+    · split
+      · rename_i hc32; rw [hlinWt]; exact Nat.lt_trans hlinLt (hu32 hc32)
       · trivial
   have hinitM := initialSymRegs_correct f env wt (fun _ => 0) -- Match concrete `initialRegs` with `initialSymRegs`
   obtain ⟨lf, hlfMem, hlfPc, hlfEv⟩ := collectWriteLeaves_sound f paramId env wt (fun _ => 0)
-    f.blocks.length 0 0 (.lit true) (initialRegs f env) (initialSymRegs f) leaves
-    (Reachable.entry hblkPos) rfl hinitM hleaves              -- Trace `wt` from entry block `0` to an active `lf ∈ leaves`
-  have hp := foldr_and_of_mem _ (foldr_holds_to_eval leaves (hvc env elemIdx wt hIn hu32 helem hwtValid rfl rfl hlin)) lf hlfMem hlfPc
+    f.blocks.length 0 0 (.lit true) (.lit true) (initialRegs f env) (initialSymRegs f) leaves
+    (fun _ => ReachableTrapFree.entry hblkPos) rfl hinitM hleaves -- Trace `wt` from block `0` to an active `lf ∈ leaves`
+  have hp := foldr_and_of_mem _ (foldr_holds_to_eval leaves (hvcWt hwtValid rfl rfl hlinWt)) lf hlfMem hlfPc
   unfold symWriteLeafOblig at hp
   cases hwo : lf.writeIdxOpt with                             -- Non-writing leaf (`none`) contradicts `omega`'s `False` proof
   | none => rw [hwo] at hp; contradiction
-  | some idxSym =>                                            -- Writing leaf (`some idxSym`) emits global write at `ev.index = elemIdx`
+  | some idxSym =>                                            -- Writing leaf (`some idxSym`) certifies trap-free global write
       rw [hwo] at hp; dsimp only at hp
-      obtain ⟨ev, hem, hw, hsp, hbid, hidx⟩ := hlfEv idxSym hwo
-      exact ⟨wt, ev, hwtValid, hbxLt, hgyPos, hem, hw, hsp, hbid, hidx.trans hp⟩
+      obtain ⟨haHolds, hidxEq⟩ := hp
+      have haEval := (symBool_eval_iff_holds env wt (fun _ => 0) lf.assertsCond).mpr haHolds
+      obtain ⟨ev, hem, hw, hsp, hbid, hidx⟩ := hlfEv haEval idxSym hwo
+      exact ⟨wt, ev, hwtValid, hbxLt, hgyPos, hem, hw, hsp, hbid, hidx.trans hidxEq⟩
 
 end CudaOxide.Proofs.Program

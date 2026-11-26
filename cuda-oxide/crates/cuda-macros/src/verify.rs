@@ -798,6 +798,14 @@ fn build_verify_marker_stmts(
     }
     for ident in &args.no_data_race {
         if let Some(shared_idx) = shared_statics.iter().position(|name| name == ident) {
+            if args.uniform_barriers.is_none() {
+                return Err(syn::Error::new(
+                    ident.span(),
+                    format!(
+                        "`no_data_race({ident})` on a `SharedArray` requires `uniform_barriers`"
+                    ),
+                ));
+            }
             stmts.push(parse_quote! {
                 ::cuda_device::thread::__verify_no_data_race_config::<#shared_idx>();
             });
@@ -916,6 +924,14 @@ mod tests {
             syn::parse_str("no_oob_idx(TILE_A), no_data_race(TILE_A), uniform_barriers").unwrap();
         let markers = build_verify_marker_stmts(&tiled_args, &params, &shared).unwrap();
         assert_eq!(markers.len(), 4);
+
+        // `no_data_race(TILE_A)` without `uniform_barriers` must be rejected.
+        let no_uniform: VerifyArgs =
+            syn::parse_str("no_oob_idx(TILE_A), no_data_race(TILE_A)").unwrap();
+        let Err(err) = build_verify_marker_stmts(&no_uniform, &params, &shared) else {
+            panic!("no_data_race on SharedArray needs uniform_barriers");
+        };
+        assert!(err.to_string().contains("requires `uniform_barriers`"));
 
         // `rewrite_verified_shared_accesses` must wrap `g2s` TMA copies on verified `TILE_A`
         // + `BAR`, while leaving unverified `OTHER_TILE` and `s2g` TMA copies unwrapped.

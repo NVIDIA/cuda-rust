@@ -272,6 +272,14 @@ pub(crate) fn parse_kernel_verification_spec(
         Some(raw) => parse_param_list(&raw, arity, "verify_writes_all_elems")?,
         None => Vec::new(),
     };
+    if !writes_all_elems.is_empty() && domain != 1 {
+        return Err(reject(
+            "kernel contract",
+            format!(
+                "`writes_all_elems` requires a 1D launch contract (`domain = 1`), found domain = {domain}"
+            ),
+        ));
+    }
     let no_oob_shared = match get_string_attr(attrs, "verify_no_oob_shared") {
         Some(raw) => parse_param_list(&raw, 64, "verify_no_oob_shared")?,
         None => Vec::new(),
@@ -283,6 +291,14 @@ pub(crate) fn parse_kernel_verification_spec(
     let uniform_barriers =
         get_string_attr(attrs, "verify_uniform_barriers").as_deref() == Some("true");
     let tmem_lifecycle = get_string_attr(attrs, "verify_tmem_lifecycle").as_deref() == Some("true");
+    if !no_data_race.is_empty() && !uniform_barriers {
+        // `MirNoSharedRace` orders accesses by per-thread `syncThreads` counts. Those counts
+        // only line up across threads when `UniformBarriers` is also proved.
+        return Err(reject(
+            "kernel contract",
+            "`no_data_race` on shared memory requires `uniform_barriers`",
+        ));
+    }
 
     let u32_coordinates =
         get_string_attr(attrs, "launch_contract_u32_coords").as_deref() == Some("true");

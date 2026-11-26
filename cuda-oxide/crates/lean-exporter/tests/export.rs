@@ -691,6 +691,25 @@ fn verifies_2d_sgemm_tiled_views_and_rejects_shared_races_oob_and_divergent_barr
     );
 }
 
+/// Reject `no_data_race` on shared memory when `uniform_barriers` is omitted from the
+/// kernel verification contract.
+#[test]
+fn rejects_no_data_race_without_uniform_barriers() {
+    // `MirNoSharedRace` orders shared accesses by per-thread `syncThreads` counts. Without
+    // `UniformBarriers`, `if tx < 32 { sync_threads() }` puts threads in different phases
+    // and a cross-phase race passes.
+    let no_uniform =
+        SGEMM_TILED_FIXTURE.replacen(", verify_uniform_barriers: builtin.string \"true\"", "", 1);
+    assert_ne!(no_uniform, SGEMM_TILED_FIXTURE);
+    let err = export_named_source(&no_uniform, "sgemm_tiled_views")
+        .expect_err("no_data_race without uniform_barriers must be rejected");
+    assert!(
+        err.to_string()
+            .contains("`no_data_race` on shared memory requires `uniform_barriers`"),
+        "unexpected error: {err}"
+    );
+}
+
 #[test]
 fn verifies_stage3_warp_and_block_reductions_and_rejects_missing_leader_guard() {
     let Some(lean_dir) = lean_package_dir_if_available() else {
@@ -2363,4 +2382,120 @@ builtin.module @lane_2d_test {
     let fake_err = export_named_source(&fake_idx1d, "vecadd")
         .expect_err("non-cuda_device function named fake_index_1d must fail closed");
     assert!(fake_err.to_string().contains("unmodeled function call"));
+}
+
+#[test]
+fn verifies_reverse_writes_all_elems_and_rejects_trapping_asserts_off_by_one_and_2d_coverage() {
+    let Some(lean_dir) = lean_package_dir_if_available() else {
+        return;
+    };
+
+    // 1. Positive: reverse-indexed `c[c.len() - 1 - idx] = a[idx] + b[idx]` with flipped `mir.gt (c_len, idx)`
+    //    and uninlined `ThreadIndex::get` (`mir.alloca` + `mir.store` + `mir.cast` + `mir.call`) proves all obligations:
+    let rev_mir = r#"
+mir.func @vecadd_rev: builtin.function <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>, mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>, mir.slice <builtin.fp32 ,mutable:true,kind:UniqueRef>) -> ()>
+  [contract_requires_len_ge: builtin.string "0>=2,1>=2", gpu_kernel: builtin.string "true", launch_contract_domain: builtin.integer <1: ui32>, reqntid_x: builtin.integer <256: ui32>, reqntid_y: builtin.integer <1: ui32>, reqntid_z: builtin.integer <1: ui32>, verify_disjoint_writes: builtin.string "2", verify_no_oob_idx: builtin.string "0,1,2", verify_writes_all_elems: builtin.string "2"]
+{
+  ^entry(a: mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>, b: mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>, c: mir.slice <builtin.fp32 ,mutable:true,kind:UniqueRef>):
+    lc = mir.alloca () [] []: <() -> (mir.ptr <builtin.integer ui8 ,mutable:true,addrspace:0,kind:Erased>)>;
+    idx_slot = mir.alloca () [] []: <() -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:0,kind:Erased>)>;
+    lc_ref = mir.cast (lc) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority Reborrow]: <(mir.ptr <builtin.integer ui8 ,mutable:true,addrspace:0,kind:Erased>) -> (mir.ptr <builtin.integer ui8 ,mutable:false,addrspace:0,kind:SharedRef>)>;
+    tid_wrapper = mir.call (lc_ref) [] [callee: builtin.string "_RINvNtNtCs11cuda_device6thread10___internal8index_1d"]: <(mir.ptr <builtin.integer ui8 ,mutable:false,addrspace:0,kind:SharedRef>) -> (builtin.integer ui64)>;
+    mir.store (idx_slot, tid_wrapper) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:0,kind:Erased>, builtin.integer ui64) -> ()>;
+    mir.goto () [^get_blk] []: <() -> ()>
+
+  ^get_blk():
+    slot_ref = mir.cast (idx_slot) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority Reborrow]: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:0,kind:Erased>) -> (mir.ptr <builtin.integer ui64 ,mutable:false,addrspace:0,kind:SharedRef>)>;
+    idx = mir.call (slot_ref) [] [callee: builtin.string "_RNvMs8_NtCs11cuda_device6threadNtB5_11ThreadIndex3get"]: <(mir.ptr <builtin.integer ui64 ,mutable:false,addrspace:0,kind:SharedRef>) -> (builtin.integer ui64)>;
+    c_len = mir.extract_field (c) [] [index: mir.field_index 1]: <(mir.slice <builtin.fp32 ,mutable:true,kind:UniqueRef>) -> (builtin.integer ui64)>;
+    in_bounds = mir.gt (c_len, idx) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+    mir.cond_br (in_bounds) [^active, ^exit] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+  ^active():
+    a_len = mir.extract_field (a) [] [index: mir.field_index 1]: <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>) -> (builtin.integer ui64)>;
+    a_ok = mir.lt (idx, a_len) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+    mir.assert (a_ok) [] []: <(builtin.integer i1) -> ()>;
+    a_ptr = mir.extract_field (a) [] [index: mir.field_index 0]: <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>)>;
+    a_elem = mir.ptr_offset (a_ptr, idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>)>;
+    a_val = mir.load (a_elem) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>) -> (builtin.fp32)>;
+    b_ptr = mir.extract_field (b) [] [index: mir.field_index 0]: <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>)>;
+    b_elem = mir.ptr_offset (b_ptr, idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>)>;
+    b_val = mir.load (b_elem) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>) -> (builtin.fp32)>;
+    one = mir.constant () [] [value: builtin.integer <1: ui64>]: <() -> (builtin.integer ui64)>;
+    last = mir.sub (c_len, one) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+    rev_idx = mir.sub (last, idx) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+    c_ok = mir.lt (rev_idx, c_len) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+    mir.assert (c_ok) [] []: <(builtin.integer i1) -> ()>;
+    sum = mir.add (a_val, b_val) [] []: <(builtin.fp32, builtin.fp32) -> (builtin.fp32)>;
+    c_ptr = mir.extract_field (c) [] [index: mir.field_index 0]: <(mir.slice <builtin.fp32 ,mutable:true,kind:UniqueRef>) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>)>;
+    c_elem = mir.ptr_offset (c_ptr, rev_idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>)>;
+    mir.store (c_elem, sum) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>, builtin.fp32) -> ()>;
+    mir.goto () [^exit] []: <() -> ()>
+
+  ^exit():
+    mir.return () [] []: <() -> ()>
+}
+"#;
+    let rev_lean = export_named_source(rev_mir, "vecadd_rev")
+        .expect("transcribes reverse-indexed vecadd with ThreadIndex::get");
+    assert!(rev_lean.contains("theorem verify_writes_all_elems_param2"));
+    assert!(rev_lean.contains("theorem verify_assert_redundant_1"));
+    lean_exporter::runner::check_generated_lean(&rev_lean, &lean_dir)
+        .expect("Lean 4 must verify reverse-indexed writes_all_elems and bounds elision");
+
+    // 2. Negative: off-by-one reverse index `c[c.len() - 2 - idx]` fails in Lean 4:
+    let rev_off_by_two = rev_mir.replacen(
+        "one = mir.constant () [] [value: builtin.integer <1: ui64>]",
+        "one = mir.constant () [] [value: builtin.integer <2: ui64>]",
+        1,
+    );
+    let rev_oob_lean = export_named_source(&rev_off_by_two, "vecadd_rev")
+        .expect("transcribes off-by-one reverse write");
+    lean_exporter::runner::check_generated_lean(&rev_oob_lean, &lean_dir)
+        .expect_err("Lean 4 must reject off-by-one `c[c.len() - 2 - idx]`");
+
+    // 3. Negative: guard `idx + 1 < c.len()` skips `idx = c.len() - 1` (leaving `c[0]` unwritten) and fails `MirWritesAllElems`:
+    let rev_skip_last = rev_mir.replacen(
+        "    in_bounds = mir.gt (c_len, idx)",
+        "    one_g = mir.constant () [] [value: builtin.integer <1: ui64>]: <() -> (builtin.integer ui64)>;\n    idx_p1 = mir.add (idx, one_g) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;\n    in_bounds = mir.gt (c_len, idx_p1)",
+        1,
+    );
+    let rev_skip_lean = export_named_source(&rev_skip_last, "vecadd_rev")
+        .expect("transcribes `idx + 1 < c.len()` reverse write");
+    lean_exporter::runner::check_generated_lean(&rev_skip_lean, &lean_dir)
+        .expect_err("Lean 4 must reject `idx + 1 < c.len()` missing `c[0]` writer");
+
+    // 4. Negative (soundness): unverified `a[idx]` retaining `mir.assert(idx < a.len())` without `a.len() >= c.len()`
+    //    traps when `a.len() == 0 < c.len()` and must fail `MirWritesAllElems`:
+    let trapping_partial = rev_mir
+        .replacen(
+            "contract_requires_len_ge: builtin.string \"0>=2,1>=2\", ",
+            "contract_requires_len_ge: builtin.string \"1>=2\", ",
+            1,
+        )
+        .replacen(
+            "verify_no_oob_idx: builtin.string \"0,1,2\"",
+            "verify_no_oob_idx: builtin.string \"1,2\"",
+            1,
+        );
+    let trapping_lean = export_named_source(&trapping_partial, "vecadd_rev")
+        .expect("transcribes kernel with unproven mir.assert on `a`");
+    lean_exporter::runner::check_generated_lean(&trapping_lean, &lean_dir).expect_err(
+        "Lean 4 must reject `writes_all_elems(c)` when an earlier `mir.assert` on `a` can trap",
+    );
+
+    // 5. Negative (soundness): `writes_all_elems` on `launch_contract_domain = 2` is rejected fail-closed:
+    let dom2_wae = rev_mir.replacen(
+        "launch_contract_domain: builtin.integer <1: ui32>, reqntid_x: builtin.integer <256: ui32>, reqntid_y: builtin.integer <1: ui32>",
+        "launch_contract_domain: builtin.integer <2: ui32>, reqntid_x: builtin.integer <16: ui32>, reqntid_y: builtin.integer <16: ui32>",
+        1,
+    );
+    let dom2_err = export_named_source(&dom2_wae, "vecadd_rev")
+        .expect_err("writes_all_elems on domain = 2 must fail closed");
+    assert!(
+        dom2_err
+            .to_string()
+            .contains("`writes_all_elems` requires a 1D launch contract (`domain = 1`)"),
+        "unexpected domain=2 error: {dom2_err}"
+    );
 }

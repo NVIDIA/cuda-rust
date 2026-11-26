@@ -75,9 +75,18 @@ exporter casts it to the exact pointer type needed by a load, store, GEP, call,
 or other typed operation.
 
 The export handles block-arg to PHI-node translation, grouped intrinsic
-declarations, `convergent` attribute on synchronization ops, kernel metadata
+declarations, the `convergent` attribute, kernel metadata
 (`!nvvm.annotations`), launch bounds, cluster config, and device extern FFI
 declarations.
+
+`convergent` (attribute group `#0`) goes on every device function and on every
+call to a device function, direct or indirect, since the callee may reach a
+barrier or warp collective. An LLVM intrinsic's `declare` line and its calls
+carry it only when the intrinsic is a known collective (barriers, warp
+shuffles, votes, matches, reductions, `ldmatrix` / `stmatrix`, mbarrier and
+bulk-copy operations, and similar); per-thread intrinsics such as
+`llvm.nvvm.read.ptx.sreg.*` stay unmarked so LLVM can still optimize the loops
+around them. Inline assembly carries it per its `AsmKind`.
 
 ### Target Configuration
 

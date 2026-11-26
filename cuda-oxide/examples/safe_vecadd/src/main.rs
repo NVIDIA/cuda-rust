@@ -70,6 +70,24 @@ mod kernels {
             c[c.len() - 1 - idx] = a[idx] + b[idx];
         }
     }
+
+    /// Equal-length `requires = (a.len() == c.len(), b.len() == c.len())` with
+    /// scalar float math intrinsics (`a[idx].sin() + b[idx].cos()`):
+    /// - `cuda-macros` forwards both directions of `==` to Lean 4 while pure
+    ///   float math intrinsics export as opaque `.unk` values.
+    #[launch_contract(
+        domain = 1,
+        block = (256, 1, 1),
+        requires = (a.len() == c.len(), b.len() == c.len()),
+    )]
+    #[verify(no_oob_idx(a, b, c), disjoint_writes(c), writes_all_elems(c))]
+    #[kernel]
+    pub fn vecadd_trig_eq(a: &[f32], b: &[f32], c: &mut [f32]) {
+        let idx = thread::index_1d().get();
+        if idx < c.len() {
+            c[idx] = a[idx].sin() + b[idx].cos();
+        }
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -95,6 +113,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut c_dev = DeviceBuffer::<f32>::zeroed(&stream, N)?;
     let mut c_mut_dev = DeviceBuffer::<f32>::zeroed(&stream, N)?;
     let mut c_rev_dev = DeviceBuffer::<f32>::zeroed(&stream, N)?;
+    let mut c_trig_dev = DeviceBuffer::<f32>::zeroed(&stream, N)?;
 
     // SAFETY: this binary embeds the single `safe_vecadd` PTX module.
     let module = unsafe { kernels::load(&ctx)? };
@@ -103,30 +122,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let launch = module.prepare_vecadd(cfg)?;
     let launch_mut = module.prepare_vecadd_mut_slice(cfg)?;
     let launch_rev = module.prepare_vecadd_reverse(cfg)?;
+    let launch_trig = module.prepare_vecadd_trig_eq(cfg)?;
 
-    // Safe, contract-checked launches (`DisjointSlice`, forward `&mut [f32]`, and reverse `&mut [f32]`):
+    // Safe, contract-checked launches (`DisjointSlice`, forward `&mut [f32]`, reverse `&mut [f32]`, and `==` + `.sin()`/`.cos()`):
     module.vecadd(&stream, &launch, &a_dev, &b_dev, &mut c_dev)?;
     module.vecadd_mut_slice(&stream, &launch_mut, &a_dev, &b_dev, &mut c_mut_dev)?;
     module.vecadd_reverse(&stream, &launch_rev, &a_dev, &b_dev, &mut c_rev_dev)?;
+    module.vecadd_trig_eq(&stream, &launch_trig, &a_dev, &b_dev, &mut c_trig_dev)?;
 
     let c_host = c_dev.to_host_vec(&stream)?;
     let c_mut_host = c_mut_dev.to_host_vec(&stream)?;
     let c_rev_host = c_rev_dev.to_host_vec(&stream)?;
+    let c_trig_host = c_trig_dev.to_host_vec(&stream)?;
     for i in 0..N {
         let expected = a_host[i] + b_host[i];
+        let expected_trig = a_host[i].sin() + b_host[i].cos();
         assert!(
             (c_host[i] - expected).abs() <= 1e-5
                 && c_host[i] == c_mut_host[i]
-                && c_rev_host[N - 1 - i] == c_host[i],
-            "mismatch at index {i}: expected {expected}, got {} / {} / rev {}",
+                && c_rev_host[N - 1 - i] == c_host[i]
+                && (c_trig_host[i] - expected_trig).abs() <= 1e-4,
+            "mismatch at index {i}: expected {expected} (trig {expected_trig}), got {} / {} / rev {} / trig {}",
             c_host[i],
             c_mut_host[i],
             c_rev_host[N - 1 - i],
+            c_trig_host[i],
         );
     }
 
     println!(
-        "Verified launch succeeded (`DisjointSlice`, forward `&mut [f32]`, and reverse `&mut [f32]`): all {N} elements match!"
+        "Verified launch succeeded (`DisjointSlice`, forward `&mut [f32]`, reverse `&mut [f32]`, and `==` + `.sin()`/`.cos()`): all {N} elements match!"
     );
     Ok(())
 }

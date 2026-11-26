@@ -2690,3 +2690,112 @@ fn accepts_raw_pointer_read_of_a_slice_parameter_no_verify_clause_names() {
     export_named_source(&unnamed, "vecadd")
         .expect("raw read of a slice parameter that no verify clause names stays accepted");
 }
+
+/// Allow pure compiler float/integer math intrinsic placeholders (`.sin()`, `.cos()`, `ctpop`)
+/// while rejecting un-inlined user float/zero-arg functions and unchecked UB intrinsics.
+#[test]
+fn accepts_pure_math_intrinsic_placeholders_and_rejects_unmodeled_float_helpers() {
+    // 1. Positive: `a[idx].sin() + b[idx].cos()` via compiler math placeholders exports as `.unk`
+    //    and proves all safety obligations in Lean 4.
+    let sin_cos_mir = VECADD_FIXTURE.replace(
+        "sum = mir.add (a_val, b_val) [] []: <(builtin.fp32, builtin.fp32) -> (builtin.fp32)>;",
+        "a_sin = mir.call (a_val) [] [callee: builtin.string \"__cuda_oxide_rust_intrinsic_sinf32\"]: <(builtin.fp32) -> (builtin.fp32)>;\n    b_cos = mir.call (b_val) [] [callee: builtin.string \"__cuda_oxide_rust_intrinsic_cosf32\"]: <(builtin.fp32) -> (builtin.fp32)>;\n    sum = mir.add (a_sin, b_cos) [] []: <(builtin.fp32, builtin.fp32) -> (builtin.fp32)>;",
+    );
+    let sin_cos_lean = export_named_source(&sin_cos_mir, "vecadd")
+        .expect("pure float math intrinsics must export");
+    if let Some(lean_dir) = lean_package_dir_if_available() {
+        lean_exporter::runner::check_generated_lean(&sin_cos_lean, &lean_dir)
+            .expect("Lean 4 must accept verified vecadd using sinf32/cosf32");
+    }
+
+    // 2. Negative: un-inlined user helper taking only `f32` could hide `sync_threads()` or shared
+    //    writes, so it must fail closed even though all arguments are floating-point.
+    let sneaky_float_helper = VECADD_FIXTURE.replace(
+        "sum = mir.add (a_val, b_val) [] []: <(builtin.fp32, builtin.fp32) -> (builtin.fp32)>;",
+        "a_tmp = mir.call (a_val) [] [callee: builtin.string \"user_crate::sneaky_sync_helper\"]: <(builtin.fp32) -> (builtin.fp32)>;\n    sum = mir.add (a_tmp, b_val) [] []: <(builtin.fp32, builtin.fp32) -> (builtin.fp32)>;",
+    );
+    let err = export_named_source(&sneaky_float_helper, "vecadd")
+        .expect_err("un-inlined user float helper must be rejected");
+    assert!(
+        err.to_string().contains("unmodeled function call"),
+        "unexpected error for user float helper: {err}"
+    );
+
+    // 3. Negative: 0-argument un-inlined user helper returning `f32` must also fail closed.
+    let zero_arg_helper = VECADD_FIXTURE.replace(
+        "sum = mir.add (a_val, b_val) [] []: <(builtin.fp32, builtin.fp32) -> (builtin.fp32)>;",
+        "z_tmp = mir.call () [] [callee: builtin.string \"user_crate::zero_arg_helper\"]: <() -> (builtin.fp32)>;\n    sum = mir.add (z_tmp, b_val) [] []: <(builtin.fp32, builtin.fp32) -> (builtin.fp32)>;",
+    );
+    let err_zero = export_named_source(&zero_arg_helper, "vecadd")
+        .expect_err("0-argument user helper must be rejected");
+    assert!(
+        err_zero.to_string().contains("unmodeled function call"),
+        "unexpected error for 0-argument user helper: {err_zero}"
+    );
+
+    // 4. Negative: unchecked intrinsic with UB preconditions (`float_to_int_unchecked`) must fail closed.
+    let unchecked_intrinsic = VECADD_FIXTURE.replace(
+        "sum = mir.add (a_val, b_val) [] []: <(builtin.fp32, builtin.fp32) -> (builtin.fp32)>;",
+        "bad_int = mir.call (a_val) [] [callee: builtin.string \"__cuda_oxide_rust_intrinsic_float_to_int_unchecked\"]: <(builtin.fp32) -> (builtin.integer ui32)>;\n    sum = mir.add (a_val, b_val) [] []: <(builtin.fp32, builtin.fp32) -> (builtin.fp32)>;",
+    );
+    let err_unchecked = export_named_source(&unchecked_intrinsic, "vecadd")
+        .expect_err("unchecked intrinsic with UB preconditions must be rejected");
+    assert!(
+        err_unchecked
+            .to_string()
+            .contains("unmodeled function call"),
+        "unexpected error for float_to_int_unchecked: {err_unchecked}"
+    );
+
+    // 5. Negative (Lean 4 proof check): total integer intrinsic (`ctpop`) exports as unconstrained
+    //    `OpaqueUint`, so unguarded `a[idx.count_ones() as usize]` fails `MirNoOobGlobal` in Lean 4!
+    let unguarded_ctpop_idx = VECADD_FIXTURE.replace(
+        "a_elem = mir.ptr_offset (a_ptr, idx)",
+        "pop = mir.call (idx) [] [callee: builtin.string \"__cuda_oxide_rust_intrinsic_ctpop\"]: <(builtin.integer ui64) -> (builtin.integer ui32)>;\n    pop64 = mir.cast (pop) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;\n    a_elem = mir.ptr_offset (a_ptr, pop64)",
+    );
+    let unguarded_ctpop_lean = export_named_source(&unguarded_ctpop_idx, "vecadd")
+        .expect("ctpop exports 1-to-1 as OpaqueUint");
+    if let Some(lean_dir) = lean_package_dir_if_available() {
+        let err_oob = lean_exporter::runner::check_generated_lean(&unguarded_ctpop_lean, &lean_dir)
+            .expect_err("Lean 4 must reject unguarded `a[ctpop(idx)]` when `a.len()` can be 0/1");
+        assert!(
+            err_oob
+                .to_string()
+                .contains("omega could not prove the goal"),
+            "unexpected Lean error for unguarded ctpop index: {err_oob}"
+        );
+    }
+}
+
+/// Ensure missing `.olean` artifacts trigger `lake build` and broken Lean package configs fail closed.
+#[test]
+fn ensure_lean_library_built_succeeds_on_valid_package_and_fails_closed_on_invalid_lakefile() {
+    let Some(lean_dir) = lean_package_dir_if_available() else {
+        return;
+    };
+    lean_exporter::runner::ensure_lean_library_built(&lean_dir)
+        .expect("real oxide-proofs-preview package must build or already have CudaOxide.olean");
+
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let bad_pkg = std::env::temp_dir().join(format!(
+        "cuda_oxide_bad_lake_pkg_{}_{unique}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&bad_pkg).unwrap();
+    std::fs::copy(
+        lean_dir.join("lean-toolchain"),
+        bad_pkg.join("lean-toolchain"),
+    )
+    .unwrap();
+    std::fs::write(bad_pkg.join("lakefile.toml"), "not = [valid toml\n").unwrap();
+    let err = lean_exporter::runner::ensure_lean_library_built(&bad_pkg)
+        .expect_err("broken lakefile.toml without CudaOxide.olean must fail closed");
+    let _ = std::fs::remove_dir_all(&bad_pkg);
+    assert!(
+        err.to_string().contains("`lake build` failed"),
+        "unexpected error from broken lakefile.toml: {err}"
+    );
+}

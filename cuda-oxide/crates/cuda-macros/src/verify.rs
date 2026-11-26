@@ -20,12 +20,23 @@ use syn::{
 };
 
 /// Extract `(lhs_param_index, rhs_param_index)` pairs for `requires` relations
-/// of the form `lhs.len() >= rhs.len()` or `rhs.len() <= lhs.len()`.
+/// comparing two slice lengths (`>=`, `>`, `<=`, `<`, or `==`).
+///
+/// The Lean verifier tracks non-strict length lower bounds (`lhs.len() >= rhs.len()`):
+/// - `lhs.len() == rhs.len()` emits both `(lhs, rhs)` and `(rhs, lhs)`.
+/// - `lhs.len() > rhs.len()` and `lhs.len() < rhs.len()` weaken soundly to
+///   `lhs.len() >= rhs.len()` and `rhs.len() >= lhs.len()`.
+/// - `!=` implies no directional lower bound and is ignored.
 pub(crate) fn extract_requires_len_ge_pairs(
     relations: &[Expr],
     params: &[CudaModuleParam],
 ) -> Vec<(usize, usize)> {
     let mut pairs = Vec::new();
+    let mut push_unique = |lhs: usize, rhs: usize| {
+        if lhs != rhs && !pairs.contains(&(lhs, rhs)) {
+            pairs.push((lhs, rhs));
+        }
+    };
     for relation in relations {
         let Expr::Binary(binary) = relation else {
             continue;
@@ -37,8 +48,12 @@ pub(crate) fn extract_requires_len_ge_pairs(
             continue;
         };
         match binary.op {
-            syn::BinOp::Ge(_) => pairs.push((left_idx, right_idx)),
-            syn::BinOp::Le(_) => pairs.push((right_idx, left_idx)),
+            syn::BinOp::Ge(_) | syn::BinOp::Gt(_) => push_unique(left_idx, right_idx),
+            syn::BinOp::Le(_) | syn::BinOp::Lt(_) => push_unique(right_idx, left_idx),
+            syn::BinOp::Eq(_) => {
+                push_unique(left_idx, right_idx);
+                push_unique(right_idx, left_idx);
+            }
             _ => {}
         }
     }
@@ -1064,5 +1079,41 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn extract_requires_len_ge_pairs_handles_eq_gt_lt_and_rejects_ne() {
+        let func: ItemFn = parse_quote! {
+            pub fn k(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>, n: u32) {}
+        };
+        let params = standalone_requires_params(&func).expect("params");
+        let parse_rels = |src: &str| -> Vec<Expr> {
+            let args: crate::cuda_module::contract::LaunchContractArgs =
+                syn::parse_str(&format!("domain = 1, requires = ({src})")).unwrap();
+            args.requires
+        };
+
+        // Positive: `==` emits both directions, `>` and `<` weaken to `>=` / `<=`.
+        let eq_pairs = extract_requires_len_ge_pairs(
+            &parse_rels("a.len() == c.len(), b.len() > c.len()"),
+            &params,
+        );
+        assert_eq!(eq_pairs, vec![(0, 2), (2, 0), (1, 2)]);
+
+        let lt_le_pairs = extract_requires_len_ge_pairs(
+            &parse_rels("c.len() < a.len(), c.len() <= b.len()"),
+            &params,
+        );
+        assert_eq!(lt_le_pairs, vec![(0, 2), (1, 2)]);
+
+        // Negative: `!=`, self-comparisons (`a.len() == a.len()`), and scalar bounds emit no pairs.
+        let ignored_pairs = extract_requires_len_ge_pairs(
+            &parse_rels("a.len() != c.len(), a.len() == a.len(), a.len() >= n"),
+            &params,
+        );
+        assert!(
+            ignored_pairs.is_empty(),
+            "non-implying or non-pair relations must not emit requires_len_ge: {ignored_pairs:?}"
+        );
     }
 }

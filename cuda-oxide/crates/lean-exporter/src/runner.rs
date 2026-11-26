@@ -23,12 +23,19 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     process::Command,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 /// Monotonic per-process counter guaranteeing unique temp filenames when
 /// `verify_module_kernels` checks multiple kernels concurrently in one process.
 static NEXT_TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Process-wide lock serializing lazy `lake build` initialization when
+/// `CudaOxide.olean` is absent so concurrent kernel threads do not race.
+static LEAN_BUILD_LOCK: Mutex<()> = Mutex::new(());
 
 use dialect_mir::ops::MirFuncOp;
 use pliron::{
@@ -163,9 +170,10 @@ pub fn default_lean_package_dir() -> PathBuf {
 /// Locate the `lake` build tool on `PATH` or inside `~/.elan/bin/lake`.
 /// Returns a fail-closed [`ExportError::Rejected`] error if Lean is not installed.
 fn find_lake_executable() -> Result<PathBuf, ExportError> {
+    let lake_name = if cfg!(windows) { "lake.exe" } else { "lake" };
     if let Some(paths) = env::var_os("PATH") {
         for dir in env::split_paths(&paths) {
-            let candidate = dir.join("lake");
+            let candidate = dir.join(lake_name);
             if candidate.is_file() {
                 return Ok(candidate);
             }
@@ -173,14 +181,18 @@ fn find_lake_executable() -> Result<PathBuf, ExportError> {
     }
     let home = env::var_os("ELAN_HOME")
         .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|h| PathBuf::from(h).join(".elan")))
+        .or_else(|| {
+            env::var_os("HOME")
+                .or_else(|| env::var_os("USERPROFILE"))
+                .map(|h| PathBuf::from(h).join(".elan"))
+        })
         .ok_or_else(|| {
             reject(
                 "lean verifier",
                 "could not locate `lake` on PATH or in ~/.elan/bin",
             )
         })?;
-    let candidate = home.join("bin").join("lake");
+    let candidate = home.join("bin").join(lake_name);
     if candidate.is_file() {
         Ok(candidate)
     } else {
@@ -192,6 +204,84 @@ fn find_lake_executable() -> Result<PathBuf, ExportError> {
             ),
         ))
     }
+}
+
+/// Return `true` when `CudaOxide.olean` is missing or older than `lean-toolchain`,
+/// `lakefile.*`, or any `.lean` source file under `CudaOxide/`.
+fn lean_library_needs_build(olean_file: &Path, lean_package_dir: &Path) -> bool {
+    let Ok(olean_mtime) = fs::metadata(olean_file).and_then(|m| m.modified()) else {
+        return true;
+    };
+    for root_file in ["lean-toolchain", "lakefile.toml", "lakefile.lean"] {
+        if let Ok(mtime) = fs::metadata(lean_package_dir.join(root_file)).and_then(|m| m.modified())
+            && mtime > olean_mtime
+        {
+            return true;
+        }
+    }
+    collect_files_sorted(&lean_package_dir.join("CudaOxide"), "lean")
+        .into_iter()
+        .any(|(_, path)| {
+            fs::metadata(path)
+                .and_then(|m| m.modified())
+                .is_ok_and(|mtime| mtime > olean_mtime)
+        })
+}
+
+/// Ensure `CudaOxide.olean` is compiled and up to date inside `lean_package_dir`
+/// before invoking Lean on a generated kernel module.
+///
+/// `lake env lean <file.lean>` only sets `LEAN_PATH` and does not build or
+/// refresh `CudaOxide` when `.lake/build/lib/lean/CudaOxide.olean` is missing
+/// or older than `CudaOxide/**/*.lean` (for example on a fresh clone, fresh
+/// Cargo git checkout, or right after `git pull`). Running `lake build` on
+/// miss or staleness keeps `.olean` artifacts synchronized automatically.
+pub fn ensure_lean_library_built(lean_package_dir: &Path) -> Result<(), ExportError> {
+    if !lean_package_dir.join("lakefile.toml").is_file()
+        && !lean_package_dir.join("lakefile.lean").is_file()
+    {
+        return Ok(());
+    }
+    let olean_file = lean_package_dir.join(".lake/build/lib/lean/CudaOxide.olean");
+    if !lean_library_needs_build(&olean_file, lean_package_dir) {
+        return Ok(());
+    }
+    let lake = find_lake_executable()?;
+    let _guard = LEAN_BUILD_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !lean_library_needs_build(&olean_file, lean_package_dir) {
+        return Ok(());
+    }
+    let output = Command::new(&lake)
+        .arg("build")
+        .current_dir(lean_package_dir)
+        .output()
+        .map_err(|e| {
+            reject(
+                "lean verifier",
+                format!(
+                    "failed to execute `lake build` in {}: {e}",
+                    lean_package_dir.display()
+                ),
+            )
+        })?;
+    if !output.status.success() {
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return Err(reject(
+            "lean verifier",
+            format!(
+                "`lake build` failed in {}:\n{}",
+                lean_package_dir.display(),
+                combined.trim()
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// Return `true` when `lake` is installed and the pinned toolchain in `lean_package_dir` resolves.
@@ -224,7 +314,8 @@ pub fn check_generated_lean_in_cache(
     cache_dir: Option<&Path>,
 ) -> Result<(), ExportError> {
     let lake = find_lake_executable()?;
-    let lean_bin = lake.with_file_name("lean");
+    ensure_lean_library_built(lean_package_dir)?;
+    let lean_bin = lake.with_file_name(if cfg!(windows) { "lean.exe" } else { "lean" });
     let olean_dir = lean_package_dir.join(".lake/build/lib/lean");
     let use_direct_lean = lean_bin.is_file() && olean_dir.join("CudaOxide.olean").is_file();
 
@@ -416,6 +507,7 @@ pub fn verify_module_kernels(
     if lean_modules.len() == 1 {
         check_generated_lean(&lean_modules[0], &lean_dir)?;
     } else {
+        ensure_lean_library_built(&lean_dir)?;
         std::thread::scope(|s| -> Result<(), ExportError> {
             let handles: Vec<_> = lean_modules
                 .iter()

@@ -118,6 +118,32 @@ pub fn is_known_placeholder(callee: &str) -> bool {
         )
 }
 
+/// Return whether `callee` is a pure, total, side-effect-free compiler
+/// intrinsic placeholder safe to model as an opaque scalar in `#[verify]`.
+///
+/// Includes every [`RustFloatMathIntrinsic`] (such as `sinf32`, `cosf32`,
+/// `expf32`, `sqrtf32`, `fmaf32`, and `maximum_number_nsz_f32`) plus total
+/// bit and saturating integer intrinsics (`rotate_left`, `rotate_right`,
+/// `ctpop`, `ctlz`, `cttz`, `bswap`, `bitreverse`, `saturating_add`,
+/// `saturating_sub`). Excludes intrinsics with UB preconditions (`exact_div`,
+/// `float_to_int_unchecked`, `ctlz_nonzero`, `cttz_nonzero`), multi-result
+/// `carrying_mul_add`, and polymorphic `select_unpredictable`.
+pub fn is_pure_total_scalar_placeholder(callee: &str) -> bool {
+    RustFloatMathIntrinsic::from_placeholder_callee(callee).is_some()
+        || matches!(
+            callee,
+            CALLEE_ROTATE_LEFT
+                | CALLEE_ROTATE_RIGHT
+                | CALLEE_CTPOP
+                | CALLEE_CTLZ
+                | CALLEE_CTTZ
+                | CALLEE_BSWAP
+                | CALLEE_BITREVERSE
+                | CALLEE_SATURATING_ADD
+                | CALLEE_SATURATING_SUB
+        )
+}
+
 /// Return whether an internal placeholder lowers to a CUDA libdevice call
 /// under every intrinsic backend.
 ///
@@ -390,5 +416,40 @@ mod tests {
 
         assert!(!is_known_placeholder("__cuda_oxide_rust_intrinsic_unknown"));
         assert!(!is_known_placeholder("__nv_sinf"));
+
+        for &intrinsic in ALL_FLOAT_MATH_INTRINSICS {
+            assert!(is_pure_total_scalar_placeholder(
+                intrinsic.placeholder_callee()
+            ));
+        }
+        for total_int in [
+            CALLEE_ROTATE_LEFT,
+            CALLEE_ROTATE_RIGHT,
+            CALLEE_CTPOP,
+            CALLEE_CTLZ,
+            CALLEE_CTTZ,
+            CALLEE_BSWAP,
+            CALLEE_BITREVERSE,
+            CALLEE_SATURATING_ADD,
+            CALLEE_SATURATING_SUB,
+        ] {
+            assert!(is_pure_total_scalar_placeholder(total_int));
+        }
+        for excluded in [
+            CALLEE_CTLZ_NONZERO,
+            CALLEE_CTTZ_NONZERO,
+            CALLEE_EXACT_DIV,
+            CALLEE_FLOAT_TO_INT_UNCHECKED,
+            CALLEE_CARRYING_MUL_ADD,
+            CALLEE_SELECT_UNPREDICTABLE,
+            "__cuda_oxide_rust_intrinsic_unknown",
+            "__nv_sinf",
+            "user_crate::my_float_helper",
+        ] {
+            assert!(
+                !is_pure_total_scalar_placeholder(excluded),
+                "`{excluded}` must not be admitted as a pure total scalar placeholder"
+            );
+        }
     }
 }

@@ -2932,6 +2932,12 @@ pub(super) fn translate_mir_program(
                                         "verified mbarrier pointer cannot escape into unmodeled operation `mir.call`",
                                     ));
                                 }
+                                LocalTag::TmemAddr(_) if spec.tmem_lifecycle => {
+                                    return Err(reject(
+                                        "mir.call",
+                                        "verified TMEM address cannot escape into unmodeled operation `mir.call`",
+                                    ));
+                                }
                                 _ => {}
                             }
                         }
@@ -2943,7 +2949,11 @@ pub(super) fn translate_mir_program(
                     let is_pure_core = callee.contains("4core")
                         || callee.starts_with("core__")
                         || callee.starts_with("core::");
-                    if op.get_num_results() != 1 || !(is_cuda_dev || is_pure_core) {
+                    let is_pure_intrinsic =
+                        dialect_mir::rust_intrinsics::is_pure_total_scalar_placeholder(&callee);
+                    if op.get_num_results() != 1
+                        || !(is_cuda_dev || is_pure_core || is_pure_intrinsic)
+                    {
                         return Err(reject(
                             "mir.call",
                             format!(

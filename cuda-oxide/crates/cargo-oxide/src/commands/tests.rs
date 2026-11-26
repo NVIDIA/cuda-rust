@@ -7615,3 +7615,80 @@ fn host_probe_reads_a_fake_compilers_host_line() {
     assert!(error.contains("-vV` failed"), "{error}");
     fs::remove_dir_all(root).unwrap();
 }
+
+#[cfg(unix)]
+#[test]
+fn setup_prebuilds_lean_proof_library_when_lake_is_available_and_warns_on_failure() {
+    use crate::backend;
+    let root = unique_temp_dir("cargo_oxide_lean_prebuild");
+    let codegen_crate = root.join("crates/rustc-codegen-cuda");
+    let lean_dir = root.join("oxide-proofs-preview");
+    let bin_dir = root.join("bin");
+    let elan_home = root.join("elan");
+    fs::create_dir_all(&codegen_crate).unwrap();
+    fs::create_dir_all(&bin_dir).unwrap();
+    fs::create_dir_all(elan_home.join("bin")).unwrap();
+
+    // Without `oxide-proofs-preview/lakefile.toml`, prebuild skips cleanly.
+    assert_eq!(
+        backend::lean_package_dir_for_codegen_crate(&codegen_crate),
+        None
+    );
+
+    fs::create_dir_all(&lean_dir).unwrap();
+    fs::write(lean_dir.join("lakefile.toml"), "name = \"CudaOxide\"\n").unwrap();
+    assert_eq!(
+        backend::lean_package_dir_for_codegen_crate(&codegen_crate).as_deref(),
+        Some(lean_dir.as_path())
+    );
+
+    // Without `lake`, prebuild skips cleanly rather than failing non-verify setups.
+    assert_eq!(
+        backend::find_lake_executable_with_env(Some(bin_dir.as_os_str()), None, None),
+        None
+    );
+    assert_eq!(
+        backend::prebuild_lean_proofs_with_lake(&codegen_crate, None),
+        backend::LeanPrebuildOutcome::Skipped
+    );
+
+    // `ELAN_HOME/bin/lake` fallback resolves when `PATH` has no `lake`.
+    let elan_lake = elan_home.join("bin/lake");
+    write_tool(
+        &elan_lake,
+        "#!/bin/sh\n[ \"$1\" = build ] || exit 2\nprintf ok > built.marker\n",
+    );
+    assert_eq!(
+        backend::find_lake_executable_with_env(
+            Some(bin_dir.as_os_str()),
+            Some(elan_home.as_os_str()),
+            None,
+        )
+        .as_deref(),
+        Some(elan_lake.as_path())
+    );
+    assert_eq!(
+        backend::prebuild_lean_proofs_with_lake(&codegen_crate, Some(&elan_lake)),
+        backend::LeanPrebuildOutcome::Built(lean_dir.clone())
+    );
+    assert!(lean_dir.join("built.marker").is_file());
+
+    // A failing `lake build` reports `Failed` (non-fatal warning during setup/update).
+    let failing_lake = bin_dir.join("lake");
+    write_tool(
+        &failing_lake,
+        "#!/bin/sh\necho 'toolchain download failed' >&2\nexit 1\n",
+    );
+    match backend::prebuild_lean_proofs_with_lake(&codegen_crate, Some(&failing_lake)) {
+        backend::LeanPrebuildOutcome::Failed {
+            lean_dir: reported,
+            reason,
+        } => {
+            assert_eq!(reported, lean_dir);
+            assert!(reason.contains("toolchain download failed"), "{reason}");
+        }
+        other => panic!("expected Failed outcome, got {other:?}"),
+    }
+
+    fs::remove_dir_all(root).unwrap();
+}

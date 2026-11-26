@@ -5,6 +5,7 @@
 
 use crate::backend;
 use reserved_oxide_symbols::NO_SHORT_PTR_ENV;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::*;
@@ -18,6 +19,10 @@ pub struct OxideConfig {
     pub default_arch: Option<String>,
     /// Additional rustflags appended after cuda-oxide's required flags.
     pub extra_rustflags: Vec<String>,
+    /// `[target.<triple>]` `extra-rustflags`, keyed by triple. A build adds
+    /// the list of the triple it builds for after `extra_rustflags` (see
+    /// `target_rustflags`). Empty means every build gets the top-level list.
+    pub target_rustflags: BTreeMap<String, Vec<String>>,
     /// Environment variables applied to child Cargo invocations.
     pub env: Vec<(String, String)>,
 }
@@ -355,6 +360,13 @@ pub(super) fn inspect_oxide_config(workspace_root: &Path) -> OxideConfigInspecti
             Vec::new()
         }
     };
+    let target_rustflags = match table.get("target") {
+        None => BTreeMap::new(),
+        Some(value) => parse_config_targets(value, &config_path).unwrap_or_else(|target_errors| {
+            errors.extend(target_errors);
+            BTreeMap::new()
+        }),
+    };
     let env = match table.get("env") {
         None => Vec::new(),
         Some(value) => match parse_config_env(value, &config_path) {
@@ -406,6 +418,7 @@ pub(super) fn inspect_oxide_config(workspace_root: &Path) -> OxideConfigInspecti
             backend,
             default_arch,
             extra_rustflags,
+            target_rustflags,
             env,
         },
         warnings,

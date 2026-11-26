@@ -7058,3 +7058,545 @@ fn the_generated_provider_crate_names_everything_it_needs() {
         ]
     );
 }
+
+// =============================================================================
+// Per-target extra-rustflags (`[target.<triple>]` tables)
+// =============================================================================
+
+/// A config with the flat list plus one table per workstation triple, the
+/// shape issue #1481 describes.
+fn per_target_config() -> OxideConfig {
+    OxideConfig {
+        extra_rustflags: strings(&["--cfg", "my_device_cfg"]),
+        target_rustflags: BTreeMap::from([
+            (
+                "x86_64-unknown-linux-gnu".to_string(),
+                strings(&["-C", "target-cpu=znver3"]),
+            ),
+            (
+                "aarch64-unknown-linux-gnu".to_string(),
+                strings(&["-C", "target-cpu=native"]),
+            ),
+        ]),
+        ..OxideConfig::default()
+    }
+}
+
+/// An inherited environment holding only `vars`, so no test depends on what
+/// the shell that runs the suite exports.
+fn inherited_env(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<std::ffi::OsString> {
+    let vars: BTreeMap<String, String> = vars
+        .iter()
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect();
+    move |key| vars.get(key).map(std::ffi::OsString::from)
+}
+
+/// A host probe that must not run: the triple is known without it.
+fn no_probe(probe: Command) -> Result<String, String> {
+    panic!("unexpected host probe: {probe:?}")
+}
+
+/// A `cargo` command with `args`, standing in for the command a cargo-oxide
+/// subcommand is about to run.
+fn cargo_command(args: &[&str]) -> Command {
+    let mut cmd = Command::new("cargo");
+    cmd.args(args);
+    cmd
+}
+
+#[test]
+fn per_target_extra_rustflags_reach_only_their_triple() {
+    let config = per_target_config();
+    let aarch64 = select_extra_rustflags(
+        &config,
+        &cargo_command(&["build", "--target", "aarch64-unknown-linux-gnu"]),
+        inherited_env(&[]),
+        no_probe,
+    )
+    .unwrap();
+    assert_eq!(
+        aarch64,
+        ["--cfg", "my_device_cfg", "-C", "target-cpu=native"]
+    );
+    let x86 = select_extra_rustflags(
+        &config,
+        &cargo_command(&["build", "--target=x86_64-unknown-linux-gnu"]),
+        inherited_env(&[]),
+        no_probe,
+    )
+    .unwrap();
+    assert_eq!(x86, ["--cfg", "my_device_cfg", "-C", "target-cpu=znver3"]);
+}
+
+#[test]
+fn per_target_extra_rustflags_unlisted_triple_gets_the_flat_list() {
+    let flags = select_extra_rustflags(
+        &per_target_config(),
+        &cargo_command(&["build", "--target", "x86_64-pc-windows-msvc"]),
+        inherited_env(&[]),
+        no_probe,
+    )
+    .unwrap();
+    assert_eq!(flags, ["--cfg", "my_device_cfg"]);
+}
+
+#[test]
+fn flat_extra_rustflags_still_reach_every_triple_without_a_probe() {
+    let config = OxideConfig {
+        extra_rustflags: strings(&["--cfg", "my_device_cfg"]),
+        ..OxideConfig::default()
+    };
+    // No tables: the old behavior, whatever the target, and no `rustc -vV`.
+    for args in [
+        &["build"][..],
+        &["build", "--target", "aarch64-unknown-linux-gnu"],
+        &["build", "--target", "a", "--target", "b"],
+    ] {
+        let flags = select_extra_rustflags(
+            &config,
+            &cargo_command(args),
+            inherited_env(&[("CARGO_BUILD_TARGET", "host-tuple")]),
+            no_probe,
+        )
+        .unwrap();
+        assert_eq!(flags, ["--cfg", "my_device_cfg"], "{args:?}");
+    }
+}
+
+#[test]
+fn per_target_extra_rustflags_follow_the_flat_list() {
+    // Appended, not replacing: rustc keeps the last of repeated `-C` options,
+    // so a table's `target-cpu` beats a top-level one.
+    let config = OxideConfig {
+        extra_rustflags: strings(&["-C", "target-cpu=x86-64-v3", "--cfg", "shared"]),
+        target_rustflags: BTreeMap::from([(
+            "x86_64-unknown-linux-gnu".to_string(),
+            strings(&["-C", "target-cpu=znver3"]),
+        )]),
+        ..OxideConfig::default()
+    };
+    let flags = select_extra_rustflags(
+        &config,
+        &cargo_command(&["build", "--target", "x86_64-unknown-linux-gnu"]),
+        inherited_env(&[]),
+        no_probe,
+    )
+    .unwrap();
+    assert_eq!(
+        flags,
+        [
+            "-C",
+            "target-cpu=x86-64-v3",
+            "--cfg",
+            "shared",
+            "-C",
+            "target-cpu=znver3"
+        ]
+    );
+}
+
+#[test]
+fn build_triple_prefers_target_arg_over_cargo_build_target() {
+    let mut cmd = cargo_command(&["build", "--target", "aarch64-unknown-linux-gnu"]);
+    cmd.env("CARGO_BUILD_TARGET", "x86_64-unknown-linux-gnu");
+    let inherited = inherited_env(&[("CARGO_BUILD_TARGET", "riscv64gc-unknown-linux-gnu")]);
+    assert_eq!(
+        resolve_build_triple(&cmd, &inherited, no_probe).unwrap(),
+        "aarch64-unknown-linux-gnu"
+    );
+}
+
+#[test]
+fn build_triple_ignores_target_dir_and_arguments_after_double_dash() {
+    let cmd = cargo_command(&[
+        "test",
+        "--target-dir",
+        "target/x",
+        "--target-dir=target/y",
+        "--",
+        "--target",
+        "x86_64-unknown-linux-gnu",
+    ]);
+    let inherited = inherited_env(&[("CARGO_BUILD_TARGET", "aarch64-unknown-linux-gnu")]);
+    assert_eq!(
+        resolve_build_triple(&cmd, &inherited, no_probe).unwrap(),
+        "aarch64-unknown-linux-gnu"
+    );
+}
+
+#[test]
+fn build_triple_reads_the_commands_cargo_build_target_before_the_inherited_one() {
+    let mut cmd = cargo_command(&["build"]);
+    cmd.env("CARGO_BUILD_TARGET", "x86_64-unknown-linux-gnu");
+    let inherited = inherited_env(&[("CARGO_BUILD_TARGET", "aarch64-unknown-linux-gnu")]);
+    assert_eq!(
+        resolve_build_triple(&cmd, &inherited, no_probe).unwrap(),
+        "x86_64-unknown-linux-gnu"
+    );
+
+    let cmd = cargo_command(&["build"]);
+    assert_eq!(
+        resolve_build_triple(&cmd, &inherited, no_probe).unwrap(),
+        "aarch64-unknown-linux-gnu"
+    );
+}
+
+#[test]
+fn build_triple_falls_back_to_the_host_probe() {
+    let mut cmd = cargo_command(&["build"]);
+    cmd.current_dir("/tmp/project")
+        .env("RUSTUP_TOOLCHAIN", "1.99.1")
+        .env_remove("CARGO_BUILD_TARGET");
+    // The command removes CARGO_BUILD_TARGET, so the inherited value is unseen.
+    let inherited = inherited_env(&[("CARGO_BUILD_TARGET", "x86_64-unknown-linux-gnu")]);
+    let mut probes = Vec::new();
+    let triple = resolve_build_triple(&cmd, &inherited, |probe| {
+        probes.push(probe);
+        Ok("aarch64-unknown-linux-gnu".to_string())
+    })
+    .unwrap();
+    assert_eq!(triple, "aarch64-unknown-linux-gnu");
+    let [probe] = probes.as_slice() else {
+        panic!("expected one probe, got {}", probes.len());
+    };
+    assert_eq!(probe.get_program(), OsStr::new("rustc"));
+    assert_eq!(command_args(probe), ["-vV"]);
+    assert_eq!(probe.get_current_dir(), Some(Path::new("/tmp/project")));
+    assert_eq!(
+        command_env(probe, "RUSTUP_TOOLCHAIN").as_deref(),
+        Some("1.99.1")
+    );
+    assert!(
+        probe
+            .get_envs()
+            .any(|(key, value)| key == OsStr::new("CARGO_BUILD_TARGET") && value.is_none())
+    );
+}
+
+#[test]
+fn host_probe_runs_the_compiler_cargo_would_run() {
+    type Vars = &'static [(&'static str, &'static str)];
+    let cases: [(Vars, Vars, &str); 5] = [
+        (&[], &[], "rustc"),
+        (
+            &[],
+            &[("CARGO_BUILD_RUSTC", "/opt/build-rustc")],
+            "/opt/build-rustc",
+        ),
+        (
+            &[],
+            &[
+                ("RUSTC", "/opt/rustc"),
+                ("CARGO_BUILD_RUSTC", "/opt/build-rustc"),
+            ],
+            "/opt/rustc",
+        ),
+        (
+            &[("RUSTC", "/cmd/rustc")],
+            &[("RUSTC", "/opt/rustc")],
+            "/cmd/rustc",
+        ),
+        // An empty RUSTC counts as unset.
+        (
+            &[("RUSTC", "")],
+            &[("CARGO_BUILD_RUSTC", "/opt/build-rustc")],
+            "/opt/build-rustc",
+        ),
+    ];
+    for (command_vars, inherited_vars, expected) in cases {
+        let mut cmd = cargo_command(&["build"]);
+        for (key, value) in command_vars {
+            cmd.env(key, value);
+        }
+        let probe = host_probe_command(&cmd, &inherited_env(inherited_vars));
+        assert_eq!(
+            probe.get_program(),
+            OsStr::new(expected),
+            "{command_vars:?} {inherited_vars:?}"
+        );
+    }
+}
+
+#[test]
+fn host_tuple_names_the_probed_host_and_probes_once() {
+    let cmd = cargo_command(&[
+        "build",
+        "--target",
+        "host-tuple",
+        "--target=x86_64-unknown-linux-gnu",
+        "--target",
+        "host-tuple",
+    ]);
+    let mut probes = 0;
+    let triple = resolve_build_triple(&cmd, &inherited_env(&[]), |_| {
+        probes += 1;
+        Ok("x86_64-unknown-linux-gnu".to_string())
+    })
+    .unwrap();
+    assert_eq!(triple, "x86_64-unknown-linux-gnu");
+    assert_eq!(probes, 1);
+
+    // The same spelling in CARGO_BUILD_TARGET.
+    let flags = select_extra_rustflags(
+        &per_target_config(),
+        &cargo_command(&["build"]),
+        inherited_env(&[("CARGO_BUILD_TARGET", "host-tuple")]),
+        |_| Ok("aarch64-unknown-linux-gnu".to_string()),
+    )
+    .unwrap();
+    assert_eq!(flags, ["--cfg", "my_device_cfg", "-C", "target-cpu=native"]);
+}
+
+#[test]
+fn build_triple_of_a_target_spec_file_is_its_file_stem() {
+    let cmd = cargo_command(&["build", "--target", "specs/my-gpu-host.json"]);
+    assert_eq!(
+        resolve_build_triple(&cmd, &inherited_env(&[]), no_probe).unwrap(),
+        "my-gpu-host"
+    );
+}
+
+#[test]
+fn per_target_extra_rustflags_refuse_two_targets_in_one_command() {
+    let error = select_extra_rustflags(
+        &per_target_config(),
+        &cargo_command(&[
+            "build",
+            "--target",
+            "x86_64-unknown-linux-gnu",
+            "--target",
+            "aarch64-unknown-linux-gnu",
+        ]),
+        inherited_env(&[]),
+        no_probe,
+    )
+    .unwrap_err();
+    assert!(error.contains("more than one target"), "{error}");
+    assert!(error.contains("`x86_64-unknown-linux-gnu`"), "{error}");
+    assert!(error.contains("`aarch64-unknown-linux-gnu`"), "{error}");
+}
+
+#[test]
+fn per_target_extra_rustflags_need_a_known_triple() {
+    let error = select_extra_rustflags(
+        &per_target_config(),
+        &cargo_command(&["build"]),
+        inherited_env(&[]),
+        |_| Err("could not run `rustc -vV`: not found".to_string()),
+    )
+    .unwrap_err();
+    assert!(error.contains("`[target.<triple>]`"), "{error}");
+    assert!(error.contains("could not run `rustc -vV`"), "{error}");
+    assert!(error.contains("--target <triple>"), "{error}");
+
+    let error = select_extra_rustflags(
+        &per_target_config(),
+        &cargo_command(&["build", "--target", "host-tuple"]),
+        inherited_env(&[]),
+        |_| Err("`rustc -vV` printed no `host:` line".to_string()),
+    )
+    .unwrap_err();
+    assert!(error.contains("printed no `host:` line"), "{error}");
+}
+
+#[test]
+fn rustc_host_line_is_read_from_verbose_version_output() {
+    let output = "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\n\
+                  commit-hash: 58cf8f9c3\nhost: aarch64-unknown-linux-gnu\n\
+                  release: 1.99.1\nLLVM version: 21.1.0\n";
+    assert_eq!(
+        parse_rustc_host(output).as_deref(),
+        Some("aarch64-unknown-linux-gnu")
+    );
+    assert_eq!(
+        parse_rustc_host("host: x86_64-pc-windows-msvc\r\n").as_deref(),
+        Some("x86_64-pc-windows-msvc")
+    );
+    assert_eq!(parse_rustc_host("rustc 1.99.1\nhost:\n"), None);
+    assert_eq!(parse_rustc_host(""), None);
+}
+
+#[test]
+fn project_config_parser_loads_target_tables() {
+    let root = unique_temp_dir("cargo_oxide_config_target_tables");
+    let cargo_dir = root.join(".cargo");
+    fs::create_dir_all(&cargo_dir).unwrap();
+    fs::write(
+        cargo_dir.join("cuda-oxide.toml"),
+        r#"
+extra-rustflags = ["--cfg", "my_device_cfg"]
+
+[target.x86_64-unknown-linux-gnu]
+extra-rustflags = ["-C", "target-cpu=znver3"]
+
+[target.aarch64-unknown-linux-gnu]
+extra-rustflags = ["-C", "target-cpu=native"]
+
+[target.thumbv7em-none-eabihf]
+"#,
+    )
+    .unwrap();
+
+    let config = load_oxide_config(&root);
+    let expected = per_target_config();
+    assert_eq!(config.extra_rustflags, expected.extra_rustflags);
+    let mut expected_targets = expected.target_rustflags;
+    expected_targets.insert("thumbv7em-none-eabihf".to_string(), Vec::new());
+    assert_eq!(config.target_rustflags, expected_targets);
+
+    let check = check_oxide_config(&root);
+    assert!(!check.failed, "{:?}", check.details);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn project_config_target_table_errors_are_named() {
+    let config_path = Path::new("/project/.cargo/cuda-oxide.toml");
+    let value: toml::Value = toml::from_str(
+        r#"
+[target]
+riscv64gc-unknown-linux-gnu = ["-C", "target-cpu=native"]
+
+[target.'cfg(unix)']
+extra-rustflags = ["-C", "target-cpu=native"]
+
+[target.host-tuple]
+extra-rustflags = []
+
+[target."x86_64 linux"]
+extra-rustflags = []
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-cpu=znver3"]
+linker = "clang"
+
+[target.aarch64-unknown-linux-gnu]
+extra-rustflags = "-C target-cpu=native"
+"#,
+    )
+    .unwrap();
+    let errors = parse_config_targets(&value["target"], config_path).unwrap_err();
+    let expected = [
+        "`[target.'cfg(unix)']`: `cfg(...)` keys are not supported",
+        "`[target.host-tuple]`: `host-tuple` is not a triple",
+        "`[target.'x86_64 linux']`: `x86_64 linux` is not a target triple",
+        "`[target.x86_64-unknown-linux-gnu]` field `rustflags` is not supported; \
+         only `extra-rustflags` is; did you mean `extra-rustflags`?",
+        "`[target.x86_64-unknown-linux-gnu]` field `linker` is not supported",
+        "field `target.aarch64-unknown-linux-gnu.extra-rustflags` must be an array of strings",
+        "`[target.riscv64gc-unknown-linux-gnu]` must be a table",
+    ];
+    for needle in expected {
+        assert!(
+            errors.iter().any(|error| error.contains(needle)),
+            "missing {needle:?} in {errors:#?}"
+        );
+    }
+    assert_eq!(errors.len(), expected.len(), "{errors:#?}");
+    assert!(
+        errors
+            .iter()
+            .all(|error| error.contains(&config_path.display().to_string())),
+        "{errors:#?}"
+    );
+
+    let not_a_table = toml::Value::String("x86_64-unknown-linux-gnu".to_string());
+    let errors = parse_config_targets(&not_a_table, config_path).unwrap_err();
+    assert_eq!(errors.len(), 1);
+    assert!(
+        errors[0].contains("field `target` must be a table"),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn doctor_reports_malformed_target_tables() {
+    let root = unique_temp_dir("cargo_oxide_doctor_target_tables");
+    let cargo_dir = root.join(".cargo");
+    fs::create_dir_all(&cargo_dir).unwrap();
+    fs::write(
+        cargo_dir.join("cuda-oxide.toml"),
+        r#"
+[target.'cfg(target_arch = "x86_64")']
+extra-rustflags = ["-C", "target-cpu=znver3"]
+"#,
+    )
+    .unwrap();
+
+    let check = check_oxide_config(&root);
+    assert!(check.failed);
+    assert!(
+        check.details.iter().any(|line| line.starts_with('✗')
+            && line.contains("`cfg(...)` keys are not supported")),
+        "{:?}",
+        check.details
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn passthrough_command_appends_the_target_table_after_the_flat_list() {
+    let ctx = test_context(per_target_config());
+    let opts = CargoPassthroughOptions {
+        verbose: false,
+        emit_nvvm_ir: false,
+        arch: Some("sm_90"),
+        features: None,
+        cargo_target_dir: None,
+        device_codegen_crate: None,
+        device_cfgs: &[],
+        no_fmad: false,
+        unchecked_indexing: false,
+        materialize_cubin: false,
+        device_debug: DeviceDebug::Off,
+        debug_assertions: false,
+    };
+    let cargo_args = strings(&["--target", "aarch64-unknown-linux-gnu", "-p", "gpu-app"]);
+    let cmd =
+        passthrough_command_for_test(&ctx, CargoPassthroughSubcommand::Build, &opts, &cargo_args)
+            .unwrap();
+    let encoded = command_env(&cmd, "CARGO_ENCODED_RUSTFLAGS").unwrap();
+    let flags = decoded_rustflags(&encoded);
+    let position = |pair: [&str; 2]| {
+        flags
+            .windows(2)
+            .position(|window| window == pair)
+            .unwrap_or_else(|| panic!("{pair:?} missing from {flags:?}"))
+    };
+    let flat = position(["--cfg", "my_device_cfg"]);
+    let table = position(["-C", "target-cpu=native"]);
+    let backend = flags
+        .iter()
+        .position(|flag| flag.starts_with("-Zcodegen-backend="))
+        .unwrap();
+    assert!(flat < table && table < backend, "{flags:?}");
+    assert!(!flags.contains(&"target-cpu=znver3"), "{flags:?}");
+}
+
+/// The real probe against a fake compiler: its `host:` line is read, and a
+/// compiler that fails is a named error rather than a guessed triple.
+#[cfg(unix)]
+#[test]
+fn host_probe_reads_a_fake_compilers_host_line() {
+    let root = unique_temp_dir("cargo_oxide_host_probe");
+    fs::create_dir_all(&root).unwrap();
+    let working = root.join("rustc-ok");
+    write_tool(
+        &working,
+        "#!/bin/sh\n[ \"$1\" = -vV ] || exit 2\nprintf 'rustc 1.99.1\\nhost: aarch64-unknown-linux-gnu\\n'\n",
+    );
+    let failing = root.join("rustc-fail");
+    write_tool(&failing, "#!/bin/sh\nexit 3\n");
+
+    let mut cmd = cargo_command(&["build"]);
+    cmd.env("RUSTC", &working).env_remove("CARGO_BUILD_TARGET");
+    let flags = configured_rustflags_for_command(&per_target_config(), &cmd).unwrap();
+    assert_eq!(flags, ["--cfg", "my_device_cfg", "-C", "target-cpu=native"]);
+
+    let mut cmd = cargo_command(&["build"]);
+    cmd.env("RUSTC", &failing).env_remove("CARGO_BUILD_TARGET");
+    let error = configured_rustflags_for_command(&per_target_config(), &cmd).unwrap_err();
+    assert!(error.contains("-vV` failed"), "{error}");
+    fs::remove_dir_all(root).unwrap();
+}

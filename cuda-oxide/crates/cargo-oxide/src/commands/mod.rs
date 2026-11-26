@@ -27,6 +27,7 @@ mod passthrough;
 mod pipeline_debug;
 mod scaffold;
 mod setup_update;
+mod target_rustflags;
 #[cfg(test)]
 mod tests;
 mod tilelib;
@@ -51,6 +52,7 @@ pub use passthrough::*;
 pub use pipeline_debug::*;
 pub use scaffold::*;
 pub use setup_update::*;
+use target_rustflags::*;
 pub use tilelib::*;
 use tilelib_provider::*;
 use toolkit::*;

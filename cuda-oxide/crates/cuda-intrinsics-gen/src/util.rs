@@ -57,10 +57,19 @@ pub fn check_contents(path: &Path, expected: &str) -> Result<()> {
     Ok(())
 }
 
+/// Formats generated Rust source text through `rustfmt` with Unix LF line
+/// endings so generated files match byte-for-byte on both Linux and Windows.
 pub fn rustfmt_source(source: &str) -> Result<String> {
     let rustfmt = std::env::var_os("RUSTFMT").unwrap_or_else(|| "rustfmt".into());
     let mut child = Command::new(&rustfmt)
-        .args(["--emit", "stdout", "--edition", "2024"])
+        .args([
+            "--emit",
+            "stdout",
+            "--edition",
+            "2024",
+            "--config",
+            "newline_style=Unix",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -90,4 +99,18 @@ fn temporary_sibling(path: &Path) -> PathBuf {
         .to_os_string();
     name.push(".cuda-intrinsics-gen.tmp");
     path.with_file_name(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rustfmt_source;
+
+    /// Verifies that `rustfmt_source` normalizes output to LF (`\n`) rather
+    /// than emitting host-native CRLF (`\r\n`) on Windows checkouts.
+    #[test]
+    fn rustfmt_source_always_emits_unix_newlines() {
+        let formatted = rustfmt_source("pub fn f() {\r\n    let _x = 1;\r\n}\r\n").unwrap();
+        assert!(formatted.contains('\n'));
+        assert!(!formatted.contains('\r'));
+    }
 }

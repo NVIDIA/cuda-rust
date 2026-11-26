@@ -9,10 +9,12 @@ TFLOPS of FP16 MMA, while the same chip's scalar FP16 throughput is roughly
 deep learning, HPC, and signal processing workloads do — tensor cores are
 where the performance lives.
 
-cuda-oxide provides access to two generations of matrix accelerators:
-**WGMMA** on Hopper (SM 90) and **tcgen05** on Blackwell (SM 100). This
-chapter covers both, their programming models, and how they connect to the
-TMA and barrier machinery from the previous chapters.
+cuda-oxide provides three matrix accelerator programming models:
+warp-level **mma.sync** through `cuda_device::wmma`, **WGMMA** on Hopper
+(SM 90), and **tcgen05** on datacenter Blackwell (SM 100a). Consumer and
+workstation Blackwell GPUs (SM 12x, such as SM 120) use the warp-level
+`wmma` API rather than tcgen05. This chapter explains the programming
+models and how the newer accelerators connect to TMA and barriers.
 
 :::{seealso}
 [CUDA Programming Guide — Warpgroup Level Matrix Operations](https://docs.nvidia.com/cuda/cuda-programming-guide/#warpgroup-level-matrix-operations)
@@ -38,6 +40,31 @@ The evolution across generations follows a clear trend: operands move closer
 to the compute units, the issuing scope widens, and the programmer writes
 fewer instructions for larger tiles. cuda-oxide tracks this evolution with
 generation-specific APIs rather than a one-size-fits-all abstraction.
+
+---
+
+## Warp-level MMA — including SM 12x
+
+The `cuda_device::wmma` module exposes `mma.sync` operations with
+register-distributed operand and accumulator fragments. All 32 lanes of a
+warp execute the same instruction; each lane supplies its own fragment.
+Unlike tcgen05, this path does not require Tensor Memory (TMEM).
+
+For example, `wmma::mma_m16n8k16_f32_f16` takes four packed `u32`
+registers for A, two for B, and four `f32` accumulator registers per lane.
+The corresponding signed INT8 operation, `wmma::mma_m16n8k16_s32_s8`,
+takes two packed `u32` registers for A, one for B, and four `i32`
+accumulators per lane. Both forms require SM 80 or newer, including SM 120.
+
+For shared-memory operand tiles, the module also supplies `ldmatrix`
+loads, such as `ldmatrix_x1`, `ldmatrix_x2`, and `ldmatrix_x4`. Choose the
+load and register layout for the specific MMA shape and element type.
+`ldmatrix` is not a memory fence: use an appropriate barrier or fence to
+order shared-memory accesses, and keep all lanes participating in the MMA.
+
+See the [PTX MMA fragment layouts](https://docs.nvidia.com/cuda/parallel-thread-execution/#warp-level-matrix-instructions-mma)
+and the [`wmma` module source](https://github.com/NVIDIA/cuda-rust/blob/main/cuda-oxide/crates/cuda-device/src/wmma.rs)
+for the register order, target requirements, and safety contracts.
 
 ---
 
@@ -336,15 +363,16 @@ CG2 and CG1 (standard) must not be mixed in the same kernel.
 
 :::{tip}
 tcgen05 is only available on **Blackwell datacenter** GPUs (SM 100a).
-Consumer Blackwell (SM 120) uses the older `mma.sync` instruction set.
-Check the target architecture before reaching for the tcgen05 API.
+Consumer and workstation Blackwell (SM 12x) use `mma.sync` through
+`cuda_device::wmma`. Check the target architecture before reaching for
+the tcgen05 API.
 :::
 
 ---
 
 ## Choosing the right accelerator
 
-| Feature           | WGMMA (Hopper)          | tcgen05 (Blackwell DC)  | mma.sync (Ampere/consumer) |
+| Feature           | WGMMA (Hopper)          | tcgen05 (Blackwell DC)  | mma.sync (including SM 12x) |
 | :---------------- | :---------------------- | :---------------------- | :------------------------- |
 | Issue model       | Warpgroup (128 threads) | Single thread           | Warp (32 threads)          |
 | Accumulator       | Registers               | TMEM (dedicated)        | Registers                  |
@@ -352,7 +380,7 @@ Check the target architecture before reaching for the tcgen05 API.
 | Async execution   | Yes (commit+barrier)    | Yes (commit+barrier)    | Synchronous                |
 | TMA integration   | Native                  | Native + multicast CG2  | Manual loads               |
 | Cluster support   | Yes                     | Yes + CG2               | No                         |
-| Minimum SM        | 90 (Hopper)             | 100a (Blackwell DC)     | 80 (Ampere)                |
+| Minimum SM        | 90 (Hopper)             | 100a (Blackwell DC)     | 75 or 80+ (shape-dependent) |
 
 For most users, the choice is determined by the target GPU. If you are
 writing a library that targets multiple architectures, you will need

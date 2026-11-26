@@ -1556,7 +1556,10 @@ pub(super) fn translate_mir_program(
 
     let mut pending_asserts: Vec<PendingAssert> = Vec::new();
 
-    let fallback_rhs_for = |v: Value, opaque_ids: &HashMap<Value, usize>| -> MirRhs {
+    // Capture `opaque_ids` directly so every fallback oracle ID is allocated from the
+    // monotonic `opaque_ids` map (strictly increasing in RPO definition order) and can
+    // never alias per-block `val_ids`.
+    let fallback_rhs_for = |v: Value| -> MirRhs {
         let w = mir_uint_width(ctx, v.get_type(ctx));
         if w > 1 {
             MirRhs::OpaqueUint(opaque_ids[&v], w)
@@ -2239,25 +2242,24 @@ pub(super) fn translate_mir_program(
                         span_elems,
                     ));
                 }
-                "nvvm.clc_query_is_canceled" if op.get_num_results() == 1 => {
-                    let res = op.get_result(0);
-                    let rhs = match op.operands().next() {
-                        Some(v) => MirRhs::CtaUnary(val_ids[&v]),
-                        None => MirRhs::CtaConst,
-                    };
-                    stmts.push(MirStmt::Assign(val_ids[&res], rhs));
-                }
-                "nvvm.clc_query_get_first_ctaid_x"
+                "nvvm.clc_query_is_canceled"
+                | "nvvm.clc_query_get_first_ctaid_x"
                 | "nvvm.clc_query_get_first_ctaid_y"
                 | "nvvm.clc_query_get_first_ctaid_z"
                     if op.get_num_results() == 1 =>
                 {
                     let res = op.get_result(0);
                     let w = mir_uint_width(ctx, res.get_type(ctx));
-                    let eff_w = if w > 1 { w } else { 32 };
-                    let rhs = match op.operands().next() {
-                        Some(v) => MirRhs::CtaUint1(val_ids[&res], eff_w, val_ids[&v]),
-                        None => MirRhs::OpaqueUint(val_ids[&res], eff_w),
+                    let rhs = if w > 1 {
+                        match op.operands().next() {
+                            Some(v) => MirRhs::CtaUint1(opaque_ids[&res], w, val_ids[&v]),
+                            None => MirRhs::OpaqueUint(opaque_ids[&res], w),
+                        }
+                    } else {
+                        match op.operands().next() {
+                            Some(v) => MirRhs::CtaUnary(val_ids[&v]),
+                            None => MirRhs::CtaConst,
+                        }
                     };
                     stmts.push(MirStmt::Assign(val_ids[&res], rhs));
                 }
@@ -2489,10 +2491,7 @@ pub(super) fn translate_mir_program(
                     for r_idx in 0..op.get_num_results() {
                         let res = op.get_result(r_idx);
                         tags.insert(res, LocalTag::TmemLoadedReg(ld_id));
-                        stmts.push(MirStmt::Assign(
-                            val_ids[&res],
-                            fallback_rhs_for(res, &opaque_ids),
-                        ));
+                        stmts.push(MirStmt::Assign(val_ids[&res], fallback_rhs_for(res)));
                     }
                 }
                 "nvvm.tcgen05_load_wait" => {
@@ -2778,10 +2777,7 @@ pub(super) fn translate_mir_program(
                             pending_asserts.remove(pos);
                         }
                     }
-                    stmts.push(MirStmt::Assign(
-                        val_ids[&res],
-                        fallback_rhs_for(res, &val_ids),
-                    ));
+                    stmts.push(MirStmt::Assign(val_ids[&res], fallback_rhs_for(res)));
                 }
                 "mir.insert_field" if op.get_num_operands() == 2 && op.get_num_results() == 1 => {
                     let (base_s, fv, res) =
@@ -2844,19 +2840,6 @@ pub(super) fn translate_mir_program(
                         stmts.push(MirStmt::Assign(val_ids[&res], MirRhs::OpaqueVal));
                     }
                 }
-                "mir.array_element_addr"
-                    if op.get_num_operands() >= 2 && op.get_num_results() == 1 =>
-                {
-                    let idx_v = op.get_operand(1);
-                    if let Some(pos) = pending_asserts.iter().rposition(|p| p.idx_val == idx_v) {
-                        pending_asserts.remove(pos);
-                    }
-                    let res = op.get_result(0);
-                    if matches!(tags.get(&op.get_operand(0)), Some(LocalTag::StackSlot)) {
-                        tags.insert(res, LocalTag::StackSlot);
-                    }
-                    stmts.push(MirStmt::Assign(val_ids[&res], MirRhs::OpaqueVal));
-                }
                 "mir.constant" | "builtin.constant" if op.get_num_results() == 1 => {
                     let res = op.get_result(0);
                     let w = mir_uint_width(ctx, res.get_type(ctx));
@@ -2873,16 +2856,10 @@ pub(super) fn translate_mir_program(
                             stmts
                                 .push(MirStmt::Assign(val_ids[&res], MirRhs::ConstInt(eff_w, val)));
                         } else {
-                            stmts.push(MirStmt::Assign(
-                                val_ids[&res],
-                                fallback_rhs_for(res, &opaque_ids),
-                            ));
+                            stmts.push(MirStmt::Assign(val_ids[&res], fallback_rhs_for(res)));
                         }
                     } else {
-                        stmts.push(MirStmt::Assign(
-                            val_ids[&res],
-                            fallback_rhs_for(res, &opaque_ids),
-                        ));
+                        stmts.push(MirStmt::Assign(val_ids[&res], fallback_rhs_for(res)));
                     }
                 }
                 "mir.float_constant" if op.get_num_results() == 1 => {
@@ -3106,8 +3083,7 @@ pub(super) fn translate_mir_program(
                             if !matches!(tags.get(&res), Some(LocalTag::TmemLoadedReg(_))) {
                                 tags.insert(res, LocalTag::UnverifiedPtr);
                             }
-                            stmts
-                                .push(MirStmt::Assign(res_vid, fallback_rhs_for(res, &opaque_ids)));
+                            stmts.push(MirStmt::Assign(res_vid, fallback_rhs_for(res)));
                         }
                     }
                 }
@@ -3158,7 +3134,7 @@ pub(super) fn translate_mir_program(
                                     tags.get(&src),
                                     Some(LocalTag::UnverifiedPtr | LocalTag::TmemLoadedReg(_))
                                 ) {
-                                    fallback_rhs_for(res, &opaque_ids)
+                                    fallback_rhs_for(res)
                                 } else {
                                     let w = mir_uint_width(ctx, res.get_type(ctx));
                                     if w > 1 {
@@ -3247,10 +3223,7 @@ pub(super) fn translate_mir_program(
                                 ));
                             }
                             _ => {
-                                stmts.push(MirStmt::Assign(
-                                    val_ids[&res],
-                                    fallback_rhs_for(res, &opaque_ids),
-                                ));
+                                stmts.push(MirStmt::Assign(val_ids[&res], fallback_rhs_for(res)));
                             }
                         }
                     } else if cast_str.contains("PointerWithExposedProvenance") {
@@ -3265,10 +3238,7 @@ pub(super) fn translate_mir_program(
                             stmts.push(MirStmt::Assign(val_ids[&res], MirRhs::Copy(val_ids[&src])));
                         } else {
                             tags.insert(res, LocalTag::UnverifiedPtr);
-                            stmts.push(MirStmt::Assign(
-                                val_ids[&res],
-                                fallback_rhs_for(res, &opaque_ids),
-                            ));
+                            stmts.push(MirStmt::Assign(val_ids[&res], fallback_rhs_for(res)));
                         }
                     } else if cast_str.contains("PtrToPtr")
                         || cast_str.contains("StaticAddress")
@@ -3365,10 +3335,7 @@ pub(super) fn translate_mir_program(
                             stmts.push(MirStmt::Assign(val_ids[&res], rhs));
                         }
                     } else {
-                        stmts.push(MirStmt::Assign(
-                            val_ids[&res],
-                            fallback_rhs_for(res, &opaque_ids),
-                        ));
+                        stmts.push(MirStmt::Assign(val_ids[&res], fallback_rhs_for(res)));
                     }
                 }
                 "mir.ptr_offset" if op.get_num_operands() == 2 && op.get_num_results() == 1 => {
@@ -3620,10 +3587,7 @@ pub(super) fn translate_mir_program(
                                 Some(LocalTag::StackSlot | LocalTag::UnverifiedPtr)
                             ) {
                                 tags.insert(res, LocalTag::UnverifiedPtr);
-                                stmts.push(MirStmt::Assign(
-                                    val_ids[&res],
-                                    fallback_rhs_for(res, &opaque_ids),
-                                ));
+                                stmts.push(MirStmt::Assign(val_ids[&res], fallback_rhs_for(res)));
                             } else {
                                 return Err(reject(
                                     "mir.load",
@@ -3791,10 +3755,7 @@ pub(super) fn translate_mir_program(
                             MirRhs::BinOp(lean_op, w, val_ids[&l], val_ids[&r]),
                         ));
                     } else {
-                        stmts.push(MirStmt::Assign(
-                            val_ids[&res],
-                            fallback_rhs_for(res, &opaque_ids),
-                        ));
+                        stmts.push(MirStmt::Assign(val_ids[&res], fallback_rhs_for(res)));
                     }
                 }
                 "mir.lt" | "mir.le" | "mir.gt" | "mir.ge" | "mir.eq" | "mir.ne"

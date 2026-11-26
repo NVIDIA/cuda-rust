@@ -27,6 +27,10 @@ REJECTED = (
     ("tests/program/RejectedUnknownWriteCoverage.lean", "write coverage claimed across an untracked guard"),
     ("tests/program/RejectedDivergentLoopUniformity.lean", "barrier loop bounded by a split-thread join"),
 )
+# Refused by the CTA state machine: `decide` evaluates `checkUniformBarriersWith` to `false`.
+REJECTED_BARRIERS = (
+    ("RejectedTmaReadAfterSync.lean", "TMA destination read after sync_threads without an mbarrier wait"),
+)
 
 
 def find_lake():
@@ -89,6 +93,15 @@ def main():
             raise RuntimeError(f"The false obligation unexpectedly passed: {filename}")
         # Require a failed proof obligation, not an import or tool error.
         if "error: omega could not prove the goal:" not in result.stdout:
+            raise RuntimeError(f"Unexpected failure in {filename}:\n{result.stdout}")
+        print(f"REJECTED as expected: {label}.", flush=True)
+    for filename, label in REJECTED_BARRIERS:
+        result = run_lake("env", "lean", f"tests/vecadd/{filename}")
+        if result.returncode == 0:
+            raise RuntimeError(f"The false obligation unexpectedly passed: {filename}")
+        # Require the barrier check itself to evaluate to `false`, not an import or tool error.
+        if ("error: Tactic `decide` proved that the proposition" not in result.stdout
+                or "checkUniformBarriersWith" not in result.stdout):
             raise RuntimeError(f"Unexpected failure in {filename}:\n{result.stdout}")
         print(f"REJECTED as expected: {label}.", flush=True)
     print("Model checks passed. Rust/MIR extraction is not implemented by this checker.")

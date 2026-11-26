@@ -1,0 +1,111 @@
+/-
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+-/
+
+import CudaOxide
+
+set_option maxRecDepth 65536
+
+-- Instantiates reusable facts for the access contracts of guarded vecadd:
+-- `no_oob_idx(a, b, c)`, `disjoint_writes(c)`, and `writes_all_elems(c)`.
+namespace Accepted
+open CudaOxide.Mir CudaOxide.Contracts CudaOxide.Proofs.Bounds CudaOxide.Proofs.Launch
+
+theorem no_oob_idx_all {aLen bLen outLen blockSize : Nat}
+    (ha : outLen ≤ aLen) (hb : outLen ≤ bLen) :
+    NoOobIdx blockSize 0 outLen aLen ∧
+    NoOobIdx blockSize 0 outLen bLen ∧
+    NoOobIdx blockSize 0 outLen outLen := by
+  exact ⟨no_oob_idx_of_guard_le ha, no_oob_idx_of_guard_le hb, no_oob_idx_of_same_len⟩
+
+theorem disjoint_writes_c {blockSize : Nat} :
+    DisjointWrites blockSize 0 := by
+  exact disjoint_writes_1d
+
+theorem writes_all_elems_c {blocks blockSize outLen : Nat}
+    (hpositive : 0 < blockSize) (hlaunch : outLen ≤ blocks * blockSize) :
+    WritesAllElems blocks blockSize outLen := by
+  exact writes_all_elems_1d hpositive hlaunch
+
+-- Construct a thread using checked block and lane coordinates.
+def lastThread : Thread1D 4 256 :=
+  ⟨⟨3, by omega⟩, ⟨255, by omega⟩⟩
+
+example : lastThread.index = 1023 := by
+  rfl
+
+example : (thread_address lastThread).val = 1023 := by
+  rfl
+
+-- Padding does not prevent the launch from covering all 1000 outputs.
+example (i : Nat) (hi : i < 1000) :
+    ∃ block lane : Nat, block < 4 ∧ lane < 256 ∧
+      globalIndex 256 block lane = i := by
+  exact launch_coverage (by omega) (by omega) hi
+
+-- Reverse-indexed 1D write `if idx < c.len() { c[c.len() - 1 - idx] = ... }` satisfies `MirWritesAllElems`.
+def revMirFunc : CudaOxide.Mir.Program.MirFunc :=
+  { domain := 1
+  , blockDimX := 256
+  , blockDimY := 1
+  , params := [(.slice false), (.slice true)]
+  , requiresLenGe := [(0, 1)]
+  , blocks := [
+      { args := [⟨0, 0⟩, ⟨1, 0⟩], stmts := [
+          (.assign 2 .index1D),
+          (.assign 3 (.sliceLen 1)),
+          (.assign 4 (.cmpOp .lt 2 3))
+        ], term := (.condBr 4 1 [] 2 []) },
+      { stmts := [
+          (.assign 5 (.sliceLen 0)),
+          (.assign 6 (.cmpOp .lt 2 5)),
+          (.assertCond 0 6),
+          (.assign 7 (.constInt 64 1)),
+          (.assign 8 (.binOp .sub 64 3 7)),
+          (.assign 9 (.binOp .sub 64 8 2)),
+          (.assign 10 (.slicePtr 1)),
+          (.assign 11 (.ptrOffset 10 9)),
+          (.assign 12 .opaqueVal),
+          (.store 11 12)
+        ], term := (.goto 2 []) },
+      { stmts := [], term := .ret }
+    ] }
+
+theorem rev_writes_all_elems :
+    CudaOxide.Contracts.Program.MirWritesAllElems revMirFunc 1 := by
+  apply CudaOxide.Proofs.Program.vcWritesAllElems rfl (by mir_bind_writes)
+  mir_vc revMirFunc
+
+#print axioms no_oob_idx_all
+#print axioms disjoint_writes_c
+#print axioms writes_all_elems_c
+#print axioms rev_writes_all_elems
+#print axioms CudaOxide.Mir.Program.ReachableTrapFree.toReachable
+#print axioms CudaOxide.Mir.Program.EmitsTrapFreeEvent.toEmitsEvent
+#print axioms index_lt_of_guard
+#print axioms no_oob_idx_of_guard_le
+#print axioms no_oob_idx_of_same_len
+#print axioms launched_index_bound
+#print axioms launched_index_fits
+#print axioms launched_index_not_sentinel
+#print axioms globalIndex_injective
+#print axioms disjoint_writes_1d
+#print axioms launch_coverage
+#print axioms writes_all_elems_1d
+#print axioms thread_index_bound
+#print axioms thread_address
+#print axioms thread_index_injective
+#print axioms CudaOxide.Proofs.ControlFlow.uniform_barriers_of_stateMap
+#print axioms CudaOxide.Proofs.ControlFlow.tmem_lifecycle_of_stateMap
+#print axioms CudaOxide.Proofs.Program.vcWritesAllElems
+#print axioms CudaOxide.Proofs.Program.symReachable_sound
+#print axioms CudaOxide.Proofs.Program.vcNoOobGlobal_of_table
+#print axioms CudaOxide.Proofs.Program.vcNoOobShared_of_table
+#print axioms CudaOxide.Proofs.Program.vcDisjointWrites_of_table
+#print axioms CudaOxide.Proofs.Program.vcNoSharedRace_of_table
+#print axioms CudaOxide.Proofs.Program.vcAssertRedundant_of_table
+#print axioms CudaOxide.Proofs.Program.vcNoOobTmem_of_table
+#print axioms CudaOxide.Proofs.Program.or_eq_add_of_mod_two_pow
+
+end Accepted

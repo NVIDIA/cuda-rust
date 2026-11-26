@@ -1,0 +1,158 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+// PostMem2Reg dialect-mir fixture for Stage 6 Blackwell tcgen05 + TMEM + PTX proxy + mbarrier verification.
+builtin.module @safe_tcgen05_matmul {
+  ^entry():
+    mir.func @tcgen05_matmul_verified: builtin.function <(mir.ptr <builtin.integer ui8,mutable:false,addrspace:0,kind:SharedRef>, mir.ptr <builtin.integer ui8,mutable:false,addrspace:0,kind:SharedRef>, mir.disjoint_slice <builtin.fp32 ,[]>, builtin.integer si32, builtin.integer si32) -> ()>
+      [gpu_kernel: builtin.string "true", launch_contract_domain: builtin.integer <1: ui32>, reqntid_x: builtin.integer <128: ui32>, reqntid_y: builtin.integer <1: ui32>, reqntid_z: builtin.integer <1: ui32>, verify_no_data_race: builtin.string "0,1,2,3", verify_no_oob_shared: builtin.string "0,1,2,3", verify_tmem_lifecycle: builtin.string "true", verify_uniform_barriers: builtin.string "true"]
+    {
+      ^entry(a_tmap: mir.ptr <builtin.integer ui8,mutable:false,addrspace:0,kind:SharedRef>, b_tmap: mir.ptr <builtin.integer ui8,mutable:false,addrspace:0,kind:SharedRef>, out: mir.disjoint_slice <builtin.fp32 ,[]>, tile_x: builtin.integer si32, tile_y: builtin.integer si32):
+        tx_u32 = nvvm.read_ptx_sreg_tid_x () [] []: <() -> (builtin.integer ui32)>;
+        tid = mir.cast (tx_u32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+        zero_u64 = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+        zero_u32 = mir.constant () [] [value: builtin.integer <0: ui32>]: <() -> (builtin.integer ui32)>;
+        c32_u32 = mir.constant () [] [value: builtin.integer <32: ui32>]: <() -> (builtin.integer ui32)>;
+        warp_id = mir.div (tx_u32, c32_u32) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;
+        is_warp0 = mir.eq (warp_id, zero_u32) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer i1)>;
+        is_leader = mir.eq (tid, zero_u64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        mir.cond_br (is_leader) [^init_bars, ^sync_after_init] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^init_bars():
+        tma_a_bar_init = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string "TMA_A_BAR", source_name: builtin.string "safe_tcgen05_matmul::kernels::tcgen05_matmul_verified::TMA_A_BAR"]: <() -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;
+        tma_b_bar_init = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string "TMA_B_BAR", source_name: builtin.string "safe_tcgen05_matmul::kernels::tcgen05_matmul_verified::TMA_B_BAR"]: <() -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;
+        mma_bar_init = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string "MMA_BAR", source_name: builtin.string "safe_tcgen05_matmul::kernels::tcgen05_matmul_verified::MMA_BAR"]: <() -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;
+        c1_u32 = mir.constant () [] [value: builtin.integer <1: ui32>]: <() -> (builtin.integer ui32)>;
+        nvvm.mbarrier_init_shared (tma_a_bar_init, c1_u32) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui32) -> ()>;
+        nvvm.mbarrier_init_shared (tma_b_bar_init, c1_u32) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui32) -> ()>;
+        nvvm.mbarrier_init_shared (mma_bar_init, c1_u32) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui32) -> ()>;
+        nvvm.fence_proxy_async_shared_cta () [] []: <() -> ()>;
+        mir.goto () [^sync_after_init] []: <() -> ()>
+
+      ^sync_after_init():
+        nvvm.barrier0 () [] []: <() -> ()>;
+        mir.cond_br (is_warp0) [^alloc_tmem, ^sync_after_alloc] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^alloc_tmem():
+        tmem_slot_alloc = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui32, size: builtin.integer <1: i64>, alloc_key: builtin.string "TMEM_ADDR", source_name: builtin.string "safe_tcgen05_matmul::kernels::tcgen05_matmul_verified::TMEM_ADDR"]: <() -> (mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:3,kind:Erased>)>;
+        c128_cols = mir.constant () [] [value: builtin.integer <128: ui32>]: <() -> (builtin.integer ui32)>;
+        nvvm.tcgen05_alloc (tmem_slot_alloc, c128_cols) [] []: <(mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui32) -> ()>;
+        mir.goto () [^sync_after_alloc] []: <() -> ()>
+
+      ^sync_after_alloc():
+        nvvm.barrier0 () [] []: <() -> ()>;
+        tmem_slot_read_raw = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui32, size: builtin.integer <1: i64>, alloc_key: builtin.string "TMEM_ADDR", source_name: builtin.string "safe_tcgen05_matmul::kernels::tcgen05_matmul_verified::TMEM_ADDR"]: <() -> (mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:3,kind:Erased>)>;
+        tmem_slot_ref = mir.cast (tmem_slot_read_raw) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority Reborrow]: <(mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:3,kind:Erased>) -> (mir.ptr <builtin.integer ui32 ,mutable:false,addrspace:3,kind:SharedRef>)>;
+        c1_len = mir.constant () [] [value: builtin.integer <1: ui64>]: <() -> (builtin.integer ui64)>;
+        ok_tmem_slot = mir.lt (zero_u64, c1_len) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        mir.assert (ok_tmem_slot) [] []: <(builtin.integer i1) -> ()>;
+        tmem_elem_ptr = mir.ptr_offset (tmem_slot_ref, zero_u64) [] []: <(mir.ptr <builtin.integer ui32 ,mutable:false,addrspace:3,kind:SharedRef>, builtin.integer ui64) -> (mir.ptr <builtin.integer ui32 ,mutable:false,addrspace:3,kind:SharedRef>)>;
+        tmem_addr = mir.load (tmem_elem_ptr) [] []: <(mir.ptr <builtin.integer ui32 ,mutable:false,addrspace:3,kind:SharedRef>) -> (builtin.integer ui32)>;
+        mir.cond_br (is_leader) [^issue_tma, ^wait_tma_a_hdr] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^issue_tma():
+        smem_a_tma = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui8, size: builtin.integer <4096: i64>, alloc_key: builtin.string "SMEM_A", source_name: builtin.string "safe_tcgen05_matmul::kernels::tcgen05_matmul_verified::SMEM_A"]: <() -> (mir.ptr <builtin.integer ui8 ,mutable:true,addrspace:3,kind:Erased>)>;
+        smem_b_tma = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui8, size: builtin.integer <4096: i64>, alloc_key: builtin.string "SMEM_B", source_name: builtin.string "safe_tcgen05_matmul::kernels::tcgen05_matmul_verified::SMEM_B"]: <() -> (mir.ptr <builtin.integer ui8 ,mutable:true,addrspace:3,kind:Erased>)>;
+        tma_a_bar_p = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string "TMA_A_BAR", source_name: builtin.string "safe_tcgen05_matmul::kernels::tcgen05_matmul_verified::TMA_A_BAR"]: <() -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;
+        tma_b_bar_p = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string "TMA_B_BAR", source_name: builtin.string "safe_tcgen05_matmul::kernels::tcgen05_matmul_verified::TMA_B_BAR"]: <() -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;
+        c4096_u32 = mir.constant () [] [value: builtin.integer <4096: ui32>]: <() -> (builtin.integer ui32)>;
+        _tok_a = nvvm.mbarrier_arrive_expect_tx_shared (tma_a_bar_p, c4096_u32) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui32) -> (builtin.integer ui64)>;
+        _tok_b = nvvm.mbarrier_arrive_expect_tx_shared (tma_b_bar_p, c4096_u32) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui32) -> (builtin.integer ui64)>;
+        ch_zero = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+        nvvm.cp_async_bulk_tensor_g2s_cta_tile_2d (smem_a_tma, tma_a_bar_p, a_tmap, tile_x, tile_y, ch_zero) [] []: <(mir.ptr <builtin.integer ui8 ,mutable:true,addrspace:3,kind:Erased>, mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>, mir.ptr <builtin.integer ui8,mutable:false,addrspace:0,kind:SharedRef>, builtin.integer si32, builtin.integer si32, builtin.integer ui64) -> ()>;
+        nvvm.cp_async_bulk_tensor_g2s_cta_tile_2d (smem_b_tma, tma_b_bar_p, b_tmap, tile_x, tile_y, ch_zero) [] []: <(mir.ptr <builtin.integer ui8 ,mutable:true,addrspace:3,kind:Erased>, mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>, mir.ptr <builtin.integer ui8,mutable:false,addrspace:0,kind:SharedRef>, builtin.integer si32, builtin.integer si32, builtin.integer ui64) -> ()>;
+        mir.goto () [^wait_tma_a_hdr] []: <() -> ()>
+
+      ^wait_tma_a_hdr():
+        tma_a_bar_w = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string "TMA_A_BAR", source_name: builtin.string "safe_tcgen05_matmul::kernels::tcgen05_matmul_verified::TMA_A_BAR"]: <() -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;
+        ready_a = nvvm.mbarrier_try_wait_parity_shared (tma_a_bar_w, zero_u32) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui32) -> (builtin.integer i1)>;
+        not_ready_a = mir.not (ready_a) [] []: <(builtin.integer i1) -> (builtin.integer i1)>;
+        mir.cond_br (not_ready_a) [^wait_tma_a_spin, ^wait_tma_b_hdr] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^wait_tma_a_spin():
+        mir.goto () [^wait_tma_a_hdr] []: <() -> ()>
+
+      ^wait_tma_b_hdr():
+        tma_b_bar_w = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string "TMA_B_BAR", source_name: builtin.string "safe_tcgen05_matmul::kernels::tcgen05_matmul_verified::TMA_B_BAR"]: <() -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;
+        ready_b = nvvm.mbarrier_try_wait_parity_shared (tma_b_bar_w, zero_u32) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui32) -> (builtin.integer i1)>;
+        not_ready_b = mir.not (ready_b) [] []: <(builtin.integer i1) -> (builtin.integer i1)>;
+        mir.cond_br (not_ready_b) [^wait_tma_b_spin, ^after_tma_wait] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^wait_tma_b_spin():
+        mir.goto () [^wait_tma_b_hdr] []: <() -> ()>
+
+      ^after_tma_wait():
+        mir.cond_br (is_leader) [^issue_mma, ^wait_mma_hdr] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^issue_mma():
+        smem_a_mma = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui8, size: builtin.integer <4096: i64>, alloc_key: builtin.string "SMEM_A", source_name: builtin.string "safe_tcgen05_matmul::kernels::tcgen05_matmul_verified::SMEM_A"]: <() -> (mir.ptr <builtin.integer ui8 ,mutable:true,addrspace:3,kind:Erased>)>;
+        smem_b_mma = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui8, size: builtin.integer <4096: i64>, alloc_key: builtin.string "SMEM_B", source_name: builtin.string "safe_tcgen05_matmul::kernels::tcgen05_matmul_verified::SMEM_B"]: <() -> (mir.ptr <builtin.integer ui8 ,mutable:true,addrspace:3,kind:Erased>)>;
+        mma_bar_p = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string "MMA_BAR", source_name: builtin.string "safe_tcgen05_matmul::kernels::tcgen05_matmul_verified::MMA_BAR"]: <() -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;
+        a_off = nvvm.cvta_generic_to_shared_offset (smem_a_mma) [] []: <(mir.ptr <builtin.integer ui8 ,mutable:true,addrspace:3,kind:Erased>) -> (builtin.integer ui64)>;
+        b_off = nvvm.cvta_generic_to_shared_offset (smem_b_mma) [] []: <(mir.ptr <builtin.integer ui8 ,mutable:true,addrspace:3,kind:Erased>) -> (builtin.integer ui64)>;
+        sh4 = mir.constant () [] [value: builtin.integer <4: ui64>]: <() -> (builtin.integer ui64)>;
+        mask_desc = mir.constant () [] [value: builtin.integer <16383: ui64>]: <() -> (builtin.integer ui64)>;
+        desc_flags = mir.constant () [] [value: builtin.integer <70368778592256: ui64>]: <() -> (builtin.integer ui64)>;
+        a_shr = mir.shr (a_off, sh4) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        a_m = mir.bitand (a_shr, mask_desc) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        a_desc = mir.bitor (a_m, desc_flags) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        b_shr = mir.shr (b_off, sh4) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        b_m = mir.bitand (b_shr, mask_desc) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        b_desc = mir.bitor (b_m, desc_flags) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        idesc = mir.constant () [] [value: builtin.integer <136314896: ui32>]: <() -> (builtin.integer ui32)>;
+        false_i1 = mir.constant () [] [value: builtin.integer <0: i1>]: <() -> (builtin.integer i1)>;
+        nvvm.tcgen05_mma_f16 (tmem_addr, a_desc, b_desc, idesc, false_i1) [] []: <(builtin.integer ui32, builtin.integer ui64, builtin.integer ui64, builtin.integer ui32, builtin.integer i1) -> ()>;
+        nvvm.tcgen05_commit_shared_cluster (mma_bar_p) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>) -> ()>;
+        mir.goto () [^wait_mma_hdr] []: <() -> ()>
+
+      ^wait_mma_hdr():
+        mma_bar_w = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string "MMA_BAR", source_name: builtin.string "safe_tcgen05_matmul::kernels::tcgen05_matmul_verified::MMA_BAR"]: <() -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;
+        ready_mma = nvvm.mbarrier_try_wait_parity_shared (mma_bar_w, zero_u32) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui32) -> (builtin.integer i1)>;
+        not_ready_mma = mir.not (ready_mma) [] []: <(builtin.integer i1) -> (builtin.integer i1)>;
+        mir.cond_br (not_ready_mma) [^wait_mma_spin, ^epilogue_init] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^wait_mma_spin():
+        mir.goto () [^wait_mma_hdr] []: <() -> ()>
+
+      ^epilogue_init():
+        warp_lane_base = mir.mul (warp_id, c32_u32) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;
+        c16_sh = mir.constant () [] [value: builtin.integer <16: ui32>]: <() -> (builtin.integer ui32)>;
+        lane_shifted = mir.shl (warp_lane_base, c16_sh) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;
+        tmem_row_base = mir.add (tmem_addr, lane_shifted) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;
+        mir.goto (zero_u64) [^col_hdr] []: <(builtin.integer ui64) -> ()>
+
+      ^col_hdr(col: builtin.integer ui64):
+        c128_u64 = mir.constant () [] [value: builtin.integer <128: ui64>]: <() -> (builtin.integer ui64)>;
+        in_col = mir.lt (col, c128_u64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        mir.cond_br (in_col) [^col_body, ^sync_before_dealloc] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^col_body():
+        col_u32 = mir.cast (col) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui64) -> (builtin.integer ui32)>;
+        ld_addr = mir.add (tmem_row_base, col_u32) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;
+        raw_val = nvvm.tcgen05_ld_32x32b_x1_raw (ld_addr) [] []: <(builtin.integer ui32) -> (builtin.integer ui32)>;
+        nvvm.tcgen05_load_wait () [] []: <() -> ()>;
+        smem_out_raw = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui32, size: builtin.integer <16384: i64>, alloc_key: builtin.string "SMEM_OUT", source_name: builtin.string "safe_tcgen05_matmul::kernels::tcgen05_matmul_verified::SMEM_OUT"]: <() -> (mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:3,kind:Erased>)>;
+        smem_out_mut = mir.cast (smem_out_raw) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority Reborrow]: <(mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:3,kind:Erased>) -> (mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:3,kind:UniqueRef>)>;
+        row_off = mir.mul (tid, c128_u64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        out_idx = mir.add (row_off, col) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        c16384_u64 = mir.constant () [] [value: builtin.integer <16384: ui64>]: <() -> (builtin.integer ui64)>;
+        ok_out = mir.lt (out_idx, c16384_u64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        mir.assert (ok_out) [] []: <(builtin.integer i1) -> ()>;
+        out_ptr = mir.ptr_offset (smem_out_mut, out_idx) [] []: <(mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:3,kind:UniqueRef>, builtin.integer ui64) -> (mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:3,kind:UniqueRef>)>;
+        mir.store (out_ptr, raw_val) [] []: <(mir.ptr <builtin.integer ui32 ,mutable:true,addrspace:3,kind:UniqueRef>, builtin.integer ui32) -> ()>;
+        one_u64 = mir.constant () [] [value: builtin.integer <1: ui64>]: <() -> (builtin.integer ui64)>;
+        next_col = mir.add (col, one_u64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        mir.goto (next_col) [^col_hdr] []: <(builtin.integer ui64) -> ()>
+
+      ^sync_before_dealloc():
+        nvvm.barrier0 () [] []: <() -> ()>;
+        mir.cond_br (is_warp0) [^dealloc_tmem, ^exit] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^dealloc_tmem():
+        c128_dealloc = mir.constant () [] [value: builtin.integer <128: ui32>]: <() -> (builtin.integer ui32)>;
+        nvvm.tcgen05_dealloc (tmem_addr, c128_dealloc) [] []: <(builtin.integer ui32, builtin.integer ui32) -> ()>;
+        mir.goto () [^exit] []: <() -> ()>
+
+      ^exit():
+        mir.return () [] []: <() -> ()>
+    }
+}

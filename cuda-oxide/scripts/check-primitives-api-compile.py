@@ -366,7 +366,9 @@ def main():
     common = ["cargo", "build", "--offline", "--target", host, "--message-format=json-render-diagnostics"]
     cli = artifact(run(common + ["-p", "cargo-oxide", "--target-dir", str(tools / "cli")], env, run_dir / "cli.log"), "cargo-oxide")
     backend = artifact(run(common + ["--manifest-path", "crates/rustc-codegen-cuda/Cargo.toml", "--lib", "--target-dir", str(tools / "backend")], env, run_dir / "backend.log"), "rustc_codegen_cuda", ".so")
-    compiler = Path(env.get("CUDA_OXIDE_CUTLASS_COMPILER", str(Path.home() / ".cargo/cuda-oxide/toolchains/cutlass/4.7.0/x86_64-cu13/lib/libCutlassCompiler.so")))
+    import platform as _platform
+    plat_dir = "aarch64-cu13" if _platform.machine() == "aarch64" else "x86_64-cu13"
+    compiler = Path(env.get("CUDA_OXIDE_CUTLASS_COMPILER", str(Path.home() / f".cargo/cuda-oxide/toolchains/cutlass/4.8.1/{plat_dir}/lib/libCutlassCompiler.so")))
     if not compiler.is_file():
         raise RuntimeError(f"pinned CUTLASS compiler not installed: {compiler}")
     mlir = evidence / "primitives.mlir"

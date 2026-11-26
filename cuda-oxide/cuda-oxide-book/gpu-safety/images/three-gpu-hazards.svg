@@ -1,0 +1,155 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 390" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <style>
+    :root, svg {
+      --bg: #ffffff;
+      --bg-stroke: #e2e8f0;
+      --panel: #f8fafc;
+      --panel-stroke: #e2e8f0;
+      --box: #ffffff;
+      --box-stroke: #94a3b8;
+      --slot-neutral: #f1f5f9;
+      --slot-stroke: #cbd5e1;
+      --circle-idle: #cbd5e1;
+      --fg: #0f172a;
+      --text: #334155;
+      --muted: #64748b;
+      --green: #15803d;
+      --green-text: #14532d;
+      --green-fill: #dcfce7;
+      --green-border: #86efac;
+      --red: #dc2626;
+      --red-fill: #fee2e2;
+      --red-soft: #fef2f2;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root, svg {
+        --bg: #161b22;
+        --bg-stroke: #30363d;
+        --panel: #1e242c;
+        --panel-stroke: #30363d;
+        --box: #13171d;
+        --box-stroke: #484f58;
+        --slot-neutral: #282e37;
+        --slot-stroke: #484f58;
+        --circle-idle: #484f58;
+        --fg: #f0f6fc;
+        --text: #c9d1d9;
+        --muted: #8b949e;
+        --green: #3fb950;
+        --green-text: #7ee787;
+        --green-fill: #163323;
+        --green-border: #2ea043;
+        --red: #f85149;
+        --red-fill: #3d1a1d;
+        --red-soft: #2d1517;
+      }
+    }
+  </style>
+  <defs>
+    <marker id="arrow-red" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M 0 0.8 L 7.5 4 L 0 7.2 Z" style="fill: var(--red)"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M 0 0.8 L 7.5 4 L 0 7.2 Z" style="fill: var(--green)"/>
+    </marker>
+  </defs>
+
+  <rect width="1080" height="390" rx="14" style="fill: var(--bg); stroke: var(--bg-stroke)" stroke-width="1.5"/>
+
+  <!-- Column 1: no_oob_idx -->
+  <g transform="translate(30, 26)">
+    <rect width="316" height="338" rx="10" style="fill: var(--panel); stroke: var(--panel-stroke)" stroke-width="1.2"/>
+    <text x="158" y="34" text-anchor="middle" font-size="16" font-weight="700" style="fill: var(--fg)">1. Out-of-Bounds Index</text>
+    <text x="158" y="56" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="13" font-weight="600" style="fill: var(--green)">no_oob_idx(buf)</text>
+
+    <!-- Thread circles -->
+    <text x="158" y="92" text-anchor="middle" font-size="12" style="fill: var(--muted)">launched threads</text>
+    <circle cx="78"  cy="118" r="13" style="fill: var(--box); stroke: var(--green)" stroke-width="2"/>
+    <circle cx="122" cy="118" r="13" style="fill: var(--box); stroke: var(--green)" stroke-width="2"/>
+    <circle cx="166" cy="118" r="13" style="fill: var(--box); stroke: var(--green)" stroke-width="2"/>
+    <circle cx="210" cy="118" r="13" style="fill: var(--red-soft); stroke: var(--red)" stroke-width="2"/>
+    <text x="210" y="122" text-anchor="middle" font-size="10" font-weight="700" style="fill: var(--red)">t</text>
+
+    <!-- Arrows to slice -->
+    <line x1="78"  y1="133" x2="78"  y2="196" style="stroke: var(--green)" stroke-width="1.8" marker-end="url(#arrow-green)"/>
+    <line x1="122" y1="133" x2="122" y2="196" style="stroke: var(--green)" stroke-width="1.8" marker-end="url(#arrow-green)"/>
+    <line x1="166" y1="133" x2="166" y2="196" style="stroke: var(--green)" stroke-width="1.8" marker-end="url(#arrow-green)"/>
+    <line x1="214" y1="132" x2="254" y2="196" style="stroke: var(--red)" stroke-width="2" stroke-dasharray="4 3" marker-end="url(#arrow-red)"/>
+
+    <!-- Buffer boxes -->
+    <rect x="52" y="202" width="140" height="36" rx="5" style="fill: var(--box); stroke: var(--box-stroke)" stroke-width="1.5"/>
+    <rect x="56"  y="206" width="42" height="28" rx="3" style="fill: var(--green-fill); stroke: var(--green-border)"/>
+    <rect x="101" y="206" width="42" height="28" rx="3" style="fill: var(--green-fill); stroke: var(--green-border)"/>
+    <rect x="146" y="206" width="42" height="28" rx="3" style="fill: var(--green-fill); stroke: var(--green-border)"/>
+    <text x="122" y="256" text-anchor="middle" font-size="11.5" style="fill: var(--muted)">slice capacity (0 .. len)</text>
+
+    <!-- OOB X -->
+    <text x="260" y="227" text-anchor="middle" font-size="20" font-weight="700" style="fill: var(--red)">×</text>
+    <text x="260" y="246" text-anchor="middle" font-size="11" style="fill: var(--red)">idx ≥ len</text>
+
+    <text x="158" y="294" text-anchor="middle" font-size="12.5" style="fill: var(--text)">Proves every active thread index</text>
+    <text x="158" y="312" text-anchor="middle" font-size="12.5" style="fill: var(--text)">stays strictly below <tspan font-family="'Roboto Mono', monospace" font-size="12">buf.len()</tspan>.</text>
+  </g>
+
+  <!-- Column 2: no_data_race -->
+  <g transform="translate(382, 26)">
+    <rect width="316" height="338" rx="10" style="fill: var(--panel); stroke: var(--panel-stroke)" stroke-width="1.2"/>
+    <text x="158" y="34" text-anchor="middle" font-size="16" font-weight="700" style="fill: var(--fg)">2. Same-Phase Data Race</text>
+    <text x="158" y="56" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="13" font-weight="600" style="fill: var(--green)">no_data_race(TILE)</text>
+
+    <!-- Thread circles -->
+    <text x="158" y="92" text-anchor="middle" font-size="12" style="fill: var(--muted)">two threads in same phase</text>
+    <circle cx="96"  cy="118" r="13" style="fill: var(--red-soft); stroke: var(--red)" stroke-width="2"/>
+    <text x="96" y="122" text-anchor="middle" font-size="10" font-weight="700" style="fill: var(--red)">t₁</text>
+    <circle cx="158" cy="118" r="13" style="fill: var(--box); stroke: var(--circle-idle)" stroke-width="1.5"/>
+    <circle cx="220" cy="118" r="13" style="fill: var(--red-soft); stroke: var(--red)" stroke-width="2"/>
+    <text x="220" y="122" text-anchor="middle" font-size="10" font-weight="700" style="fill: var(--red)">t₂</text>
+
+    <!-- Colliding arrows -->
+    <line x1="102" y1="132" x2="150" y2="196" style="stroke: var(--red)" stroke-width="2" marker-end="url(#arrow-red)"/>
+    <line x1="214" y1="132" x2="166" y2="196" style="stroke: var(--red)" stroke-width="2" marker-end="url(#arrow-red)"/>
+    <text x="86"  y="168" text-anchor="middle" font-size="11" style="fill: var(--red)">write</text>
+    <text x="238" y="168" text-anchor="middle" font-size="11" style="fill: var(--red)">read / write</text>
+
+    <!-- Shared memory boxes -->
+    <rect x="68"  y="202" width="180" height="36" rx="5" style="fill: var(--box); stroke: var(--box-stroke)" stroke-width="1.5"/>
+    <rect x="73"  y="206" width="54"  height="28" rx="3" style="fill: var(--slot-neutral); stroke: var(--slot-stroke)" stroke-width="1.2"/>
+    <rect x="131" y="206" width="54"  height="28" rx="3" style="fill: var(--red-fill); stroke: var(--red)" stroke-width="1.8"/>
+    <rect x="189" y="206" width="54"  height="28" rx="3" style="fill: var(--slot-neutral); stroke: var(--slot-stroke)" stroke-width="1.2"/>
+    <text x="158" y="256" text-anchor="middle" font-size="11.5" style="fill: var(--muted)">shared tile without barrier wall</text>
+
+    <text x="158" y="294" text-anchor="middle" font-size="12.5" style="fill: var(--text)">Proves distinct threads never conflict</text>
+    <text x="158" y="312" text-anchor="middle" font-size="12.5" style="fill: var(--text)">within the same barrier phase.</text>
+  </g>
+
+  <!-- Column 3: uniform_barriers -->
+  <g transform="translate(734, 26)">
+    <rect width="316" height="338" rx="10" style="fill: var(--panel); stroke: var(--panel-stroke)" stroke-width="1.2"/>
+    <text x="158" y="34" text-anchor="middle" font-size="16" font-weight="700" style="fill: var(--fg)">3. Divergent Barrier</text>
+    <text x="158" y="56" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="13" font-weight="600" style="fill: var(--green)">uniform_barriers</text>
+
+    <!-- Thread circles -->
+    <text x="158" y="92" text-anchor="middle" font-size="12" style="fill: var(--muted)">threads in a block</text>
+    <circle cx="86"  cy="118" r="13" style="fill: var(--box); stroke: var(--green)" stroke-width="2"/>
+    <circle cx="134" cy="118" r="13" style="fill: var(--box); stroke: var(--green)" stroke-width="2"/>
+    <circle cx="182" cy="118" r="13" style="fill: var(--box); stroke: var(--green)" stroke-width="2"/>
+    <circle cx="230" cy="118" r="13" style="fill: var(--red-soft); stroke: var(--red)" stroke-width="2"/>
+    <text x="230" y="122" text-anchor="middle" font-size="10" font-weight="700" style="fill: var(--red)">t</text>
+
+    <!-- Arrows to barrier wall -->
+    <line x1="86"  y1="133" x2="86"  y2="196" style="stroke: var(--green)" stroke-width="1.8" marker-end="url(#arrow-green)"/>
+    <line x1="134" y1="133" x2="134" y2="196" style="stroke: var(--green)" stroke-width="1.8" marker-end="url(#arrow-green)"/>
+    <line x1="182" y1="133" x2="182" y2="196" style="stroke: var(--green)" stroke-width="1.8" marker-end="url(#arrow-green)"/>
+    <!-- Divergent early exit -->
+    <path d="M 230 133 Q 232 160 268 168" fill="none" style="stroke: var(--red)" stroke-width="2" stroke-dasharray="4 3" marker-end="url(#arrow-red)"/>
+    <text x="264" y="188" text-anchor="middle" font-size="10.5" style="fill: var(--red)">early return</text>
+
+    <!-- Barrier line -->
+    <rect x="56" y="204" width="160" height="26" rx="5" style="fill: var(--green-fill); stroke: var(--green)" stroke-width="1.5"/>
+    <text x="136" y="221" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11.5" font-weight="600" style="fill: var(--green-text)">sync_threads()</text>
+    <text x="158" y="256" text-anchor="middle" font-size="11.5" style="fill: var(--muted)">all threads must arrive together</text>
+
+    <text x="158" y="294" text-anchor="middle" font-size="12.5" style="fill: var(--text)">Proves every thread in the block</text>
+    <text x="158" y="312" text-anchor="middle" font-size="12.5" style="fill: var(--text)">reaches every <tspan font-family="'Roboto Mono', monospace" font-size="12">sync_threads()</tspan>.</text>
+  </g>
+</svg>

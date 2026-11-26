@@ -61,6 +61,7 @@ pub(crate) mod statement_debug;
 pub mod terminator;
 pub mod types;
 pub mod values;
+pub(crate) mod verification;
 
 use pliron::context::Context;
 

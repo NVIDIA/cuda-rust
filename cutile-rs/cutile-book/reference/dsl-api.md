@@ -810,6 +810,31 @@ let (values, token): (Tile<f32, { [128] }>, Token) =
     load_ptr_tko(ptrs, ordering::Weak, None::<scope::TileBlock>, None, None, None, Latency::<0>);
 ```
 
+(masked-pointer-loads)=
+#### Masked pointer loads
+
+`load_ptr_tko` accepts a mask with the pointer tile's shape and an optional
+scalar padding value. Masked-off lanes receive padding; the frontend broadcasts
+that scalar across the complete result shape, including rank-two and rank-three
+tiles. For example, inside an unsafe device function:
+
+```rust
+// ptrs: PointerTile<*const f16, {[BM, BK]}>
+// valid: Tile<bool, {[BM, BK]}>
+let zero: f16 = convert_scalar(0.0f32);
+let (values, token): (Tile<f16, {[BM, BK]}>, Token) = unsafe {
+    load_ptr_tko(ptrs, ordering::Weak, None::<scope::TileBlock>,
+                 Some(valid), Some(zero), None, Latency::<1>)
+};
+```
+
+The caller must ensure every enabled lane addresses a live, correctly aligned
+allocation with the required synchronization. Pointer loads do not infer tensor
+bounds or strides. Construct the mask from the actual shape, use the actual
+strides, and widen operands to `i64` before offset multiplication. Keep tokens
+when subsequent operations depend on the load. See
+[memory operations and atomics](#low-level-memory-ops) for ordering and scope.
+
 #### Atomics
 
 Module-scope atomic storage uses `Global<A, { [] }>`, where `A` implements

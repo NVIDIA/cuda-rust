@@ -802,6 +802,30 @@ pub unsafe fn cp_async_mbarrier_arrive_noinc(bar: *mut Barrier) {
     }
 }
 
+/// Wait until earlier PDL-linked kernels finish and their global writes are visible
+/// (`cute.arch.griddepcontrol_wait`, PTX `griddepcontrol.wait`).
+///
+/// # Safety
+/// Call in accordance with CUDA Programmatic Dependent Launch (`PDL`) grid-ordering rules.
+#[inline(always)]
+pub unsafe fn griddepcontrol_wait() {
+    unsafe {
+        cuda_device::grid::dependency::wait();
+    }
+}
+
+/// Let the next PDL-linked kernel start launching its blocks (for setup and weight prefetch)
+/// before this kernel exits (`cute.arch.griddepcontrol_launch_dependents`).
+///
+/// # Safety
+/// Call only after any memory writes that downstream kernels read without `griddepcontrol_wait` are done.
+#[inline(always)]
+pub unsafe fn griddepcontrol_launch_dependents() {
+    unsafe {
+        cuda_device::grid::dependency::trigger_dependents();
+    }
+}
+
 /// Commit prior `tcgen05` operations issued by this thread to `bar` (`cute.nvgpu.tcgen05.commit`).
 ///
 /// # Safety

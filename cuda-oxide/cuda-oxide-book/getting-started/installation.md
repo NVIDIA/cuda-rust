@@ -180,8 +180,9 @@ for the supported driver ranges and PTX limitation.
 
 ## Official CUTLASS compiler (optional)
 
-The high-level CuTe translation backend uses NVIDIA's official CUTLASS 4.7
-compiler library. Install the repository-pinned archive with:
+The high-level CuTe translation backend uses NVIDIA's official CUTLASS 4.8.1
+compiler library (`x86_64` and `aarch64` Linux with CUDA 13). Install the
+repository-pinned archive with:
 
 ```bash
 cargo oxide toolchain install cutlass
@@ -198,7 +199,8 @@ CUDA_OXIDE_DEVICE_BACKEND=cutlass-mlir \
 Set `CUDA_OXIDE_CUTLASS_COMPILER` to an absolute
 `libCutlassCompiler.so` path only when intentionally overriding the managed
 installation. The CuTe chapter's [Build with the CUTLASS Compiler](../cute/build-with-cutlass.md)
-page lists the two supported targets, the options and the failure rules.
+page lists the four validated targets (`sm_100a`, `sm_103a`, `sm_107a`, and
+`sm_120a`), the options, and the failure rules.
 
 ---
 
@@ -362,6 +364,7 @@ The full set, as `cargo oxide --help` reports it:
 | `test` | Run Cargo tests through the cuda-oxide backend |
 | `emit-ltoir` | Compile a crate's device code to a binary LTOIR artifact in one step |
 | `pipeline` | Show the full compilation pipeline (MIR -> PTX/NVVM IR) with verbose output |
+| `lean-export` | Export a kernel's MIR and generated Lean 4 safety proofs |
 | `debug` | Build with debug info and launch `cuda-gdb` |
 | `list` | List the examples bundled with the cuda-oxide workspace |
 | `inspect` | Build an example or project and print the generated PTX |

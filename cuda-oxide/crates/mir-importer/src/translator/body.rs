@@ -2679,6 +2679,8 @@ pub fn translate_body(
                 );
             }
         }
+
+        super::verification::attach_verification_attributes(ctx, mir_func_op, body, &reachable);
     }
 
     // Attribute macros may run before `#[kernel]`. Generic expansion forwards

@@ -973,17 +973,19 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                         Some(TileIrType::Tile(t)) => t.shape.is_empty(),
                         _ => false,
                     };
-                    let result_is_shaped = match &tile_result_ir_ty {
-                        TileIrType::Tile(t) => !t.shape.is_empty(),
-                        _ => false,
+                    let result_rank = match &tile_result_ir_ty {
+                        TileIrType::Tile(t) => t.shape.len(),
+                        _ => 0,
                     };
-                    let promoted_padding = if padding_is_scalar && result_is_shaped {
+                    let promoted_padding = if padding_is_scalar && result_rank > 0 {
                         let padding_ir_ty = super::_type::convert_type(&padding_value.ty)
                             .expect("failed to convert padding type");
                         let ones_shape_ty = match &padding_ir_ty {
                             TileIrType::Tile(tile_ty) => {
                                 TileIrType::Tile(cutile_ir::ir::TileType {
-                                    shape: vec![1],
+                                    // Broadcast preserves rank, even when its
+                                    // source is a reshaped scalar padding value.
+                                    shape: vec![1; result_rank],
                                     element_type: tile_ty.element_type.clone(),
                                 })
                             }

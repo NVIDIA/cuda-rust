@@ -155,6 +155,23 @@ pub fn codegen_crate_path(workspace_root: &Path) -> PathBuf {
 /// 5. Build from the dependency's checkout (or, without one, from a `main`
 ///    clone) and cache the result
 pub fn find_or_build_backend(workspace_root: &Path, configured_backend: Option<&Path>) -> PathBuf {
+    find_or_build_backend_inner(workspace_root, configured_backend, false)
+}
+
+/// Same as [`find_or_build_backend`], keeping `stdout` clean for commands whose
+/// primary output is machine- or user-inspected artifact text (`lean-export`).
+pub fn find_or_build_backend_quiet_stdout(
+    workspace_root: &Path,
+    configured_backend: Option<&Path>,
+) -> PathBuf {
+    find_or_build_backend_inner(workspace_root, configured_backend, true)
+}
+
+fn find_or_build_backend_inner(
+    workspace_root: &Path,
+    configured_backend: Option<&Path>,
+    quiet_stdout: bool,
+) -> PathBuf {
     // 1. Explicit override
     if let Ok(path) = std::env::var("CUDA_OXIDE_BACKEND") {
         let p = PathBuf::from(&path);
@@ -190,7 +207,7 @@ pub fn find_or_build_backend(workspace_root: &Path, configured_backend: Option<&
     // 4. Local repo
     let codegen_crate = codegen_crate_path(workspace_root);
     if codegen_crate.is_dir() {
-        return build_backend_from_source(&codegen_crate);
+        return build_backend_from_source_in_inner(&codegen_crate, None, quiet_stdout);
     }
 
     // 4 + 5. Standalone project: the backend follows the project's cuda-oxide
@@ -1010,7 +1027,17 @@ pub fn build_backend_from_source(codegen_crate: &Path) -> PathBuf {
 /// delete to reclaim the space, instead of a build tree inside Cargo's
 /// checkout that nothing ever cleans up.
 pub fn build_backend_from_source_in(codegen_crate: &Path, target_dir: Option<&Path>) -> PathBuf {
-    println!("Building rustc-codegen-cuda backend...");
+    build_backend_from_source_in_inner(codegen_crate, target_dir, false)
+}
+
+fn build_backend_from_source_in_inner(
+    codegen_crate: &Path,
+    target_dir: Option<&Path>,
+    quiet_stdout: bool,
+) -> PathBuf {
+    if !quiet_stdout {
+        println!("Building rustc-codegen-cuda backend...");
+    }
     // The application build still honors these (codegen_env.rs folds them
     // into the composed flags), so say once why the backend build does not.
     let ambient_flags_present = [
@@ -1021,12 +1048,15 @@ pub fn build_backend_from_source_in(codegen_crate: &Path, target_dir: Option<&Pa
     .iter()
     .any(|var| std::env::var(var).is_ok_and(|value| !value.trim().is_empty()));
     if ambient_flags_present {
-        println!(
-            "  note: ambient RUSTFLAGS are ignored for the backend dylib (its \
+        let note = "  note: ambient RUSTFLAGS are ignored for the backend dylib (its \
              digest keys every build cache); they still apply to application \
              builds. For custom backend flags, build crates/rustc-codegen-cuda \
-             manually and point CUDA_OXIDE_BACKEND at the result."
-        );
+             manually and point CUDA_OXIDE_BACKEND at the result.";
+        if quiet_stdout {
+            eprintln!("{note}");
+        } else {
+            println!("{note}");
+        }
     }
 
     let host_target = active_host_target();
@@ -1045,11 +1075,14 @@ pub fn build_backend_from_source_in(codegen_crate: &Path, target_dir: Option<&Pa
 
     render_cargo_diagnostics(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    if !stderr.is_empty() {
+    if !stderr.is_empty() && !quiet_stdout {
         eprint!("{stderr}");
     }
 
     if !output.status.success() {
+        if quiet_stdout && !stderr.is_empty() {
+            eprint!("{stderr}");
+        }
         eprintln!("Failed to build rustc-codegen-cuda");
         std::process::exit(output.status.code().unwrap_or(1));
     }
@@ -1066,7 +1099,9 @@ pub fn build_backend_from_source_in(codegen_crate: &Path, target_dir: Option<&Pa
         );
         std::process::exit(1);
     }
-    println!("✓ Backend built: {}", so_path.display());
+    if !quiet_stdout {
+        println!("✓ Backend built: {}", so_path.display());
+    }
     so_path
 }
 

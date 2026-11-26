@@ -3476,6 +3476,23 @@ fn try_dispatch_intrinsic(
             }
         }
 
+        // tcgen05 shared-memory descriptor packing. The callee has a real body
+        // for host code and constant evaluation, device code gets the operation.
+        "cuda_device::tcgen05::tcgen05_smem_descriptor" => {
+            Ok(Some(intrinsics::memory::emit_tcgen05_smem_descriptor(
+                ctx,
+                body,
+                args,
+                destination,
+                target,
+                block_ptr,
+                prev_op,
+                value_map,
+                block_map,
+                loc,
+            )?))
+        }
+
         // Explicit generic-to-shared address conversion for hardware SMEM
         // descriptors (the CUDA C++ `__cvta_generic_to_shared_offset` analog).
         "cuda_device::shared::cvta_generic_to_shared_offset" => Ok(Some(

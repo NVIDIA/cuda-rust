@@ -12,11 +12,13 @@
 //! libdevice intrinsic (`__nv_sinf`, `__nv_expf`, ...); libm's
 //! software-float bodies are never translated.
 //!
-//! Note: `libm::*` on device is libdevice, not the host's libm; do not use it
-//! where bit-for-bit agreement with the host is required — and note that a
-//! correctly rounded implementation is not a substitute for matching the host's
-//! algorithm. Libdevice uses different polynomial approximations and rounding
-//! than host standard C libraries (e.g., glibc).
+//! Note: on the device, both `f32`/`f64` math methods and intercepted `libm::*`
+//! calls lower to CUDA `libdevice` (`__nv_*`), not the host's `libm` crate or
+//! C math library (`glibc`). `libdevice` uses different polynomial
+//! approximations and ULP bounds, so results can differ by 1-2 ULP from the
+//! host (and even a correctly rounded routine will not match a host library
+//! that is not itself correctly rounded). When bit-for-bit agreement with the
+//! host is required, run the same explicit polynomial on both sides instead.
 //!
 //! Exercises the f32 ("...f") and f64 (bare) entry points, the
 //! tuple-returning `sincosf`, and the fmax/fmin/rint lanes. The host

@@ -97,7 +97,10 @@ impl Submission {
     pub(crate) fn new(stream: Arc<Stream>) -> Self {
         Self {
             stream,
-            owners: Mutex::new(Owners(Some(OwnerSet::default()))),
+            owners: Mutex::new(Owners(Some(OwnerSet {
+                leases: Vec::with_capacity(4),
+                others: Vec::new(),
+            }))),
             recorded: Mutex::new(Vec::new()),
         }
     }

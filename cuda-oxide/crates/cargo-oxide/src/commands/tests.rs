@@ -2364,6 +2364,52 @@ fn inspect_oxide_config_rejects_bad_toml_and_arch() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+/// `short-pointers = false` becomes `[env] CUDA_OXIDE_NO_SHORT_PTR=1`;
+/// `true` (the default) adds nothing; a non-boolean or a second spelling
+/// through `[env]` is rejected.
+#[test]
+fn short_pointers_config_becomes_the_backend_env() {
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system time before unix epoch")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "cargo_oxide_config_short_pointers_{}_{}",
+        std::process::id(),
+        unique
+    ));
+    let cargo_dir = root.join(".cargo");
+    std::fs::create_dir_all(&cargo_dir).unwrap();
+    let config = cargo_dir.join("cuda-oxide.toml");
+    let env_of = |text: &str| {
+        std::fs::write(&config, text).unwrap();
+        match inspect_oxide_config(&root) {
+            OxideConfigInspection::Valid { config, .. } => Ok(config.env),
+            OxideConfigInspection::Invalid { errors, .. } => Err(errors),
+            OxideConfigInspection::Missing => panic!("config was written"),
+        }
+    };
+
+    assert_eq!(
+        env_of("short-pointers = false\n").unwrap(),
+        [("CUDA_OXIDE_NO_SHORT_PTR".to_string(), "1".to_string())]
+    );
+    assert!(env_of("short-pointers = true\n").unwrap().is_empty());
+    let errors = env_of("short-pointers = \"no\"\n").unwrap_err();
+    assert!(
+        errors.iter().any(|e| e.contains("must be a boolean")),
+        "{errors:?}"
+    );
+    for value in ["false", "true"] {
+        let errors = env_of(&format!(
+            "short-pointers = {value}\n[env]\nCUDA_OXIDE_NO_SHORT_PTR = \"1\"\n"
+        ))
+        .unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("sets both")), "{errors:?}");
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// `default-arch` load-time validation must be exactly as permissive as
 /// the consumers: `parse_nvvm_arch` (NVVM path) accepts `sm_XX`,
 /// `compute_XX`, and bare `XX`, so none of those may fail the load.

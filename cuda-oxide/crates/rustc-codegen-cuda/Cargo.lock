@@ -222,6 +222,7 @@ dependencies = [
  "object",
  "pliron",
  "ptx-parse",
+ "reserved-oxide-symbols",
  "rustc-demangle",
  "serde_json",
  "sha2",

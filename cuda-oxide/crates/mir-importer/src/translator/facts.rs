@@ -40,6 +40,7 @@
 use crate::error::{TranslationErr, TranslationResult};
 use pliron::location::Location;
 use pliron::{input_err, input_error, input_error_noloc};
+use reserved_oxide_symbols::is_device_extern_symbol;
 use rustc_public::CrateDef;
 use rustc_public::mir;
 use rustc_public::ty::{AdtKind, ConstantKind};
@@ -263,6 +264,13 @@ pub(crate) fn is_std_precondition_check(fn_def: &rustc_public::ty::FnDef) -> boo
     }
     let name = fn_def.name();
     name.as_str().rsplit("::").next() == Some("precondition_check")
+}
+
+/// `true` if the device module only declares `instance`: a Rust foreign item,
+/// or a `#[device]` extern host stub, whose body the collector never emits
+/// and whose symbol external LTOIR provides.
+pub(crate) fn is_external_declaration(instance: &mir::mono::Instance) -> bool {
+    instance.is_foreign_item() || is_device_extern_symbol(&instance.name())
 }
 
 /// `true` if a trait-method call's `Self` type is `cuda_device::SharedArray`.
@@ -1189,5 +1197,110 @@ pub fn reference_validity(
 
         set_emitted_functions(std::collections::BTreeSet::new());
         assert!(!is_emitted_name("second_run_spin"));
+    }
+
+    /// A `#[device]` extern host stub is a Rust definition, yet the device
+    /// module only declares it, exactly like a foreign item. A stub missed
+    /// here reaches the final verifier as a call with neither a `mir.func`
+    /// nor an attached signature.
+    #[test]
+    fn external_declarations_include_device_extern_stubs() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "cuda_oxide_external_declaration_{}_{}",
+            std::process::id(),
+            unique
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let fixture = root.join("fixture.rs");
+        std::fs::write(
+            &fixture,
+            r#"
+unsafe extern "C" {
+    pub fn foreign(x: f32) -> f32;
+}
+pub unsafe extern "C" fn PREFIXstub(x: f32) -> f32 {
+    let _ = x;
+    unreachable!()
+}
+pub fn ordinary(x: f32) -> f32 { x }
+pub fn caller(x: f32) -> f32 {
+    unsafe { foreign(x) + PREFIXstub(x) + ordinary(x) }
+}
+"#
+            .replace("PREFIX", reserved_oxide_symbols::DEVICE_EXTERN_PREFIX),
+        )
+        .unwrap();
+        let output = std::process::Command::new("rustc")
+            .args(["--print", "sysroot"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let sysroot = String::from_utf8(output.stdout).unwrap();
+        let args = vec![
+            "rustc".to_string(),
+            "--edition=2024".to_string(),
+            "--crate-type=rlib".to_string(),
+            "--crate-name=external_declaration_fixture".to_string(),
+            "--emit=metadata".to_string(),
+            "-Zmir-opt-level=0".to_string(),
+            format!("--out-dir={}", root.display()),
+            format!("--sysroot={}", sysroot.trim()),
+            fixture.display().to_string(),
+        ];
+        let results = std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                rustc_public::run!(&args, || {
+                    use rustc_public::ty::{RigidTy, TyKind};
+                    let caller = rustc_public::all_local_items()
+                        .into_iter()
+                        .find(|item| item.name().ends_with("::caller"))
+                        .expect("fixture caller");
+                    let body = mir::mono::Instance::try_from(caller)
+                        .unwrap()
+                        .body()
+                        .unwrap();
+                    let mut results = std::collections::BTreeMap::new();
+                    for block in &body.blocks {
+                        let mir::TerminatorKind::Call {
+                            func: mir::Operand::Constant(constant),
+                            ..
+                        } = &block.terminator.kind
+                        else {
+                            continue;
+                        };
+                        let TyKind::RigidTy(RigidTy::FnDef(def, args)) =
+                            constant.const_.ty().kind()
+                        else {
+                            continue;
+                        };
+                        let callee = mir::mono::Instance::resolve(def, &args).unwrap();
+                        let name = callee.name();
+                        let short = name.rsplit("::").next().unwrap();
+                        let short = short
+                            .strip_prefix(reserved_oxide_symbols::DEVICE_EXTERN_PREFIX)
+                            .unwrap_or(short);
+                        results.insert(short.to_string(), is_external_declaration(&callee));
+                    }
+                    std::ops::ControlFlow::<(), _>::Continue(results)
+                })
+            })
+            .unwrap()
+            .join()
+            .unwrap()
+            .unwrap();
+        std::fs::remove_dir_all(&root).ok();
+        assert_eq!(
+            results,
+            std::collections::BTreeMap::from([
+                ("foreign".to_string(), true),
+                ("ordinary".to_string(), false),
+                ("stub".to_string(), true),
+            ])
+        );
     }
 }

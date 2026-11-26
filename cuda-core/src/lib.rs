@@ -41,7 +41,7 @@ pub use runtime::*;
 
 pub use context::{ContextLimit, StreamPriorityRange, SyncPolicy};
 pub use cuda_core_derive::DeviceCopy;
-pub use device_buffer::{DeviceBuffer, DeviceBufferView, DeviceCopy};
+pub use device_buffer::{DeviceBuffer, DeviceBufferView, DeviceBufferViewMut, DeviceCopy};
 pub use embedded::{EmbeddedModule, EmbeddedModuleError};
 pub use launch::*;
 pub use launch_raw::*;

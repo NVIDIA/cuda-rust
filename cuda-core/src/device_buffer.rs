@@ -262,6 +262,41 @@ impl<T> DeviceBuffer<T> {
         })
     }
 
+    /// Borrows an exclusive contiguous range of elements without copying memory.
+    ///
+    /// The view retains the parent allocation, CUDA context, and access tracker.
+    /// The exclusive Rust borrow prevents overlapping mutable subviews.
+    ///
+    /// ```compile_fail
+    /// # use cuda_core::{CudaStream, DeviceBuffer};
+    /// # fn overlapping(stream: &CudaStream) {
+    /// let mut buffer = DeviceBuffer::<u32>::zeroed(stream, 4).unwrap();
+    /// let first = buffer.slice_mut(0..3).unwrap();
+    /// let second = buffer.slice_mut(1..4).unwrap();
+    /// let _ = (first, second);
+    /// # }
+    /// ```
+    pub fn slice_mut(
+        &mut self,
+        range: std::ops::Range<usize>,
+    ) -> Result<DeviceBufferViewMut<'_, T>, DriverError> {
+        if range.start > range.end || range.end > self.len {
+            return Err(DriverError(
+                cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_VALUE,
+            ));
+        }
+        let storage = self.storage.slice_bytes(
+            allocation_size::<T>(range.start)?,
+            allocation_size::<T>(range.end - range.start)?,
+        )?;
+        Ok(DeviceBufferViewMut {
+            storage,
+            shared_access_writes: self.shared_access_writes,
+            len: range.end - range.start,
+            _borrow: PhantomData,
+        })
+    }
+
     /// Returns the raw `CUdeviceptr` for use in kernel argument lists.
     #[inline]
     pub fn cu_deviceptr(&self) -> CUdeviceptr {
@@ -1160,6 +1195,90 @@ impl<'a, T: DeviceCopy> DeviceBufferView<'a, T> {
             shared_access_writes: false,
             _borrow: PhantomData,
         })
+    }
+}
+
+/// An exclusive, non-owning contiguous view of a [`DeviceBuffer`].
+///
+/// Retains its parent's allocation, CUDA context, and access tracker through
+/// [`crate::RawDeviceBuffer`], without taking ownership of a new allocation.
+/// Not `Copy` or `Clone`; splitting consumes the original exclusive view.
+pub struct DeviceBufferViewMut<'a, T> {
+    storage: crate::RawDeviceBuffer,
+    shared_access_writes: bool,
+    len: usize,
+    _borrow: PhantomData<&'a mut DeviceBuffer<T>>,
+}
+
+impl<'a, T> DeviceBufferViewMut<'a, T> {
+    pub fn cu_deviceptr(&self) -> CUdeviceptr {
+        self.storage.cu_deviceptr()
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn num_bytes(&self) -> usize {
+        self.storage.len_bytes()
+    }
+
+    pub fn context(&self) -> &Arc<Context> {
+        self.storage.context()
+    }
+
+    pub fn storage(&self) -> &crate::RawDeviceBuffer {
+        &self.storage
+    }
+
+    /// Whether shared kernel reads can mutate elements through interior mutability.
+    #[doc(hidden)]
+    pub fn shared_access_writes(&self) -> bool {
+        self.shared_access_writes
+    }
+
+    /// Consumes the view and returns two disjoint mutable subviews.
+    ///
+    /// Both share the parent's allocation-wide access tracker. As a result,
+    /// concurrent submissions on different streams may still conflict.
+    pub fn split_at_mut(self, mid: usize) -> Result<(Self, Self), DriverError> {
+        if mid > self.len {
+            return Err(DriverError(
+                cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_VALUE,
+            ));
+        }
+        let left_bytes = allocation_size::<T>(mid)?;
+        let right_bytes = allocation_size::<T>(self.len - mid)?;
+        let left = self.storage.slice_bytes(0, left_bytes)?;
+        let right = self.storage.slice_bytes(left_bytes, right_bytes)?;
+        Ok((
+            Self {
+                storage: left,
+                shared_access_writes: self.shared_access_writes,
+                len: mid,
+                _borrow: PhantomData,
+            },
+            Self {
+                storage: right,
+                shared_access_writes: self.shared_access_writes,
+                len: self.len - mid,
+                _borrow: PhantomData,
+            },
+        ))
+    }
+
+    /// Consumes this exclusive view, yielding a shared borrowed view.
+    pub fn into_shared(self) -> DeviceBufferView<'a, T> {
+        DeviceBufferView {
+            storage: self.storage,
+            shared_access_writes: self.shared_access_writes,
+            len: self.len,
+            _borrow: PhantomData,
+        }
     }
 }
 

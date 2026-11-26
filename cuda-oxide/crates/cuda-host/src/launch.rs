@@ -631,6 +631,34 @@ unsafe impl<T> KernelSliceArg for cuda_core::DeviceBufferView<'_, T> {
     }
 }
 
+#[cfg(feature = "async")]
+// SAFETY: the exclusive view reports its exact pointer and element extent and
+// retains the same owner, CUDA context, and allocation-wide access tracker.
+unsafe impl<T> KernelSliceArg for cuda_core::DeviceBufferViewMut<'_, T> {
+    type Elem = T;
+
+    fn cu_deviceptr(&self) -> cuda_core::sys::CUdeviceptr {
+        self.cu_deviceptr()
+    }
+
+    fn len(&self) -> usize {
+        self.len()
+    }
+
+    fn storage(&self) -> Option<cuda_core::RawDeviceBuffer> {
+        Some(self.storage().clone())
+    }
+
+    fn shared_access_writes(&self) -> bool {
+        self.shared_access_writes()
+    }
+}
+
+#[cfg(feature = "async")]
+// SAFETY: the exclusive borrow and consuming split prevent safe overlapping
+// mutable views. Submission retention preserves the allocation until completion.
+unsafe impl<T> KernelSliceArgMut for cuda_core::DeviceBufferViewMut<'_, T> {}
+
 #[doc(hidden)]
 #[cfg(feature = "async")]
 pub fn new_async_kernel_launch_builder<'a>(

@@ -173,7 +173,7 @@ fn exp2(x: f32) -> f32 {
 fn reduce_score_chunk(scores: &TmemFragment<32>, mut left: f32, mut right: f32) -> (f32, f32) {
     let mut i = 0;
     while i < 32 {
-        thread::__unroll_config::<0>();
+        thread::__unroll_config(0);
         left = left.max(scores.values[i]);
         left = left.max(scores.values[i + 1]);
         right = right.max(scores.values[i + 2]);
@@ -189,7 +189,7 @@ fn reduce_masked_scores(scores: &TmemFragment<128>) -> f32 {
     let mut maxima = [f32::NEG_INFINITY; 64];
     let mut i = 0;
     while i < 64 {
-        thread::__unroll_config::<0>();
+        thread::__unroll_config(0);
         maxima[i] = scores.values[i * 2].max(scores.values[i * 2 + 1]);
         i += 1;
     }
@@ -207,7 +207,7 @@ fn reduce_masked_scores(scores: &TmemFragment<128>) -> f32 {
 fn reduce_max_level<const WIDTH: usize>(maxima: &mut [f32; 64]) {
     let mut i = 0;
     while i < WIDTH {
-        thread::__unroll_config::<0>();
+        thread::__unroll_config(0);
         maxima[i] = maxima[i * 2].max(maxima[i * 2 + 1]);
         i += 1;
     }

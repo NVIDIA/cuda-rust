@@ -1,0 +1,11 @@
+error: a kernel may have only one launch_bounds attribute
+  --> tests/compile_fail/launch_bounds_duplicate.rs:11:1
+   |
+11 | #[launch_bounds(256)]
+   | ^^^^^^^^^^^^^^^^^^^^^
+
+error: a kernel may have only one launch_bounds attribute
+  --> tests/compile_fail/launch_bounds_duplicate.rs:16:1
+   |
+16 | #[launch_bounds(128)]
+   | ^^^^^^^^^^^^^^^^^^^^^

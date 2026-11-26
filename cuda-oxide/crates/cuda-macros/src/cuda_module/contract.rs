@@ -10,7 +10,7 @@ use crate::common::{attr_path_ends_with, internal_ident};
 use crate::cuda_module::model::{
     CudaModuleKernel, CudaModuleParam, CudaModuleParamMarshal, ScalarIntClass,
 };
-use crate::launch_attrs::{ClusterArgs, ConstU32Expr, LaunchBoundsArgs};
+use crate::launch_attrs::{ClusterArgs, ConstU32Expr, LaunchBoundsArgs, single_launch_bounds_attr};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{
@@ -834,17 +834,7 @@ struct ContractLaunchBounds {
 fn cuda_module_launch_bounds(
     attrs: &[syn::Attribute],
 ) -> syn::Result<Option<ContractLaunchBounds>> {
-    let matching: Vec<_> = attrs
-        .iter()
-        .filter(|attr| attr_path_ends_with(attr, "launch_bounds"))
-        .collect();
-    if matching.len() > 1 {
-        return Err(syn::Error::new_spanned(
-            matching[1],
-            "a kernel may have only one launch_bounds attribute",
-        ));
-    }
-    let Some(attr) = matching.first() else {
+    let Some(attr) = single_launch_bounds_attr(attrs)? else {
         return Ok(None);
     };
     let args = attr.parse_args::<LaunchBoundsArgs>()?;

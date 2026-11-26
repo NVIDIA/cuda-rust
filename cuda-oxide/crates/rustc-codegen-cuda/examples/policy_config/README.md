@@ -97,13 +97,12 @@ impl<const BYTES: usize> Layout for Swizzled<BYTES> {}
 type TileA = Tile<Shape2<64, 128>, Swizzled<128>, Shared, Block>;
 ```
 
-## Current boundary
+## Where policy expressions apply
 
-Policy expressions are supported for `launch_bounds` and loop `unroll` first.
-Generic expressions currently need Rust's `generic_const_exprs` feature. Host
+Policy expressions can be used in `launch_bounds` and loop `unroll`. Host
 `launch_contract` fields, cluster dimensions, and dynamic shared-memory sizes
-remain literal. A policy-based `launch_bounds` maximum composes with a host
-launch contract and is checked separately for each specialization. The
+take literal values. A policy-based `launch_bounds` maximum composes with a
+host launch contract and is checked separately for each specialization. The
 minimum-block value remains a compiler occupancy hint; it is not launch
 geometry. Other named constants used for that maximum must be visible at module
 scope because the host contract is generated beside the kernel function.

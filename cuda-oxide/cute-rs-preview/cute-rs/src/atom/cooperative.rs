@@ -189,7 +189,7 @@ impl<T: Copy, Layout: crate::layout::ReifySmem2D, const N: usize> SharedRow<'_, 
         let mut accumulator = initial;
         let mut i = 0;
         while i < N {
-            cuda_device::thread::__unroll_config::<0>();
+            cuda_device::thread::__unroll_config(0);
             let (global, shared) = unsafe {
                 (
                     other.get_unchecked(i),
@@ -406,7 +406,7 @@ impl<T: Copy, Layout: crate::layout::ReifySmem2D> SmemTile<T, Layout> {
         let arr = values.into_array();
         let mut i = 0;
         while i < N {
-            cuda_device::thread::__unroll_config::<0>();
+            cuda_device::thread::__unroll_config(0);
             unsafe { self.store_at(row, column + i, arr[i]) };
             i += 1;
         }

@@ -1216,8 +1216,11 @@ pub unsafe fn __grid_constant_config<const PARAMETER: usize>() {
 ///
 /// # How It Works
 ///
-/// 1. The `#[launch_bounds]` macro injects `__launch_bounds_config::<MAX, MIN>()` at kernel start
-/// 2. MIR importer detects this call and extracts the const generic parameters
+/// 1. The `#[launch_bounds]` macro injects
+///    `__launch_bounds_config(const { __launch_bounds_max_threads(MAX) }, const { MIN })`
+///    at kernel start
+/// 2. MIR importer detects this call and reads its two constant arguments from
+///    each monomorphized kernel
 /// 3. The marker call is NOT compiled - it's removed during compilation
 /// 4. LLVM export emits `!nvvm.annotations` with `maxntid` and `minctasm` metadata
 /// 5. LLVM NVPTX backend emits `.maxntid` and `.minnctapersm` in PTX
@@ -1230,11 +1233,15 @@ pub unsafe fn __grid_constant_config<const PARAMETER: usize>() {
 ///
 /// # Parameters
 ///
-/// - `MAX_THREADS` - Maximum threads per block (required). Maps to `.maxntid`.
-/// - `MIN_BLOCKS` - Minimum blocks per SM for occupancy (optional, default 0 = unspecified).
+/// - `max_threads` - Maximum threads per block (required). Maps to `.maxntid`.
+/// - `min_blocks` - Minimum blocks per SM for occupancy (optional, default 0 = unspecified).
 ///   Maps to `.minnctapersm`.
 ///
-/// `MAX_THREADS` does not require an exact block size. For example, a maximum
+/// Both arguments must be constants. The macro computes them in inline `const`
+/// blocks, which rustc evaluates for each instance, so an expression such as
+/// `F::MAX_THREADS` in a generic kernel gives each instance its own bounds.
+///
+/// `max_threads` does not require an exact block size. For example, a maximum
 /// of 256 also permits a launch with 128 threads. Use an exact host
 /// `#[launch_contract(block = (...))]` when the kernel requires one shape.
 ///
@@ -1248,18 +1255,25 @@ pub unsafe fn __grid_constant_config<const PARAMETER: usize>() {
 /// Using appropriate launch bounds can significantly improve performance for
 /// register-heavy kernels or kernels with specific occupancy requirements.
 #[inline(never)]
-pub fn __launch_bounds_config<const MAX_THREADS: u32, const MIN_BLOCKS: u32>() {
-    const { validate_launch_bounds(MAX_THREADS) }
+pub fn __launch_bounds_config(max_threads: u32, min_blocks: u32) {
     // This function is detected at compile time and removed.
-    // The const generics are extracted to set launch bounds.
+    // Its constant arguments are extracted to set launch bounds.
     // No runtime code is generated.
+    let _ = (max_threads, min_blocks);
 }
 
-const fn validate_launch_bounds(max_threads: u32) {
+/// Validates a `#[launch_bounds]` maximum and returns it unchanged.
+///
+/// `#[launch_bounds]` evaluates this in the inline `const` block that computes
+/// [`__launch_bounds_config`]'s first argument, so a zero maximum is a
+/// compile-time error for each kernel instance that has one.
+#[doc(hidden)]
+pub const fn __launch_bounds_max_threads(max_threads: u32) -> u32 {
     assert!(
         max_threads > 0,
         "launch_bounds maximum threads must be greater than zero"
     );
+    max_threads
 }
 
 /// Compile-time marker carrying an exact block shape to the device compiler.
@@ -1392,31 +1406,43 @@ pub fn __unchecked_indexing_config<const ENABLED: bool>() {
 ///
 /// # Parameters
 ///
-/// - `FACTOR = 0` requests full unrolling of this loop and requires a
+/// - `factor = 0` requests full unrolling of this loop and requires a
 ///   compile-time-known trip count.
-/// - `FACTOR >= 2` requests partial unrolling of this loop by that factor.
+/// - `factor >= 2` requests partial unrolling of this loop by that factor.
 ///   It groups that many iterations; it does not limit the loop to that many
 ///   total iterations, and a remainder still runs.
+///
+/// The factor must be a constant. The macros compute it in an inline `const`
+/// block (`__unroll_config(const { __unroll_factor(N) })`), which rustc
+/// evaluates for each instance, so an expression such as `P::UNROLL` in
+/// generic code gives each instance its own factor.
 #[inline(never)]
-pub fn __unroll_config<const FACTOR: u32>() {
-    const { validate_unroll_factor(FACTOR) }
+pub fn __unroll_config(factor: u32) {
     // This function is detected at compile time and removed.
-    // The const generic FACTOR is extracted to set the loop-unroll request.
+    // Its constant argument is extracted to set the loop-unroll request.
     // No runtime code is generated.
+    let _ = factor;
 }
 
 /// Internal sentinel factor for `#[unroll(never)]`.
 #[doc(hidden)]
 pub const UNROLL_NEVER: u32 = u32::MAX - 1;
 
-const fn validate_unroll_factor(factor: u32) {
+/// Validates an `#[unroll]` factor and returns it unchanged.
+///
+/// The macros evaluate this in the inline `const` block that computes
+/// [`__unroll_config`]'s argument, so an invalid factor is a compile-time
+/// error for each instance that has one.
+#[doc(hidden)]
+pub const fn __unroll_factor(factor: u32) -> u32 {
     if factor == UNROLL_NEVER {
-        return;
+        return factor;
     }
     assert!(
         factor == 0 || (factor >= 2 && factor <= 1024),
         "partial unroll factor must be in 2..=1024, or 0 for full unrolling"
     );
+    factor
 }
 
 /// Compile-time "keep this loop rolled" marker (internal, do not call directly).

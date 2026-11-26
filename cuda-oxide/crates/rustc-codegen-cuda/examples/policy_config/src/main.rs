@@ -3,9 +3,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#![feature(generic_const_exprs)]
-#![allow(incomplete_features)]
-
 use cuda_core::{
     BlockRequirement, CudaContext, DeviceBuffer, KernelLaunchContract, LaunchConfig1D,
 };

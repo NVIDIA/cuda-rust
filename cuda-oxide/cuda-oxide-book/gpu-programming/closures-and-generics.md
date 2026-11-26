@@ -87,9 +87,6 @@ directly on the CPU.
 A policy type groups tuning choices for one generic kernel:
 
 ```rust
-#![feature(generic_const_exprs)]
-#![allow(incomplete_features)]
-
 use cuda_core::LaunchConfig1D;
 use cuda_device::{DisjointSlice, cuda_module, kernel, launch_bounds, launch_contract, thread};
 
@@ -176,9 +173,12 @@ an address, or runs an operation.
 `UNROLL = 4` groups four loop iterations. It does not stop the loop after four
 iterations, and remaining iterations are still handled.
 
-Generic policy expressions currently need Rust's `generic_const_exprs`
-feature. Other named constants used in a contracted `launch_bounds` maximum
-must be visible at module scope.
+Policy expressions are evaluated for every specialization, and an invalid
+value (a zero maximum, an unroll factor of 1) fails compilation for the
+specialization that has it. Host code can be generic over the policy too:
+`fn launch<P: TransformPolicy>(module: &kernels::LoadedModule)` can call
+`module.prepare_transform::<P>(...)`. Other named constants used in a
+contracted `launch_bounds` maximum must be visible at module scope.
 
 ### Const-generic kernels
 

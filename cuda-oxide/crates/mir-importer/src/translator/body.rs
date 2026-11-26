@@ -68,7 +68,7 @@ pub struct ClusterDims {
 
 /// Launch bounds extracted from `#[launch_bounds(max, min)]` attribute.
 ///
-/// These are detected by scanning MIR for `cuda_device::thread::__launch_bounds_config::<MAX,MIN>()`
+/// These are detected by scanning MIR for `cuda_device::thread::__launch_bounds_config(MAX, MIN)`
 /// marker calls injected by the `#[launch_bounds]` macro.
 #[derive(Debug, Clone, Copy)]
 pub struct LaunchBounds {
@@ -219,22 +219,22 @@ fn detect_grid_constant_params(
     Ok(indices.into_iter().collect())
 }
 
-/// Scans MIR for `__launch_bounds_config::<MAX, MIN>()` marker and extracts launch bounds.
+/// Scans MIR for the `__launch_bounds_config(MAX, MIN)` marker and extracts launch bounds.
 ///
-/// The `#[launch_bounds(max, min)]` macro injects this call at the start of the kernel.
-/// We scan the MIR to find it and extract the const generic parameters.
+/// The `#[launch_bounds(max, min)]` macro injects this call at the start of the kernel,
+/// with each argument computed in an inline `const` block. The body is a
+/// monomorphized instance, so both arguments are evaluated constants here, also
+/// when they depend on the kernel's generic parameters.
 ///
 /// Returns `Some(LaunchBounds)` if found, `None` otherwise.
 fn detect_launch_bounds_config(
     body: &mir::Body,
     reachable: &std::collections::BTreeSet<usize>,
 ) -> Result<Option<LaunchBounds>, String> {
-    use rustc_public::ty::TyConstKind;
-
     let mut detected: Option<LaunchBounds> = None;
     for &block_idx in reachable {
         let block = &body.blocks[block_idx];
-        let mir::TerminatorKind::Call { func, .. } = &block.terminator.kind else {
+        let mir::TerminatorKind::Call { func, args, .. } = &block.terminator.kind else {
             continue;
         };
         let mir::Operand::Constant(constant) = func else {
@@ -243,7 +243,7 @@ fn detect_launch_bounds_config(
         let ConstantKind::ZeroSized = constant.const_.kind() else {
             continue;
         };
-        let TyKind::RigidTy(RigidTy::FnDef(def_id, args)) = constant.const_.ty().kind() else {
+        let TyKind::RigidTy(RigidTy::FnDef(def_id, _)) = constant.const_.ty().kind() else {
             continue;
         };
 
@@ -255,34 +255,16 @@ fn detect_launch_bounds_config(
             continue;
         }
 
-        if args.0.len() != 2 {
+        if args.len() != 2 {
             return Err(format!(
-                "cuda_device launch-bounds marker has {} generic arguments; expected exactly 2",
-                args.0.len()
+                "cuda_device launch-bounds marker has {} arguments; expected exactly 2",
+                args.len()
             ));
         }
-        let mut values = [0u32; 2];
-        for (index, (name, arg)) in ["maximum threads", "minimum blocks"]
-            .into_iter()
-            .zip(args.0.iter())
-            .enumerate()
-        {
-            let rustc_public::ty::GenericArgKind::Const(value) = arg else {
-                return Err(format!(
-                    "cuda_device launch-bounds {name} argument is not a constant"
-                ));
-            };
-            let raw = match value.kind() {
-                TyConstKind::Value(_, allocation) => allocation.read_uint().map_err(|error| {
-                    format!("could not read launch-bounds {name} constant: {error:?}")
-                })?,
-                _ => u128::from(value.eval_target_usize().map_err(|error| {
-                    format!("could not evaluate launch-bounds {name} constant: {error:?}")
-                })?),
-            };
-            values[index] = u32::try_from(raw)
-                .map_err(|_| format!("launch-bounds {name} value {raw} does not fit in u32"))?;
-        }
+        let values = [
+            facts::u32_const_operand(&args[0], "launch-bounds maximum threads")?,
+            facts::u32_const_operand(&args[1], "launch-bounds minimum blocks")?,
+        ];
         if values[0] == 0 {
             return Err("launch-bounds maximum threads must be greater than zero".to_string());
         }

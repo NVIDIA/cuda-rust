@@ -682,19 +682,21 @@ fn generic_kernel_routes_launch_contract_to_entry_only() {
 fn generic_kernel_forwards_only_exact_top_level_configuration_markers() {
     let kernel: ItemFn = parse_quote! {
         fn map<T>() {
-            ::cuda_device::thread::__launch_bounds_config::<64, 2>();
+            ::cuda_device::thread::__launch_bounds_config(const { 64 }, const { 2 });
             unsafe {
                 ::cuda_device::thread::__launch_contract_config::<1, true>();
             }
             ::cuda_device::thread::__launch_contract_block_config::<64, 1, 1>();
             ::cuda_device::cluster::__cluster_config::<2, 1, 1>();
             ::cuda_device::shared::__dynamic_shared_alignment::<128>();
-            cuda_device::thread::__launch_bounds_config::<4, 1>();
+            cuda_device::thread::__launch_bounds_config(const { 4 }, const { 1 });
             unrelated();
-            other::cuda_device::thread::__launch_bounds_config::<32, 1>();
-            cuda_device::thread::__launch_bounds_config::<16, 1>(7);
+            other::cuda_device::thread::__launch_bounds_config(const { 32 }, const { 1 });
+            ::cuda_device::thread::__launch_bounds_config(const { 16 }, 1);
+            ::cuda_device::thread::__launch_bounds_config::<16, 1>();
+            ::cuda_device::thread::__launch_bounds_config(const { 16 });
             {
-                cuda_device::thread::__launch_bounds_config::<8, 1>();
+                ::cuda_device::thread::__launch_bounds_config(const { 8 }, const { 1 });
             }
         }
     };
@@ -703,16 +705,17 @@ fn generic_kernel_forwards_only_exact_top_level_configuration_markers() {
     let forwarded = quote!(#(#markers)*).to_string().replace(' ', "");
 
     assert_eq!(markers.len(), 5);
-    assert!(forwarded.contains("__launch_bounds_config::<64,2>()"));
+    assert!(forwarded.contains("__launch_bounds_config(const{64},const{2})"));
     assert!(forwarded.contains("__launch_contract_config::<1,true>()"));
     assert!(forwarded.contains("__launch_contract_block_config::<64,1,1>()"));
     assert!(forwarded.contains("__cluster_config::<2,1,1>()"));
     assert!(forwarded.contains("__dynamic_shared_alignment::<128>()"));
     assert!(!forwarded.contains("unrelated"));
-    assert!(!forwarded.contains("::<4,1>()"));
+    assert!(!forwarded.contains("const{4}"));
     assert!(!forwarded.contains("other::cuda_device"));
-    assert!(!forwarded.contains("::<16,1>(7)"));
-    assert!(!forwarded.contains("::<8,1>()"));
+    assert!(!forwarded.contains("const{16}"));
+    assert!(!forwarded.contains("::<16,1>"));
+    assert!(!forwarded.contains("const{8}"));
 }
 
 /// The two hygiene regressions for the injected launch-context scope spell

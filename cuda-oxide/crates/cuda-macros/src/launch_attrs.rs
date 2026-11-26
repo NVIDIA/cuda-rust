@@ -17,12 +17,11 @@ use crate::cuda_module::model::{
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
-    Expr, FnArg, GenericParam, Ident, ItemFn, Pat, Path, Stmt, Token,
+    Expr, FnArg, Ident, ItemFn, Pat, Stmt, Token,
     parse::{Parse, ParseStream},
     parse_macro_input, parse_quote,
     punctuated::Punctuated,
     spanned::Spanned,
-    visit::{self, Visit},
     visit_mut::{self, VisitMut},
 };
 
@@ -30,24 +29,72 @@ pub(crate) fn launch_bounds_entry(attr: TokenStream, item: TokenStream) -> Token
     let args: LaunchBoundsArgs = parse_macro_input!(attr as LaunchBoundsArgs);
     let mut input = parse_macro_input!(item as ItemFn);
 
-    let max_threads = &args.max_threads.expr;
-    let min_blocks = &args.min_blocks.expr;
-
-    add_const_evaluatable_bound(&mut input.sig.generics, &args.max_threads);
-    add_const_evaluatable_bound(&mut input.sig.generics, &args.min_blocks);
-
-    // Inject the launch bounds config marker at the start of the function body
-    let marker_call: syn::Stmt = syn::parse_quote! {
-        ::cuda_device::thread::__launch_bounds_config::<{ #max_threads }, { #min_blocks }>();
-    };
+    // This attribute has already been removed from `input.attrs`, so any
+    // `launch_bounds` left there is a second one. Checking here as well as in
+    // `#[kernel]` catches it whichever attribute expands first.
+    if let Some(duplicate) = input
+        .attrs
+        .iter()
+        .find(|attr| attr_path_ends_with(attr, "launch_bounds"))
+    {
+        return duplicate_launch_bounds_error(duplicate)
+            .to_compile_error()
+            .into();
+    }
 
     // Prepend the marker to the function body
-    input.block.stmts.insert(0, marker_call);
+    input.block.stmts.insert(0, launch_bounds_marker(&args));
 
     quote! {
         #input
     }
     .into()
+}
+
+/// Returns the only `#[launch_bounds]` attribute in `attrs`, if there is one.
+///
+/// A kernel has one launch-bounds pair. Two attributes would each inject a
+/// marker, and the device importer would report the conflict only much later
+/// (or accept two identical copies), so a second attribute is an error at
+/// that attribute.
+pub(crate) fn single_launch_bounds_attr(
+    attrs: &[syn::Attribute],
+) -> syn::Result<Option<&syn::Attribute>> {
+    let mut matching = attrs
+        .iter()
+        .filter(|attr| attr_path_ends_with(attr, "launch_bounds"));
+    let first = matching.next();
+    if let Some(duplicate) = matching.next() {
+        return Err(duplicate_launch_bounds_error(duplicate));
+    }
+    Ok(first)
+}
+
+/// The error for a second `#[launch_bounds]` attribute on one kernel,
+/// spanned at that attribute. Shared by every place that checks for one, so
+/// they all report the same message.
+fn duplicate_launch_bounds_error(duplicate: &syn::Attribute) -> syn::Error {
+    syn::Error::new_spanned(
+        duplicate,
+        "a kernel may have only one launch_bounds attribute",
+    )
+}
+
+/// The launch-bounds config marker `#[launch_bounds]` injects at the start of
+/// the function body.
+///
+/// The bounds are ordinary arguments computed in inline `const` blocks. rustc
+/// evaluates them, and validates the maximum, for each monomorphized kernel,
+/// so the bounds may be expressions over the kernel's generic parameters.
+pub(crate) fn launch_bounds_marker(args: &LaunchBoundsArgs) -> Stmt {
+    let max_threads = &args.max_threads.expr;
+    let min_blocks = &args.min_blocks.expr;
+    parse_quote! {
+        ::cuda_device::thread::__launch_bounds_config(
+            const { ::cuda_device::thread::__launch_bounds_max_threads(#max_threads) },
+            const { #min_blocks },
+        );
+    }
 }
 
 pub(crate) fn launch_contract_entry(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -300,92 +347,6 @@ fn validate_literal_max_threads(value: &ConstU32Expr) -> syn::Result<()> {
     }
 }
 
-/// Returns whether an expression names one of the function's type or const
-/// parameters and therefore needs a signature-level evaluatability witness.
-///
-/// Non-generic paths deliberately return false. In particular, a const item
-/// declared inside the function body is in scope at the generated marker but
-/// is not in scope in the function signature.
-fn const_expr_depends_on_generics(expr: &Expr, generics: &syn::Generics) -> bool {
-    let generic_names: Vec<&Ident> = generics
-        .params
-        .iter()
-        .filter_map(|parameter| match parameter {
-            GenericParam::Type(parameter) => Some(&parameter.ident),
-            GenericParam::Const(parameter) => Some(&parameter.ident),
-            GenericParam::Lifetime(_) => None,
-        })
-        .collect();
-    if generic_names.is_empty() {
-        return false;
-    }
-
-    struct GenericReference<'a> {
-        generic_names: &'a [&'a Ident],
-        found: bool,
-    }
-
-    impl<'ast> Visit<'ast> for GenericReference<'_> {
-        fn visit_path(&mut self, path: &'ast Path) {
-            if path.segments.iter().any(|segment| {
-                self.generic_names
-                    .iter()
-                    .any(|generic| segment.ident == **generic)
-            }) {
-                self.found = true;
-                return;
-            }
-            visit::visit_path(self, path);
-        }
-    }
-
-    let mut visitor = GenericReference {
-        generic_names: &generic_names,
-        found: false,
-    };
-    visitor.visit_expr(expr);
-    visitor.found
-}
-
-/// Make a generic constant expression evaluatable at each monomorphization.
-///
-/// rustc requires this bound for expressions such as `P::MAX_THREADS`. The
-/// marker itself supplies the expected `u32` type; the array length is only an
-/// evaluatability witness and never reaches device code.
-pub(crate) fn add_const_evaluatable_bound(generics: &mut syn::Generics, value: &ConstU32Expr) {
-    if value.literal_value.is_some() || !const_expr_depends_on_generics(&value.expr, generics) {
-        return;
-    }
-    let expr = &value.expr;
-    let predicate: syn::WherePredicate = parse_quote! {
-        [(); (#expr) as usize]:
-    };
-    generics.make_where_clause().predicates.push(predicate);
-}
-
-pub(crate) fn add_launch_bounds_evaluatability_from_attrs(input: &mut ItemFn) -> syn::Result<()> {
-    let matching: Vec<_> = input
-        .attrs
-        .iter()
-        .filter(|attr| attr_path_ends_with(attr, "launch_bounds"))
-        .collect();
-    if matching.len() > 1 {
-        return Err(syn::Error::new_spanned(
-            matching[1],
-            "a kernel may have only one launch_bounds attribute",
-        ));
-    }
-    let Some(attr) = matching.first() else {
-        return Ok(());
-    };
-    let bounds = attr.parse_args::<LaunchBoundsArgs>()?;
-    let max_threads = bounds.max_threads.clone();
-    let min_blocks = bounds.min_blocks.clone();
-    add_const_evaluatable_bound(&mut input.sig.generics, &max_threads);
-    add_const_evaluatable_bound(&mut input.sig.generics, &min_blocks);
-    Ok(())
-}
-
 /// Arguments for the `#[unroll]` / `#[unroll(N)]` attribute.
 ///
 /// Bare `#[unroll]` parses to factor `0` (full unroll); `#[unroll(N)]` requires
@@ -461,8 +422,8 @@ impl Parse for UnrollArgs {
 /// attribute, the visitor:
 ///
 /// 1. removes the `unroll` attribute from the loop expr's `attrs`, and
-/// 2. inserts `cuda_device::thread::__unroll_config::<FACTOR>();` as the FIRST
-///    statement of that loop's body block.
+/// 2. inserts `cuda_device::thread::__unroll_config(const { .. FACTOR .. });`
+///    as the FIRST statement of that loop's body block.
 ///
 /// `FACTOR` follows [`UnrollArgs`]: bare `#[unroll]` => `0` (full unroll),
 /// `#[unroll(N)]` => `N`. `#[nounroll]` inserts
@@ -479,7 +440,6 @@ pub(crate) struct LoopUnrollAttrVisitor {
     /// First parse error encountered (e.g. a malformed `#[unroll(...)]`). The
     /// caller surfaces this as a compile error.
     pub(crate) error: Option<syn::Error>,
-    pub(crate) const_expressions: Vec<ConstU32Expr>,
 }
 
 impl LoopUnrollAttrVisitor {
@@ -518,9 +478,6 @@ impl LoopUnrollAttrVisitor {
                 return None;
             }
         };
-        if factor.literal_value.is_none() {
-            self.const_expressions.push(factor.clone());
-        }
         Some((factor, attr.span()))
     }
 
@@ -572,17 +529,18 @@ impl LoopUnrollAttrVisitor {
         }
     }
 
-    /// Build the `__unroll_config::<FACTOR>()` marker statement. The call
-    /// carries `span`, the `#[unroll]` attribute's, so diagnostics about the
-    /// loop point at the attribute. The braces around the factor keep the
-    /// macro's own span. On the attribute's span rustc treats them as written
-    /// by the user, and its `unused_braces` lint then reports every literal
-    /// factor with a fix-it that deletes the attribute.
+    /// Build the `__unroll_config(const { __unroll_factor(FACTOR) })` marker
+    /// statement. rustc evaluates and validates the factor in the inline
+    /// `const` block for each monomorphized function, so the factor may be an
+    /// expression over the function's generic parameters. The call carries
+    /// `span`, the `#[unroll]` attribute's, so diagnostics about the loop
+    /// point at the attribute.
     fn marker_stmt(factor: &ConstU32Expr, span: proc_macro2::Span) -> Stmt {
         let expr = &factor.expr;
-        let factor_arg = quote! { { #expr } };
         syn::parse_quote_spanned! {span=>
-            cuda_device::thread::__unroll_config::<#factor_arg>();
+            cuda_device::thread::__unroll_config(
+                const { cuda_device::thread::__unroll_factor(#expr) }
+            );
         }
     }
 }
@@ -625,9 +583,6 @@ pub(crate) fn rewrite_loop_unroll_attrs(input: &mut ItemFn) -> syn::Result<()> {
     visitor.visit_block_mut(&mut input.block);
     if let Some(err) = visitor.error {
         return Err(err);
-    }
-    for expression in &visitor.const_expressions {
-        add_const_evaluatable_bound(&mut input.sig.generics, expression);
     }
     Ok(())
 }

@@ -62,12 +62,12 @@ unsafe fn sm100_step(bar: *mut mbarrier::Barrier, shared: *mut u32, global: *con
     unsafe { warp::bar_warp_sync(u32::MAX) };
     let mut i = 0;
     while i < 2 {
-        thread::__unroll_config::<0>();
+        thread::__unroll_config(0);
         i += 1;
     }
     let mut j = 0;
     while j < 2048 {
-        thread::__unroll_config::<1024>();
+        thread::__unroll_config(1024);
         j += 1;
     }
 }

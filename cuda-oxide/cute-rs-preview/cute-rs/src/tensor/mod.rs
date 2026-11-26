@@ -197,7 +197,7 @@ impl<T: Copy, const N: usize> RegisterTile<T, N> {
         let mut values = [first; N];
         let mut i = 1;
         while i < N {
-            cuda_device::thread::__unroll_config::<0>();
+            cuda_device::thread::__unroll_config(0);
             values[i] = f(i);
             i += 1;
         }
@@ -229,7 +229,7 @@ impl<T: Copy, const N: usize> RegisterTile<T, N> {
         let mut accumulator = initial;
         let mut i = 0;
         while i < N {
-            cuda_device::thread::__unroll_config::<0>();
+            cuda_device::thread::__unroll_config(0);
             accumulator = f(accumulator, self.0[i]);
             i += 1;
         }

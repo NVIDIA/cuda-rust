@@ -4,13 +4,15 @@
  */
 
 use crate::cuda_module::contract::{LaunchContractArgs, validate_requires_relations};
+use crate::kernel::scope::is_kernel_configuration_marker;
 use crate::launch::{
     CudaLaunchAsyncInput, CudaLaunchInput, expand_cuda_launch, expand_cuda_launch_async,
     kernel_sibling_path,
 };
 use crate::launch_attrs::{
-    ClusterArgs, LaunchBoundsArgs, LoopUnrollAttrVisitor, UnrollArgs, add_const_evaluatable_bound,
-    inject_launch_contract_markers, rewrite_loop_unroll_attrs, standalone_requires_params,
+    ClusterArgs, LaunchBoundsArgs, LoopUnrollAttrVisitor, UnrollArgs,
+    inject_launch_contract_markers, launch_bounds_marker, rewrite_loop_unroll_attrs,
+    standalone_requires_params,
 };
 use quote::{format_ident, quote};
 use reserved_oxide_symbols::INSTANTIATE_PREFIX;
@@ -264,7 +266,7 @@ fn bare_unroll_on_while_injects_factor_zero_marker() {
     let out = run_loop_unroll_visitor(func);
     // Bare #[unroll] => full unroll (factor 0).
     assert!(
-        out.contains("cuda_device::thread::__unroll_config::<{0u32}>()"),
+        out.contains("cuda_device::thread::__unroll_config(const{cuda_device::thread::__unroll_factor(0u32)})"),
         "expected factor-0 marker:\n{out}"
     );
     // The expression attribute must be stripped so rustc never sees it.
@@ -284,7 +286,9 @@ fn unroll_n_on_for_loop_injects_factor_n_marker() {
     };
     let out = run_loop_unroll_visitor(func);
     assert!(
-        out.contains("cuda_device::thread::__unroll_config::<{4}>()"),
+        out.contains(
+            "cuda_device::thread::__unroll_config(const{cuda_device::thread::__unroll_factor(4)})"
+        ),
         "expected factor-4 marker:\n{out}"
     );
     assert!(
@@ -329,7 +333,9 @@ fn unroll_on_bare_loop_injects_marker() {
     };
     let out = run_loop_unroll_visitor(func);
     assert!(
-        out.contains("cuda_device::thread::__unroll_config::<{2}>()"),
+        out.contains(
+            "cuda_device::thread::__unroll_config(const{cuda_device::thread::__unroll_factor(2)})"
+        ),
         "expected factor-2 marker on `loop`:\n{out}"
     );
 }
@@ -348,7 +354,9 @@ fn nested_annotated_loop_is_handled() {
     };
     let out = run_loop_unroll_visitor(func);
     assert!(
-        out.contains("cuda_device::thread::__unroll_config::<{3}>()"),
+        out.contains(
+            "cuda_device::thread::__unroll_config(const{cuda_device::thread::__unroll_factor(3)})"
+        ),
         "expected marker injected into nested loop:\n{out}"
     );
 }
@@ -490,32 +498,39 @@ fn launch_bounds_keeps_policy_expressions_typed() {
         fn configured<P: Policy>() {}
     };
     let args: LaunchBoundsArgs = syn::parse_str("P::MAX_THREADS * 2, P::MIN_BLOCKS").unwrap();
-    add_const_evaluatable_bound(&mut function.sig.generics, &args.max_threads);
-    add_const_evaluatable_bound(&mut function.sig.generics, &args.min_blocks);
-
-    let max_threads = &args.max_threads.expr;
-    let min_blocks = &args.min_blocks.expr;
-    let marker: Stmt = parse_quote! {
-        ::cuda_device::thread::__launch_bounds_config::<
-            { #max_threads },
-            { #min_blocks },
-        >();
-    };
+    let marker = launch_bounds_marker(&args);
+    assert!(is_kernel_configuration_marker(&marker));
     function.block.stmts.insert(0, marker);
     let output = quote!(#function).to_string().replace(' ', "");
 
     assert!(
-        output.contains("__launch_bounds_config"),
-        "missing marker: {output}"
+        output.contains(
+            "::cuda_device::thread::__launch_bounds_config(const{\
+             ::cuda_device::thread::__launch_bounds_max_threads(P::MAX_THREADS*2)},\
+             const{P::MIN_BLOCKS},);"
+        ),
+        "{output}"
     );
-    assert!(output.contains("{P::MAX_THREADS*2}"), "{output}");
-    assert!(output.contains("{P::MIN_BLOCKS}"), "{output}");
-    assert!(output.contains("[();(P::MAX_THREADS*2)asusize]:"));
-    assert!(output.contains("[();(P::MIN_BLOCKS)asusize]:"));
+    assert!(
+        !output.contains("where"),
+        "launch bounds keep only the function's declared bounds: {output}"
+    );
 }
 
 #[test]
-fn policy_unroll_expression_gets_marker_and_evaluatability_bound() {
+fn literal_launch_bounds_default_min_blocks_to_zero() {
+    let args: LaunchBoundsArgs = syn::parse_str("256").unwrap();
+    let marker = launch_bounds_marker(&args);
+    let output = quote!(#marker).to_string().replace(' ', "");
+
+    assert!(
+        output.contains("__launch_bounds_max_threads(256)},const{0u32}"),
+        "{output}"
+    );
+}
+
+#[test]
+fn policy_unroll_expression_gets_inline_const_marker() {
     let func: ItemFn = parse_quote! {
         fn k<P: Policy>() {
             let mut i = 0u32;
@@ -525,8 +540,14 @@ fn policy_unroll_expression_gets_marker_and_evaluatability_bound() {
     };
     let output = run_loop_unroll_visitor(func);
 
-    assert!(output.contains("__unroll_config::<{P::UNROLL}>()"));
-    assert!(output.contains("[();(P::UNROLL)asusize]:"));
+    assert!(
+        output.contains("__unroll_config(const{cuda_device::thread::__unroll_factor(P::UNROLL)})"),
+        "{output}"
+    );
+    assert!(
+        !output.contains("where"),
+        "unroll keeps only the function's declared bounds: {output}"
+    );
 }
 
 #[test]
@@ -541,9 +562,9 @@ fn function_local_unroll_const_stays_in_block_scope() {
     };
     let output = run_loop_unroll_visitor(func);
 
-    assert!(output.contains("__unroll_config::<{FACTOR}>()"));
+    assert!(output.contains("__unroll_factor(FACTOR)"), "{output}");
     assert!(
-        !output.contains("[();(FACTOR)asusize]:"),
+        !output.contains("where"),
         "a block-local const must not be copied into the function signature: {output}"
     );
 }

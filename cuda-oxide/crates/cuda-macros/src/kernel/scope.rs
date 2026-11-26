@@ -551,10 +551,12 @@ fn configuration_marker_call(statement: &Stmt) -> Option<(&ExprCall, bool)> {
 /// Return compiler configuration markers already materialized in a generic
 /// kernel body by attributes that expanded before `#[kernel]`.
 ///
-/// Only exact, zero-argument calls to cuda-oxide's internal marker paths are
-/// forwarded. The launch-contract marker additionally retains its generated
-/// `unsafe` boundary. Nested calls and unrelated top-level calls remain solely
-/// in the helper body.
+/// Only exact calls to cuda-oxide's internal marker paths are forwarded: the
+/// const-generic markers with no arguments, and the launch-bounds marker with
+/// exactly two inline `const { .. }` block arguments and no generic arguments.
+/// The launch-contract marker additionally retains its generated `unsafe`
+/// boundary. Nested calls and unrelated top-level calls remain solely in the
+/// helper body.
 pub(crate) fn top_level_kernel_configuration_markers(input: &ItemFn) -> Vec<Stmt> {
     input
         .block
@@ -569,9 +571,6 @@ pub(crate) fn is_kernel_configuration_marker(statement: &Stmt) -> bool {
     let Some((call, unsafe_wrapped)) = configuration_marker_call(statement) else {
         return false;
     };
-    if !call.args.is_empty() {
-        return false;
-    }
     let Expr::Path(ExprPath {
         qself: None, path, ..
     }) = &*call.func
@@ -584,20 +583,29 @@ pub(crate) fn is_kernel_configuration_marker(statement: &Stmt) -> bool {
         || segments[0].ident != "cuda_device"
         || !matches!(segments[0].arguments, PathArguments::None)
         || !matches!(segments[1].arguments, PathArguments::None)
-        || !matches!(segments[2].arguments, PathArguments::AngleBracketed(_))
     {
         return false;
     }
 
     let module = &segments[1].ident;
     let marker = &segments[2].ident;
+    // `#[launch_bounds]` passes its values as inline-const arguments; every
+    // other marker carries its configuration as const generic arguments.
+    if module == "thread" && marker == "__launch_bounds_config" {
+        return !unsafe_wrapped
+            && matches!(segments[2].arguments, PathArguments::None)
+            && call.args.len() == 2
+            && call.args.iter().all(|arg| matches!(arg, Expr::Const(_)));
+    }
+    if !call.args.is_empty() || !matches!(segments[2].arguments, PathArguments::AngleBracketed(_)) {
+        return false;
+    }
     if unsafe_wrapped {
         module == "thread"
             && (marker == "__launch_contract_config" || marker == "__grid_constant_config")
     } else {
         (module == "thread"
-            && (marker == "__launch_bounds_config"
-                || marker == "__launch_contract_block_config"
+            && (marker == "__launch_contract_block_config"
                 || marker == "__launch_contract_requires_len_ge_config"
                 || marker == "__verify_no_oob_idx_config"
                 || marker == "__verify_disjoint_writes_config"

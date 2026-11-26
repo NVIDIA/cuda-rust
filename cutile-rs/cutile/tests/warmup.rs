@@ -112,6 +112,7 @@ fn cache_key_different_spec_args() {
         stride_one: vec![false, true],
         base_ptr_div: DivHint::from_ptr(16),
         elements_disjoint: true,
+        full_slab: vec![],
     };
     let spec_misaligned = SpecializationBits {
         shape_div: vec![DivHint::from_value(4), DivHint::from_value(4)],
@@ -119,6 +120,7 @@ fn cache_key_different_spec_args() {
         stride_one: vec![false, true],
         base_ptr_div: DivHint::from_ptr(4),
         elements_disjoint: true,
+        full_slab: vec![],
     };
     let key_a = default_key()
         .spec_args(vec![("x".into(), spec_aligned)])

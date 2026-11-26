@@ -18,6 +18,7 @@
 use crate::common;
 use cutile::api;
 use cutile::prelude::{DeviceOp, PartitionOp};
+use cutile::tensor::KernelOutputStored;
 use cutile::tile_kernel::{
     contains_cuda_function, get_default_device, jit_compile_count, TileFunctionKey, TileKernel,
 };
@@ -56,7 +57,7 @@ fn vector_add_spec_args(len: usize, tile: usize) -> Vec<(String, SpecializationB
     let x = api::ones::<f32>(&[len]).sync().unwrap();
     let y = api::ones::<f32>(&[len]).sync().unwrap();
     let z = api::zeros::<f32>(&[len]).partition([tile]).sync().unwrap();
-    let z_spec = z.unpartition().spec().clone();
+    let z_spec = KernelOutputStored::spec(&z).clone();
     vec![
         ("z".to_string(), z_spec),
         ("x".to_string(), x.spec().clone()),

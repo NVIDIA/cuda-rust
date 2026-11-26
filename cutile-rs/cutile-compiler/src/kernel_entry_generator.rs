@@ -249,6 +249,102 @@ impl TensorInput {
         }
     }
 
+    /// A `&mut Tensor` parameter is this tile block's slab of the tensor the
+    /// host partitioned, not the whole tensor.
+    fn is_slab(&self) -> bool {
+        self.mutable && self.param_kind == TensorParamKind::Tensor
+    }
+
+    /// Whether every block's slab is full on `axis`: the host saw the
+    /// partition divide the tensor there.
+    fn is_full_slab(&self, axis: usize) -> bool {
+        self.spec
+            .as_ref()
+            .is_some_and(|spec| spec.full_slab.get(axis) == Some(&true))
+    }
+
+    /// Binds `{var}_slab_ptr` and `{var}_slab_shape`: the slab of the current
+    /// tile block, in elements. Each axis starts at `pid * slab`. A full axis
+    /// keeps the slab extent, static when the kernel declares it; a ragged
+    /// axis is clipped to the root extent, so the last slab ends where the
+    /// tensor does.
+    fn slab_view_statements(&self) -> Vec<Stmt> {
+        let var_name = &self.var_name;
+        let element_type = &self.element_type;
+        let axes = 0..self.rank as usize;
+        let static_slab = |axis: usize| match self.input_tensor_shape.shape[axis].as_str() {
+            "-1" | "- 1" => None,
+            extent => Some(extent.to_string()),
+        };
+        let slab_extent = |axis: usize| {
+            static_slab(axis).unwrap_or_else(|| format!("{var_name}_partition_dim_{axis}"))
+        };
+        let stride = |axis: usize| match self.static_strides[axis].as_str() {
+            "-1" | "- 1" => format!("{var_name}_stride_{axis}"),
+            stride => stride.to_string(),
+        };
+
+        let mut lines = vec![format!(
+            "let {var_name}_pid: (i32, i32, i32) = get_tile_block_id();"
+        )];
+        let mut slab_shape = vec![];
+        let mut dynamic_extents = vec![];
+        for axis in axes.clone() {
+            let slab = slab_extent(axis);
+            lines.push(format!(
+                "let {var_name}_origin_{axis}: i32 = {var_name}_pid.{axis} * {slab};"
+            ));
+            match (self.is_full_slab(axis), static_slab(axis)) {
+                (true, Some(extent)) => slab_shape.push(extent),
+                (true, None) => {
+                    slab_shape.push("-1".to_string());
+                    dynamic_extents.push(slab);
+                }
+                (false, _) => {
+                    slab_shape.push("-1".to_string());
+                    dynamic_extents.push(format!("{var_name}_extent_{axis}"));
+                    lines.push(format!(
+                        "let {var_name}_extent_{axis}: i32 = min({slab}, {var_name}_dim_{axis} - {var_name}_origin_{axis});"
+                    ));
+                }
+            }
+            for (term, value) in [
+                ("origin", format!("{var_name}_origin_{axis}")),
+                ("stride", stride(axis)),
+            ] {
+                lines.push(format!(
+                    "let {var_name}_{term}_tile_{axis}: Tile<i32, {{[]}}> = scalar_to_tile({value});"
+                ));
+                lines.push(format!(
+                    "let {var_name}_{term}_wide_{axis}: Tile<i64, {{[]}}> = exti({var_name}_{term}_tile_{axis});"
+                ));
+            }
+            lines.push(format!(
+                "let {var_name}_offset_{axis}: Tile<i64, {{[]}}> = {var_name}_origin_wide_{axis} * {var_name}_stride_wide_{axis};"
+            ));
+        }
+        let offset_sum = axes
+            .clone()
+            .map(|axis| format!("{var_name}_offset_{axis}"))
+            .collect::<Vec<_>>()
+            .join(" + ");
+        let slab_shape = format!("{{[{}]}}", slab_shape.join(","));
+        let dynamic_extents = dynamic_extents.join(", ");
+        lines.push(format!(
+            "let {var_name}_slab_offset: Tile<i64, {{[]}}> = {offset_sum};"
+        ));
+        lines.push(format!(
+            "let {var_name}_slab_ptr: PointerTile<*mut {element_type}, {{[]}}> = addptr_tile({var_name}_ptr, {var_name}_slab_offset);"
+        ));
+        lines.push(format!(
+            "let {var_name}_slab_shape: Shape<{slab_shape}> = Shape::<{slab_shape}> {{ dims: &[{dynamic_extents}] }};"
+        ));
+        lines
+            .iter()
+            .map(|line| syn::parse_str::<Stmt>(line).unwrap())
+            .collect()
+    }
+
     fn generate_statements(&self) -> Vec<Stmt> {
         let mut statements = Vec::new();
         let var_name = &self.var_name;
@@ -268,9 +364,8 @@ impl TensorInput {
         //     statements.push(syn::Stmt::Item(item));
         // }
 
-        // Shape. Mutable tensor args are exposed to the user kernel as tile-shaped
-        // tensors, but the entry wrapper constructs a view of the full tensor so
-        // Tensor::store can index the output partition by the current tile-block id.
+        // Shape. A mutable tensor arg arrives as the full tensor's dims; the
+        // slab view built from them below is what the kernel sees.
         let dim_i_arg_name = "dim";
         let dims_arg_name = format!("{}s", dim_i_arg_name);
         let tensor_view_shape = if self.mutable {
@@ -365,17 +460,22 @@ impl TensorInput {
         .unwrap();
         statements.push(strides_array_stmnt);
 
-        // Use the full tensor pointer. Mutable output partition indexing is
-        // handled by Tensor::load/store inside the kernel body.
         let ptr_var = format!("{var_name}_ptr");
-        let final_ptr_var = ptr_var;
         let inferred_ptr_div = self.spec.as_ref().map(|s| s.base_ptr_div.divisor);
         let ptr_div = self.effective_div(inferred_ptr_div);
         if ptr_div > 1 {
-            statements.push(Self::get_assume_div_by(final_ptr_var.clone(), ptr_div));
+            statements.push(Self::get_assume_div_by(ptr_var.clone(), ptr_div));
         }
 
-        let final_shape_var = shape_var.clone();
+        let (final_ptr_var, final_shape_var) = if self.is_slab() {
+            statements.extend(self.slab_view_statements());
+            (
+                format!("{var_name}_slab_ptr"),
+                format!("{var_name}_slab_shape"),
+            )
+        } else {
+            (ptr_var, shape_var.clone())
+        };
 
         match &self.param_kind {
             TensorParamKind::Tensor => {

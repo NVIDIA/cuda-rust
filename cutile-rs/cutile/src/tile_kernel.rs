@@ -110,7 +110,8 @@ pub use preparation::{KernelCompileJob, PreparedKernel};
 /// GPU architecture, compiler version, and the `tileiras` binary that assembles the cubin.
 ///
 /// Tensor extents are deliberately absent: `stride_args` records only which
-/// dimensions have stride 1, and `spec_args` only power-of-two divisibility. A
+/// dimensions have stride 1, and `spec_args` only power-of-two divisibility and,
+/// for a partitioned output, which axes the partition divides. A
 /// `[1024, 1024]` and a `[4096, 4096]` matmul share one key, because extents are
 /// runtime kernel arguments and do not reach the generated code.
 ///

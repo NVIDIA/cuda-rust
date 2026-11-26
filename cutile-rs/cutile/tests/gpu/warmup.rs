@@ -11,6 +11,7 @@ use crate::common;
 use cutile::api;
 use cutile::jit_cache::{self, FileSystemJitStore, JitStore};
 use cutile::prelude::{DeviceOp, PartitionOp};
+use cutile::tensor::KernelOutputStored;
 use cutile::tile_kernel::{
     contains_cuda_function, get_default_device, jit_compile_count, TileFunctionKey, TileKernel,
 };
@@ -169,12 +170,12 @@ fn different_keys_parallel_compile() {
         let x_probe_8 = api::ones::<f32>(&[256]).sync().unwrap();
         let y_probe_8 = api::ones::<f32>(&[256]).sync().unwrap();
         let z_probe_8 = api::zeros::<f32>(&[256]).partition([128]).sync().unwrap();
-        let z_spec_8 = z_probe_8.unpartition().spec().clone();
+        let z_spec_8 = KernelOutputStored::spec(&z_probe_8).clone();
 
         let x_probe_32 = api::ones::<f32>(&[512]).sync().unwrap();
         let y_probe_32 = api::ones::<f32>(&[512]).sync().unwrap();
         let z_probe_32 = api::zeros::<f32>(&[512]).partition([256]).sync().unwrap();
-        let z_spec_32 = z_probe_32.unpartition().spec().clone();
+        let z_spec_32 = KernelOutputStored::spec(&z_probe_32).clone();
 
         let device_id = get_default_device();
         let gpu_name = get_gpu_name(device_id);

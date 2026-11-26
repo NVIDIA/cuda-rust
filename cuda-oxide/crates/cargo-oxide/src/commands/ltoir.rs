@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::*;
 
@@ -56,12 +56,23 @@ pub fn emit_ltoir(
     });
     let sm_arch = parsed_arch.sm();
 
+    // Cargo invokes rustc from its workspace root even when the selected
+    // package is a member. Pin this command's IR directory explicitly instead
+    // of deriving it from the compiler's working directory.
+    let (build_ctx, ir_dir) =
+        ltoir_build_context(ctx, &example_dir, std::env::var_os("CUDA_OXIDE_PTX_DIR"))
+            .unwrap_or_else(|error| {
+                eprintln!("Error: {error}");
+                std::process::exit(1);
+            });
+    clean_generated_files(&ir_dir, example);
+
     // Step 1: build in NVVM IR mode so the backend writes `<crate>.ll` as
     // libNVVM-ready NVVM IR. codegen_build exits on build failure. Pass
     // quiet=true so the intermediate "✓ Build succeeded" line is suppressed;
     // emit_ltoir prints its own unified summary at the end.
     codegen_build(
-        ctx,
+        &build_ctx,
         example,
         verbose,
         true,
@@ -76,7 +87,7 @@ pub fn emit_ltoir(
     );
 
     // Step 2: compile that NVVM IR to LTOIR via libNVVM -gen-lto.
-    let ll_path = emitted_ll_path(&example_dir, example);
+    let ll_path = emitted_ll_path(&ir_dir, example);
     let ir = std::fs::read(&ll_path).unwrap_or_else(|e| {
         eprintln!(
             "Error: could not read emitted NVVM IR at {}: {e}",
@@ -163,6 +174,51 @@ pub fn emit_ltoir(
         out_path.display(),
         ltoir.len()
     );
+}
+
+/// Select the same IR directory for the build and subsequent reader. Keep an
+/// inherited override strongest, followed by project config. Relative explicit
+/// paths are relative to rustc's Cargo workspace cwd, matching existing backend
+/// semantics. Without an override, emit-ltoir owns its invocation directory.
+pub(super) fn ltoir_build_context(
+    ctx: &Context,
+    example_dir: &Path,
+    inherited_dir: Option<std::ffi::OsString>,
+) -> Result<(Context, PathBuf), String> {
+    let configured = inherited_dir
+        .or_else(|| project_config_env(ctx, "CUDA_OXIDE_PTX_DIR").map(std::ffi::OsString::from));
+    let ir_dir = match configured {
+        None => example_dir.to_path_buf(),
+        Some(path) => {
+            let path = PathBuf::from(path);
+            if path.is_absolute() {
+                path
+            } else {
+                let metadata = cargo_metadata(example_dir)?;
+                let root = metadata
+                    .get("workspace_root")
+                    .and_then(|path| path.as_str())
+                    .ok_or_else(|| "Cargo metadata did not include workspace_root".to_string())?;
+                Path::new(root).join(path)
+            }
+        }
+    };
+    let value = ir_dir.to_str().ok_or_else(|| {
+        format!(
+            "NVVM IR output directory is not Unicode: {}",
+            ir_dir.display()
+        )
+    })?;
+    let mut build_ctx = ctx.clone();
+    build_ctx
+        .config
+        .env
+        .retain(|(key, _)| key != "CUDA_OXIDE_PTX_DIR");
+    build_ctx
+        .config
+        .env
+        .push(("CUDA_OXIDE_PTX_DIR".into(), value.into()));
+    Ok((build_ctx, ir_dir))
 }
 
 /// Normalize a target architecture to libNVVM's `compute_XX` form.

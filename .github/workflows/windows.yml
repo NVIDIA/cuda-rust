@@ -1,0 +1,492 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+---
+name: windows
+
+# Runs as a job of the top-level CI workflow (.github/workflows/ci.yml), with
+# workflow_dispatch kept for standalone maintainer runs. Concurrency on push is
+# governed by CI's own group.
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  windows-compile:
+    name: Windows MSVC compile & PTX/cubin check (GPU-less)
+    runs-on: windows-amd64-cpu16
+    timeout-minutes: 90
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@v4
+
+      - name: Configure git for Windows paths
+        run: |
+          git config --global --add safe.directory "$env:GITHUB_WORKSPACE"
+          git config --global core.longpaths true
+
+      # NVIDIA's self-hosted Windows Server 2025 VM image ships git, pwsh, bash,
+      # zstd, and tar, but no Visual Studio C++ Build Tools. Install VCTools +
+      # the recommended Windows SDK silently when absent, then activate x64 env.
+      - name: Install MSVC Build Tools and Windows SDK
+        run: |
+          $ErrorActionPreference = "Stop"
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $hasVc = (Test-Path -LiteralPath $vswhere) -and
+            (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath)
+          if ($hasVc) {
+            Write-Host "MSVC x64 Build Tools already installed at: $hasVc"
+            exit 0
+          }
+
+          $installer = Join-Path $env:RUNNER_TEMP "vs_buildtools.exe"
+          curl.exe -fSL --retry 3 --retry-all-errors `
+            -o $installer "https://aka.ms/vs/17/release/vs_buildtools.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to download vs_buildtools.exe (exit $LASTEXITCODE)"
+          }
+
+          $proc = Start-Process -FilePath $installer -PassThru -Wait -NoNewWindow -ArgumentList @(
+            "--quiet",
+            "--wait",
+            "--norestart",
+            "--nocache",
+            "--add", "Microsoft.VisualStudio.Workload.VCTools",
+            "--includeRecommended"
+          )
+          Remove-Item -Force $installer -ErrorAction SilentlyContinue
+          # 3010 = ERROR_SUCCESS_REBOOT_REQUIRED (e.g. UCRT servicing); cl.exe
+          # and link.exe are usable immediately without rebooting the runner VM.
+          if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {
+            throw "vs_buildtools.exe failed with exit code $($proc.ExitCode)"
+          }
+
+      - name: Activate MSVC x64 developer environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Set up Python 3 (for verify-code-shape.sh scripts)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Cache the assembled CUDA 13.3.1 Windows redistributable subset, LLVM
+      # 23.1.6 (clang, libclang, lld-link, llc, opt), and prebuilt MSVC libffi
+      # so warm runs skip ~700 MB of archive downloads and extraction.
+      - name: Restore Windows CUDA, LLVM, and libffi bundle
+        id: deps-cache
+        uses: actions/cache@v4
+        with:
+          path: C:\cuda-oxide-ci-deps
+          key: windows-ci-deps-v1-cuda13.3.1-llvm23.1.6-libffi3.8.2
+
+      - name: Provision CUDA 13.3.1, LLVM 23.1.6, and libffi on cache miss
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        run: |
+          $ErrorActionPreference = "Stop"
+          $depsRoot = "C:\cuda-oxide-ci-deps"
+          $cudaDir  = Join-Path $depsRoot "cuda"
+          $llvmDir  = Join-Path $depsRoot "llvm"
+          $ffiDir   = Join-Path $depsRoot "libffi"
+          $sysTar   = Join-Path $env:SystemRoot "System32\tar.exe"
+
+          if (Test-Path -LiteralPath $depsRoot) {
+            Remove-Item -Recurse -Force $depsRoot
+          }
+          New-Item -ItemType Directory -Force -Path $cudaDir, $llvmDir, "$ffiDir\lib", "$ffiDir\bin" | Out-Null
+
+          function Fetch-Verified {
+            param(
+              [string]$Url,
+              [string]$Sha256,
+              [string]$OutFile
+            )
+            curl.exe -fSL --retry 3 --retry-all-errors -o $OutFile $Url
+            if ($LASTEXITCODE -ne 0) {
+              throw "Download failed for $Url (exit $LASTEXITCODE)"
+            }
+            $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $OutFile).Hash.ToLowerInvariant()
+            if ($actual -ne $Sha256.ToLowerInvariant()) {
+              throw "SHA-256 mismatch for ${Url}: expected $Sha256, got $actual"
+            }
+          }
+
+          # 1. Prebuilt MSVC x64 libffi 3.8.2 (provides libffi-8.lib -> ffi.lib + libffi-8.dll).
+          $ffiZip = Join-Path $env:RUNNER_TEMP "libffi-3.8.2-msvc.zip"
+          $ffiTmp = Join-Path $env:RUNNER_TEMP "libffi-extract"
+          Fetch-Verified `
+            -Url "https://github.com/libffi/libffi/releases/download/v3.8.2/libffi-3.8.2-x86-64bit-msvc-binaries.zip" `
+            -Sha256 "1c1e4f611ea669209d40572188a46f08b176b0197f131f8e1461b85246b92016" `
+            -OutFile $ffiZip
+          New-Item -ItemType Directory -Force -Path $ffiTmp | Out-Null
+          Expand-Archive -LiteralPath $ffiZip -DestinationPath $ffiTmp -Force
+          Copy-Item -LiteralPath "$ffiTmp\libffi-8.lib" -Destination "$ffiDir\lib\libffi-8.lib" -Force
+          Copy-Item -LiteralPath "$ffiTmp\libffi-8.lib" -Destination "$ffiDir\lib\ffi.lib" -Force
+          Copy-Item -LiteralPath "$ffiTmp\libffi-8.dll" -Destination "$ffiDir\bin\libffi-8.dll" -Force
+          Remove-Item -Recurse -Force $ffiZip, $ffiTmp
+
+          # 2. LLVM 23.1.6 for Windows x64 MSVC (llc.exe, opt.exe, lld-link.exe, clang.exe, libclang.dll).
+          # Decompress to a file first rather than piping binary data through PowerShell.
+          $llvmZst = Join-Path $env:RUNNER_TEMP "clang-llvm-23.1.6-win64.tar.zst"
+          $llvmTar = Join-Path $env:RUNNER_TEMP "clang-llvm-23.1.6-win64.tar"
+          Fetch-Verified `
+            -Url "https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.6/clang%2Bllvm-23.1.6-x86_64-pc-windows-msvc.tar.zst" `
+            -Sha256 "7623f582089983c1cb51030cf1996514b19464e5669099571b399e8543770155" `
+            -OutFile $llvmZst
+          zstd.exe -d --long=31 $llvmZst -o $llvmTar
+          if ($LASTEXITCODE -ne 0) {
+            throw "zstd decompression failed for LLVM archive (exit $LASTEXITCODE)"
+          }
+          & $sysTar -xf $llvmTar -C $llvmDir --strip-components=1
+          if ($LASTEXITCODE -ne 0) {
+            throw "tar extraction failed for LLVM archive (exit $LASTEXITCODE)"
+          }
+          Remove-Item -Force $llvmZst, $llvmTar
+
+          # 3. Official NVIDIA CUDA 13.3.1 Windows x86_64 redistributable components
+          # (matches the CUDA 13.3.1 baseline tested on Linux).
+          $redistBase = "https://developer.download.nvidia.com/compute/cuda/redist"
+          $cudaComponents = @(
+            @{
+              Name   = "cuda_crt"
+              Rel    = "cuda_crt/windows-x86_64/cuda_crt-windows-x86_64-13.3.73-archive.zip"
+              Sha256 = "9227ec7c80db10b7cb0d4ee71ed62ec7ae36e67890216413ab6f9afa35d577f0"
+            },
+            @{
+              Name   = "cuda_cudart"
+              Rel    = "cuda_cudart/windows-x86_64/cuda_cudart-windows-x86_64-13.3.29-archive.zip"
+              Sha256 = "1feb7dd266813ffe8dbc24e115183a5ac35a4795c8d34aca0df85ab616b64d9c"
+            },
+            @{
+              Name   = "cccl"
+              Rel    = "cccl/windows-x86_64/cccl-windows-x86_64-13.3.3.4.1-archive.zip"
+              Sha256 = "48fab83097a636c4119da28bd3c9c9af9327e34c1efed17a14449cc2956ca6d1"
+            },
+            @{
+              Name   = "cuda_nvcc"
+              Rel    = "cuda_nvcc/windows-x86_64/cuda_nvcc-windows-x86_64-13.3.73-archive.zip"
+              Sha256 = "270214eaee58e49f8fca52a910a46afbfab227858e70897cba8afae10826280b"
+            },
+            @{
+              Name   = "libcurand"
+              Rel    = "libcurand/windows-x86_64/libcurand-windows-x86_64-10.4.3.29-archive.zip"
+              Sha256 = "d3c518485188990666cf9ad848dab40cd0f686a6760344a52fc9eed24acc5b49"
+            },
+            @{
+              Name   = "libnvvm"
+              Rel    = "libnvvm/windows-x86_64/libnvvm-windows-x86_64-13.3.73-archive.zip"
+              Sha256 = "ca8f11d5173ac16a166be8fafefbf9676542a097de1fce61b3f17696dffc1f27"
+            },
+            @{
+              Name   = "libnvjitlink"
+              Rel    = "libnvjitlink/windows-x86_64/libnvjitlink-windows-x86_64-13.3.33-archive.zip"
+              Sha256 = "43bc22509507c138c86885191bb2709b5d23506ea6abdc8bc64d9960e2b63363"
+            }
+          )
+
+          foreach ($comp in $cudaComponents) {
+            Write-Host "Installing CUDA component: $($comp.Name)"
+            $zipFile = Join-Path $env:RUNNER_TEMP "$($comp.Name).zip"
+            $stageDir = Join-Path $env:RUNNER_TEMP "stage-$($comp.Name)"
+            Fetch-Verified -Url "$redistBase/$($comp.Rel)" -Sha256 $comp.Sha256 -OutFile $zipFile
+            New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
+            & $sysTar -xf $zipFile -C $stageDir
+            if ($LASTEXITCODE -ne 0) {
+              throw "tar extraction failed for $($comp.Name) (exit $LASTEXITCODE)"
+            }
+            $roots = @(Get-ChildItem -LiteralPath $stageDir -Directory)
+            if ($roots.Count -ne 1) {
+              throw "Expected 1 top-level directory in $($comp.Name), found $($roots.Count)"
+            }
+            robocopy.exe $roots[0].FullName $cudaDir /E /NFL /NDL /NJH /NJS /NC /NS | Out-Null
+            if ($LASTEXITCODE -ge 8) {
+              throw "robocopy failed for $($comp.Name) with exit code $LASTEXITCODE"
+            }
+            $global:LASTEXITCODE = 0
+            Remove-Item -Recurse -Force $zipFile, $stageDir
+          }
+
+      - name: Configure CUDA, LLVM, and libffi environment
+        run: |
+          $ErrorActionPreference = "Stop"
+          $depsRoot = "C:\cuda-oxide-ci-deps"
+          $cudaDir  = "$depsRoot\cuda"
+          $llvmBin  = "$depsRoot\llvm\bin"
+          $ffiLib   = "$depsRoot\libffi\lib"
+          $ffiBin   = "$depsRoot\libffi\bin"
+
+          foreach ($required in @(
+            "$cudaDir\include\cuda.h",
+            "$cudaDir\include\curand.h",
+            "$cudaDir\bin\nvcc.exe",
+            "$cudaDir\bin\ptxas.exe",
+            "$cudaDir\nvvm\libdevice\libdevice.10.bc",
+            "$llvmBin\llc.exe",
+            "$llvmBin\opt.exe",
+            "$llvmBin\lld-link.exe",
+            "$llvmBin\clang.exe",
+            "$llvmBin\libclang.dll",
+            "$ffiLib\ffi.lib",
+            "$ffiBin\libffi-8.dll"
+          )) {
+            if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
+              throw "Missing provisioned dependency file: $required"
+            }
+          }
+
+          @(
+            "CUDA_PATH=$cudaDir",
+            "CUDA_HOME=$cudaDir",
+            "CUDA_TOOLKIT_PATH=$cudaDir",
+            "LIBCLANG_PATH=$llvmBin",
+            "CUDA_OXIDE_LLC=$llvmBin\llc.exe",
+            "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$llvmBin\lld-link.exe",
+            "LIBFFI_LIB_DIR=$ffiLib",
+            "LIBFFI_BIN_DIR=$ffiBin",
+            "LIB=$ffiLib;$cudaDir\lib\x64;$env:LIB",
+            "INCLUDE=$cudaDir\include;$env:INCLUDE"
+          ) | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          @(
+            "$cudaDir\bin\x64",
+            "$cudaDir\bin",
+            "$cudaDir\nvvm\bin\x64",
+            "$cudaDir\nvvm\bin",
+            $llvmBin,
+            $ffiBin
+          ) | Where-Object { Test-Path -LiteralPath $_ } |
+              Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+          & "$cudaDir\bin\nvcc.exe" --version
+          & "$cudaDir\bin\ptxas.exe" --version
+          & "$llvmBin\llc.exe" --version | Select-Object -First 3
+          & "$llvmBin\lld-link.exe" --version
+
+      - name: Install Rust toolchain
+        env:
+          RUSTUP_VERSION: "1.29.2"
+          # SHA-256 of rustup-init.exe for x86_64-pc-windows-msvc from static.rust-lang.org.
+          RUSTUP_INIT_SHA256: "00f139da614dced87d3c3d4121c43eebdac3c1bf8a5ee86b9d80dfd71c8d70fd"
+        run: |
+          $ErrorActionPreference = "Stop"
+          $cargoBin = Join-Path $env:USERPROFILE ".cargo\bin"
+          $rustupExe = Join-Path $cargoBin "rustup.exe"
+          if (-not (Test-Path -LiteralPath $rustupExe -PathType Leaf)) {
+            $init = Join-Path $env:RUNNER_TEMP "rustup-init.exe"
+            curl.exe -fSL --retry 3 --retry-all-errors `
+              -o $init "https://static.rust-lang.org/rustup/archive/$env:RUSTUP_VERSION/x86_64-pc-windows-msvc/rustup-init.exe"
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to download rustup-init.exe (exit $LASTEXITCODE)"
+            }
+            $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $init).Hash.ToLowerInvariant()
+            if ($actual -ne $env:RUSTUP_INIT_SHA256) {
+              throw "SHA-256 mismatch for rustup-init.exe: expected $env:RUSTUP_INIT_SHA256, got $actual"
+            }
+            & $init -y --no-modify-path --profile minimal --default-toolchain none
+            if ($LASTEXITCODE -ne 0) {
+              throw "rustup-init.exe failed with exit code $LASTEXITCODE"
+            }
+            Remove-Item -Force $init
+          }
+
+          $cargoBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $env:PATH = "$cargoBin;$env:PATH"
+
+          Push-Location cuda-oxide
+          try {
+            & $rustupExe show
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            Pop-Location
+          }
+
+      - name: Restore Rust build cache
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        with:
+          workspaces: |
+            cuda-oxide
+            cuda-oxide/crates/rustc-codegen-cuda
+          key: windows-msvc-v1
+          cache-on-failure: true
+
+      - name: Run Windows crate unit tests
+        working-directory: cuda-oxide
+        run: |
+          $ErrorActionPreference = "Stop"
+          $sysroot = (& rustc --print sysroot).Trim()
+          $env:PATH = "$sysroot\bin;$env:PATH"
+
+          function Run-CargoTest {
+            param([string[]]$CargoArgs)
+            Write-Host "::group::cargo $($CargoArgs -join ' ')"
+            & cargo @CargoArgs
+            $code = $LASTEXITCODE
+            Write-Host "::endgroup::"
+            if ($code -ne 0) { exit $code }
+          }
+
+          # COFF .oxart emission and PE extraction.
+          Run-CargoTest @("test", "--locked", "-p", "oxide-artifacts", "--all-targets", "--features", "object")
+          # Windows CUDA Toolkit path and versioned DLL discovery (includes #[cfg(windows)] tests).
+          Run-CargoTest @("test", "--locked", "-p", "cuda-toolkit-discovery", "--all-targets")
+          # Live DLL load + Windows file-identity verification against provisioned CUDA 13.3.1.
+          Run-CargoTest @("test", "--locked", "-p", "libnvvm-sys", "--all-targets", "--", "--include-ignored", "--nocapture")
+          Run-CargoTest @("test", "--locked", "-p", "nvjitlink-sys", "--all-targets", "--", "--include-ignored", "--nocapture")
+          Run-CargoTest @("test", "--locked", "-p", "cuda-artifact-finalizer", "--all-targets")
+          Run-CargoTest @("test", "--locked", "-p", "cuda-intrinsics-gen", "--all-targets")
+          # Real llc.exe -> ptxas.exe spine-kernel compilation on Windows.
+          Run-CargoTest @("test", "--locked", "-p", "cuda-oxide-codegen", "--all-targets")
+          # Full CLI test suite on Windows MSVC.
+          Run-CargoTest @("test", "--locked", "-p", "cargo-oxide", "--all-targets")
+
+          Push-Location crates\rustc-codegen-cuda
+          try {
+            Run-CargoTest @("test", "--locked", "--lib")
+          } finally {
+            Pop-Location
+          }
+
+      - name: Build Windows codegen backend and run doctor
+        working-directory: cuda-oxide
+        run: |
+          $ErrorActionPreference = "Stop"
+          cargo build --locked -p cargo-oxide
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $cargoOxideDir = Join-Path (Get-Location) "target\debug"
+          $cargoOxide = Join-Path $cargoOxideDir "cargo-oxide.exe"
+          $cargoBin = Join-Path $env:USERPROFILE ".cargo\bin"
+          Copy-Item -LiteralPath $cargoOxide -Destination (Join-Path $cargoBin "cargo-oxide.exe") -Force
+          $cargoOxideDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+          & $cargoOxide setup
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          & $cargoOxide doctor
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Compile all examples and verify PTX (ptxas) and COFF cubin embedding
+        timeout-minutes: 65
+        working-directory: cuda-oxide
+        env:
+          CARGO_INCREMENTAL: "0"
+        run: |
+          $ErrorActionPreference = "Stop"
+          $sysroot = (& rustc --print sysroot).Trim()
+          $env:PATH = "$sysroot\bin;$env:PATH"
+          $sharedTarget = (Join-Path $env:RUNNER_TEMP "windows-examples-target").Replace('\', '/')
+          $smokeLogs    = (Join-Path $env:RUNNER_TEMP "windows-smoketest-logs").Replace('\', '/')
+          $env:CARGO_TARGET_DIR  = $sharedTarget
+          $env:SMOKETEST_LOG_DIR = $smokeLogs
+
+          # Resolve Git for Windows bash explicitly; C:\Windows\System32\bash.exe
+          # is the WSL launcher and fails when no WSL distro is registered.
+          $gitExe  = (Get-Command git.exe -ErrorAction Stop).Source
+          $gitRoot = Split-Path -Parent (Split-Path -Parent $gitExe)
+          $gitBash = Join-Path $gitRoot "bin\bash.exe"
+          if (-not (Test-Path -LiteralPath $gitBash -PathType Leaf)) {
+            throw "Git Bash was not found at $gitBash"
+          }
+
+          # 1. Full compile-only sweep + ptxas assembly + code-shape verification under Git Bash.
+          & $gitBash scripts/smoketest.sh --compile-only --no-color
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          # Helper: extract the `.oxart` section from a linked Windows PE executable
+          # and verify its OXIDEART header, target arch, payload kind, and cubin ELF magic.
+          function Assert-EmbeddedPeArtifact {
+            param(
+              [string]$ExePath,
+              [uint16]$ExpectedVersion,
+              [uint16]$ExpectedKind,
+              [string]$ExpectedTarget
+            )
+            if (-not (Test-Path -LiteralPath $ExePath -PathType Leaf)) {
+              throw "Expected host executable was not produced: $ExePath"
+            }
+            $pe = [System.IO.File]::ReadAllBytes($ExePath)
+            $peOffset = [BitConverter]::ToInt32($pe, 0x3C)
+            if ([System.Text.Encoding]::ASCII.GetString($pe, $peOffset, 4) -ne "PE`0`0") {
+              throw "$ExePath does not carry a valid PE signature"
+            }
+            $coff = $peOffset + 4
+            $numSections = [BitConverter]::ToUInt16($pe, $coff + 2)
+            $optHdrSize  = [BitConverter]::ToUInt16($pe, $coff + 16)
+            $secTable    = $coff + 20 + $optHdrSize
+
+            $oxart = $null
+            for ($i = 0; $i -lt $numSections; $i++) {
+              $sec  = $secTable + ($i * 40)
+              $name = [System.Text.Encoding]::ASCII.GetString($pe, $sec, 8).TrimEnd("`0")
+              if ($name -eq ".oxart") {
+                $vsize  = [BitConverter]::ToUInt32($pe, $sec + 8)
+                $rawSz  = [BitConverter]::ToUInt32($pe, $sec + 16)
+                $rawPtr = [BitConverter]::ToUInt32($pe, $sec + 20)
+                $len    = [int][Math]::Min($vsize, $rawSz)
+                $oxart  = [byte[]]::new($len)
+                [Array]::Copy($pe, [int]$rawPtr, $oxart, 0, $len)
+                break
+              }
+            }
+            if ($null -eq $oxart) {
+              throw "No .oxart COFF section found in $ExePath"
+            }
+            $magic = [System.Text.Encoding]::ASCII.GetString($oxart, 0, 8)
+            if ($magic -ne "OXIDEART") {
+              throw "Unexpected .oxart magic '$magic' in $ExePath"
+            }
+            $version   = [BitConverter]::ToUInt16($oxart, 8)
+            $nameLen   = [BitConverter]::ToUInt16($oxart, 16)
+            $targetLen = [BitConverter]::ToUInt16($oxart, 18)
+            $target    = [System.Text.Encoding]::ASCII.GetString($oxart, 32 + $nameLen, $targetLen)
+            $recOffset = 32 + $nameLen + $targetLen
+            $kind      = [BitConverter]::ToUInt16($oxart, $recOffset)
+            $dataOff   = [BitConverter]::ToUInt32($oxart, $recOffset + 4)
+
+            if ($version -ne $ExpectedVersion) {
+              throw "Expected .oxart version $ExpectedVersion, got $version"
+            }
+            if ($target -ne $ExpectedTarget) {
+              throw "Expected .oxart target '$ExpectedTarget', got '$target'"
+            }
+            if ($kind -ne $ExpectedKind) {
+              throw "Expected .oxart payload kind $ExpectedKind, got $kind"
+            }
+            if ($ExpectedKind -eq 512) {
+              if ($oxart[$dataOff] -ne 0x7F -or
+                  $oxart[$dataOff + 1] -ne 0x45 -or
+                  $oxart[$dataOff + 2] -ne 0x4C -or
+                  $oxart[$dataOff + 3] -ne 0x46) {
+                throw "Embedded cubin payload in $ExePath does not start with ELF magic"
+              }
+            }
+            Write-Host "Verified .oxart in $(Split-Path -Leaf $ExePath): v$version kind=$kind target=$target"
+          }
+
+          $vecaddExe = Join-Path $env:RUNNER_TEMP "windows-examples-target\release\vecadd.exe"
+
+          # 2. Direct LLVM PTX path -> COFF .oxart (kind 256).
+          cargo oxide build vecadd --arch sm_86
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Assert-EmbeddedPeArtifact -ExePath $vecaddExe -ExpectedVersion 1 -ExpectedKind 256 -ExpectedTarget "sm_86"
+
+          # 3. libNVVM + nvJitLink cubin materialization -> COFF .oxart (kind 512 + ELF cubin).
+          cargo oxide build vecadd --materialize-cubin --arch sm_86
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Assert-EmbeddedPeArtifact -ExePath $vecaddExe -ExpectedVersion 1 -ExpectedKind 512 -ExpectedTarget "sm_86"
+
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-smoketest-compile-logs
+          path: ${{ runner.temp }}/windows-smoketest-logs/
+          if-no-files-found: ignore
+          retention-days: 7

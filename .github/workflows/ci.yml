@@ -90,3 +90,8 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && (github.event_name != 'push' || needs.changes.outputs.relevant == 'true' || needs.changes.outputs.any_changed != 'true') }}
     uses: ./.github/workflows/cargo-deny.yml
+
+  windows:
+    needs: changes
+    if: ${{ !cancelled() && (github.event_name != 'push' || needs.changes.outputs.relevant == 'true' || needs.changes.outputs.any_changed != 'true') }}
+    uses: ./.github/workflows/windows.yml

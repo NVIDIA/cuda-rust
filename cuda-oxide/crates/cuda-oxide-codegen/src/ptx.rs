@@ -498,7 +498,7 @@ pub struct PtxModule<'a> {
 /// GPU can run the kernel, else the minimum arch the IR's features require.
 // mir-importer pipeline plumbing; not part of the frontend contract.
 #[doc(hidden)]
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn generate_ptx(
     module: PtxModule<'_>,
     debug_kind: DebugKind,

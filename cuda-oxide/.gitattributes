@@ -1,3 +1,5 @@
+* text=auto eol=lf
+intrinsics/** text eol=lf
 intrinsics/probes/*.ll whitespace=-blank-at-eof
 # Retain upstream fixture whitespace and unified patch context verbatim.
 third_party/pliron-mlir-interop/** -whitespace

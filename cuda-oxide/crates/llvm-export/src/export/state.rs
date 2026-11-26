@@ -165,6 +165,8 @@ pub(super) struct ModuleExportState<'a> {
     pub(super) loop_unroll_disable_property: Option<usize>,
     /// Which debug metadata tier this export should emit.
     pub(super) debug_kind: DebugKind,
+    /// Physical bit width of an `addrspace(3)` pointer under the active data layout.
+    pub(super) shared_pointer_size_bits: u64,
     /// Where function-local statics are retained (per the consuming LLVM).
     pub(super) debug_function_local_static_placement: FunctionLocalStaticPlacement,
     /// NVVM textual dialect, or `None` for the ordinary PTX/llc path.
@@ -267,6 +269,7 @@ impl<'a> ModuleExportState<'a> {
             unroll_disabled_loops: Vec::new(),
             loop_unroll_disable_property: None,
             debug_kind,
+            shared_pointer_size_bits: 32,
             debug_function_local_static_placement,
             nvvm_ir_dialect,
             debug_compile_unit: None,

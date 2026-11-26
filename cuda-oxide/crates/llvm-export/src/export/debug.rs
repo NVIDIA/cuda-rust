@@ -735,14 +735,14 @@ impl<'a> ModuleExportState<'a> {
             }
             DebugLocalTypeKind::Pointer { name, size_bits } => {
                 let name = escape_debug_string(name);
-                let addr_space = if *size_bits == 32 {
-                    ", dwarfAddressSpace: 8"
+                let (effective_bits, addr_space) = if *size_bits == 32 {
+                    (self.shared_pointer_size_bits, ", dwarfAddressSpace: 8")
                 } else {
-                    ""
+                    (*size_bits, "")
                 };
                 format!(
                     "!DIDerivedType(tag: DW_TAG_pointer_type, name: \"{name}\", \
-                     baseType: null, size: {size_bits}{addr_space})"
+                     baseType: null, size: {effective_bits}{addr_space})"
                 )
             }
             DebugLocalTypeKind::TypedPointer {
@@ -756,14 +756,14 @@ impl<'a> ModuleExportState<'a> {
                 );
                 let base = self.ensure_debug_type(pointee);
                 let name = escape_debug_string(name);
-                let addr_space = if *size_bits == 32 {
-                    ", dwarfAddressSpace: 8"
+                let (effective_bits, addr_space) = if *size_bits == 32 {
+                    (self.shared_pointer_size_bits, ", dwarfAddressSpace: 8")
                 } else {
-                    ""
+                    (*size_bits, "")
                 };
                 format!(
                     "!DIDerivedType(tag: DW_TAG_pointer_type, name: \"{name}\", \
-                     baseType: !{base}, size: {size_bits}{addr_space})"
+                     baseType: !{base}, size: {effective_bits}{addr_space})"
                 )
             }
             DebugLocalTypeKind::Struct {
@@ -1368,6 +1368,30 @@ mod tests {
         assert!(
             node.contains("size: 32, dwarfAddressSpace: 8"),
             "32-bit shared pointer should carry size 32 and dwarfAddressSpace 8: {node}"
+        );
+
+        let mut wide_state = ModuleExportState::new(
+            &ctx,
+            true,
+            super::super::DebugKind::Full,
+            None,
+            FunctionLocalStaticPlacement::CompileUnitGlobals,
+        );
+        wide_state.shared_pointer_size_bits =
+            super::super::config::ExportBackendConfig::shared_pointer_size_bits(
+                &super::super::config::PtxWideExportConfig,
+            );
+        assert_eq!(wide_state.shared_pointer_size_bits, 64);
+        let wide_id = wide_state.ensure_debug_type(&typed);
+        let wide_node = &wide_state
+            .debug_nodes
+            .iter()
+            .find(|(node_id, _)| *node_id == wide_id)
+            .unwrap()
+            .1;
+        assert!(
+            wide_node.contains("size: 64, dwarfAddressSpace: 8"),
+            "wide-pointer PTX shared pointer must match its 64-bit slot while keeping dwarfAddressSpace 8: {wide_node}"
         );
     }
 

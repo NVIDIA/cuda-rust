@@ -168,6 +168,17 @@ pub trait ExportBackendConfig {
     fn function_local_static_placement(&self) -> FunctionLocalStaticPlacement {
         FunctionLocalStaticPlacement::default()
     }
+
+    /// Physical bit width of an `addrspace(3)` pointer in [`Self::datalayout`]:
+    /// `32` when the layout declares `-p3:32:...` (`--nvptx-short-ptr`), `64`
+    /// otherwise (`PtxWideExportConfig`, `LegacyLlvm7`).
+    fn shared_pointer_size_bits(&self) -> u64 {
+        if self.datalayout().contains("-p3:32:") {
+            32
+        } else {
+            64
+        }
+    }
 }
 
 /// Default PTX export configuration.

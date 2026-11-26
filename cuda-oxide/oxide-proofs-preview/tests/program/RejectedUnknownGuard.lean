@@ -21,13 +21,14 @@ def unknownGuard : MirFunc :=
 
 -- This claim is false because a `.unk` condition prunes neither arm.
 example {env t b regs phase} (h : Reachable unknownGuard env t b regs phase) : b = 0 := by
-  induction h with
-  | entry => rfl
-  | stepGoto _ _ hterm _ ih => subst ih; simp [unknownGuard, MirFunc.blockAt] at hterm
+  induction h with                                          -- Induct over `Reachable` steps from block `0`
+  | entry => rfl                                            -- Entry starts at block `0`
+  | stepGoto _ _ hterm _ ih =>                              -- Block `0` ends in `condBr`, not `goto`
+      subst ih; simp [unknownGuard, MirFunc.blockAt] at hterm
   | stepCondTrue _ hexec hterm hcond _ ih | stepCondFalse _ hexec hterm hcond _ ih =>
-      subst ih
-      simp [unknownGuard, MirFunc.blockAt] at hterm
+      subst ih                                              -- Substitute `b = 0` from induction hypothesis
+      simp [unknownGuard, MirFunc.blockAt] at hterm         -- Unfold block `0`'s `condBr` terminator
       obtain ⟨rfl, -⟩ := hterm                              -- The branch condition is register `2`
-      simp [unknownGuard, MirFunc.blockAt, execStmts, evalRhs] at hexec
+      simp [unknownGuard, MirFunc.blockAt, execStmts, evalRhs] at hexec -- Execute block `0` statements
       obtain ⟨rfl, -⟩ := hexec                              -- Block 0 leaves `.unk` in register `2`
       simp [RegFile.set] at hcond <;> omega                 -- `.unk` excludes neither arm

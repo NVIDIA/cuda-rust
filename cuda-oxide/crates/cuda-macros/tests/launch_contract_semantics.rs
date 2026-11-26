@@ -40,4 +40,5 @@ fn launch_contract_types_are_resolved_semantically() {
     t.compile_fail(
         "tests/compile_fail/launch_contract_standalone_generic_requires_unknown_ident.rs",
     );
+    t.compile_fail("tests/compile_fail/verify_shared_no_data_race_requires_uniform_barriers.rs");
 }

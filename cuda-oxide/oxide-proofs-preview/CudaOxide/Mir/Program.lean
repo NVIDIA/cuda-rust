@@ -673,4 +673,86 @@ def EmitsTmemEvent (f : MirFunc) (env : InputEnv) (t : ThreadCtx) (tev : TmemEve
     Reachable f env t b regs phase ∧
     tev ∈ (execStmts f env t regs phase (f.blockAt b).term (f.blockAt b).stmts).2.2.2
 
+/-- True when every `Stmt.assertCond _ cond` in `stmts` evaluates `cond` to `.bool true`
+    (meaning no retained runtime `mir.assert` check traps while executing `stmts`). -/
+def stmtsNoTrap (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
+    (regs : RegFile) (phase : Nat) (term : Terminator) : List Stmt → Bool
+  | [] => true
+  | stmt :: rest =>
+      match stmt with
+      | .assertCond _ cond =>
+          (regs cond == .bool true) && stmtsNoTrap f env t regs phase term rest
+      | .assign dst (.load _) =>
+          stmtsNoTrap f env t (regs.set dst .unk) phase term rest
+      | .assign dst (.loadTmemBase _ cols) =>
+          stmtsNoTrap f env t (regs.set dst (.tmemPtr cols 0)) phase term rest
+      | .assign dst rhs =>
+          stmtsNoTrap f env t (regs.set dst (evalRhs f env t regs rhs)) phase term rest
+      | .syncThreads =>
+          stmtsNoTrap f env t regs (phase + 1) term rest
+      | _ =>
+          stmtsNoTrap f env t regs phase term rest
+
+/-- Inductive small-step reachability of `(blockIdx, entryRegs, entryPhase)` where every
+    `Stmt.assertCond` executed along predecessor blocks evaluated to `.bool true`. -/
+inductive ReachableTrapFree (f : MirFunc) (env : InputEnv) (t : ThreadCtx) :
+    Nat → RegFile → Nat → Prop where
+  /-- Kernel starts at `block 0` in phase `0` with `initialRegs f env`. -/
+  | entry (hpos : 0 < f.blocks.length) :
+      ReachableTrapFree f env t 0 (initialRegs f env) 0
+  /-- Trap-free unconditional `mir.goto target args` transition. -/
+  | stepGoto {b target phase outPhase : Nat} {regs outRegs : RegFile}
+      {evs : List MemEvent} {tevs : List TmemEvent} {args : List Nat}
+      (hreach : ReachableTrapFree f env t b regs phase)
+      (hnotrap : stmtsNoTrap f env t regs phase (f.blockAt b).term (f.blockAt b).stmts = true)
+      (hexec : execStmts f env t regs phase (f.blockAt b).term (f.blockAt b).stmts = (outRegs, outPhase, evs, tevs))
+      (hterm : (f.blockAt b).term = .goto target args)
+      (hdst : target < f.blocks.length) :
+      ReachableTrapFree f env t target (bindBlockArgs outRegs outRegs (f.blockAt target).args args) outPhase
+  /-- Trap-free conditional `mir.cond_br` taking `thenBlk` when `outRegs cond = .bool true`. -/
+  | stepCondTrue {b tBlk fBlk cond phase outPhase : Nat} {regs outRegs : RegFile}
+      {evs : List MemEvent} {tevs : List TmemEvent} {tArgs fArgs : List Nat}
+      (hreach : ReachableTrapFree f env t b regs phase)
+      (hnotrap : stmtsNoTrap f env t regs phase (f.blockAt b).term (f.blockAt b).stmts = true)
+      (hexec : execStmts f env t regs phase (f.blockAt b).term (f.blockAt b).stmts = (outRegs, outPhase, evs, tevs))
+      (hterm : (f.blockAt b).term = .condBr cond tBlk tArgs fBlk fArgs)
+      (hcond : outRegs cond = .bool true)
+      (hdst : tBlk < f.blocks.length) :
+      ReachableTrapFree f env t tBlk (bindBlockArgs outRegs outRegs (f.blockAt tBlk).args tArgs) outPhase
+  /-- Trap-free conditional `mir.cond_br` taking `elseBlk` when `outRegs cond = .bool false`. -/
+  | stepCondFalse {b tBlk fBlk cond phase outPhase : Nat} {regs outRegs : RegFile}
+      {evs : List MemEvent} {tevs : List TmemEvent} {tArgs fArgs : List Nat}
+      (hreach : ReachableTrapFree f env t b regs phase)
+      (hnotrap : stmtsNoTrap f env t regs phase (f.blockAt b).term (f.blockAt b).stmts = true)
+      (hexec : execStmts f env t regs phase (f.blockAt b).term (f.blockAt b).stmts = (outRegs, outPhase, evs, tevs))
+      (hterm : (f.blockAt b).term = .condBr cond tBlk tArgs fBlk fArgs)
+      (hcond : outRegs cond = .bool false)
+      (hdst : fBlk < f.blocks.length) :
+      ReachableTrapFree f env t fBlk (bindBlockArgs outRegs outRegs (f.blockAt fBlk).args fArgs) outPhase
+
+/-- Trap-free reachability implies general `Reachable`. -/
+theorem ReachableTrapFree.toReachable {f : MirFunc} {env : InputEnv} {t : ThreadCtx}
+    {b phase : Nat} {regs : RegFile} (h : ReachableTrapFree f env t b regs phase) :
+    Reachable f env t b regs phase := by
+  induction h with
+  | entry hpos => exact Reachable.entry hpos                 -- Base entry block `0`
+  | stepGoto _ _ hex hterm hdst ih => exact Reachable.stepGoto ih hex hterm hdst
+  | stepCondTrue _ _ hex hterm hc hdst ih =>
+      exact Reachable.stepCondTrue ih hex hterm (by rw [hc]; simp) hdst
+  | stepCondFalse _ _ hex hterm hc hdst ih =>
+      exact Reachable.stepCondFalse ih hex hterm (by rw [hc]; simp) hdst
+
+/-- `MemEvent` `ev` is emitted on a trap-free execution path (every `Stmt.assertCond`
+    along predecessor blocks and inside the emitting block evaluates to `.bool true`). -/
+def EmitsTrapFreeEvent (f : MirFunc) (env : InputEnv) (t : ThreadCtx) (ev : MemEvent) : Prop :=
+  ∃ b phase : Nat, ∃ regs : RegFile,
+    ReachableTrapFree f env t b regs phase ∧
+    stmtsNoTrap f env t regs phase (f.blockAt b).term (f.blockAt b).stmts = true ∧
+    ev ∈ (execStmts f env t regs phase (f.blockAt b).term (f.blockAt b).stmts).2.2.1
+
+/-- Every `EmitsTrapFreeEvent` is also a reachable `EmitsEvent`. -/
+theorem EmitsTrapFreeEvent.toEmitsEvent {f : MirFunc} {env : InputEnv} {t : ThreadCtx} {ev : MemEvent} :
+    EmitsTrapFreeEvent f env t ev → EmitsEvent f env t ev
+  | ⟨b, phase, regs, hr, _, hmem⟩ => ⟨b, phase, regs, hr.toReachable, hmem⟩
+
 end CudaOxide.Mir.Program

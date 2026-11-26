@@ -831,13 +831,13 @@ theorem symReachable_sound {f : MirFunc} {tbl : List SymBlockInv}
       have hcv := hmOut cond; dsimp only at hcv
       cases hget : (symExecStmts f (tbl.getD b0 {}).effCond (tbl.getD b0 {}).regs (tbl.getD b0 {}).phaseSpec (.condBr cond tBlk tArgs fBlk fArgs) (f.blockAt b0).stmts).1.getVar cond with
       | bool cSym =>                                      --   Tracked boolean guard: strengthen `effCond` with `cSym = true`
-          rw [hget] at hbrOk hcv
-          rw [SymVal.matchesVal] at hcv
-          rw [hcv] at hcond
-          have hcTrue : cSym.eval env t havoc = true := by -- A tracked condition other than `false` is `true`
+          rw [hget] at hbrOk hcv                          --   Substitute `getVar cond = .bool cSym` into edge check & match
+          rw [SymVal.matchesVal] at hcv                   --   Unpack `outR cond = .bool (cSym.eval env t havoc)`
+          rw [hcv] at hcond                               --   Rewrite `outR cond ≠ .bool false` using `cSym.eval`
+          have hcTrue : cSym.eval env t havoc = true := by --   A tracked boolean other than `false` evaluates to `true`
             simpa using hcond
-          simp only [Bool.and_eq_true] at hbrOk
-          have hec := symBool_conj_true hpc0 hcTrue
+          simp only [Bool.and_eq_true] at hbrOk           --   Split `validSymEdge` conjunction across both outgoing arms
+          have hec := symBool_conj_true hpc0 hcTrue       --   Combine entry path condition `hpc0` with `cSym = true`
           obtain ⟨hrDst, havoc', hpcDst, hpsDst, hmDst⟩ :=
             validSymEdge_sound hvalidIn hbrOk.1 hec hmOut hpsOut
           exact ⟨hdst, hrDst, havoc', hpcDst, hpsDst, hmDst⟩
@@ -862,15 +862,15 @@ theorem symReachable_sound {f : MirFunc} {tbl : List SymBlockInv}
       have hcv := hmOut cond; dsimp only at hcv
       cases hget : (symExecStmts f (tbl.getD b0 {}).effCond (tbl.getD b0 {}).regs (tbl.getD b0 {}).phaseSpec (.condBr cond tBlk tArgs fBlk fArgs) (f.blockAt b0).stmts).1.getVar cond with
       | bool cSym =>                                      --   Tracked boolean guard: strengthen `effCond` with `!cSym = true`
-          rw [hget] at hbrOk hcv
-          rw [SymVal.matchesVal] at hcv
-          rw [hcv] at hcond
-          have hcFalse : cSym.eval env t havoc = false := by -- A tracked condition other than `true` is `false`
+          rw [hget] at hbrOk hcv                          --   Substitute `getVar cond = .bool cSym` into edge check & match
+          rw [SymVal.matchesVal] at hcv                   --   Unpack `outR cond = .bool (cSym.eval env t havoc)`
+          rw [hcv] at hcond                               --   Rewrite `outR cond ≠ .bool true` using `cSym.eval`
+          have hcFalse : cSym.eval env t havoc = false := by -- A tracked boolean other than `true` evaluates to `false`
             simpa using hcond
-          simp only [Bool.and_eq_true] at hbrOk
-          have hnotTrue : (SymBool.not cSym).eval env t havoc = true := by
+          simp only [Bool.and_eq_true] at hbrOk           --   Split `validSymEdge` conjunction across both outgoing arms
+          have hnotTrue : (SymBool.not cSym).eval env t havoc = true := by -- Negated guard `!cSym` evaluates to `true`
             simp [SymBool.eval, hcFalse]
-          have hec := symBool_conj_true hpc0 hnotTrue
+          have hec := symBool_conj_true hpc0 hnotTrue     --   Combine entry path condition `hpc0` with `!cSym = true`
           obtain ⟨hrDst, havoc', hpcDst, hpsDst, hmDst⟩ :=
             validSymEdge_sound hvalidIn hbrOk.2 hec hmOut hpsOut
           exact ⟨hdst, hrDst, havoc', hpcDst, hpsDst, hmDst⟩

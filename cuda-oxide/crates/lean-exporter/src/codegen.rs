@@ -451,12 +451,21 @@ fn render_mir_program_module(
         ));
         axiom_prints.push(format!("#print axioms {thm}"));
     }
+    if need_uniform_barriers {
+        theorems.push(
+            "theorem verify_uniform_barriers :\n    \
+             CudaOxide.Contracts.ControlFlow.UniformBarriers controlFlowCfg := by\n  \
+             exact CudaOxide.Proofs.ControlFlow.uniform_barriers_of_stateMap (cfg := controlFlowCfg) (inv := cfgStateMap) rfl"
+                .to_string(),
+        );
+        axiom_prints.push("#print axioms verify_uniform_barriers".to_string());
+    }
     for &sid in &spec.no_data_race {
         let thm = format!("verify_no_data_race_shared{sid}");
         theorems.push(format!(
             "theorem {thm} :\n    \
-             CudaOxide.Contracts.Program.MirNoSharedRace mirFunc {sid} := by\n  \
-             apply vcNoSharedRace_of_table mirFunc_valid mirEvents_eq (by mir_bind_shared_pairs)\n  \
+             CudaOxide.Contracts.Program.MirNoSharedRace mirFunc controlFlowCfg {sid} := by\n  \
+             apply vcNoSharedRace_of_table verify_uniform_barriers mirFunc_valid mirEvents_eq (by mir_bind_shared_pairs)\n  \
              mir_vc mirFunc"
         ));
         axiom_prints.push(format!("#print axioms {thm}"));
@@ -470,15 +479,6 @@ fn render_mir_program_module(
                 .to_string(),
         );
         axiom_prints.push("#print axioms verify_no_oob_tmem".to_string());
-    }
-    if need_uniform_barriers {
-        theorems.push(
-            "theorem verify_uniform_barriers :\n    \
-             CudaOxide.Contracts.ControlFlow.UniformBarriers controlFlowCfg := by\n  \
-             exact CudaOxide.Proofs.ControlFlow.uniform_barriers_of_stateMap (cfg := controlFlowCfg) (inv := cfgStateMap) rfl"
-                .to_string(),
-        );
-        axiom_prints.push("#print axioms verify_uniform_barriers".to_string());
     }
     if spec.tmem_lifecycle {
         theorems.push(

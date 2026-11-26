@@ -31,10 +31,10 @@ theorem else_arm_reachable (env : InputEnv) (t : ThreadCtx) :
 theorem assert_not_redundant (env : InputEnv) (t : ThreadCtx)
     (henv : unknownGuard.validInput env) (ht : unknownGuard.validThread t) :
     ¬ MirAssertRedundant unknownGuard 0 := by
-  intro h
-  obtain ⟨regs, hr⟩ := then_arm_reachable env t
+  intro h                                                          -- Assume `MirAssertRedundant unknownGuard 0` holds
+  obtain ⟨regs, hr⟩ := then_arm_reachable env t                    -- Witness reachable `then`-arm state `(1, regs, 0)`
   have hcond := h env t 1 0 regs henv ht hr [.assign 3 (.constBool false)] [] 3 rfl -- Assert `0` reads register `3`
-  simp [execStmts, evalRhs, RegFile.set] at hcond                -- Register `3` is `.bool false`
+  simp [execStmts, evalRhs, RegFile.set] at hcond                  -- Register `3` evaluates to `.bool false`, contradiction
 
 #print axioms then_arm_reachable
 #print axioms else_arm_reachable

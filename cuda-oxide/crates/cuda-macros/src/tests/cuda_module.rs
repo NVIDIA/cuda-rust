@@ -1572,3 +1572,61 @@ fn non_generic_kernel_lookups_never_consult_the_divergence_diagnosis() {
         "non-generic lookups must keep the ordinary error path: {expanded}"
     );
 }
+
+#[test]
+fn an_explicit_constant_export_name_survives_the_module_rewrite() {
+    // OptiX looks its launch parameters up by name (`pipelineLaunchParamsVariableName`), so a
+    // user-chosen symbol must reach the PTX unchanged; unnamed constants keep the unique symbol.
+    let expanded = expand_to_compact_string(parse_quote! {
+        mod kernels {
+            #[constant(export_name = "params",)]
+            static PARAMS: ConstantMemory<u32> = ConstantMemory::UNINIT;
+            #[constant]
+            static OTHER: ConstantMemory<u32> = ConstantMemory::UNINIT;
+            #[kernel]
+            fn k() {}
+        }
+    });
+    assert!(
+        expanded.contains(r#"#[constant(export_name="params")]"#),
+        "{expanded}"
+    );
+    assert!(expanded.contains(r#"get_global("params")"#), "{expanded}");
+    assert!(
+        !expanded.contains("_PARAMS\""),
+        "the generated symbol must not replace the explicit one"
+    );
+    assert!(
+        expanded.contains("_OTHER\""),
+        "unnamed constants keep their generated symbol"
+    );
+
+    let empty = expand_cuda_module(parse_quote! {
+        mod kernels {
+            #[constant(export_name = "")]
+            static BAD: ConstantMemory<u32> = ConstantMemory::UNINIT;
+            #[kernel]
+            fn k() {}
+        }
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(empty.contains("non-empty PTX identifier"), "{empty}");
+
+    let duplicate = expand_cuda_module(parse_quote! {
+        mod kernels {
+            #[constant(export_name = "params")]
+            static A: ConstantMemory<u32> = ConstantMemory::UNINIT;
+            #[constant(export_name = "params")]
+            static B: ConstantMemory<u32> = ConstantMemory::UNINIT;
+            #[kernel]
+            fn k() {}
+        }
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(
+        duplicate.contains("duplicate #[constant] PTX symbol"),
+        "{duplicate}"
+    );
+}

@@ -44,15 +44,48 @@ pub(super) fn collect_cuda_module_constants(
                 ),
             ));
         }
+        // An explicit `#[constant(export_name = "...")]` is a contract with something outside
+        // this crate that looks the symbol up by name (OptiX finds its launch parameters by
+        // `pipelineLaunchParamsVariableName`), so it wins over the generated unique symbol.
+        let symbol = match user_export_name(&item_static.attrs)? {
+            Some(name) => name,
+            None => cuda_module_constant_symbol(module_ident, &item_static.ident),
+        };
+        if constants
+            .iter()
+            .any(|existing: &CudaModuleConstant| existing.symbol == symbol)
+        {
+            return Err(syn::Error::new_spanned(
+                &item_static.ident,
+                format!("duplicate #[constant] PTX symbol `{symbol}` in `#[cuda_module]`"),
+            ));
+        }
         constants.push(CudaModuleConstant {
             ident: item_static.ident.clone(),
             ty: item_static.ty.clone(),
             cfg_attrs: cuda_module_cfg_attrs(&item_static.attrs)?,
             method_attrs: cuda_module_method_attrs(&item_static.attrs),
-            symbol: cuda_module_constant_symbol(module_ident, &item_static.ident),
+            symbol,
         });
     }
     Ok(constants)
+}
+
+/// The `export_name` of a `#[constant(export_name = "...")]` attribute, if the user wrote one.
+fn user_export_name(attrs: &[syn::Attribute]) -> syn::Result<Option<String>> {
+    for attr in attrs {
+        if !attr_path_ends_with(attr, "constant") {
+            continue;
+        }
+        let syn::Meta::List(list) = &attr.meta else {
+            continue;
+        };
+        let args: crate::device::ConstantArgs = list.parse_args()?;
+        if let Some(name) = args.export_name {
+            return Ok(Some(name.value()));
+        }
+    }
+    Ok(None)
 }
 
 fn cuda_module_constant_symbol(module_ident: &Ident, ident: &Ident) -> String {

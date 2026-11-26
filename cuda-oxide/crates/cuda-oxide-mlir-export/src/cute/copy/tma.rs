@@ -107,7 +107,7 @@ impl OperationTranslation for TmaLoadTranslation {
             "operandSegmentSizes".into(),
             MlirAttribute::DenseI32Array(vec![1, 1, 2, 1, 0, 0, 0, 0]),
         );
-        copy.attributes
+        copy.properties
             .insert("isCTAOnly".into(), MlirAttribute::Bool(true));
         operations.push(copy);
         Ok(operations)

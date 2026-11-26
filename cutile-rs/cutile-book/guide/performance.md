@@ -10,6 +10,56 @@ affect all three limits.
 :alt: The GPU performance triangle showing memory bandwidth, compute utilization, and occupancy
 ```
 
+## Start from a comparable kernel
+
+Start with the same algorithm, tensor layouts, dtypes, accumulation precision,
+and output contract as the workload you need. The
+[reusable kernel catalog](https://github.com/NVIDIA/cuda-rust/tree/main/cutile-rs/cutile-kernels)
+includes GEMM memory-access variants, causal FP16 attention and routed FP16 MoE,
+as well as fused QKV and block-scaled NVFP4 MoE. Its examples demonstrate launch
+contracts and correctness checks. Published implementations such as
+[NVIDIA TileGym](https://github.com/NVIDIA/TileGym) are also useful algorithmic
+starting points. Check licenses before adapting source; use APIs from the docs
+matching your installed cuTile Rust version.
+
+Choose a relevant implementation rather than copying a configuration table for
+another device. A short-sequence attention kernel can avoid a streaming loop;
+a small MoE batch can gather routed rows directly, while larger batches may
+benefit from materializing a packed input. Include routing, packing and combine
+costs when comparing complete operations.
+
+## Memory access and IR structure
+
+Tensor partitions provide bounds handling and layout metadata. A tensor-derived
+loop bound such as `num_tiles(&part_a, 1i32)` also expresses how the traversal
+relates to its input. Prefer this over separately calculating the tile count
+when both describe the same loop.
+
+Existing APIs expose several independent choices:
+
+- `load_view_tko` can select `tma::Disabled` for non-TMA tensor loads while
+  retaining tensor padding. Establish partition access with
+  `check_partition_access` when calling this low-level operation directly.
+- `load_ptr_tko` supports masked gathers with scalar padding, including
+  multidimensional pointer tiles. See [pointer loads](masked-pointer-loads).
+- `permute` can express transposed MMA accumulation, followed by an output
+  transpose. This changes the tile layout and can change the generated schedule.
+- Load-latency hints and `CompileOptions::num_cta_in_cga` expose scheduling choices
+  on supported targets. They are candidates to measure, not universal defaults.
+
+Hoist invariant pointer bases, row offsets and masks out of inner loops where
+possible. Widen integer operands before multiplying offsets. Preserve masks for
+partial tiles and use actual strides; a contiguous row-major formula is valid
+only under that layout contract. Raw pointers transfer these obligations to the
+caller, including synchronization and lifetime requirements.
+
+The shape of a gather, intermediate reshapes, padding, and placement of address
+arithmetic can affect backend scheduling. Inspect the emitted Tile IR rather
+than assuming two equivalent formulas produce the same instructions. Measure
+both forms before preferring a flat or multidimensional gather. Removing checks
+or adding `in_bounds` assertions is not a general optimization: every such
+assertion needs a proof for all supported shapes, including tails.
+
 ## Tile Shape
 
 Tile size controls how much work each tile block performs. Larger tiles improve data reuse and reduce launch overhead per element, but they also consume more registers and can reduce occupancy.
@@ -167,7 +217,13 @@ let r = do_bench(&stream, &BenchOptions::default(), |s| {
 println!("median {:.3} ms over {} reps", r.median_ms(), r.reps());
 ```
 
-Timing uses CUDA events (device timeline, not host clocks), warmup absorbs first-launch JIT, the L2 cache is cleared between reps, and results report medians and quantiles. When comparing two configurations, use `do_bench_paired`. It alternates the arms rep by rep, so clock and thermal drift cannot masquerade as a difference between them.
+Timing uses CUDA events (device timeline, not host clocks), warmup absorbs first-launch JIT, the L2 cache is cleared between reps, and results report medians and quantiles. When comparing two configurations, use `do_bench_paired`. It alternates the arms rep by rep to reduce confounding from clock and thermal drift. Repeat comparisons and report variation when the difference is small.
+
+Device-event latency and end-to-end application latency answer different questions.
+Measure host submission separately when it matters, and include every required
+stage when reporting a fused or multi-launch operation. Match the toolchain,
+compile options, streams, cache policy and input layouts across comparisons.
+Only numerically valid results are performance candidates.
 
 ## Autotuning (experimental)
 

@@ -111,6 +111,8 @@ The generated method maps kernel parameters to host values:
 | `DisjointSlice<T>` | `&mut DeviceBuffer<T>` | Pointer + length |
 | scalar/raw pointer | Same value             | Value directly   |
 
+Plain `&mut [T]` kernel parameters require `#[verify(no_oob_idx(...), disjoint_writes(...))]` (preview); unverified kernels take `DisjointSlice<T>` instead (see [The Safety Model](../gpu-safety/the-safety-model.md)).
+
 ### Return value
 
 Raw typed launch methods return `Result<(), DriverError>`. The `Ok` case means the

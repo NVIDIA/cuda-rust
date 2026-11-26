@@ -26,6 +26,18 @@ target_dir="$(cd "${oxide}" && cargo metadata --format-version 1 --no-deps |
     python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"
 cargo_oxide="${target_dir}/debug/cargo-oxide"
 
+ptxas_bin=""
+for candidate in "${CUDA_OXIDE_PTXAS:-}" \
+    "$(command -v ptxas 2>/dev/null || true)" \
+    "${CUDA_TOOLKIT_PATH:+${CUDA_TOOLKIT_PATH}/bin/ptxas}" \
+    "${CUDA_HOME:+${CUDA_HOME}/bin/ptxas}" \
+    /usr/local/cuda/bin/ptxas; do
+    if [[ -n "${candidate}" && -x "${candidate}" ]]; then
+        ptxas_bin="${candidate}"
+        break
+    fi
+done
+
 failed=0
 for mode in sync async; do
     name="scaffold_${mode}"
@@ -56,7 +68,7 @@ for mode in sync async; do
 
     if ! (cd "${project}" && "${cargo_oxide}" oxide build) >"${work}/${name}.log" 2>&1; then
         echo "error: the ${mode} \`cargo oxide new\` template does not build:" >&2
-        grep -E '^(error|warning)(\[|:)' -A8 "${work}/${name}.log" | head -60 >&2 || tail -40 "${work}/${name}.log" >&2
+        tail -n 80 "${work}/${name}.log" >&2
         failed=1
         continue
     fi
@@ -65,6 +77,27 @@ for mode in sync async; do
         echo "error: the ${mode} project resolved a CUDA crate from git, not this checkout" >&2
         failed=1
         continue
+    fi
+    ptx="${project}/${name}.ptx"
+    if [[ ! -s "${ptx}" ]]; then
+        echo "error: the ${mode} project build produced no device PTX at ${ptx}" >&2
+        failed=1
+        continue
+    fi
+    if [[ -n "${ptxas_bin}" ]]; then
+        ptx_arch="$(sed -nE 's/^\.target[[:space:]]+(sm_[0-9]+[af]?).*/\1/p' "${ptx}" | head -n 1)"
+        if [[ -z "${ptx_arch}" ]]; then
+            echo "error: ${ptx} has no .target directive" >&2
+            failed=1
+            continue
+        fi
+        if ! "${ptxas_bin}" -arch="${ptx_arch}" "${ptx}" -o "${work}/${name}.cubin" \
+            >"${work}/${name}.ptxas.log" 2>&1; then
+            echo "error: ptxas rejected ${mode} template PTX (${ptx_arch}):" >&2
+            cat "${work}/${name}.ptxas.log" >&2
+            failed=1
+            continue
+        fi
     fi
     echo "${mode} template: builds against this checkout"
 done

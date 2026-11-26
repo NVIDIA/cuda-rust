@@ -84,6 +84,21 @@ pub fn register_nvvm_tcgen05_pack(
     primitive!(Tcgen05DeallocCg2Op, "v1:i0360", Primitive::Dealloc, 2, 2);
     primitive!(Tcgen05CommitOp, "v1:i0348", Primitive::Commit, 1, 1);
     primitive!(Tcgen05CommitCg2Op, "v1:i0363", Primitive::Commit, 2, 1);
+    // The `.shared::cluster` commit takes one shared mbarrier address, like the plain form.
+    primitive!(
+        Tcgen05CommitSharedClusterOp,
+        "v1:i0349",
+        Primitive::Commit,
+        1,
+        1
+    );
+    primitive!(
+        Tcgen05CommitSharedClusterCg2Op,
+        "v1:i0364",
+        Primitive::Commit,
+        2,
+        1
+    );
     primitive!(
         Tcgen05CommitMulticastOp,
         "v1:i0760",
@@ -1086,6 +1101,41 @@ mod tests {
             translate(&ctx, &module)
                 .unwrap_err()
                 .contains("expected intrinsic marker v1:i0362")
+        );
+    }
+
+    /// Check the `.shared::cluster` commit maps to the same commit as the plain form and keeps its identity.
+    #[test]
+    fn shared_cluster_commit_becomes_the_plain_commit() {
+        let (mut ctx, module, first) = fixture();
+        let block = first.deref(&ctx).get_parent_block().unwrap();
+        let a = block.deref(&ctx).arguments().collect::<Vec<_>>();
+        let commit = Operation::new(
+            &mut ctx,
+            Tcgen05CommitSharedClusterCg2Op::get_concrete_op_info(),
+            vec![],
+            vec![a[0]],
+            vec![],
+            0,
+        );
+        commit.deref_mut(&ctx).attributes.set(
+            "cuda_oxide_intrinsic_marker".try_into().unwrap(),
+            StringAttr::new("v1:i0364".into()),
+        );
+        commit.insert_before(&ctx, first);
+        let text = translate(&ctx, &module).unwrap();
+        // The fixture already holds one multicast commit.
+        assert_eq!(text.matches("\"nvvm.tcgen05.commit\"").count(), 2, "{text}");
+        assert!(!text.contains("cta_1"), "{text}");
+
+        commit.deref_mut(&ctx).attributes.set(
+            "cuda_oxide_intrinsic_marker".try_into().unwrap(),
+            StringAttr::new("v1:i0349".into()),
+        );
+        assert!(
+            translate(&ctx, &module)
+                .unwrap_err()
+                .contains("expected intrinsic marker v1:i0364")
         );
     }
 

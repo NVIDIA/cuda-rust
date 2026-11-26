@@ -69,6 +69,29 @@ impl Drop for RecursiveDrop {
     }
 }
 
+// Zero-sized types get no stack slot, but their retained drop glue still
+// needs a non-null, aligned `*mut Self` (#1755). The looping body keeps the
+// proof from erasing the drop, so the address has to be materialized. The
+// `align(64)` variant checks that the address follows the type's alignment.
+struct ZstLoopingDrop;
+
+impl Drop for ZstLoopingDrop {
+    #[allow(clippy::empty_loop)]
+    fn drop(&mut self) {
+        loop {}
+    }
+}
+
+#[repr(align(64))]
+struct AlignedZstLoopingDrop;
+
+impl Drop for AlignedZstLoopingDrop {
+    #[allow(clippy::empty_loop)]
+    fn drop(&mut self) {
+        loop {}
+    }
+}
+
 // Precision control for the proof. An effect-free destructor whose two
 // branches join back together returns on every path, so the proof must keep
 // accepting it and lower the drop to a plain branch. The callees have visible
@@ -147,6 +170,49 @@ mod kernels {
 
             // Semantically unreachable.
             slot.write(0x4444_4444);
+        }
+    }
+
+    /// Compile-only regression: a zero-sized value with retained drop glue
+    /// must compile, pass a dangling aligned address to its glue, and use no
+    /// stack storage.
+    #[kernel]
+    pub fn zst_drop_probe(mut out: DisjointSlice<u32>) {
+        if thread::index_1d().get() != 0 {
+            return;
+        }
+
+        unsafe {
+            let slot = out.as_mut_ptr();
+            slot.write(0x1212_1212);
+
+            {
+                let _guard = ZstLoopingDrop;
+            }
+
+            // Semantically unreachable.
+            slot.write(0x1313_1313);
+        }
+    }
+
+    /// Compile-only regression: as `zst_drop_probe`, with an over-aligned
+    /// zero-sized type whose dangling address must be its 64-byte alignment.
+    #[kernel]
+    pub fn aligned_zst_drop_probe(mut out: DisjointSlice<u32>) {
+        if thread::index_1d().get() != 0 {
+            return;
+        }
+
+        unsafe {
+            let slot = out.as_mut_ptr();
+            slot.write(0x1414_1414);
+
+            {
+                let _guard = AlignedZstLoopingDrop;
+            }
+
+            // Semantically unreachable.
+            slot.write(0x1515_1515);
         }
     }
 

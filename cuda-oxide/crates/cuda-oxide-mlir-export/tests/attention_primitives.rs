@@ -180,6 +180,8 @@ fn full_cute_attention_numeric_pack_keeps_precise_intrinsics() {
     mark(&mut ctx, op, block, "v1:i0915");
     let op = CpAsyncCa4Op::build(&mut ctx, a[6], a[7]);
     mark(&mut ctx, op, block, "v1:i0086");
+    let op = CpAsyncCg16Op::build(&mut ctx, a[6], a[7]);
+    mark(&mut ctx, op, block, "v1:i0092");
     let op = CpAsyncMbarrierArriveNoIncOp::build(&mut ctx, a[8]);
     mark(&mut ctx, op, block, "v1:i0103");
     let op = VoteSyncAllOp::build(&mut ctx, a[3], a[5]);
@@ -218,5 +220,14 @@ fn full_cute_attention_numeric_pack_keeps_precise_intrinsics() {
         assert!(text.contains(name), "{text}");
     }
     assert!(text.contains("192 : i32"), "{text}");
+    // The four-byte cache-all copy and the sixteen-byte cache-global copy share one target operation.
+    assert_eq!(
+        text.matches("\"nvvm.cp.async.shared.global\"").count(),
+        2,
+        "{text}"
+    );
+    assert!(text.contains("#nvvm<load_cache_modifier ca>"), "{text}");
+    assert!(text.contains("#nvvm<load_cache_modifier cg>"), "{text}");
+    assert!(text.contains("size = 16 : i32"), "{text}");
     assert!(!text.contains("cuda_oxide_intrinsic_marker"));
 }

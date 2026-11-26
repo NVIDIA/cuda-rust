@@ -98,6 +98,7 @@ fn register_nvvm_numeric_common_pack(
     }
     registry.register_operation::<ReduxSyncFmaxOp>(SyncTranslation(0))?;
     registry.register_operation::<CpAsyncCa4Op>(SyncTranslation(1))?;
+    registry.register_operation::<CpAsyncCg16Op>(SyncTranslation(5))?;
     registry.register_operation::<CpAsyncMbarrierArriveNoIncOp>(SyncTranslation(2))?;
     registry.register_operation::<VoteSyncAllOp>(SyncTranslation(3))?;
     registry.register_operation::<BarWarpSyncOp>(SyncTranslation(4))?;
@@ -591,8 +592,8 @@ impl OperationTranslation for PackE4m3x2Translation {
 
 /// Native MLIR operations retain the compiler's PTX lowering for these instructions.
 struct SyncTranslation(
-    #[doc = "Reviewed selector: 0 reduction, 1 copy, 2 barrier arrival, 3 vote, or 4 warp sync."]
-    u8,
+    #[doc = "Reviewed selector: 0 reduction, 1 four-byte copy, 2 barrier arrival, 3 vote, 4 warp sync, or 5 sixteen-byte copy."]
+     u8,
 );
 impl OperationTranslation for SyncTranslation {
     fn translate(
@@ -633,6 +634,12 @@ impl OperationTranslation for SyncTranslation {
                     .map_err(|e| e.to_string())?;
                 ("v1:i0049", 1, 0)
             }
+            5 => {
+                CpAsyncCg16Op::new(source)
+                    .verify(ctx)
+                    .map_err(|e| e.to_string())?;
+                ("v1:i0092", 2, 0)
+            }
             _ => unreachable!(),
         };
         require_input(&mut input, marker, args, results)?;
@@ -646,7 +653,7 @@ impl OperationTranslation for SyncTranslation {
                 "nvvm.redux.sync",
                 vec![input.operands[1].clone(), input.operands[0].clone()],
             ),
-            1 => {
+            1 | 5 => {
                 let dst = e.llvm_ptr(input.operands[0].clone(), 3)?;
                 let src = e.llvm_ptr(input.operands[1].clone(), 1)?;
                 ("nvvm.cp.async.shared.global", vec![dst, src])
@@ -668,6 +675,10 @@ impl OperationTranslation for SyncTranslation {
             1 => {
                 crate::cute::integer_property(&mut op, "size", 32, 4);
                 crate::cute::property(&mut op, "modifier", "#nvvm<load_cache_modifier ca>")?;
+            }
+            5 => {
+                crate::cute::integer_property(&mut op, "size", 32, 16);
+                crate::cute::property(&mut op, "modifier", "#nvvm<load_cache_modifier cg>")?;
             }
             2 => {
                 op.properties

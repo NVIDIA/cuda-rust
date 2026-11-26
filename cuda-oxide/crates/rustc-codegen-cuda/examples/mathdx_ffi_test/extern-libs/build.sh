@@ -147,7 +147,7 @@ compile_ltoir() {
     local extra_flags="${2:-}"
 
     echo "=== Compiling $src ==="
-    
+
     # -dc: relocatable device code, -dlto: device LTO, --keep: retain .ltoir
     # --expt-relaxed-constexpr: REQUIRED for cuBLASDx - enables constexpr in device code
     # -Wno-deprecated-declarations: suppress MathDx deprecation warnings
@@ -222,21 +222,21 @@ echo ""
 # =============================================================================
 if [ "$BUILD_TEST" = true ]; then
     echo "=== Building test_separate.cubin ==="
-    
+
     TOOLS_DIR="$SCRIPT_DIR/../tools"
     if [ -x "$TOOLS_DIR/link_ltoir" ]; then
         # Collect LTOIR files to link
         LTOIR_FILES="cuda_test_kernels.ltoir cufftdx_wrappers_funcs.ltoir"
-        
+
         # Add cuBLASDx wrappers if they exist
         if [ -f "cublasdx_wrappers.ltoir" ]; then
             LTOIR_FILES="$LTOIR_FILES cublasdx_wrappers.ltoir"
             echo "  Including cuBLASDx wrappers"
         fi
-        
+
         "$TOOLS_DIR/link_ltoir" -arch=${ARCH} -o test_separate.cubin $LTOIR_FILES
         echo "  Created: test_separate.cubin"
-        
+
         # Build host test program
         if [ -f "test_separate.cu" ]; then
             echo ""

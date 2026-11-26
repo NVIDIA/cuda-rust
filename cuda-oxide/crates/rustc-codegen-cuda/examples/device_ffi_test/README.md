@@ -125,16 +125,17 @@ device_ffi_test/
 
 ## How It Works
 
-### 1. Rust Kernel Code (`src/main.rs`)
+### 1. Rust Kernel Code (simplified)
 
 ```rust
-use cuda_device::{device, kernel};
+use cuda_device::{convergent, device, kernel};
 
 // Declare external device functions from CUDA C++
-// Note: No NVVM attributes needed - see "Why No NVVM Attributes?" below
+// Mark collectives before the Rust device module is optimized.
 #[device]
 unsafe extern "C" {
     fn magnitude_squared(x: f32, y: f32) -> f32;
+    #[convergent]
     fn warp_reduce_sum(val: f32) -> f32;
 }
 
@@ -205,46 +206,27 @@ callers that deliberately use this mapping may allow that lint on the extern.
 
 ---
 
-## Why No NVVM Attributes on Extern Declarations?
+## Convergence on Extern Declarations
 
-When using LTOIR linking, **NVVM attributes (`#[convergent]`, `#[pure]`, `#[readonly]`)
-are not needed on Rust extern function declarations**. Here's why:
+Mark external warp and block collective declarations with `#[convergent]`.
+cuda-oxide emits LLVM's `convergent` attribute on each marked declaration before
+libNVVM optimizes the Rust device module. Attributes on external definitions
+arrive later during LTO and cannot protect earlier optimization.
 
-### The LTOIR Already Has Proper Attributes
+The annotation forbids transformations that add control dependencies to the
+call. It does not make threads reach the call or guarantee reconvergence;
+callers must satisfy the collective's warp or block participation requirements.
+Reachable declarations of the same symbol must agree on the annotation. Ordinary
+scalar helpers and storage-size queries do not need this annotation.
 
-External CUDA C++ compiled with `nvcc -dc -dlto` produces LTOIR with complete
-attribute specifications on the function **definitions**:
+The `convergence-helper` dependency declares `warp_reduce_sum` privately and
+calls it through a public generic device helper. `verify-code-shape.sh` checks
+that this declaration retains convergence in the consuming module, alongside
+local collective declarations and unmarked scalar declarations.
 
-```llvm
-; From cccl_wrappers_text.ltoir
-attributes #0 = { convergent inlinehint mustprogress willreturn }
-attributes #7 = { convergent nounwind }
-```
-
-### nvJitLink Uses Definition Attributes
-
-During LTO linking:
-1. cuda-oxide LTOIR has **declarations** (no function body)
-2. External LTOIR has **definitions** with proper attributes  
-3. nvJitLink resolves symbols and uses the **definition's attributes** for optimization
-
-### Attributes on Declarations Are Redundant
-
-Since the linker uses the definition's attributes:
-- Attributes on declarations don't affect the final code
-- The external library authors already set correct attributes
-- User-specified attributes could be incorrect or misleading
-
-### What About cuda-oxide Built-in Intrinsics?
-
-For cuda-oxide's own intrinsics (like `sync_threads()`, `shuffle()`, etc.), the
-compiler handles convergent semantics internally. Users don't need to annotate these.
-
-### Historical Note
-
-Earlier versions of this example used `#[convergent]`, `#[pure]`, and `#[readonly]`
-attributes. These have been removed as they provided no benefit with LTOIR linking
-and could mislead users into thinking they were necessary.
+Built-in intrinsics such as `sync_threads()` and warp shuffles already carry
+convergence information. `#[pure]` and `#[readonly]` do not currently emit LLVM
+memory-effect attributes.
 
 ---
 

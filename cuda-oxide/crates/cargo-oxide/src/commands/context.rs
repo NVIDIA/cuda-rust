@@ -81,6 +81,18 @@ pub fn resolve_context() -> Context {
     })
 }
 
+/// Same as [`resolve_context`], keeping `stdout` completely clean for commands
+/// whose stdout is the exported artifact stream (`lean-export`).
+pub fn resolve_context_quiet_stdout() -> Context {
+    resolve_from_cwd(|cwd| {
+        resolve_context_in(
+            cwd,
+            load_oxide_config,
+            backend::find_or_build_backend_quiet_stdout,
+        )
+    })
+}
+
 /// Resolve a context for `cargo oxide setup`, which builds the backend itself.
 ///
 /// The config is loaded as strictly as [`resolve_context`] does, since setup

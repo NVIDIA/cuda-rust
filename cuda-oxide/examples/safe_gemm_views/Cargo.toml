@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "safe_gemm_views"
+version = "0.1.0"
+edition = "2024"
+authors = ["Nihal Pasham <nihalp@nvidia.com>"]
+license = "Apache-2.0"
+
+[workspace]
+
+[dependencies]
+cuda-device = { path = "../../crates/cuda-device" }
+cuda-host = { path = "../../crates/cuda-host" }
+cuda-core = { path = "../../../cuda-core" }

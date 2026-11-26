@@ -662,6 +662,24 @@ fn cuda_module_kernel(
             .any(|parameter| parameter.grid_constant)
             .then(|| parse_quote!(unsafe))
     });
+    let mut writes_all_elems_params = Vec::new();
+    for attr in &item_fn.attrs {
+        if crate::common::attr_path_ends_with(attr, "verify")
+            && let Ok(v_args) = attr.parse_args::<crate::verify::VerifyArgs>()
+        {
+            for ident in v_args.writes_all_elems {
+                if launch_contract.as_ref().map(|c| c.domain) != Some(1) {
+                    return Err(syn::Error::new(
+                        ident.span(),
+                        "`writes_all_elems(...)` requires `#[launch_contract(domain = 1, ...)]`",
+                    ));
+                }
+                if !writes_all_elems_params.iter().any(|p| p == &ident) {
+                    writes_all_elems_params.push(ident);
+                }
+            }
+        }
+    }
     Ok(Some(CudaModuleKernel {
         module_path: module_path.to_vec(),
         vis: item_fn.vis.clone(),
@@ -675,6 +693,7 @@ fn cuda_module_kernel(
         cluster_dim,
         cooperative,
         launch_contract,
+        writes_all_elems_params,
         is_generic,
     }))
 }

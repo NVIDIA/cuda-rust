@@ -1,0 +1,5 @@
+error: pointer parameter `dst` cannot be `#[inout]`: the callee reads and writes the memory it points to, and the pointer itself is never returned
+  --> tests/ui/foreign_pointer_inout.rs:11:24
+   |
+11 |     pub unsafe fn fill(#[inout] dst: *mut f32) -> *mut f32;
+   |                        ^

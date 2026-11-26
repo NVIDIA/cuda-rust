@@ -306,3 +306,42 @@ impl Verify for CuteSm100BlockScaledMmaPlanAttr {
         Ok(())
     }
 }
+
+/// Static shape, CTA-group, B-collector, and layout contract for one SM107 `mxf8f6f4` (`SF_VEC = 32`, `K = 64`) MMA step.
+#[pliron_attr(
+    name = "cute.sm107_block_scaled_mma_plan",
+    format = "`<` $m `,` $n `,` $cta_group `,` $b_collector `,` $a_layout `,` $b_layout `>`"
+)]
+#[derive(PartialEq, Eq, Clone, Debug, Hash)]
+pub struct CuteSm107BlockScaledMmaPlanAttr {
+    /// Collective output-row extent `M` (`128` for `cta_group = 1`, `256` for `cta_group = 2`).
+    pub m: u32,
+    /// Collective output-column extent `N` (`16..=256`, multiple of 16).
+    pub n: u32,
+    /// Number of participating CTAs (`1` or `2`).
+    pub cta_group: u32,
+    /// B-collector qualifier (`0 = discard`, `1 = lastuse`, `2 = fill`, `3 = use`).
+    pub b_collector: u32,
+    /// Physical shared placement of the A tile (`(m / cta_group, 128)` `Swizzle<3, 4, 3>`).
+    pub a_layout: CuteComposedLayoutAttr,
+    /// Physical shared placement of the B tile (`(n / cta_group, 128)` `Swizzle<3, 4, 3>`).
+    pub b_layout: CuteComposedLayoutAttr,
+}
+impl Verify for CuteSm107BlockScaledMmaPlanAttr {
+    fn verify(&self, ctx: &Context) -> Result<(), Error> {
+        self.a_layout.verify(ctx)?;
+        self.b_layout.verify(ctx)?;
+        let valid_m =
+            (self.cta_group == 1 && self.m == 128) || (self.cta_group == 2 && self.m == 256);
+        if !valid_m
+            || !(16..=256).contains(&self.n)
+            || !self.n.is_multiple_of(16)
+            || self.b_collector > 3
+        {
+            return verify_err_noloc!(
+                "SM107 MXF8F6F4 block-scaled MMA requires M128 (CG1) or M256 (CG2), N16..256 by16, and b_collector 0..=3"
+            );
+        }
+        Ok(())
+    }
+}

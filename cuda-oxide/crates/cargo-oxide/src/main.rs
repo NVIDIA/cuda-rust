@@ -18,6 +18,7 @@
 //! cargo oxide sanitize vecadd         # run under NVIDIA Compute Sanitizer
 //! cargo oxide debug vecadd --tui      # build + cuda-gdb
 //! cargo oxide inspect vecadd          # build + print generated PTX
+//! cargo oxide lean-export             # inspect the scalar MIR-to-Lean demo
 //! cargo oxide fuzz-schedule barrier   # perturb generated PTX and watchdog it
 //! cargo oxide tilelib relu --arch sm_120  # #[tile_export] crate -> cuTile tile library
 //! cargo oxide new my_kernel           # scaffold a standalone project
@@ -501,6 +502,25 @@ enum Commands {
         #[arg(long)]
         unchecked_indexing: bool,
     },
+    /// Export a kernel's MIR and generated Lean 4 safety proofs
+    #[command(name = "lean-export")]
+    LeanExport {
+        /// Verified example/crate name (`safe_vecadd`, `safe_gemm_sol_final`) or `.mir` file path
+        #[arg(value_name = "INPUT")]
+        input: Option<PathBuf>,
+        /// Filter to a single kernel function symbol (required when INPUT is a `.mir` file)
+        #[arg(long, value_name = "NAME")]
+        function: Option<String>,
+        /// Target GPU architecture (e.g., sm_90, sm_100a, sm_120)
+        #[arg(long)]
+        arch: Option<String>,
+        /// Comma-separated list of Cargo features to enable
+        #[arg(long)]
+        features: Option<String>,
+        /// Show verbose compilation output on stderr
+        #[arg(short, long)]
+        verbose: bool,
+    },
     /// Format all crates (SIMT workspace, codegen backend, examples)
     Fmt {
         /// Check formatting without modifying files
@@ -546,7 +566,7 @@ enum ToolchainCommand {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum ManagedToolchain {
-    /// NVIDIA CUTLASS compiler 4.7.0 for Linux x86_64 and CUDA 13
+    /// NVIDIA CUTLASS compiler 4.8.1 for Linux (x86_64, aarch64) and CUDA 13
     Cutlass,
 }
 
@@ -677,6 +697,10 @@ fn validate_materialization_cli(cli: &Cli) -> Result<(), String> {
         ),
         Commands::List { .. } => Err(
             "--materialize-cubin cannot be used with list because list does not compile device code"
+                .to_string(),
+        ),
+        Commands::LeanExport { .. } => Err(
+            "--materialize-cubin cannot be used with lean-export because it only exports a Lean model"
                 .to_string(),
         ),
         Commands::Fmt { .. } => Err(
@@ -1188,6 +1212,25 @@ fn main() {
             let ctx = commands::resolve_passive_context();
             commands::list_examples(&ctx, json);
         }
+        Commands::LeanExport {
+            input,
+            function,
+            arch,
+            features,
+            verbose,
+        } => {
+            let ctx = commands::resolve_passive_context();
+            commands::lean_export(
+                &ctx,
+                commands::LeanExportOptions {
+                    input: input.as_deref(),
+                    function: function.as_deref(),
+                    arch: arch.as_deref(),
+                    features: features.as_deref(),
+                    verbose,
+                },
+            );
+        }
         Commands::Fmt { check } => {
             // Formatting compiles no device code. `format_all` reads only
             // `workspace_root`, `codegen_crate` and `examples_dir`, which the
@@ -1339,6 +1382,57 @@ mod tests {
     }
 
     #[test]
+    fn lean_export_parser_accepts_demo_and_paired_custom_input() {
+        let demo = Cli::try_parse_from(["cargo-oxide", "lean-export"]).unwrap();
+        assert!(matches!(
+            demo.command,
+            Commands::LeanExport {
+                input: None,
+                function: None,
+                arch: None,
+                features: None,
+                verbose: false,
+            }
+        ));
+
+        let custom = Cli::try_parse_from([
+            "cargo-oxide",
+            "lean-export",
+            "path with spaces/input.mir",
+            "--function",
+            "global_index",
+        ])
+        .unwrap();
+        let Commands::LeanExport {
+            input, function, ..
+        } = custom.command
+        else {
+            panic!("expected LeanExport");
+        };
+        assert_eq!(input, Some(PathBuf::from("path with spaces/input.mir")));
+        assert_eq!(function.as_deref(), Some("global_index"));
+
+        let by_example = Cli::try_parse_from([
+            "cargo-oxide",
+            "lean-export",
+            "safe_gemm_sol_final",
+            "--arch",
+            "sm_100a",
+        ])
+        .unwrap();
+        assert!(matches!(
+            by_example.command,
+            Commands::LeanExport {
+                input: Some(_),
+                function: None,
+                arch: Some(_),
+                features: None,
+                verbose: false,
+            }
+        ));
+    }
+
+    #[test]
     fn update_parser_accepts_force_flag() {
         let plain =
             Cli::try_parse_from(["cargo-oxide", "update"]).expect("update command should parse");
@@ -1467,6 +1561,7 @@ mod tests {
     fn materialize_cubin_rejects_non_codegen_subcommands() {
         for args in [
             &["cargo-oxide", "fmt", "--materialize-cubin"][..],
+            &["cargo-oxide", "lean-export", "--materialize-cubin"],
             &["cargo-oxide", "new", "demo", "--materialize-cubin"],
             &["cargo-oxide", "doctor", "--materialize-cubin"],
             &["cargo-oxide", "setup", "--materialize-cubin"],

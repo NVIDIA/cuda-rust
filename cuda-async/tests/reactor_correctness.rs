@@ -7,16 +7,10 @@
 //! on tokio's `AtomicWaker` and runtime waker-contract tests (spurious wake,
 //! waker replacement, cancellation mid-flight).
 //!
-//! Every test sets `CUDA_ASYNC_SPIN_BUDGET_US=0`, which disables the inline
-//! spin fast path so every pipeline goes through the completion-notification
-//! path (the flag-write reactor by default; `CUDA_ASYNC_HOST_SYNC=block`/`spin`
-//! routes through the host-callback fallback instead). Run the default path,
-//! and optionally the fallback:
-//!
-//! ```text
-//! cargo test -p cuda-async --test reactor_correctness
-//! CUDA_ASYNC_HOST_SYNC=spin cargo test -p cuda-async --test reactor_correctness
-//! ```
+//! Tests requiring a pending future hold GPU work behind an explicit gate.
+//! No process-wide environment mutation or assumed kernel duration is needed.
+//! The default reactor and optional `CUDA_ASYNC_HOST_SYNC=spin` fallback can
+//! both be exercised by launching this test binary with that environment.
 //!
 //! A single future is always polled from the thread that scheduled it
 //! (execution contexts are thread-local). But many such threads submit into
@@ -38,18 +32,13 @@ fn on_fresh_thread<F: FnOnce() + Send + 'static>(f: F) {
     std::thread::spawn(f).join().expect("test thread panicked");
 }
 
-fn force_notification_path() {
-    // OnceLock-cached on first poll; every test in this binary wants 0.
-    #[allow(unused_unsafe)]
-    unsafe {
-        std::env::set_var("CUDA_ASYNC_SPIN_BUDGET_US", "0")
-    };
-}
+#[path = "support/gate.rs"]
+mod gate;
+use gate::Gate;
 
 // ---------------------------------------------------------------------------
-// A device op with real, controllable GPU-side duration: `passes` async
-// memsets of a `bytes`-sized buffer, so the work is still in flight when the
-// first poll happens and the notification path must carry completion.
+// A device op with real GPU work. Tests that require a pending poll attach
+// an explicit gate; memory bandwidth and host scheduling do not prove it.
 // ---------------------------------------------------------------------------
 
 struct MemsetOp {
@@ -57,12 +46,17 @@ struct MemsetOp {
     bytes: usize,
     passes: usize,
     value: u8,
+    gate: Option<Arc<Gate>>,
 }
 
 impl DeviceOp for MemsetOp {
     type Output = ();
     unsafe fn execute(self, context: &ExecutionContext) -> Result<(), DeviceError> {
         let stream = context.get_cuda_stream().cu_stream();
+        if let Some(gate) = self.gate {
+            context.retain(gate.clone())?;
+            gate.arm(stream)?;
+        }
         for _ in 0..self.passes {
             let code = cuda_bindings::cuMemsetD8Async(self.dptr, self.value, self.bytes, stream);
             if code != cuda_bindings::cudaError_enum_CUDA_SUCCESS {
@@ -104,13 +98,14 @@ fn read_device(dptr: u64, bytes: usize) -> Vec<u8> {
     host
 }
 
-/// ~64 MiB x passes of memset: long enough to be in flight at first poll.
+/// Device work for visibility checks; duration is never used as a predicate.
 fn slow_op(dptr: u64, bytes: usize, value: u8) -> MemsetOp {
     MemsetOp {
         dptr,
         bytes,
         passes: 16,
         value,
+        gate: None,
     }
 }
 
@@ -172,7 +167,6 @@ const BUF: usize = 64 << 20;
 #[test]
 fn notification_path_completes_and_data_is_visible() {
     on_fresh_thread(|| {
-        force_notification_path();
         init_device_contexts(0, 1).expect("init failed (requires GPU)");
         let dptr = alloc_device(BUF);
         for round in 0..8u8 {
@@ -196,29 +190,24 @@ fn notification_path_completes_and_data_is_visible() {
 #[test]
 fn spurious_wake_repolls_to_pending_then_completes() {
     on_fresh_thread(|| {
-        force_notification_path();
         init_device_contexts(0, 1).expect("init failed (requires GPU)");
         let dptr = alloc_device(BUF);
-        let mut future = slow_op(dptr, BUF, 0x11).into_future();
+        let gate = Gate::closed();
+        let hold = gate.hold();
+        let mut op = slow_op(dptr, BUF, 0x11);
+        op.gate = Some(gate);
+        let mut future = op.into_future();
         let (_state, waker) = flag_waker();
         let mut cx = Context::from_waker(&waker);
         let first = Pin::new(&mut future).poll(&mut cx);
         assert!(first.is_pending(), "slow op resolved on first poll");
-        // Spurious wake + immediate re-poll, several times.
-        let mut completed = None;
+        // A spurious wake cannot complete work while the gate is closed.
         for _ in 0..4 {
             waker.wake_by_ref();
-            if let Poll::Ready(result) = Pin::new(&mut future).poll(&mut cx) {
-                completed = Some(result);
-                break;
-            }
+            assert!(Pin::new(&mut future).poll(&mut cx).is_pending());
         }
-        match completed {
-            Some(result) => result.expect("op failed on a re-poll after the work drained"),
-            None => {
-                block_on_with_deadline(future, DEADLINE).expect("op failed after spurious wakes")
-            }
-        }
+        drop(hold);
+        block_on_with_deadline(future, DEADLINE).expect("op failed after spurious wakes");
     });
 }
 
@@ -228,10 +217,13 @@ fn spurious_wake_repolls_to_pending_then_completes() {
 #[test]
 fn completion_wakes_the_latest_registered_waker() {
     on_fresh_thread(|| {
-        force_notification_path();
         init_device_contexts(0, 1).expect("init failed (requires GPU)");
         let dptr = alloc_device(BUF);
-        let mut future = slow_op(dptr, BUF, 0x22).into_future();
+        let gate = Gate::closed();
+        let hold = gate.hold();
+        let mut op = slow_op(dptr, BUF, 0x22);
+        op.gate = Some(gate);
+        let mut future = op.into_future();
 
         let (state_a, waker_a) = flag_waker();
         let mut cx_a = Context::from_waker(&waker_a);
@@ -239,7 +231,9 @@ fn completion_wakes_the_latest_registered_waker() {
 
         let (state_b, waker_b) = flag_waker();
         let mut cx_b = Context::from_waker(&waker_b);
-        if Pin::new(&mut future).poll(&mut cx_b).is_pending() {
+        assert!(Pin::new(&mut future).poll(&mut cx_b).is_pending());
+        {
+            drop(hold);
             // Wait for the completion signal to land.
             let start = Instant::now();
             while !state_b.woken.load(Ordering::SeqCst) {
@@ -260,25 +254,34 @@ fn completion_wakes_the_latest_registered_waker() {
 
 /// Cancellation: dropping a future mid-flight (after registration) must not
 /// panic when the GPU later completes, must not corrupt later pipelines, and
-/// must recycle completion slots (exercised by outnumbering the pool).
+/// leaves completion-slot recycling to the slot-table unit/model tests.
 #[test]
-fn drop_mid_flight_recycles_and_later_pipelines_work() {
+fn cancellation_does_not_corrupt_later_pipelines() {
     on_fresh_thread(|| {
-        force_notification_path();
         init_device_contexts(0, 1).expect("init failed (requires GPU)");
         let dptr = alloc_device(BUF);
 
-        for _ in 0..32 {
-            let mut future = slow_op(dptr, BUF, 0x33).into_future();
+        // Allocate and retain all pinned gates outside the gated region:
+        // cuMemHostAlloc/FreeHost can synchronize the context themselves.
+        let gates: Vec<_> = (0..32).map(|_| Gate::closed()).collect();
+        block_on_with_deadline(slow_op(dptr, BUF, 0x33).into_future(), DEADLINE).unwrap();
+        for gate in &gates {
+            let hold = gate.hold();
+            let mut op = slow_op(dptr, BUF, 0x33);
+            op.gate = Some(gate.clone());
+            let mut future = op.into_future();
             let (_state, waker) = flag_waker();
             let mut cx = Context::from_waker(&waker);
             // Register with the completion path, then cancel.
             assert!(Pin::new(&mut future).poll(&mut cx).is_pending());
             drop(future);
+            drop(hold);
         }
 
-        // Give the dropped completions time to land and slots to recycle.
-        std::thread::sleep(Duration::from_millis(200));
+        // Establish device completion rather than guessing with a sleep.
+        cuda_async::device_context::with_device(0, |device| device.synchronize())
+            .unwrap()
+            .unwrap();
 
         // Later pipelines complete with correct data.
         for round in 0..8u8 {
@@ -291,13 +294,12 @@ fn drop_mid_flight_recycles_and_later_pipelines_work() {
     });
 }
 
-/// Idle/active ping-pong: sequential awaits with idle gaps cycle the
-/// scanner's park/unpark edge (targets the missed-unpark window; the park
-/// token must make an unpark-before-park return immediately).
+/// Sequential submissions check completion and data visibility repeatedly.
+/// Exact park/unpark interleavings belong to the slot-table model tests;
+/// a sleep in a GPU test cannot establish that the scanner has parked.
 #[test]
-fn sequential_pingpong_park_unpark() {
+fn sequential_submissions_complete() {
     on_fresh_thread(|| {
-        force_notification_path();
         init_device_contexts(0, 1).expect("init failed (requires GPU)");
         let small = 8 << 20;
         let dptr = alloc_device(small);
@@ -308,12 +310,9 @@ fn sequential_pingpong_park_unpark() {
                 bytes: small,
                 passes: 2,
                 value,
+                gate: None,
             };
             block_on_with_deadline(op.into_future(), DEADLINE).expect("ping-pong op failed");
-            if i % 10 == 0 {
-                // Force a genuinely idle window so the scanner parks.
-                std::thread::sleep(Duration::from_millis(2));
-            }
         }
         let host = read_device(dptr, 4096);
         assert!(host.iter().all(|&b| b == 199_u8));
@@ -331,7 +330,6 @@ fn sequential_pingpong_park_unpark() {
 #[test]
 fn concurrent_submitters_share_one_reactor() {
     on_fresh_thread(|| {
-        force_notification_path();
         // Establish the device on the coordinating thread first so workers
         // retain an already-live primary context.
         init_device_contexts(0, 1).expect("init failed (requires GPU)");
@@ -354,6 +352,7 @@ fn concurrent_submitters_share_one_reactor() {
                             bytes: buf,
                             passes: 2,
                             value,
+                            gate: None,
                         };
                         block_on_with_deadline(op.into_future(), DEADLINE)
                             .expect("concurrent op failed");

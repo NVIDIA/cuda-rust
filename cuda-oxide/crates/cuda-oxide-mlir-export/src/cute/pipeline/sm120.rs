@@ -318,12 +318,17 @@ impl OperationTranslation for PipelineExpectTxTranslation {
             i128::from(pipeline.transaction_bytes),
             &input.location,
         )?;
-        operations.push(operation(
+        let mut expect_tx = operation(
             "nvvm.mbarrier.arrive.expect_tx",
             vec![],
             vec![barrier.clone(), bytes],
             &input.location,
-        )?);
+        )?;
+        expect_tx.properties.insert(
+            "operandSegmentSizes".into(),
+            MlirAttribute::DenseI32Array(vec![1, 1, 0, 0]),
+        );
+        operations.push(expect_tx);
         operations.push(operation(
             "builtin.unrealized_conversion_cast",
             input.results,
@@ -390,6 +395,10 @@ impl OperationTranslation for PipelineReleaseTranslation {
             vec![barrier],
             &input.location,
         )?;
+        arrive.properties.insert(
+            "operandSegmentSizes".into(),
+            MlirAttribute::DenseI32Array(vec![1, 0, 0]),
+        );
         let yield_ = operation("scf.yield", vec![], vec![], &input.location)?;
         arrive.location = input.location.clone();
         let mut conditional = operation("scf.if", vec![], vec![elected], &input.location)?;

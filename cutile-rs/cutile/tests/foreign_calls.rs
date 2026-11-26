@@ -7,6 +7,9 @@
 //! `preview$call` at bytecode 13.5. Compile-only: needs neither a GPU nor
 //! the tile library, which `tileiras` loads only when assembling.
 
+#[path = "support/temp_dir.rs"]
+mod temp_dir;
+
 use cutile::compile_api::KernelCompiler;
 use cutile::tile_kernel::{CompileOptions, TileLibrarySpec};
 use cutile_ir::bytecode::BytecodeVersion;
@@ -79,6 +82,18 @@ mod lib_decls {
     #[cutile::foreign]
     #[allow(clippy::unused_unit)]
     pub unsafe fn consume(x: Tile<f32, { [32] }>) -> ();
+
+    /// Pointer operands: the library writes `x` to `dst`, using `scratch`.
+    #[cutile::foreign]
+    pub unsafe fn write_to<const N: i32, T: ElementType>(
+        x: Tile<T, { [N] }>,
+        dst: *mut T,
+        scratch: *mut u8,
+    );
+
+    /// A pointer operand the library reads through, and an output-only result.
+    #[cutile::foreign]
+    pub unsafe fn read_from<const N: i32, T: ElementType>(src: *const T) -> Tile<T, { [N] }>;
 }
 
 #[cutile::module]
@@ -148,6 +163,49 @@ mod kernels {
         let (first,) = unsafe { singleton(y.load()) };
         let second = unsafe { singleton(first) };
         y.store(second.0);
+    }
+
+    /// Tensors give pointer operands through `subtensor_mut_ptr` (this block's
+    /// tile) and `as_ptr` (the view's base, offset here by hand).
+    #[cutile::entry()]
+    fn pointer_operands(
+        x: &mut Tensor<f32, { [32] }>,
+        out: &mut Tensor<f32, { [32] }>,
+        scratch: &mut Tensor<u8, { [64] }>,
+        src: &Tensor<f32, { [-1] }>,
+    ) {
+        let pid: (i32, i32, i32) = get_tile_block_id();
+        let t = x.load();
+        unsafe { write_to(t, out.subtensor_mut_ptr(), scratch.subtensor_mut_ptr()) };
+        let base: PointerTile<*const f32, { [] }> = pointer_to_tile(src.as_ptr());
+        let slot: PointerTile<*const f32, { [] }> = base.offset(pid.0 * 32);
+        let back: Tile<f32, { [32] }> = unsafe { read_from::<32, f32>(tile_to_pointer(slot)) };
+        x.store(back + out.load());
+    }
+
+    /// A rank-2 block tile of a byte tensor with a dynamic row stride. For a
+    /// `[32769, 65536]` tensor, block 32768's offset is 2^31, past
+    /// `i32::MAX`; `gpu/subtensor_mut_ptr.rs` runs that case.
+    #[cutile::entry()]
+    fn wide_block_tile_pointer(
+        y: &mut Tensor<u8, { [1, 32] }>,
+        scratch: &mut Tensor<u8, { [64] }>,
+    ) {
+        let t: Tile<u8, { [32] }> = y.load().reshape(shape![32]);
+        unsafe { write_to::<32, u8>(t, y.subtensor_mut_ptr(), scratch.subtensor_mut_ptr()) };
+    }
+
+    /// A raw pointer kernel parameter is passed as is.
+    #[cutile::entry()]
+    unsafe fn raw_pointer_operand(y: &mut Tensor<f32, { [32] }>, src: *const f32) {
+        y.store(read_from::<32, f32>(src));
+    }
+
+    /// `*mut u8` and `*mut i8` both lower to `ptr<i8>`.
+    #[cutile::entry()]
+    fn byte_pointer_operands(x: &mut Tensor<i8, { [32] }>, scratch: &mut Tensor<u8, { [64] }>) {
+        let t = x.load();
+        unsafe { write_to::<32, i8>(t, x.subtensor_mut_ptr(), scratch.subtensor_mut_ptr()) };
     }
 
     #[cutile::entry()]
@@ -303,6 +361,108 @@ fn turbofish_placeholders_are_inferred_from_the_arguments() {
 }
 
 #[test]
+fn pointer_operands_are_rank_0_pointer_tiles() {
+    common::with_test_stack(|| {
+        let artifacts = compile(
+            "pointer_operands",
+            vec![],
+            &[("x", &[1]), ("out", &[1]), ("scratch", &[1]), ("src", &[1])],
+        );
+        let ir = artifacts.ir_text();
+        let write = call_lines(&ir, "write_to");
+        assert_eq!(write.len(), 1, "{ir}");
+        // Pointer generics are inferred from the pointer operand's pointee.
+        assert!(write[0].contains("@write_to<[32, f32]>"), "{write:?}");
+        assert!(
+            write[0].contains(": (tile<32xf32>, tile<ptr<f32>>, tile<ptr<i8>>, token) -> token"),
+            "{write:?}"
+        );
+        let read = call_lines(&ir, "read_from");
+        assert_eq!(read.len(), 1, "{ir}");
+        assert!(
+            read[0].contains(": (tile<ptr<f32>>, tile<32xf32>, token) -> (tile<32xf32>, token)"),
+            "{read:?}"
+        );
+        // Block tiles and the hand-made slot are offsets of their bases.
+        assert!(ir.contains("offset"), "{ir}");
+        assert_eq!(
+            artifacts.module().foreign_callees(),
+            ["read_from", "write_to"]
+        );
+        artifacts
+            .bytecode()
+            .expect("valid pointer-operand bytecode");
+    });
+}
+
+#[test]
+fn block_tile_pointer_offsets_are_computed_in_i64() {
+    common::with_test_stack(|| {
+        // Dynamic row stride, unit column stride.
+        let artifacts = compile(
+            "wide_block_tile_pointer",
+            vec![],
+            &[("y", &[-1, 1]), ("scratch", &[1])],
+        );
+        let ir = artifacts.ir_text();
+        // Two block tiles (`y` and `scratch`), each offset by an `i64`.
+        let offsets: Vec<&str> = ir.lines().filter(|l| l.contains(" = offset ")).collect();
+        assert_eq!(offsets.len(), 2, "{ir}");
+        for offset in &offsets {
+            assert!(
+                offset.contains(": tile<ptr<i8>>, tile<i64> -> tile<ptr<i8>>"),
+                "{offset}"
+            );
+        }
+        // Block ids, extents and strides are sign-extended before any
+        // product or sum; nothing is multiplied or added in `i32`.
+        assert!(
+            ir.contains("exti") && ir.contains("signed : tile<i32> -> tile<i64>"),
+            "{ir}"
+        );
+        for line in ir
+            .lines()
+            .filter(|l| l.contains(" = muli ") || l.contains(" = addi "))
+        {
+            assert!(line.trim_end().ends_with(": tile<i64>"), "{line}\n{ir}");
+        }
+        artifacts.bytecode().expect("bytecode");
+    });
+}
+
+#[test]
+fn raw_pointer_kernel_parameters_are_pointer_operands() {
+    common::with_test_stack(|| {
+        let artifacts = compile("raw_pointer_operand", vec![], &[("y", &[1])]);
+        let read = call_lines(&artifacts.ir_text(), "read_from");
+        assert_eq!(read.len(), 1);
+        assert!(
+            read[0].contains("(tile<ptr<f32>>, tile<32xf32>, token)"),
+            "{read:?}"
+        );
+        artifacts.bytecode().expect("bytecode");
+    });
+}
+
+#[test]
+fn unsigned_and_signed_byte_pointers_are_the_same_operand_type() {
+    common::with_test_stack(|| {
+        let artifacts = compile(
+            "byte_pointer_operands",
+            vec![],
+            &[("x", &[1]), ("scratch", &[1])],
+        );
+        let write = call_lines(&artifacts.ir_text(), "write_to");
+        assert_eq!(write.len(), 1);
+        assert!(
+            write[0].contains(": (tile<32xi8>, tile<ptr<i8>>, tile<ptr<i8>>, token) -> token"),
+            "{write:?}"
+        );
+        artifacts.bytecode().expect("bytecode");
+    });
+}
+
+#[test]
 fn foreign_calls_require_tile_ir_13_5() {
     common::with_test_stack(|| {
         let error = KernelCompiler::new(kernels::__module_ast_self, "kernels", "fft_kernel")
@@ -341,8 +501,8 @@ fn tile_libraries_are_configured_on_the_host() {
             "{message}"
         );
 
-        let dir = std::env::temp_dir().join(format!("cutile_foreign_calls_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let directory = temp_dir::TempDir::new("cutile-foreign-calls");
+        let dir = directory.path();
         let missing = TileLibrarySpec::new(dir.join("missing.tilelib"));
         let message =
             scale_l2_key(CompileOptions::new().tile_library(missing)).expect_err("missing library");
@@ -366,7 +526,6 @@ fn tile_libraries_are_configured_on_the_host() {
             with(TileLibrarySpec::new(&library)),
             "contents are key material"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     });
 }
 

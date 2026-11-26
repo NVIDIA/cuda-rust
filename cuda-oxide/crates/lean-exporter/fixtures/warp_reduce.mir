@@ -1,0 +1,108 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+// PostMem2Reg dialect-mir fixture for Stage 3 verified warp and 2-phase block reductions.
+builtin.module @safe_warp_reduce {
+  ^entry():
+    mir.func @_RINvNtNtCs11cuda_device6thread10___internal8index_1d: builtin.function <(mir.ptr <builtin.integer ui8,mutable:false,addrspace:0,kind:SharedRef>) -> (builtin.integer ui64)>
+      []
+    {
+      ^entry(lc_arg: mir.ptr <builtin.integer ui8,mutable:false,addrspace:0,kind:SharedRef>):
+        zero_idx = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+        mir.return (zero_idx) [] []: <(builtin.integer ui64) -> ()>
+    };
+    mir.func @warp_reduce_sum: builtin.function <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>, mir.disjoint_slice <builtin.fp32 ,[]>) -> ()>
+      [contract_requires_len_ge: builtin.string "0>=1", gpu_kernel: builtin.string "true", launch_contract_domain: builtin.integer <1: ui32>, reqntid_x: builtin.integer <256: ui32>, reqntid_y: builtin.integer <1: ui32>, reqntid_z: builtin.integer <1: ui32>, verify_disjoint_writes: builtin.string "1", verify_no_oob_idx: builtin.string "0,1", verify_writes_all_elems: builtin.string "1"]
+    {
+      ^entry(data: mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>, out: mir.disjoint_slice <builtin.fp32 ,[]>):
+        lc = mir.alloca () [] []: <() -> (mir.ptr <builtin.integer ui8,mutable:true,addrspace:0,kind:Erased>)>;
+        lc_ref = mir.cast (lc) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority Reborrow]: <(mir.ptr <builtin.integer ui8,mutable:true,addrspace:0,kind:Erased>) -> (mir.ptr <builtin.integer ui8,mutable:false,addrspace:0,kind:SharedRef>)>;
+        tid_struct = mir.call (lc_ref) [] [callee: builtin.string "_RINvNtNtCs11cuda_device6thread10___internal8index_1d"]: <(mir.ptr <builtin.integer ui8,mutable:false,addrspace:0,kind:SharedRef>) -> (builtin.integer ui64)>;
+        idx = mir.extract_field (tid_struct) [] [index: mir.field_index 0]: <(builtin.integer ui64) -> (builtin.integer ui64)>;
+        out_len = mir.extract_field (out) [] [index: mir.field_index 1]: <(mir.disjoint_slice <builtin.fp32 ,[]>) -> (builtin.integer ui64)>;
+        in_bounds = mir.lt (idx, out_len) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        mir.cond_br (in_bounds) [^active, ^exit] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^active():
+        data_len = mir.extract_field (data) [] [index: mir.field_index 1]: <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>) -> (builtin.integer ui64)>;
+        data_ok = mir.lt (idx, data_len) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        mir.assert (data_ok) [] []: <(builtin.integer i1) -> ()>;
+        data_ptr = mir.extract_field (data) [] [index: mir.field_index 0]: <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>)>;
+        data_elem = mir.ptr_offset (data_ptr, idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>)>;
+        v0 = mir.load (data_elem) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>) -> (builtin.fp32)>;
+        mask = mir.constant () [] [value: builtin.integer <4294967295: ui32>]: <() -> (builtin.integer ui32)>;
+        d16 = mir.constant () [] [value: builtin.integer <16: ui32>]: <() -> (builtin.integer ui32)>;
+        s16 = nvvm.shfl_sync_bfly_f32 (mask, v0, d16) [] []: <(builtin.integer ui32, builtin.fp32, builtin.integer ui32) -> (builtin.fp32)>;
+        v1 = mir.add (v0, s16) [] []: <(builtin.fp32, builtin.fp32) -> (builtin.fp32)>;
+        d8 = mir.constant () [] [value: builtin.integer <8: ui32>]: <() -> (builtin.integer ui32)>;
+        s8 = nvvm.shfl_sync_bfly_f32 (mask, v1, d8) [] []: <(builtin.integer ui32, builtin.fp32, builtin.integer ui32) -> (builtin.fp32)>;
+        v2 = mir.add (v1, s8) [] []: <(builtin.fp32, builtin.fp32) -> (builtin.fp32)>;
+        d4 = mir.constant () [] [value: builtin.integer <4: ui32>]: <() -> (builtin.integer ui32)>;
+        s4 = nvvm.shfl_sync_bfly_f32 (mask, v2, d4) [] []: <(builtin.integer ui32, builtin.fp32, builtin.integer ui32) -> (builtin.fp32)>;
+        v3 = mir.add (v2, s4) [] []: <(builtin.fp32, builtin.fp32) -> (builtin.fp32)>;
+        d2 = mir.constant () [] [value: builtin.integer <2: ui32>]: <() -> (builtin.integer ui32)>;
+        s2 = nvvm.shfl_sync_bfly_f32 (mask, v3, d2) [] []: <(builtin.integer ui32, builtin.fp32, builtin.integer ui32) -> (builtin.fp32)>;
+        v4 = mir.add (v3, s2) [] []: <(builtin.fp32, builtin.fp32) -> (builtin.fp32)>;
+        d1 = mir.constant () [] [value: builtin.integer <1: ui32>]: <() -> (builtin.integer ui32)>;
+        s1 = nvvm.shfl_sync_bfly_f32 (mask, v4, d1) [] []: <(builtin.integer ui32, builtin.fp32, builtin.integer ui32) -> (builtin.fp32)>;
+        sum = mir.add (v4, s1) [] []: <(builtin.fp32, builtin.fp32) -> (builtin.fp32)>;
+        out_ptr = mir.extract_field (out) [] [index: mir.field_index 0]: <(mir.disjoint_slice <builtin.fp32 ,[]>) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:RawMut>)>;
+        out_elem = mir.ptr_offset (out_ptr, idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:RawMut>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:RawMut>)>;
+        mir.store (out_elem, sum) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:RawMut>, builtin.fp32) -> ()>;
+        mir.goto () [^exit] []: <() -> ()>
+
+      ^exit():
+        mir.return () [] []: <() -> ()>
+    };
+    mir.func @block_reduce_sum: builtin.function <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>, mir.disjoint_slice <builtin.fp32 ,[]>) -> ()>
+      [gpu_kernel: builtin.string "true", launch_contract_domain: builtin.integer <1: ui32>, reqntid_x: builtin.integer <256: ui32>, reqntid_y: builtin.integer <1: ui32>, reqntid_z: builtin.integer <1: ui32>, verify_no_data_race: builtin.string "0", verify_no_oob_shared: builtin.string "0", verify_uniform_barriers: builtin.string "true"]
+    {
+      ^entry(data: mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>, out: mir.disjoint_slice <builtin.fp32 ,[]>):
+        tx = nvvm.read_ptx_sreg_tid_x () [] []: <() -> (builtin.integer ui32)>;
+        lane = nvvm.read_ptx_sreg_laneid () [] []: <() -> (builtin.integer ui32)>;
+        zero_u32 = mir.constant () [] [value: builtin.integer <0: ui32>]: <() -> (builtin.integer ui32)>;
+        is_leader = mir.eq (lane, zero_u32) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer i1)>;
+        mir.cond_br (is_leader) [^leader_stage, ^barrier_sync] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^leader_stage():
+        c32_u32 = mir.constant () [] [value: builtin.integer <32: ui32>]: <() -> (builtin.integer ui32)>;
+        warp_u32 = mir.div (tx, c32_u32) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;
+        warp_idx = mir.cast (warp_u32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+        warp_sums_raw = mir.shared_alloc () [] [elem_type: builtin.type builtin.fp32, size: builtin.integer <8: i64>, alloc_key: builtin.string "WARP_SUMS", source_name: builtin.string "safe_warp_reduce::kernels::block_reduce_sum::WARP_SUMS"]: <() -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>)>;
+        warp_sums_mut = mir.cast (warp_sums_raw) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority Reborrow]: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>)>;
+        c8_write = mir.constant () [] [value: builtin.integer <8: ui64>]: <() -> (builtin.integer ui64)>;
+        ok_write = mir.lt (warp_idx, c8_write) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        mir.assert (ok_write) [] []: <(builtin.integer i1) -> ()>;
+        slot_ptr = mir.ptr_offset (warp_sums_mut, warp_idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>)>;
+        zero_f32 = mir.float_constant () [] [float_value: builtin.single 0]: <() -> (builtin.fp32)>;
+        mir.store (slot_ptr, zero_f32) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:UniqueRef>, builtin.fp32) -> ()>;
+        mir.goto () [^barrier_sync] []: <() -> ()>
+
+      ^barrier_sync():
+        nvvm.barrier0 () [] []: <() -> ()>;
+        init_sum = mir.float_constant () [] [float_value: builtin.single 0]: <() -> (builtin.fp32)>;
+        zero_w = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+        mir.goto (init_sum, zero_w) [^scan_header] []: <(builtin.fp32, builtin.integer ui64) -> ()>
+
+      ^scan_header(acc: builtin.fp32, w: builtin.integer ui64):
+        c8_u64 = mir.constant () [] [value: builtin.integer <8: ui64>]: <() -> (builtin.integer ui64)>;
+        in_scan = mir.lt (w, c8_u64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        done_scan = mir.not (in_scan) [] []: <(builtin.integer i1) -> (builtin.integer i1)>;
+        mir.cond_br (done_scan) [^exit, ^scan_body] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^scan_body():
+        warp_sums_read_raw = mir.shared_alloc () [] [elem_type: builtin.type builtin.fp32, size: builtin.integer <8: i64>, alloc_key: builtin.string "WARP_SUMS", source_name: builtin.string "safe_warp_reduce::kernels::block_reduce_sum::WARP_SUMS"]: <() -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>)>;
+        warp_sums_ref = mir.cast (warp_sums_read_raw) [] [cast_kind: mir.cast_kind PtrToPtr, pointer_kind_authority: mir.pointer_kind_authority Reborrow]: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>)>;
+        c8_read = mir.constant () [] [value: builtin.integer <8: ui64>]: <() -> (builtin.integer ui64)>;
+        ok_read = mir.lt (w, c8_read) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        mir.assert (ok_read) [] []: <(builtin.integer i1) -> ()>;
+        elem_ptr = mir.ptr_offset (warp_sums_ref, w) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>)>;
+        val = mir.load (elem_ptr) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:3,kind:SharedRef>) -> (builtin.fp32)>;
+        next_acc = mir.add (acc, val) [] []: <(builtin.fp32, builtin.fp32) -> (builtin.fp32)>;
+        one_u64 = mir.constant () [] [value: builtin.integer <1: ui64>]: <() -> (builtin.integer ui64)>;
+        next_w = mir.add (w, one_u64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+        mir.goto (next_acc, next_w) [^scan_header] []: <(builtin.fp32, builtin.integer ui64) -> ()>
+
+      ^exit():
+        mir.return () [] []: <() -> ()>
+    }
+}

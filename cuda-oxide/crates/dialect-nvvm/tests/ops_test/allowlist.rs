@@ -50,6 +50,8 @@ fn handwritten_ops_match_reviewed_allowlist() {
         // Address-domain conversions are handwritten, like the CTA CVTA.
         ("memory.rs", "CvtaGenericToClusterSharedOffsetOp"),
         ("memory.rs", "CvtaGenericToSharedOffsetOp"),
+        // Packs a shared offset and layout fields into the tcgen05 descriptor.
+        ("memory.rs", "Tcgen05SmemDescriptorOp"),
         ("wgmma.rs", "WgmmaMakeSmemDescOp"),
         ("wgmma.rs", "WgmmaMmaM64N64K16F32Bf16Op"),
         ("wgmma.rs", "WgmmaMmaM64N128K16F32Bf16Op"),

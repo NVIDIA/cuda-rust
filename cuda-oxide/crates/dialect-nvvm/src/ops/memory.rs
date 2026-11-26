@@ -9,6 +9,10 @@
 //! (WGMMA/tcgen05 SMEM descriptors, `ldmatrix`/`stmatrix` operands) consume
 //! raw space-local offsets instead. These operations expose that conversion
 //! as a first-class step, mirroring CUDA C++'s `__cvta_generic_to_shared_offset`.
+//!
+//! `nvvm.tcgen05_smem_descriptor` is the step after it: it packs such an offset
+//! and the layout fields into the 64-bit tcgen05 shared-memory descriptor, so a
+//! backend sees one descriptor operation instead of shifts and ors.
 
 use dialect_mir::types::{MirPtrType, address_space};
 use pliron::{
@@ -138,6 +142,67 @@ impl Verify for CvtaGenericToClusterSharedOffsetOp {
                 op.loc(),
                 "nvvm.cvta_generic_to_cluster_shared_offset result must be u32 or u64"
             );
+        }
+        Ok(())
+    }
+}
+
+/// Pack the fields of a tcgen05 shared-memory descriptor into its `u64` encoding.
+///
+/// Operands are `[address, leading_dim_bytes, stride_bytes, base_offset,
+/// leading_dim_absolute, swizzle]` with the types `u64, u32, u32, u8, bool, u8`.
+/// The address is a raw `.shared` offset in bytes, as
+/// `nvvm.cvta_generic_to_shared_offset` returns it. The three byte values lose
+/// their low four bits and are masked to 14 bits, `base_offset` and `swizzle`
+/// are masked to 3 bits, and bits 46-48 hold the fixed value `0b001`. This is
+/// the encoding of `cuda_device::tcgen05::tcgen05_smem_descriptor`.
+#[pliron_op(
+    name = "nvvm.tcgen05_smem_descriptor",
+    format,
+    interfaces = [NOpdsInterface<6>, NResultsInterface<1>],
+)]
+pub struct Tcgen05SmemDescriptorOp;
+
+impl Tcgen05SmemDescriptorOp {
+    /// Operand widths in order: address, two byte offsets, base offset,
+    /// leading-dimension mode, swizzle.
+    pub const OPERAND_WIDTHS: [u32; 6] = [64, 32, 32, 8, 1, 8];
+
+    /// Wrap an existing operation pointer.
+    pub fn new(op: Ptr<Operation>) -> Self {
+        Tcgen05SmemDescriptorOp { op }
+    }
+}
+
+/// Match a Rust unsigned integer of `width` bits, or `bool` for width 1.
+fn is_descriptor_field(ctx: &Context, ty: pliron::r#type::TypeHandle, width: u32) -> bool {
+    ty.deref(ctx)
+        .downcast_ref::<IntegerType>()
+        .is_some_and(|integer| {
+            // The importer types `bool` as a signless one-bit integer.
+            integer.width() == width && (width == 1 || integer.signedness() == Signedness::Unsigned)
+        })
+}
+
+impl Verify for Tcgen05SmemDescriptorOp {
+    fn verify(&self, ctx: &Context) -> Result<(), Error> {
+        let op = self.get_operation().deref(ctx);
+        if op.get_num_operands() != 6 || op.get_num_results() != 1 {
+            return verify_err!(
+                op.loc(),
+                "nvvm.tcgen05_smem_descriptor requires exactly [address, leading_dim_bytes, stride_bytes, base_offset, leading_dim_absolute, swizzle] and one result"
+            );
+        }
+        for (index, width) in Self::OPERAND_WIDTHS.into_iter().enumerate() {
+            if !is_descriptor_field(ctx, op.get_operand(index).get_type(ctx), width) {
+                return verify_err!(
+                    op.loc(),
+                    "nvvm.tcgen05_smem_descriptor operands must be u64, u32, u32, u8, bool, u8"
+                );
+            }
+        }
+        if !is_descriptor_field(ctx, op.get_result(0).get_type(ctx), 64) {
+            return verify_err!(op.loc(), "nvvm.tcgen05_smem_descriptor result must be u64");
         }
         Ok(())
     }

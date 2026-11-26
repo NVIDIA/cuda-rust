@@ -20,8 +20,8 @@ defaults:
 jobs:
   windows-compile:
     name: Windows MSVC compile & PTX/cubin check (GPU-less)
-    runs-on: windows-amd64-cpu8
-    timeout-minutes: 60
+    runs-on: windows-amd64-cpu16
+    timeout-minutes: 90
     steps:
       - name: Clone repository
         uses: actions/checkout@v4
@@ -30,6 +30,19 @@ jobs:
         run: |
           git config --global --add safe.directory "$env:GITHUB_WORKSPACE"
           git config --global core.longpaths true
+
+      - name: Set up Python 3 (for verify-code-shape.sh scripts)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Provide python3.exe alias ahead of WindowsApps stub
+        run: |
+          $ErrorActionPreference = "Stop"
+          $pyExe = (Get-Command python.exe -ErrorAction Stop).Source
+          $pyDir = Split-Path -Parent $pyExe
+          Copy-Item -LiteralPath $pyExe -Destination (Join-Path $pyDir "python3.exe") -Force
+          $pyDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       # NVIDIA's self-hosted Windows Server 2025 VM image ships git, pwsh, bash,
       # zstd, and tar, but no Visual Studio C++ Build Tools. Install VCTools +
@@ -367,7 +380,8 @@ jobs:
           & $cargoOxide doctor
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Compile representative kernels and verify PTX (ptxas) and COFF cubin embedding
+      - name: Compile all examples and verify PTX (ptxas) and COFF cubin embedding
+        timeout-minutes: 65
         working-directory: cuda-oxide
         env:
           CARGO_INCREMENTAL: "0"
@@ -389,9 +403,8 @@ jobs:
             throw "Git Bash was not found at $gitBash"
           }
 
-          # 1. Compile-only sweep + ptxas assembly + code-shape verification under Git Bash.
-          & $gitBash scripts/smoketest.sh --compile-only --no-color `
-            -o '^(vecadd|sharedmem|atomics|scalar_math_sm75|generated_intrinsics_blackwell)$'
+          # 1. Full compile-only sweep + ptxas assembly + code-shape verification under Git Bash.
+          & $gitBash scripts/smoketest.sh --compile-only --no-color
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           # Helper: extract the `.oxart` section from a linked Windows PE executable

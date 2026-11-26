@@ -318,7 +318,7 @@ fn exported_device_global_keeps_its_user_symbol() {
         .expect("the user-named static keeps its symbol");
     assert_eq!(named.address_space(&ctx), llvm_addr::GLOBAL);
     assert!(named.is_retained(&ctx));
-    assert!(!named.is_host_written(&ctx));
+    assert!(named.is_host_written(&ctx));
     let generated = globals
         .iter()
         .find(|g| g.get_symbol_name(&ctx).to_string() != "ODT_SYM_IN")

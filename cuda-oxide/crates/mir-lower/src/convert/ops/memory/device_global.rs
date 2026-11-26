@@ -277,10 +277,13 @@ fn create_device_global(
         global_op.mark_retained(ctx);
         global_op.mark_host_written(ctx);
     } else if exported_symbol.is_some() {
-        // A user-named global exists for host lookup: keep it rooted even if
-        // optimization removes every device access, like `#[no_mangle]` on
-        // the host.
+        // A user-named global exists for host lookup (`cuModuleGetGlobal`,
+        // `optixPipelineSymbolMemcpyAsync`): keep it rooted and mark it
+        // host-written (`externally_initialized`) so whole-program LTO never
+        // internalizes a never-device-stored global or folds loads to its
+        // compile-time initializer.
         global_op.mark_retained(ctx);
+        global_op.mark_host_written(ctx);
     }
     if matches!(
         spec.addr_space,

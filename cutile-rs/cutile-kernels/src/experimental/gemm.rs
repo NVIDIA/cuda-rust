@@ -3,17 +3,24 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! Experimental baseline GEMM kernels.
+//! Experimental mixed-precision GEMM kernels.
 
 #[cutile::module]
 pub mod gemm_f16_module {
     use cutile::core::*;
 
-    /// Baseline f16 GEMM with f32 MMA operands.
+    /// GEMM with f16 operands, f32 accumulation, and f16 output.
+    ///
+    /// Keep the operands in f16 for MMA; widening them before multiplication
+    /// changes the operation selected by the compiler. Only the accumulator
+    /// needs f32 precision. The output is rounded to f16 once after the K loop.
     ///
     /// # Safety
-    /// K must be divisible by BK. Inputs must cover every tile addressed by the
-    /// output partition/grid, and output must not alias inputs or other writers.
+    /// X[M,K], Y[K,N], and Z[M,N] must have matching positive dimensions and
+    /// TMA-compatible strides. K must be divisible by BK. Use supported MMA
+    /// tile sizes, output partitions [BM,BN], and grid (ceil(M/BM),ceil(N/BN),1).
+    /// Partial M/N tiles are masked. Output must not alias inputs or other
+    /// writers, and padded indices must fit i32.
     #[cutile::entry(print_ir=false,
                        unchecked_accesses=true,
                        optimization_hints = (
@@ -31,10 +38,7 @@ pub mod gemm_f16_module {
         for i in 0i32..(K / BK) {
             let tile_x: Tile<f16, { [BM, BK] }> = part_x.load([pid.0, i]);
             let tile_y: Tile<f16, { [BK, BN] }> = part_y.load([i, pid.1]);
-            let tile_x: Tile<f32, { [BM, BK] }> = convert_tile(tile_x);
-            let tile_y: Tile<f32, { [BK, BN] }> = convert_tile(tile_y);
             tile_z = mma(tile_x, tile_y, tile_z);
-            continue;
         }
         let tile_z: Tile<f16, { [BM, BN] }> = convert_tile(tile_z);
         z.store(tile_z);

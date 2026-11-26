@@ -376,6 +376,17 @@ semantic_op!(
     [U32, SharedF16, SharedF16, U32, U32, U32, U32, U32, Bool],
     |_| true
 );
+semantic_op!(
+    /// Issue one `K = 64` sub-step (`0` or `1`) of an SM107 `mxf8f6f4` block-scaled MMA (`SF_VEC = 32`).
+    ///
+    /// Operands: `[tmem_d, a, b, sfa_tmem, sfb_tmem, sub_k, accumulate]`.
+    CuteSm107BlockScaledGemmOp,
+    "cute.sm107_block_scaled_gemm",
+    sm107_block_scaled_gemm_plan,
+    CuteSm107BlockScaledMmaPlanAttr,
+    [U32, SharedF16, SharedF16, U32, U32, U32, Bool],
+    |_| true
+);
 
 /// Apply a callback to the closed paired-SM100 operation set.
 macro_rules! for_all_ops {
@@ -401,7 +412,8 @@ macro_rules! for_all_ops {
             CuteSm100StoreAcquireOp,
             CuteSm100StoreTailOp,
             CuteSm100BlockScaledCopyOp,
-            CuteSm100BlockScaledGemmOp
+            CuteSm100BlockScaledGemmOp,
+            CuteSm107BlockScaledGemmOp
         )
     };
 }
@@ -424,6 +436,7 @@ pub fn register(ctx: &mut Context) {
     CuteSm100PipelinePlanAttr::register(ctx);
     CuteSm100ScaleCopyPlanAttr::register(ctx);
     CuteSm100BlockScaledMmaPlanAttr::register(ctx);
+    CuteSm107BlockScaledMmaPlanAttr::register(ctx);
 }
 /// Locally verify a recognized operation; `None` means another family.
 pub fn verify_local(ctx: &Context, op: Ptr<Operation>) -> Option<Result<(), Error>> {

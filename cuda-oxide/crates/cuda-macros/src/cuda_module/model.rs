@@ -34,6 +34,9 @@ pub(crate) struct CudaModuleKernel {
     pub(super) cluster_dim: Option<(u32, u32, u32)>,
     pub(super) cooperative: bool,
     pub(super) launch_contract: Option<CudaModuleLaunchContract>,
+    /// Output slice parameters declared in `#[verify(writes_all_elems(...))]`,
+    /// checked at host launch time via `param.len() <= grid.x * block.x`.
+    pub(super) writes_all_elems_params: Vec<Ident>,
     pub(super) is_generic: bool,
 }
 

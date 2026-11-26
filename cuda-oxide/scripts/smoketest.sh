@@ -22,11 +22,11 @@
 #                   elsewhere PTX compilation is sufficient (plus the
 #                   ptxas gate).
 #   blackwell-mma -- Blackwell-consumer-only MMA (kind::mxf8f6f4 exists on
-#                   sm_120/sm_121 alone), always compiled with
-#                   `--arch=sm_120a` because the generated target gating
-#                   rejects every other architecture at compile time. On an
-#                   sm_120/121 host require full execution; elsewhere the
-#                   example verifies the generated PTX and exits 0.
+#                   sm_120/sm_121 alone). Target selection uses the detected
+#                   host arch on sm_120/sm_121 (sm_120a / sm_121a) and falls
+#                   back to sm_120a elsewhere. On an sm_120/121 host require
+#                   full execution; elsewhere the example verifies the
+#                   generated PTX and exits 0 (plus the ptxas gate).
 #   ltoir        -- runs with `--emit-nvvm-ir --arch=<host>`; the host
 #                   compute capability is detected via `nvidia-smi` so the
 #                   resulting cubin actually loads. Execution must succeed
@@ -2287,12 +2287,6 @@ run_cargo() {
         # Any concrete arch works: the finalizer (libNVVM + nvJitLink) runs
         # here too, so this lane exercises the full native-artifact path.
         args+=("--arch=sm_90")
-    fi
-    # kind::mxf8f6f4 admits only sm_120/sm_121 in the generated target
-    # gating, so the device build must always pin sm_120a; the example
-    # itself decides at runtime whether the host GPU can execute it.
-    if [[ "${cat}" == "blackwell-mma" ]]; then
-        args+=("--arch=sm_120a")
     fi
     if [[ "${cat}" == "ltoir" || ( "${cat}" == "auto-nvvm" && ${COMPILE_ONLY} -eq 1 ) ]]; then
         args+=("--emit-nvvm-ir" "--arch=${LTOIR_ARCH}")

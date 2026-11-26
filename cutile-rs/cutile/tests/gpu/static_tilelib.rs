@@ -4,18 +4,22 @@
  */
 
 //! Foreign tile-library calls executed on the GPU, against a static test
-//! tile library built from `gpu/tilelib/` with the toolkit's own tools:
+//! tile library built from the sources in `gpu/tilelib/`:
 //! `cuda-tile-translate` assembles the interface and the implementation
 //! catalog, `nvcc` compiles the SIMT code to LTO-IR, and `tileiras
-//! --preview-create-tile-lib` packages them. Skipped without a Tile IR 13.5
-//! `tileiras` or without `nvcc` next to it.
+//! --preview-create-tile-lib` packages them.
+//!
+//! `nvcc` and `tileiras` come from the toolkit. The public toolkit has no
+//! `cuda-tile-translate`: `CUTILE_TILE_TRANSLATE` names the executable, and
+//! without it the one next to `tileiras` is used. `cargo build --release -p
+//! cuda-tile-rs` builds one (see that crate's README).
+//!
+//! Skipped without a Tile IR 13.5 `tileiras`, without `nvcc` next to it, or
+//! without `cuda-tile-translate`. With `CUTILE_REQUIRE_TILELIB=1` a skip is a
+//! failure.
 //!
 //! A static tile library carries precompiled SIMT code and needs no
-//! implementation-provider shared library. When the toolkit has no
-//! `cuda-tile-translate`, `gpu/tilelib/prebuilt/` is used instead; after
-//! editing a `.mlir` file, regenerate it with
-//! `cuda-tile-translate <name>.mlir --mlir-to-cudatilebc --preview=simt
-//! --bytecode-version=13.5 -o prebuilt/<name>.tilebc`.
+//! implementation-provider shared library.
 
 use crate::common::supports_tile_ir as supports;
 use cutile::prelude::*;
@@ -29,6 +33,9 @@ use std::sync::OnceLock;
 
 /// The built `test_lib.tilelib`, once [`test_tilelib_available`] built it.
 static TILELIB: OnceLock<PathBuf> = OnceLock::new();
+
+/// The `cuda-tile-translate` that built it (see [`tile_translate`]).
+static TRANSLATE: OnceLock<PathBuf> = OnceLock::new();
 
 /// The test library, as the host configures it.
 fn tilelib() -> TileLibrarySpec {
@@ -224,6 +231,67 @@ mod kernels {
     fn lane_ids_kernel(ids: &mut Tensor<i32, { [32] }>) {
         ids.store(unsafe { lane_ids() });
     }
+
+    /// The library writes twice each element of `x` to global memory
+    /// through `dst`.
+    ///
+    /// # Safety
+    ///
+    /// `dst` is valid for writes of 32 contiguous `f32` inside one
+    /// allocation (the library does not check bounds), and no other tile
+    /// block reads or writes them during the call.
+    #[cutile::foreign]
+    pub unsafe fn store_to(x: Tile<f32, { [32] }>, dst: *mut f32);
+
+    /// The library reads 32 elements through `src` and returns each plus one.
+    ///
+    /// # Safety
+    ///
+    /// `src` is valid for reads of 32 contiguous `f32` inside one allocation
+    /// (the library does not check bounds), and no other tile block writes
+    /// them during the call.
+    #[cutile::foreign]
+    pub unsafe fn load_from(src: *const f32) -> Tile<f32, { [32] }>;
+
+    /// Each block hands the library its own tile of `y`, then loads the tile
+    /// back into `x`: the load is ordered after the call. `subtensor_mut_ptr` is
+    /// relative to the block, like `load` and `store`.
+    #[cutile::entry()]
+    fn store_through_pointer_kernel(x: &mut Tensor<f32, { [32] }>, y: &mut Tensor<f32, { [32] }>) {
+        unsafe { store_to(x.load(), y.subtensor_mut_ptr()) };
+        x.store(y.load());
+    }
+
+    /// A `[1, 32]` tile of a row-major tensor is 32 contiguous elements:
+    /// block `(i, j)` writes row `i`, columns `[32 j, 32 j + 32)`, through its
+    /// pointer, so both block ids reach the address.
+    #[cutile::entry()]
+    fn store_through_rank_2_pointer_kernel(
+        x: &mut Tensor<f32, { [1, 32] }>,
+        y: &mut Tensor<f32, { [1, 32] }>,
+    ) {
+        let t: Tile<f32, { [32] }> = x.load().reshape(shape![32]);
+        unsafe { store_to(t, y.subtensor_mut_ptr()) };
+    }
+
+    /// The rank-3 form: block `(i, j, k)` writes its `[1, 1, 32]` tile.
+    #[cutile::entry()]
+    fn store_through_rank_3_pointer_kernel(
+        x: &mut Tensor<f32, { [1, 1, 32] }>,
+        y: &mut Tensor<f32, { [1, 1, 32] }>,
+    ) {
+        let t: Tile<f32, { [32] }> = x.load().reshape(shape![32]);
+        unsafe { store_to(t, y.subtensor_mut_ptr()) };
+    }
+
+    /// Each block hands the library its own slot of `x` to read.
+    #[cutile::entry()]
+    fn load_through_pointer_kernel(z: &mut Tensor<f32, { [32] }>, x: &Tensor<f32, { [-1] }>) {
+        let pid: (i32, i32, i32) = get_tile_block_id();
+        let base: PointerTile<*const f32, { [] }> = pointer_to_tile(x.as_ptr());
+        let slot: PointerTile<*const f32, { [] }> = base.offset(pid.0 * 32i32);
+        z.store(unsafe { load_from(tile_to_pointer(slot)) });
+    }
 }
 
 /// Runs a toolkit tool and panics with its output when it fails.
@@ -245,35 +313,44 @@ fn tilelib_sources() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/gpu/tilelib")
 }
 
+/// The `cuda-tile-translate` that assembles the library's `.mlir` sources:
+/// `CUTILE_TILE_TRANSLATE` when it is set, otherwise the one next to
+/// `tileiras` in `bin`, if there is one.
+fn tile_translate(bin: &Path) -> Option<PathBuf> {
+    match std::env::var_os("CUTILE_TILE_TRANSLATE").filter(|path| !path.is_empty()) {
+        Some(path) => {
+            let path = PathBuf::from(path);
+            assert!(
+                path.is_file(),
+                "CUTILE_TILE_TRANSLATE names {path:?}, which is not a file"
+            );
+            Some(path)
+        }
+        None => Some(bin.join("cuda-tile-translate")).filter(|path| path.is_file()),
+    }
+}
+
 /// Builds `test_lib.tilelib` for the device's architecture into `dir`, with
-/// the SIMT implementation in `simt_source`. Intermediate files go to a
-/// per-process directory, and the library is renamed into place, so
-/// concurrent test processes never see a partial file.
-fn build_test_tilelib(bin: &Path, sm: &str, simt_source: &Path, dir: &Path) {
+/// the SIMT implementation in `simt_source`. `translate` assembles the
+/// `.mlir` sources; `nvcc` and `tileiras` are taken from `bin`. Intermediate
+/// files go to a per-process directory, and the library is renamed into
+/// place, so concurrent test processes never see a partial file.
+fn build_test_tilelib(translate: &Path, bin: &Path, sm: &str, simt_source: &Path, dir: &Path) {
     let src = tilelib_sources();
     let work = dir.join(format!("build-{}", std::process::id()));
     std::fs::create_dir_all(&work).expect("create the test tile-library directory");
-    let translate = bin.join("cuda-tile-translate");
     for name in ["interface", "implementation"] {
-        let out = work.join(format!("{name}.tilebc"));
-        if translate.is_file() {
-            run(
-                &translate,
-                &[
-                    src.join(format!("{name}.mlir")).as_os_str(),
-                    "--mlir-to-cudatilebc".as_ref(),
-                    "--preview=simt".as_ref(),
-                    "--bytecode-version=13.5".as_ref(),
-                    "-o".as_ref(),
-                    out.as_os_str(),
-                ],
-            );
-        } else {
-            // Some toolkits do not ship cuda-tile-translate; the prebuilt
-            // bytecode is assembled from the same .mlir files.
-            std::fs::copy(src.join(format!("prebuilt/{name}.tilebc")), &out)
-                .expect("copy prebuilt tile bytecode");
-        }
+        run(
+            translate,
+            &[
+                src.join(format!("{name}.mlir")).as_os_str(),
+                "--mlir-to-cudatilebc".as_ref(),
+                "--preview=simt".as_ref(),
+                "--bytecode-version=13.5".as_ref(),
+                "-o".as_ref(),
+                work.join(format!("{name}.tilebc")).as_os_str(),
+            ],
+        );
     }
     let arch = sm.trim_start_matches("sm_");
     let fatbin = work.join("test_lib.fatbin");
@@ -314,27 +391,52 @@ fn build_test_tilelib(bin: &Path, sm: &str, simt_source: &Path, dir: &Path) {
     std::fs::remove_dir_all(&work).ok();
 }
 
+/// A skipped test passes, and the harness reports it as passed. The CUDA 13.5
+/// GPU job sets `CUTILE_REQUIRE_TILELIB=1`: there these tests must run, so a
+/// skip fails them instead.
+fn skip_tilelib(reason: &str) -> bool {
+    if std::env::var("CUTILE_REQUIRE_TILELIB").as_deref() == Ok("1") {
+        panic!("CUTILE_REQUIRE_TILELIB=1 but the tile library tests cannot run: {reason}");
+    }
+    eprintln!("SKIP static tile library: {reason}");
+    false
+}
+
 /// Builds the test library once per process (see [`tilelib`]). Returns
-/// false (skip) without Tile IR
-/// 13.5 foreign-call support or without `nvcc` next to `tileiras`; a tool
-/// that is present but fails is a test failure.
+/// false (skip) without Tile IR 13.5 foreign-call support, without `nvcc`
+/// next to `tileiras`, or without `cuda-tile-translate` (see
+/// [`tile_translate`]); a tool that is present but fails is a test failure.
+/// With `CUTILE_REQUIRE_TILELIB=1` a skip is a failure too (see
+/// [`skip_tilelib`]).
 fn test_tilelib_available() -> bool {
     static BUILT: OnceLock<bool> = OnceLock::new();
     *BUILT.get_or_init(|| {
         if !supports(&[Feature::ForeignCall]) {
-            return false;
+            return skip_tilelib("the selected toolkit has no Tile IR 13.5 foreign-call support");
         }
         let tileiras = cutile_compiler::cuda_tile_runtime_utils::tileiras_binary();
         let bin = tileiras.parent().map(PathBuf::from).unwrap_or_default();
         if !bin.join("nvcc").is_file() {
-            eprintln!("SKIP static tile library: no nvcc next to {tileiras:?}");
-            return false;
+            return skip_tilelib(&format!("no nvcc next to {tileiras:?}"));
         }
+        let Some(translate) = tile_translate(&bin) else {
+            return skip_tilelib(&format!(
+                "no cuda-tile-translate: CUTILE_TILE_TRANSLATE is not set and none is next to \
+                 {tileiras:?}"
+            ));
+        };
         let sm = cutile_compiler::cuda_tile_runtime_utils::get_gpu_name(0);
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
             .join("cutile-test-tilelib")
             .join(&sm);
-        build_test_tilelib(&bin, &sm, &tilelib_sources().join("test_lib.cu"), &dir);
+        build_test_tilelib(
+            &translate,
+            &bin,
+            &sm,
+            &tilelib_sources().join("test_lib.cu"),
+            &dir,
+        );
+        TRANSLATE.set(translate).ok();
         TILELIB.set(dir.join("test_lib.tilelib")).ok();
         true
     })
@@ -448,6 +550,98 @@ fn a_function_without_operands_returns_its_output_only_result() -> Result<(), Er
         .sync()?;
     let expected: Vec<i32> = (0..32).collect();
     assert_eq!(ids.unpartition().to_host_vec().sync()?, expected);
+    Ok(())
+}
+
+/// Two blocks each pass the library a pointer to their slot of `y`; the
+/// library writes `2 x` there, and each block's load after the call reads
+/// it back.
+#[test]
+fn the_library_writes_through_a_pointer_operand() -> Result<(), Error> {
+    if !test_tilelib_available() {
+        return Ok(());
+    }
+    let input: Vec<f32> = (0..64).map(|i| i as f32).collect();
+    let x = api::copy_host_vec_to_device(&Arc::new(input.clone()))
+        .sync()?
+        .partition([32]);
+    let y = api::full::<f32>(-1.0, &[64]).sync()?.partition([32]);
+    let (x, y) = kernels::store_through_pointer_kernel(x, y)
+        .compile_options(with_tilelib())
+        .sync()?;
+    let doubled: Vec<f32> = input.iter().map(|v| 2.0 * v).collect();
+    assert_eq!(y.unpartition().to_host_vec().sync()?, doubled);
+    assert_eq!(x.unpartition().to_host_vec().sync()?, doubled);
+    Ok(())
+}
+
+/// Runs `kernel` on a `shape` tensor split into tiles of `tile` (32
+/// contiguous elements each) and checks that every block's pointer reached
+/// its own tile: the library writes `2 x` to each.
+fn check_block_tile_pointers<const R: usize>(
+    shape: [usize; R],
+    tile: [usize; R],
+    kernel: impl FnOnce(
+        Partition<Tensor<f32>>,
+        Partition<Tensor<f32>>,
+    ) -> Result<(Partition<Tensor<f32>>, Partition<Tensor<f32>>), DeviceError>,
+) -> Result<(), Error> {
+    let len: usize = shape.iter().product();
+    let input: Vec<f32> = (0..len).map(|i| i as f32).collect();
+    let x = api::copy_host_vec_to_device(&Arc::new(input.clone()))
+        .reshape(&shape)
+        .sync()?
+        .partition(tile);
+    let y = api::full::<f32>(-1.0, &shape).sync()?.partition(tile);
+    let (_, y) = kernel(x, y)?;
+    let doubled: Vec<f32> = input.iter().map(|v| 2.0 * v).collect();
+    assert_eq!(y.unpartition().to_host_vec().sync()?, doubled);
+    Ok(())
+}
+
+/// `subtensor_mut_ptr` of a rank-2 block tile offsets both axes by the block
+/// id: a `[3, 64]` tensor in `[1, 32]` tiles runs a 3 x 2 grid.
+#[test]
+fn a_rank_2_block_tile_pointer_reaches_the_library() -> Result<(), Error> {
+    if !test_tilelib_available() {
+        return Ok(());
+    }
+    check_block_tile_pointers([3, 64], [1, 32], |x, y| {
+        kernels::store_through_rank_2_pointer_kernel(x, y)
+            .compile_options(with_tilelib())
+            .sync()
+    })
+}
+
+/// `subtensor_mut_ptr` of a rank-3 block tile offsets all three axes by the
+/// block id: a `[2, 3, 64]` tensor in `[1, 1, 32]` tiles runs a 2 x 3 x 2
+/// grid.
+#[test]
+fn a_rank_3_block_tile_pointer_reaches_the_library() -> Result<(), Error> {
+    if !test_tilelib_available() {
+        return Ok(());
+    }
+    check_block_tile_pointers([2, 3, 64], [1, 1, 32], |x, y| {
+        kernels::store_through_rank_3_pointer_kernel(x, y)
+            .compile_options(with_tilelib())
+            .sync()
+    })
+}
+
+/// Two blocks each pass the library a pointer to their slot of `x`.
+#[test]
+fn the_library_reads_through_a_pointer_operand() -> Result<(), Error> {
+    if !test_tilelib_available() {
+        return Ok(());
+    }
+    let input: Vec<f32> = (0..64).map(|i| i as f32).collect();
+    let x = api::copy_host_vec_to_device(&Arc::new(input.clone())).sync()?;
+    let z = api::full::<f32>(-1.0, &[64]).sync()?.partition([32]);
+    let (z, _) = kernels::load_through_pointer_kernel(z, x)
+        .compile_options(with_tilelib())
+        .sync()?;
+    let expected: Vec<f32> = input.iter().map(|v| v + 1.0).collect();
+    assert_eq!(z.unpartition().to_host_vec().sync()?, expected);
     Ok(())
 }
 
@@ -576,7 +770,7 @@ fn a_rebuilt_library_recompiles_through_a_hot_launch_site() -> Result<(), Error>
         .map(PathBuf::from)
         .unwrap_or_default();
     let sm = cutile_compiler::cuda_tile_runtime_utils::get_gpu_name(0);
-    build_test_tilelib(&bin, &sm, &simt_source, &dir);
+    build_test_tilelib(TRANSLATE.get().unwrap(), &bin, &sm, &simt_source, &dir);
 
     assert_eq!(launch()?, plus(11.0), "the launch runs the rebuilt library");
     let key = kernels::rebuilt_library_kernel(api::meta::<f32>(&[32]).partition([32]))
@@ -630,6 +824,88 @@ fn a_kernel_without_foreign_calls_ignores_library_files() -> Result<(), Error> {
         "a kernel that links no library is not compiled again for a rebuilt library"
     );
     std::fs::remove_dir_all(&dir).ok();
+    Ok(())
+}
+
+/// The in-memory cache key of `no_library_kernel` launched with `libraries`.
+/// Computing the key resolves (hashes) the libraries but compiles nothing,
+/// so any file serves as a library.
+fn no_library_key(libraries: &[&Path]) -> cutile::tile_kernel::TileFunctionKey {
+    let options = libraries
+        .iter()
+        .fold(CompileOptions::new(), |options, path| {
+            options.tile_library(TileLibrarySpec::new(*path))
+        });
+    kernels::no_library_kernel(api::meta::<f32>(&[32]).partition([32]))
+        .compile_options(options)
+        .l1_cache_key()
+        .expect("L1 key")
+}
+
+/// Every spelling of one set of tile libraries keys a kernel once: the
+/// list as written (a duplicate, a path through `.`, an order) is not part
+/// of the key, only the resolved, de-duplicated libraries are. Different
+/// contents still key differently. Needs no tile library toolchain.
+#[test]
+fn one_set_of_tile_libraries_is_one_cache_key() -> Result<(), Error> {
+    let dir = std::env::temp_dir().join(format!("cutile_tilelib_key_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create the libraries' folder");
+    let a = dir.join("a.tilelib");
+    let b = dir.join("b.tilelib");
+    std::fs::write(&a, b"library a").unwrap();
+    std::fs::write(&b, b"library b").unwrap();
+    let a_dotted = dir.join(".").join("a.tilelib");
+
+    let one = no_library_key(&[&a]);
+    assert_eq!(no_library_key(&[&a, &a]), one, "a duplicated library");
+    assert_eq!(
+        no_library_key(&[&a_dotted]),
+        one,
+        "another path to the library"
+    );
+    assert_eq!(
+        no_library_key(&[&a, &b]),
+        no_library_key(&[&b, &a]),
+        "the libraries' order"
+    );
+    assert!(one.compile_options.tile_libraries.is_empty());
+
+    assert_ne!(no_library_key(&[]), one, "no library");
+    assert_ne!(no_library_key(&[&a, &b]), one, "one more library");
+    std::fs::write(&a, b"library a, rebuilt").unwrap();
+    assert_ne!(no_library_key(&[&a]), one, "a rebuilt library");
+    std::fs::remove_dir_all(&dir).ok();
+    Ok(())
+}
+
+/// A launch that names a default library again keys the kernel as the
+/// same launch without the default: it compiles once, and its launches
+/// share one module and one copy of each `Global`. The list as written
+/// once keyed them apart, so `global_accesses_after_a_foreign_call_execute`
+/// failed whenever `default_tile_libraries_link_every_kernel` ran between
+/// its two launches: the second launch compiled a second module whose
+/// counter started at 0.
+#[test]
+fn a_default_library_named_again_keeps_the_cache_key() -> Result<(), Error> {
+    if !test_tilelib_available() {
+        return Ok(());
+    }
+    // Changes the defaults, part of every kernel's cache key.
+    let _lock = crate::common::cache_test_lock();
+    let key = || {
+        kernels::global_after_call_kernel(
+            api::meta::<f32>(&[32]).partition([32]),
+            api::meta::<i32>(&[1]).partition([1]),
+            api::meta::<i32>(&[1]).partition([1]),
+        )
+        .compile_options(with_tilelib())
+        .l1_cache_key()
+        .expect("L1 key")
+    };
+    let without_default = key();
+    let _restore = RestoreDefaultTileLibraries::save();
+    cutile::tile_kernel::set_default_tile_libraries([tilelib()]);
+    assert_eq!(key(), without_default);
     Ok(())
 }
 

@@ -93,15 +93,16 @@ pub struct CuteSm100MmaAttr {
 }
 impl Verify for CuteSm100MmaAttr {
     fn verify(&self, ctx: &Context) -> Result<(), Error> {
-        if !matches!(self.cta_group, 1 | 2)
-            || self.m != 128
+        let valid_m = (self.cta_group == 1 && matches!(self.m, 64 | 128))
+            || (self.cta_group == 2 && matches!(self.m, 128 | 256));
+        if !valid_m
             || !(16..=256).contains(&self.n)
             || !self.n.is_multiple_of(16)
             || self.k == 0
             || !self.k.is_multiple_of(16)
         {
             return verify_err_noloc!(
-                "SM100 independent FP16 MMA requires M128, N16..256 by16, K by16, CTA group1 or2"
+                "SM100 independent F16/BF16 MMA requires M in 64/128 (CG1) or 128/256 (CG2), N16..256 by16, K by16"
             );
         }
         for (layout, rows, mn) in [
@@ -299,14 +300,47 @@ operation!(
     CuteSm100TmaAttr,
     [Descriptor, Shared, I32, I32, I32]
 );
+operation!(
+    /// Issue shared BF16 A × shared BF16 B into FP32 TMEM from one elected leader lane.
+    ///
+    /// Operands: `[destination, a_base, b_base, accumulate, a_bytes, b_bytes]`.
+    CuteSm100Bf16MmaSsOp,
+    "cute.sm100_bf16_mma_ss",
+    sm100_bf16_mma_ss_plan,
+    CuteSm100MmaAttr,
+    [U32, Shared, Shared, Bool, U32, U32]
+);
+operation!(
+    /// Start a rank-three global-to-shared BF16 transfer from all producer-warp lanes.
+    ///
+    /// Operands: `[descriptor, destination, c0, c1, c2, barrier, rank]`.
+    CuteSm100Bf16TmaLoadOp,
+    "cute.sm100_bf16_tma_load",
+    sm100_bf16_tma_load_plan,
+    CuteSm100TmaAttr,
+    [Descriptor, SharedWrite, I32, I32, I32, Barrier, U32]
+);
+operation!(
+    /// Start a rank-three shared-to-global BF16 transfer from one elected issuer.
+    ///
+    /// Operands: `[descriptor, source, c0, c1, c2]`.
+    CuteSm100Bf16TmaStoreOp,
+    "cute.sm100_bf16_tma_store",
+    sm100_bf16_tma_store_plan,
+    CuteSm100TmaAttr,
+    [Descriptor, Shared, I32, I32, I32]
+);
 /// Apply a callback to the closed independent attention operation set.
 macro_rules! each_op {
     ($m:ident) => {
         $m!(
             CuteSm100MmaSsOp,
+            CuteSm100Bf16MmaSsOp,
             CuteSm100MmaTsOp,
             CuteSm100TmaLoadOp,
-            CuteSm100TmaStoreOp
+            CuteSm100Bf16TmaLoadOp,
+            CuteSm100TmaStoreOp,
+            CuteSm100Bf16TmaStoreOp
         )
     };
 }
@@ -342,6 +376,8 @@ pub fn verify_story(ctx: &Context, ops: &[Ptr<Operation>]) -> Result<(), String>
         let id = Operation::get_opid(op, ctx);
         let plan = if id == CuteSm100MmaSsOp::get_opid_static() {
             CuteSm100MmaSsOp::wrap(op).plan(ctx)
+        } else if id == CuteSm100Bf16MmaSsOp::get_opid_static() {
+            CuteSm100Bf16MmaSsOp::wrap(op).plan(ctx)
         } else if id == CuteSm100MmaTsOp::get_opid_static() {
             CuteSm100MmaTsOp::wrap(op).plan(ctx)
         } else {

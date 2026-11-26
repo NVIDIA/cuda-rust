@@ -13,6 +13,19 @@ pub mod fmha_prefill_gqa_lpt_module {
     use cutile::core::*;
 
     /// Raw-pointer long-prefill GQA attention with LPT/swizzled scheduling. Experimental TileGym-style path for long transformer prefill cells.
+    ///
+    /// # Safety
+    /// Q/output are contiguous [q_len, q_heads, D]; K/V are contiguous
+    /// [kv_heads, kv_len, D]. In particular, the physical K/V head stride
+    /// must equal kv_len * D. For a cache with a larger reserved sequence
+    /// stride, use [`fmha_prefill_gqa_lpt_strided`]. Pointers must be
+    /// 16-byte aligned and outputs must not alias inputs or concurrent writes.
+    /// M_EFF = BM * GROUP; GROUP divides query_group_size, which divides
+    /// q_heads = num_head_groups * GROUP. Dimensions and scheduling divisors
+    /// are positive; num_q_blocks = ceil(q_len / BM). EVEN_K = 1 requires
+    /// kv_len divisible by BN. Use a matching schedule/swizzle and a 1-D grid
+    /// covering num_q_blocks * num_head_groups. Padded indices must fit i32.
+    /// query_start must be nonnegative and query_start + q_len <= kv_len.
     #[cutile::entry(print_ir=false,
                        unchecked_accesses=true,
                        optimization_hints = (
@@ -46,6 +59,147 @@ pub mod fmha_prefill_gqa_lpt_module {
         num_hb_quotient: i32,
         num_hb_remainder: i32,
     ) {
+        unsafe {
+            fmha_prefill_gqa_lpt_impl::<
+                BM,
+                BN,
+                D,
+                GROUP,
+                M_EFF,
+                CAUSAL,
+                EVEN_K,
+                LATENCY,
+                SCHED,
+                MASK_SPLIT,
+            >(
+                q_ptr,
+                k_ptr,
+                v_ptr,
+                out_ptr,
+                qk_scale,
+                query_group_size,
+                q_len,
+                kv_len,
+                kv_len * D,
+                kv_len * D,
+                query_start,
+                num_q_blocks,
+                num_head_groups,
+                swizzle,
+                num_hb_quotient,
+                num_hb_remainder,
+            );
+        }
+    }
+
+    /// Prefill with independent physical K/V head strides, in elements.
+    /// Token rows remain contiguous with stride D; only kv_len active rows
+    /// per head are read, even when storage reserves a longer sequence.
+    ///
+    /// # Safety
+    /// All requirements of [`fmha_prefill_gqa_lpt`] apply except its K/V head
+    /// layout: k_head_stride and v_head_stride must each be at least kv_len * D
+    /// elements and a multiple of 8 (16 bytes for f16). Strides and padded
+    /// indices must fit i32.
+    /// Each allocation must cover (kv_heads - 1) * head_stride + kv_len * D
+    /// elements. Q/output retain their contiguous layouts.
+    #[cutile::entry(print_ir=false,
+                       unchecked_accesses=true,
+                       optimization_hints = (
+                         sm_100 = (occupancy=2, max_divisibility=16,),
+                         sm_120 = (occupancy=2, max_divisibility=16,),
+                       ))]
+    unsafe fn fmha_prefill_gqa_lpt_strided<
+        const BM: i32,
+        const BN: i32,
+        const D: i32,
+        const GROUP: i32,
+        const M_EFF: i32, // caller MUST pass BM * GROUP
+        const CAUSAL: i32,
+        const EVEN_K: i32,
+        const LATENCY: i32,
+        const SCHED: i32,
+        const MASK_SPLIT: i32,
+    >(
+        q_ptr: *mut f16,   // [q_len, q_heads, D]
+        k_ptr: *mut f16,   // [kv_heads, kv_len, D]
+        v_ptr: *mut f16,   // [kv_heads, kv_len, D]
+        out_ptr: *mut f16, // [q_len, q_heads, D]
+        qk_scale: f32,
+        query_group_size: i32,
+        q_len: i32,
+        kv_len: i32,
+        k_head_stride: i32,
+        v_head_stride: i32,
+        query_start: i32,
+        num_q_blocks: i32,
+        num_head_groups: i32,
+        swizzle: i32,
+        num_hb_quotient: i32,
+        num_hb_remainder: i32,
+    ) {
+        unsafe {
+            fmha_prefill_gqa_lpt_impl::<
+                BM,
+                BN,
+                D,
+                GROUP,
+                M_EFF,
+                CAUSAL,
+                EVEN_K,
+                LATENCY,
+                SCHED,
+                MASK_SPLIT,
+            >(
+                q_ptr,
+                k_ptr,
+                v_ptr,
+                out_ptr,
+                qk_scale,
+                query_group_size,
+                q_len,
+                kv_len,
+                k_head_stride,
+                v_head_stride,
+                query_start,
+                num_q_blocks,
+                num_head_groups,
+                swizzle,
+                num_hb_quotient,
+                num_hb_remainder,
+            );
+        }
+    }
+
+    unsafe fn fmha_prefill_gqa_lpt_impl<
+        const BM: i32,
+        const BN: i32,
+        const D: i32,
+        const GROUP: i32,
+        const M_EFF: i32, // caller MUST pass BM * GROUP
+        const CAUSAL: i32,
+        const EVEN_K: i32,
+        const LATENCY: i32,
+        const SCHED: i32,
+        const MASK_SPLIT: i32,
+    >(
+        q_ptr: *mut f16,   // [q_len, q_heads, D]
+        k_ptr: *mut f16,   // [kv_heads, kv_len, D]
+        v_ptr: *mut f16,   // [kv_heads, kv_len, D]
+        out_ptr: *mut f16, // [q_len, q_heads, D]
+        qk_scale: f32,
+        query_group_size: i32,
+        q_len: i32,
+        kv_len: i32,
+        k_head_stride: i32,
+        v_head_stride: i32,
+        query_start: i32,
+        num_q_blocks: i32,
+        num_head_groups: i32,
+        swizzle: i32,
+        num_hb_quotient: i32,
+        num_hb_remainder: i32,
+    ) {
         let q_ptr: *mut f16 = unsafe { assume_div_by::<_, 16>(q_ptr) };
         let k_ptr: *mut f16 = unsafe { assume_div_by::<_, 16>(k_ptr) };
         let v_ptr: *mut f16 = unsafe { assume_div_by::<_, 16>(v_ptr) };
@@ -68,13 +222,16 @@ pub mod fmha_prefill_gqa_lpt_module {
         let kv_shape: Shape<{ [-1, -1, D] }> = Shape::<{ [-1, -1, D] }> {
             dims: &[kv_heads, kv_len],
         };
-        let kv_strides: Array<{ [-1, -1, 1] }> = Array::<{ [-1, -1, 1] }> {
-            dims: &[kv_len * D, D],
+        let k_strides: Array<{ [-1, -1, 1] }> = Array::<{ [-1, -1, 1] }> {
+            dims: &[k_head_stride, D],
+        };
+        let v_strides: Array<{ [-1, -1, 1] }> = Array::<{ [-1, -1, 1] }> {
+            dims: &[v_head_stride, D],
         };
         let k_tv: Tensor<f16, { [-1, -1, D] }> =
-            unsafe { make_tensor_view(pointer_to_tile(k_ptr), kv_shape, kv_strides, tok) };
+            unsafe { make_tensor_view(pointer_to_tile(k_ptr), kv_shape, k_strides, tok) };
         let v_tv: Tensor<f16, { [-1, -1, D] }> =
-            unsafe { make_tensor_view(pointer_to_tile(v_ptr), kv_shape, kv_strides, tok) };
+            unsafe { make_tensor_view(pointer_to_tile(v_ptr), kv_shape, v_strides, tok) };
         let out_shape: Shape<{ [-1, -1, D] }> = Shape::<{ [-1, -1, D] }> {
             dims: &[q_len, q_heads],
         };
@@ -377,7 +534,7 @@ pub mod fmha_prefill_gqa_lpt_module {
     }
 }
 
-pub use fmha_prefill_gqa_lpt_module::fmha_prefill_gqa_lpt;
+pub use fmha_prefill_gqa_lpt_module::{fmha_prefill_gqa_lpt, fmha_prefill_gqa_lpt_strided};
 
 #[allow(clippy::too_many_arguments)]
 #[cutile::module]
@@ -868,11 +1025,15 @@ pub mod fmha_prefill_gqa_lpt_split_module {
     /// attention scratch [num_q_blocks * num_head_groups, NS_M, D], and LSE
     /// scratch [num_q_blocks * num_head_groups, NS_M]. All pointers except LSE
     /// must be 16-byte aligned. Buffers must not alias any concurrent writes.
+    /// All layouts are contiguous; for K/V caches with reserved sequence
+    /// capacity, use [`fmha_prefill_gqa_lpt_split_strided`].
     /// M_EFF = BM * GROUP and NS_M = NUM_KV_SPLITS * M_EFF. GROUP must divide
     /// query_group_size, which must divide q_heads = num_head_groups * GROUP.
     /// Dimensions and scheduling divisors must be positive; EVEN_K = 1 requires
     /// kv_len divisible by BN. Launch (num_q_blocks * num_head_groups,
     /// NUM_KV_SPLITS, 1), then the merge with matching dimensions/scheduling.
+    /// num_q_blocks = ceil(q_len / BM), and padded indices must fit i32.
+    /// query_start must be nonnegative and query_start + q_len <= kv_len.
     #[cutile::entry(print_ir=false,
                        unchecked_accesses=true,
                        optimization_hints = (
@@ -907,6 +1068,153 @@ pub mod fmha_prefill_gqa_lpt_split_module {
         num_hb_quotient: i32,
         num_hb_remainder: i32,
     ) {
+        unsafe {
+            fmha_prefill_gqa_lpt_split_impl::<
+                BM,
+                BN,
+                D,
+                GROUP,
+                M_EFF,
+                EVEN_K,
+                NUM_KV_SPLITS,
+                NS_M,
+                LATENCY,
+                SCHED,
+            >(
+                q_ptr,
+                k_ptr,
+                v_ptr,
+                att_partial_ptr,
+                lse_partial_ptr,
+                qk_scale,
+                query_group_size,
+                q_len,
+                kv_len,
+                kv_len * D,
+                kv_len * D,
+                query_start,
+                num_q_blocks,
+                num_head_groups,
+                swizzle,
+                num_hb_quotient,
+                num_hb_remainder,
+            );
+        }
+    }
+
+    /// Split-K prefill with independent physical K/V head strides, in elements.
+    /// Token rows remain contiguous with stride D; only kv_len active rows
+    /// per head are read, even when storage reserves a longer sequence. Pass
+    /// the partial outputs to [`super::prefill_splitk_reduce_merge`].
+    ///
+    /// # Safety
+    /// All requirements of [`fmha_prefill_gqa_lpt_split`] apply except its K/V
+    /// head layout: k_head_stride and v_head_stride must each be at least
+    /// kv_len * D elements and a multiple of 8 (16 bytes for f16). Strides and
+    /// padded indices must fit i32.
+    /// Each allocation must cover (kv_heads - 1) * head_stride + kv_len * D
+    /// elements. Q and scratch retain their contiguous layouts; scratch sizes
+    /// and the merge launch depend on active lengths, not cache capacities.
+    #[cutile::entry(print_ir=false,
+                       unchecked_accesses=true,
+                       optimization_hints = (
+                         sm_100 = (occupancy=2, max_divisibility=16,),
+                         sm_120 = (occupancy=2, max_divisibility=16,),
+                       ))]
+    unsafe fn fmha_prefill_gqa_lpt_split_strided<
+        const BM: i32,
+        const BN: i32,
+        const D: i32,
+        const GROUP: i32,
+        const M_EFF: i32,
+        const EVEN_K: i32,
+        const NUM_KV_SPLITS: i32,
+        const NS_M: i32,
+        const LATENCY: i32,
+        const SCHED: i32,
+    >(
+        q_ptr: *mut f16,
+        k_ptr: *mut f16,
+        v_ptr: *mut f16,
+        att_partial_ptr: *mut f16, // [num_tiles, NUM_KV_SPLITS * M_EFF, D]
+        lse_partial_ptr: *mut f32, // [num_tiles, NUM_KV_SPLITS * M_EFF]
+        qk_scale: f32,
+        query_group_size: i32,
+        q_len: i32,
+        kv_len: i32,
+        k_head_stride: i32,
+        v_head_stride: i32,
+        query_start: i32,
+        num_q_blocks: i32,
+        num_head_groups: i32,
+        swizzle: i32,
+        num_hb_quotient: i32,
+        num_hb_remainder: i32,
+    ) {
+        unsafe {
+            fmha_prefill_gqa_lpt_split_impl::<
+                BM,
+                BN,
+                D,
+                GROUP,
+                M_EFF,
+                EVEN_K,
+                NUM_KV_SPLITS,
+                NS_M,
+                LATENCY,
+                SCHED,
+            >(
+                q_ptr,
+                k_ptr,
+                v_ptr,
+                att_partial_ptr,
+                lse_partial_ptr,
+                qk_scale,
+                query_group_size,
+                q_len,
+                kv_len,
+                k_head_stride,
+                v_head_stride,
+                query_start,
+                num_q_blocks,
+                num_head_groups,
+                swizzle,
+                num_hb_quotient,
+                num_hb_remainder,
+            );
+        }
+    }
+
+    unsafe fn fmha_prefill_gqa_lpt_split_impl<
+        const BM: i32,
+        const BN: i32,
+        const D: i32,
+        const GROUP: i32,
+        const M_EFF: i32,
+        const EVEN_K: i32,
+        const NUM_KV_SPLITS: i32,
+        const NS_M: i32,
+        const LATENCY: i32,
+        const SCHED: i32,
+    >(
+        q_ptr: *mut f16,
+        k_ptr: *mut f16,
+        v_ptr: *mut f16,
+        att_partial_ptr: *mut f16, // [num_tiles, NUM_KV_SPLITS * M_EFF, D]
+        lse_partial_ptr: *mut f32, // [num_tiles, NUM_KV_SPLITS * M_EFF]
+        qk_scale: f32,
+        query_group_size: i32,
+        q_len: i32,
+        kv_len: i32,
+        k_head_stride: i32,
+        v_head_stride: i32,
+        query_start: i32,
+        num_q_blocks: i32,
+        num_head_groups: i32,
+        swizzle: i32,
+        num_hb_quotient: i32,
+        num_hb_remainder: i32,
+    ) {
         let q_ptr: *mut f16 = unsafe { assume_div_by::<_, 16>(q_ptr) };
         let k_ptr: *mut f16 = unsafe { assume_div_by::<_, 16>(k_ptr) };
         let v_ptr: *mut f16 = unsafe { assume_div_by::<_, 16>(v_ptr) };
@@ -931,13 +1239,16 @@ pub mod fmha_prefill_gqa_lpt_split_module {
         let kv_shape: Shape<{ [-1, -1, D] }> = Shape::<{ [-1, -1, D] }> {
             dims: &[kv_heads, kv_len],
         };
-        let kv_strides: Array<{ [-1, -1, 1] }> = Array::<{ [-1, -1, 1] }> {
-            dims: &[kv_len * D, D],
+        let k_strides: Array<{ [-1, -1, 1] }> = Array::<{ [-1, -1, 1] }> {
+            dims: &[k_head_stride, D],
+        };
+        let v_strides: Array<{ [-1, -1, 1] }> = Array::<{ [-1, -1, 1] }> {
+            dims: &[v_head_stride, D],
         };
         let k_tv: Tensor<f16, { [-1, -1, D] }> =
-            unsafe { make_tensor_view(pointer_to_tile(k_ptr), kv_shape, kv_strides, tok) };
+            unsafe { make_tensor_view(pointer_to_tile(k_ptr), kv_shape, k_strides, tok) };
         let v_tv: Tensor<f16, { [-1, -1, D] }> =
-            unsafe { make_tensor_view(pointer_to_tile(v_ptr), kv_shape, kv_strides, tok) };
+            unsafe { make_tensor_view(pointer_to_tile(v_ptr), kv_shape, v_strides, tok) };
         let att_shape: Shape<{ [-1, NS_M, D] }> = Shape::<{ [-1, NS_M, D] }> {
             dims: &[total_tiles],
         };
@@ -1147,7 +1458,9 @@ pub mod fmha_prefill_gqa_lpt_split_module {
     }
 }
 
-pub use fmha_prefill_gqa_lpt_split_module::fmha_prefill_gqa_lpt_split;
+pub use fmha_prefill_gqa_lpt_split_module::{
+    fmha_prefill_gqa_lpt_split, fmha_prefill_gqa_lpt_split_strided,
+};
 
 #[cutile::module]
 pub mod prefill_splitk_reduce_merge_module {

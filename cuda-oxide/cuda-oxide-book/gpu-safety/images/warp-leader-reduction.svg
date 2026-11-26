@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 380" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <style>
+    :root, svg {
+      --bg: #ffffff;
+      --bg-stroke: #e2e8f0;
+      --panel: #f8fafc;
+      --panel-stroke: #cbd5e1;
+      --fg: #0f172a;
+      --text: #334155;
+      --sub: #475569;
+      --muted: #64748b;
+      --green: #15803d;
+      --green-text: #14532d;
+      --green-sub: #166534;
+      --green-fill: #dcfce7;
+      --green-soft: #f0fdf4;
+      --blue: #2563eb;
+      --blue-text: #1e3a8a;
+      --blue-fill: #dbeafe;
+      --blue-soft: #eff6ff;
+      --idle-fill: #f1f5f9;
+      --idle-stroke: #94a3b8;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root, svg {
+        --bg: #161b22;
+        --bg-stroke: #30363d;
+        --panel: #1e242c;
+        --panel-stroke: #3d444d;
+        --fg: #f0f6fc;
+        --text: #c9d1d9;
+        --sub: #b1bac4;
+        --muted: #8b949e;
+        --green: #3fb950;
+        --green-text: #7ee787;
+        --green-sub: #56d364;
+        --green-fill: #163323;
+        --green-soft: #12261e;
+        --blue: #58a6ff;
+        --blue-text: #a5d6ff;
+        --blue-fill: #172b4d;
+        --blue-soft: #132238;
+        --idle-fill: #21262d;
+        --idle-stroke: #484f58;
+      }
+    }
+  </style>
+  <defs>
+    <marker id="arrow-g" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M 0 0.8 L 7.5 4 L 0 7.2 Z" style="fill: var(--green)"/>
+    </marker>
+    <marker id="arrow-b" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M 0 0.8 L 7.5 4 L 0 7.2 Z" style="fill: var(--blue)"/>
+    </marker>
+  </defs>
+
+  <rect width="1080" height="380" rx="14" style="fill: var(--bg); stroke: var(--bg-stroke)" stroke-width="1.5"/>
+
+  <text x="40" y="40" font-size="18" font-weight="700" style="fill: var(--fg)">Leader-Guarded Warp &amp; Block Reduction in Shared Memory</text>
+  <text x="40" y="62" font-size="13" style="fill: var(--muted)">Why <tspan font-family="'Roboto Mono', monospace">if lane == 0 { WARP_SUMS[tid / 32] = warp_sum } </tspan>followed by <tspan font-family="'Roboto Mono', monospace">sync_threads() </tspan>is proven data-race-free.</text>
+
+  <!-- Left Box: Phase 0 -->
+  <g transform="translate(36, 88)">
+    <rect width="420" height="254" rx="10" style="fill: var(--panel); stroke: var(--panel-stroke)" stroke-width="1.5"/>
+    <text x="24" y="30" font-size="15" font-weight="700" style="fill: var(--fg)">Phase 0: Warp Leader Stage</text>
+    <text x="24" y="50" font-family="'Roboto Mono', monospace" font-size="12" style="fill: var(--green)">if lane == 0 { WARP_SUMS[tid / 32] = warp_sum }</text>
+
+    <!-- Warp 0 group -->
+    <rect x="44" y="68" width="152" height="46" rx="8" style="fill: var(--bg); stroke: var(--panel-stroke)" stroke-width="1"/>
+    <circle cx="72" cy="91" r="14" style="fill: var(--green-soft); stroke: var(--green)" stroke-width="2"/>
+    <text x="72" y="95" text-anchor="middle" font-size="10.5" font-weight="700" style="fill: var(--green-text)">t₀</text>
+    <circle cx="112" cy="91" r="13" style="fill: var(--idle-fill); stroke: var(--idle-stroke)" stroke-width="1.2" stroke-dasharray="3 2"/>
+    <text x="112" y="95" text-anchor="middle" font-size="10" style="fill: var(--muted)">t₁</text>
+    <text x="156" y="95" text-anchor="middle" font-size="10.5" style="fill: var(--muted)">..t₃₁</text>
+
+    <!-- Warp 1 group -->
+    <rect x="224" y="68" width="152" height="46" rx="8" style="fill: var(--bg); stroke: var(--panel-stroke)" stroke-width="1"/>
+    <circle cx="252" cy="91" r="14" style="fill: var(--green-soft); stroke: var(--green)" stroke-width="2"/>
+    <text x="252" y="95" text-anchor="middle" font-size="10.5" font-weight="700" style="fill: var(--green-text)">t₃₂</text>
+    <circle cx="292" cy="91" r="13" style="fill: var(--idle-fill); stroke: var(--idle-stroke)" stroke-width="1.2" stroke-dasharray="3 2"/>
+    <text x="292" y="95" text-anchor="middle" font-size="10" style="fill: var(--muted)">t₃₃</text>
+    <text x="336" y="95" text-anchor="middle" font-size="10.5" style="fill: var(--muted)">..t₆₃</text>
+
+    <!-- Leader write arrows -->
+    <line x1="72"  y1="114" x2="120" y2="156" style="stroke: var(--green)" stroke-width="2" marker-end="url(#arrow-g)"/>
+    <line x1="252" y1="114" x2="275" y2="156" style="stroke: var(--green)" stroke-width="2" marker-end="url(#arrow-g)"/>
+
+    <!-- Shared Array Slots -->
+    <rect x="70"  y="162" width="108" height="36" rx="4" style="fill: var(--green-fill); stroke: var(--green)" stroke-width="1.5"/>
+    <text x="124" y="185" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--green-text)">WARP_SUMS[0]</text>
+    <rect x="224" y="162" width="108" height="36" rx="4" style="fill: var(--green-fill); stroke: var(--green)" stroke-width="1.5"/>
+    <text x="278" y="185" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--green-text)">WARP_SUMS[1]</text>
+
+    <text x="210" y="226" text-anchor="middle" font-size="12.5" style="fill: var(--text)">Only <tspan font-family="'Roboto Mono', monospace">lane == 0</tspan> writes <tspan font-family="'Roboto Mono', monospace">tid / 32</tspan>: 1 writer per warp slot.</text>
+  </g>
+
+  <!-- Center Barrier Wall -->
+  <g transform="translate(476, 88)">
+    <rect x="12" y="0" width="104" height="254" rx="8" style="fill: var(--green-soft); stroke: var(--green)" stroke-width="2" stroke-dasharray="6 4"/>
+    <text x="64" y="118" text-anchor="middle" font-size="13" font-weight="700" style="fill: var(--green-text)">BARRIER</text>
+    <text x="64" y="138" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--green)">sync_threads()</text>
+    <text x="64" y="162" text-anchor="middle" font-size="11" style="fill: var(--green-sub)">Phase 0 ≠ Phase 1</text>
+  </g>
+
+  <!-- Right Box: Phase 1 -->
+  <g transform="translate(624, 88)">
+    <rect width="420" height="254" rx="10" style="fill: var(--panel); stroke: var(--panel-stroke)" stroke-width="1.5"/>
+    <text x="24" y="30" font-size="15" font-weight="700" style="fill: var(--fg)">Phase 1: Block Sum Scan</text>
+    <text x="24" y="50" font-family="'Roboto Mono', monospace" font-size="12" style="fill: var(--blue)">while w &lt; 8 { block_sum += WARP_SUMS[w] }</text>
+
+    <!-- Thread scanning across WARP_SUMS[0..8] -->
+    <circle cx="130" cy="92" r="15" style="fill: var(--blue-soft); stroke: var(--blue)" stroke-width="2"/>
+    <text x="130" y="96" text-anchor="middle" font-size="11" font-weight="700" style="fill: var(--blue-text)">t₀</text>
+    <text x="156" y="96" font-size="12" style="fill: var(--sub)">scans <tspan font-family="'Roboto Mono', monospace">w = 0 .. 7</tspan> across warps</text>
+
+    <line x1="124" y1="110" x2="104" y2="156" style="stroke: var(--blue)" stroke-width="1.8" marker-end="url(#arrow-b)"/>
+    <line x1="132" y1="110" x2="210" y2="156" style="stroke: var(--blue)" stroke-width="1.8" marker-end="url(#arrow-b)"/>
+    <line x1="140" y1="110" x2="316" y2="156" style="stroke: var(--blue)" stroke-width="1.8" marker-end="url(#arrow-b)"/>
+
+    <!-- Shared Array Slots -->
+    <rect x="52"  y="162" width="98" height="36" rx="4" style="fill: var(--blue-fill); stroke: var(--blue)" stroke-width="1.5"/>
+    <text x="101" y="185" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="10.5" style="fill: var(--blue-text)">WARP_SUMS[0]</text>
+    <rect x="160" y="162" width="98" height="36" rx="4" style="fill: var(--blue-fill); stroke: var(--blue)" stroke-width="1.5"/>
+    <text x="209" y="185" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="10.5" style="fill: var(--blue-text)">WARP_SUMS[1]</text>
+    <rect x="268" y="162" width="98" height="36" rx="4" style="fill: var(--blue-fill); stroke: var(--blue)" stroke-width="1.5"/>
+    <text x="317" y="185" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="10.5" style="fill: var(--blue-text)">..SUMS[7]</text>
+
+    <text x="210" y="226" text-anchor="middle" font-size="12.5" style="fill: var(--text)">Read-only scan in Phase 1: 2 bounds checks erased!</text>
+  </g>
+</svg>

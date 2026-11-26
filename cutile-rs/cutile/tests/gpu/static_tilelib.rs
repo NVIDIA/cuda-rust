@@ -1106,6 +1106,9 @@ fn global_accesses_after_a_foreign_call_execute() -> Result<(), Error> {
     if !test_tilelib_available() {
         return Ok(());
     }
+    // The counter lives in the loaded module. Keep other tests from evicting
+    // that module between launches.
+    let _guard = crate::common::cache_test_lock();
     for launch in 0..2i32 {
         let x = api::copy_host_vec_to_device(&Arc::new(iota()))
             .sync()?

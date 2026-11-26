@@ -12,10 +12,21 @@ pub(super) fn touch_main_rs(example_dir: &Path) {
     // Force a rebuild so the codegen backend re-runs and emits a fresh
     // .ptx alongside the example. Touch every source file that might
     // host `#[kernel]` items so multi-bin layouts (kernels in `lib.rs`,
-    // tests in `main.rs`, perf bench in `bin/<name>.rs`, etc.) all
-    // re-codegen on every `cargo oxide run/build` invocation.
+    // tests in `main.rs`, perf bench in `bin/<name>.rs`, etc.) and nested
+    // workspace member crates all re-codegen on every `cargo oxide run/build`
+    // invocation.
     for rel in ["src/main.rs", "src/lib.rs"] {
         touch_source_file(&example_dir.join(rel));
+    }
+    if let Ok(entries) = std::fs::read_dir(example_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() && path.join("Cargo.toml").is_file() {
+                for rel in ["src/main.rs", "src/lib.rs"] {
+                    touch_source_file(&path.join(rel));
+                }
+            }
+        }
     }
 }
 

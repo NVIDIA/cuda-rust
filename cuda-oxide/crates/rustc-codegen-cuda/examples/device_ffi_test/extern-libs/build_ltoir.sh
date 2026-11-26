@@ -29,6 +29,11 @@ NVCC_FLAGS=()
 if [[ -n "$NVCC_CCBIN" ]]; then
     NVCC_FLAGS+=("-ccbin=$NVCC_CCBIN")
 fi
+case "${OSTYPE:-}" in
+    msys*|cygwin*|win32*)
+        NVCC_FLAGS+=("-std=c++17" "-Xcompiler=/Zc:preprocessor" "-Xcompiler=/Zc:__cplusplus")
+        ;;
+esac
 
 echo "Building for architecture: $ARCH"
 if [[ -n "$NVCC_CCBIN" ]]; then
@@ -62,7 +67,7 @@ compile_ltoir() {
 
     echo "=== Compiling $src ==="
     # -dc: relocatable device code, -dlto: device LTO, --keep: retain .ltoir
-    nvcc "${NVCC_FLAGS[@]}" -arch=$ARCH -dc -dlto --keep $extra_flags "$src" -o "${base}.o" 2>&1
+    nvcc "${NVCC_FLAGS[@]}" -arch=$ARCH -dc -dlto --keep ${extra_flags:+"$extra_flags"} "$src" -o "${base}.o" 2>&1
 
     if [ -f "${base}.ltoir" ]; then
         echo "  Binary LTOIR: ${base}.ltoir ($(wc -c < ${base}.ltoir) bytes)"

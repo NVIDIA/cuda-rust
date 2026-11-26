@@ -17,11 +17,13 @@ use pliron::{
     operation::Operation,
 };
 
-/// Emit independent SM100 attention loads or stores using the verified descriptor plan.
-pub(in crate::cute) struct Tma(
-    #[doc = "True selects shared-to-global stores; false selects global-to-shared loads."]
-    pub(in crate::cute) bool,
-);
+/// Emit independent SM100 16-bit (`f16` or `bf16`) TMA loads or stores using the verified descriptor plan.
+pub(in crate::cute) struct Tma {
+    /// True selects shared-to-global stores; false selects global-to-shared loads.
+    pub(in crate::cute) store: bool,
+    /// True selects `bf16` shared pointer metadata; false selects `f16`.
+    pub(in crate::cute) bf16: bool,
+}
 impl OperationTranslation for Tma {
     fn translate(
         &self,
@@ -30,14 +32,27 @@ impl OperationTranslation for Tma {
         input: OperationInput,
         session: &mut TranslationSession<'_>,
     ) -> Result<Vec<MlirOperation>, String> {
-        let p = if self.0 {
-            let o = CuteSm100TmaStoreOp::wrap(source);
-            o.verify(ctx).map_err(|e| e.to_string())?;
-            o.plan(ctx)
-        } else {
-            let o = CuteSm100TmaLoadOp::wrap(source);
-            o.verify(ctx).map_err(|e| e.to_string())?;
-            o.plan(ctx)
+        let p = match (self.store, self.bf16) {
+            (true, false) => {
+                let o = CuteSm100TmaStoreOp::wrap(source);
+                o.verify(ctx).map_err(|e| e.to_string())?;
+                o.plan(ctx)
+            }
+            (true, true) => {
+                let o = CuteSm100Bf16TmaStoreOp::wrap(source);
+                o.verify(ctx).map_err(|e| e.to_string())?;
+                o.plan(ctx)
+            }
+            (false, false) => {
+                let o = CuteSm100TmaLoadOp::wrap(source);
+                o.verify(ctx).map_err(|e| e.to_string())?;
+                o.plan(ctx)
+            }
+            (false, true) => {
+                let o = CuteSm100Bf16TmaLoadOp::wrap(source);
+                o.verify(ctx).map_err(|e| e.to_string())?;
+                o.plan(ctx)
+            }
         }
         .ok_or("missing SM100 TMA plan")?;
         contract(&input)?;
@@ -54,8 +69,9 @@ impl OperationTranslation for Tma {
             64,
             None,
         )?;
-        let data = e.cute_ptr(a[1].clone(), "f16", "smem", 128, None)?;
-        if self.0 {
+        let elem = if self.bf16 { "bf16" } else { "f16" };
+        let data = e.cute_ptr(a[1].clone(), elem, "smem", 128, None)?;
+        if self.store {
             let mut op = e.operation(
                 "cute_nvgpu.arch.copy.SM100.tma_store",
                 vec![desc, data, a[2].clone(), a[3].clone(), a[4].clone()],

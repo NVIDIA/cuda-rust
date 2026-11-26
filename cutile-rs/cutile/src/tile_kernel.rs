@@ -11,10 +11,12 @@ use cuda_core::DType;
 use cuda_core::{memcpy_dtoh_async, Function};
 use cutile_compiler::ast::Module;
 use cutile_compiler::compile_api::KernelCompiler;
+use cutile_compiler::compile_control::CompileControl;
 use cutile_compiler::compiler::{CUDATileFunctionCompiler, CUDATileModules};
 use cutile_compiler::cuda_tile_runtime_utils::{
-    bytecode_override, compile_bytecode_cached_with_toolkit, env_flag_enabled,
-    get_compiler_version, get_gpu_name, recompile_after_disk_rejection_with_toolkit,
+    bytecode_override, compile_bytecode_cached_with_control, compile_bytecode_cached_with_toolkit,
+    env_flag_enabled, get_compiler_version, get_gpu_name,
+    recompile_after_disk_rejection_with_control, recompile_after_disk_rejection_with_toolkit,
     serialize_tile_ir_bytecode_for_version, tileiras_fingerprint, toolchain_env_snapshot,
     Stage2Source, TileirasOptions, ToolchainEnvSnapshot, ToolkitCapabilities,
 };
@@ -56,14 +58,13 @@ macro_rules! jit_log {
 
 static JIT_COMPILE_COUNT: AtomicU64 = AtomicU64::new(0);
 
-/// Process-global JIT compile counter: +1 per successful compile, +0 on cache
-/// hits and on failed compiles. Equals the number of distinct kernels cached.
+/// Process-global JIT installation counter: +1 per successful in-memory cache
+/// installation, +0 on in-memory hits and on failed installations.
 /// Snapshot before a call and check the delta to get exact miss counts.
 ///
-/// A disk-cache hit still counts: the counter tracks in-memory misses, which
-/// run the compiler frontend either way. Absent failures,
-/// `jit_compile_count == jit_backend_compile_count + jit_disk_hit_count`
-/// (both in [`crate::jit_cache`]).
+/// A disk-cache hit still counts. CPU preparation can run the frontend and
+/// assembler without installing a kernel, so this counter need not equal the
+/// sum of the backend compile and disk-hit counters in [`crate::jit_cache`].
 pub fn jit_compile_count() -> u64 {
     JIT_COMPILE_COUNT.load(Ordering::Relaxed)
 }
@@ -93,6 +94,13 @@ pub use cutile_compiler::tile_library::{
 /// `#[cutile::module]`.
 pub type ModuleAstFn = fn() -> Module;
 
+#[cfg(feature = "experimental-tune")]
+mod compilation_flights;
+#[cfg(feature = "experimental-tune")]
+mod preparation;
+#[cfg(feature = "experimental-tune")]
+pub use preparation::{KernelCompileJob, PreparedKernel};
+
 /// Cache key for a compiled tile kernel.
 ///
 /// Two kernel invocations that share the same `TileFunctionKey` can reuse the same compiled
@@ -121,6 +129,12 @@ pub struct TileFunctionKey {
     pub spec_args: Vec<(String, SpecializationBits)>,
     pub scalar_hints: Vec<(String, DivHint)>,
     pub grid: Option<(u32, u32, u32)>,
+    /// The options the kernel compiles with, except the tile libraries:
+    /// `tile_libraries` is empty here, and [`Self::tile_libraries_digest`]
+    /// identifies the libraries instead. Every spelling of one set of
+    /// libraries (a default the launch names again, a path given relative
+    /// or absolute) links the same files, so it must compile once and
+    /// share one loaded module, with one copy of each `Global`.
     pub compile_options: CompileOptions,
     source_hash: String,
     device_id: usize,
@@ -296,6 +310,9 @@ impl FunctionKey for TileFunctionKey {}
 pub struct Specialization<F: Fn() -> Module> {
     module_ast_fn: F,
     key: TileFunctionKey,
+    /// The options the kernel compiles with, the default tile libraries
+    /// included. The key holds them without the libraries.
+    compile_options: CompileOptions,
     /// The tile libraries the key's digest was taken from, which the
     /// compile links.
     tile_libraries: TileLibrarySnapshot,
@@ -346,7 +363,7 @@ impl<F: Fn() -> Module> Specialization<F> {
         .strides(&stride_refs)
         .spec_args(&spec_refs)
         .scalar_hints(&scalar_hint_refs)
-        .options(self.key.compile_options.clone());
+        .options(self.compile_options.clone());
         if let Some(grid) = self.key.grid {
             compiler = compiler.grid(grid);
         }
@@ -386,12 +403,18 @@ pub fn _specialization_from_context<F: Fn() -> Module>(
     let compile_options = compile_options.with_default_tile_libraries();
     let tile_libraries =
         TileLibrarySnapshot::new(tile_library_generation, &compile_options.tile_libraries);
+    // The digest identifies the libraries by their resolved, de-duplicated
+    // set; the list as written would key the same libraries differently.
+    let key_options = CompileOptions {
+        tile_libraries: Vec::new(),
+        ..compile_options.clone()
+    };
     let mut key_builder = TileFunctionKey::builder(module_name, function_name)
         .generics(function_generics)
         .stride_args(stride_args)
         .spec_args(spec_args)
         .scalar_hints(scalar_hints)
-        .compile_options(compile_options)
+        .compile_options(key_options)
         .source_hash(source_hash)
         .device_id(device_id)
         .gpu_name(gpu_name)
@@ -404,6 +427,7 @@ pub fn _specialization_from_context<F: Fn() -> Module>(
     Specialization {
         module_ast_fn,
         key: key_builder.build(),
+        compile_options,
         tile_libraries,
     }
 }
@@ -761,27 +785,25 @@ fn write_ir(
     Ok(())
 }
 
-// ── Single-flight compilation dedup is handled by once_cell::sync::OnceCell ──
+// Plain host-owned artifacts. No CUDA module is loaded until load_kernel_binary.
+struct KernelBinary {
+    cubin: Vec<u8>,
+    bytecode: Vec<u8>,
+    tileiras_opts: TileirasOptions,
+    capabilities: Arc<ToolkitCapabilities>,
+    stage2_source: Stage2Source,
+    validator: Arc<Validator>,
+    links_tile_libraries: bool,
+    stage1_ms: f64,
+    stage2_ms: f64,
+    check_stats: (u32, u32, u32),
+}
 
-/// Compiles one tile-function specialization to a CUBIN and loads it into a
-/// [`CompiledKernel`], also returning whether it links tile libraries.
-///
-/// This is the single compile-and-load core behind [`compile_from_context`],
-/// which serves both real `.sync()` / `.await` launches and the `.compile()`
-/// warmup terminal. It runs the compiler, honors the `print_ir` /
-/// `dump_mlir_dir` entry attributes,
-/// lowers to a CUBIN, loads the module, and resolves `function_entry`, emitting
-/// per-stage `CUTILE_JIT_TIMING` along the way.
-///
-/// Callers own the cache concerns: they build the [`TileFunctionKey`], dedup via
-/// the cache slot, and call [`record_jit_compile`]. This function assumes it
-/// runs exactly once per cache miss and does no caching itself.
 #[allow(clippy::too_many_arguments)]
-fn compile_and_load_kernel(
+fn compile_kernel_binary(
     modules: &CUDATileModules,
     module_name: &str,
     function_name: &str,
-    function_entry: &str,
     generics: &[String],
     stride_args: &[(String, Vec<i32>)],
     spec_args: &[(String, SpecializationBits)],
@@ -790,10 +812,13 @@ fn compile_and_load_kernel(
     gpu_name: &str,
     compile_options: &CompileOptions,
     tile_libraries: &TileLibrarySnapshot,
-    device_id: usize,
+    capabilities: Arc<ToolkitCapabilities>,
     key_str: &str,
-) -> Result<(CompiledKernel, bool), Error> {
-    let t0 = std::time::Instant::now();
+    control: Option<&CompileControl>,
+) -> Result<KernelBinary, Error> {
+    if let Some(control) = control {
+        control.check().map_err(anyhow::Error::from)?;
+    }
     let compile_options = &compile_options.with_jit_env_overrides()?;
 
     let stride_args_refs: Vec<(&str, &[i32])> = stride_args
@@ -805,7 +830,6 @@ fn compile_and_load_kernel(
     let scalar_hints_refs: Vec<(&str, &DivHint)> =
         scalar_hints.iter().map(|x| (x.0.as_str(), &x.1)).collect();
 
-    let capabilities = ToolkitCapabilities::for_device(device_id)?;
     let stage1_start = std::time::Instant::now();
     let (tile_module, validator, check_stats) = {
         let compiler = CUDATileFunctionCompiler::new(
@@ -838,6 +862,9 @@ fn compile_and_load_kernel(
         (tile_module, validator, check_stats)
     };
     let stage1_ms = stage1_start.elapsed().as_secs_f64() * 1000.0;
+    if let Some(control) = control {
+        control.check().map_err(anyhow::Error::from)?;
+    }
 
     let stage2_start = std::time::Instant::now();
     {
@@ -868,15 +895,60 @@ fn compile_and_load_kernel(
     }
     let (bytecode, _) =
         serialize_tile_ir_bytecode_for_version(&tile_module, capabilities.target.bytecode_version)?;
+    if let Some(control) = control {
+        control.check().map_err(anyhow::Error::from)?;
+    }
     // A kernel with foreign tile-library calls links its tile libraries.
     let tilelibs = tile_libraries.link(&tile_module)?;
     let links_tile_libraries = !tilelibs.is_empty();
     let tileiras_opts =
         TileirasOptions::from_compile_options(compile_options).with_tilelibs(tilelibs);
-    let (cubin, mut stage2_source) =
-        compile_bytecode_cached_with_toolkit(&bytecode, &tileiras_opts, &capabilities)?;
-    let mut stage2_ms = stage2_start.elapsed().as_secs_f64() * 1000.0;
+    let (cubin, stage2_source) = if let Some(control) = control {
+        compile_bytecode_cached_with_control(&bytecode, &tileiras_opts, &capabilities, control)?
+    } else {
+        compile_bytecode_cached_with_toolkit(&bytecode, &tileiras_opts, &capabilities)?
+    };
+    let stage2_ms = stage2_start.elapsed().as_secs_f64() * 1000.0;
 
+    Ok(KernelBinary {
+        cubin,
+        bytecode,
+        tileiras_opts,
+        capabilities,
+        stage2_source,
+        validator,
+        links_tile_libraries,
+        stage1_ms,
+        stage2_ms,
+        check_stats,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn load_kernel_binary(
+    binary: &KernelBinary,
+    device_id: usize,
+    function_entry: &str,
+    module_name: &str,
+    function_name: &str,
+    generics: &[String],
+    key_str: &str,
+    control: Option<&CompileControl>,
+) -> Result<(CompiledKernel, bool), Error> {
+    let KernelBinary {
+        cubin,
+        bytecode,
+        tileiras_opts,
+        capabilities,
+        stage2_source,
+        validator,
+        links_tile_libraries,
+        stage1_ms,
+        stage2_ms,
+        check_stats,
+    } = binary;
+    let mut stage2_ms = *stage2_ms;
+    let mut from_disk = matches!(stage2_source, Stage2Source::DiskCache { .. });
     // A retry recompile (below) runs inside the stage-3 window but is really
     // stage-2 work; track it so the timing line attributes it to stage2 (which
     // then reports source=tileiras) instead of inflating stage3.
@@ -886,28 +958,39 @@ fn compile_and_load_kernel(
     // tileiras in this process, or from the disk cache, whose read path
     // verifies the entry's SHA-256 payload checksum before handing the bytes
     // back (a torn or corrupt entry is a miss, never a load).
-    let module = match unsafe { load_module_from_bytes(&cubin, device_id) } {
+    let module = match unsafe { load_module_from_bytes(cubin, device_id) } {
         Ok(module) => module,
         // A disk-served cubin the driver rejects (partial write the checksum
         // missed, driver/toolkit skew, …) must not fail the launch: evict that
         // exact entry and recompile with tileiras, bypassing the cache read so a
-        // still-present bad entry can't be re-served. `mem::replace` moves the
-        // store/key out and leaves `Tileiras`, which is now the true source of
-        // the loaded cubin. Only a second failure is a real error.
-        Err(e) => match std::mem::replace(&mut stage2_source, Stage2Source::Tileiras) {
+        // still-present bad entry cannot be re-served. Only a second failure is
+        // a real error. The shared CPU artifact itself remains immutable.
+        Err(e) => match stage2_source {
             Stage2Source::DiskCache { store, key } => {
                 jit_log!(
                     "{module_name}::{function_name} → cached cubin rejected by the driver ({e}); \
                      evicting and recompiling"
                 );
                 let recompile_start = std::time::Instant::now();
-                let cubin = recompile_after_disk_rejection_with_toolkit(
-                    store.as_ref(),
-                    &key,
-                    &bytecode,
-                    &tileiras_opts,
-                    &capabilities,
-                )?;
+                let cubin = if let Some(control) = control {
+                    recompile_after_disk_rejection_with_control(
+                        store.as_ref(),
+                        key,
+                        bytecode,
+                        tileiras_opts,
+                        capabilities,
+                        control,
+                    )?
+                } else {
+                    recompile_after_disk_rejection_with_toolkit(
+                        store.as_ref(),
+                        key,
+                        bytecode,
+                        tileiras_opts,
+                        capabilities,
+                    )?
+                };
+                from_disk = false;
                 recompile_ms = recompile_start.elapsed().as_secs_f64() * 1000.0;
                 stage2_ms += recompile_ms;
                 // SAFETY: a fresh tileiras compile, complete by construction.
@@ -927,13 +1010,10 @@ fn compile_and_load_kernel(
 
     jit_log!(
         "{module_name}::{function_name} → JIT compiled in {:.1?}",
-        t0.elapsed()
+        std::time::Duration::from_secs_f64((stage1_ms + stage2_ms + stage3_ms) / 1000.0)
     );
     if std::env::var_os("CUTILE_JIT_TIMING").is_some() {
-        let stage2_source = match stage2_source {
-            Stage2Source::Tileiras => "tileiras",
-            Stage2Source::DiskCache { .. } => "disk",
-        };
+        let stage2_source = if from_disk { "disk" } else { "tileiras" };
         eprintln!(
             "CUTILE_JIT_TIMING module={module_name} function={function_name} key={key_str} stage1_ms={stage1_ms:.3} stage2_ms={stage2_ms:.3} stage2_source={stage2_source} stage3_ms={stage3_ms:.3} checks_discharged={} checks_hoisted={} checks_in_place={} generics={}",
             check_stats.0,
@@ -947,9 +1027,9 @@ fn compile_and_load_kernel(
         CompiledKernel {
             module,
             function,
-            validator,
+            validator: Arc::clone(validator),
         },
-        links_tile_libraries,
+        *links_tile_libraries,
     ))
 }
 
@@ -1085,23 +1165,40 @@ fn compile_for_launch_site<F: Fn() -> Module>(
     // Only one thread executes the closure; others block and see the result.
     let compiled = match slot.get_or_try_init(|| -> Result<(CompiledKernel, bool), Error> {
         jit_log!("{module_name}::{function_name} → JIT compiling...");
-        // Build the module ASTs lazily — only on a real cache miss.
-        let modules = CUDATileModules::from_kernel((specialization.module_ast_fn)())?;
-        let kernel = compile_and_load_kernel(
-            &modules,
+        // No CUDA work runs in a preparation worker. Ordinary launches join
+        // the same CPU flight before loading on this foreground thread.
+        let build = || {
+            let modules = CUDATileModules::from_kernel((specialization.module_ast_fn)())?;
+            compile_kernel_binary(
+                &modules,
+                module_name,
+                function_name,
+                &key.function_generics,
+                &key.stride_args,
+                &key.spec_args,
+                &key.scalar_hints,
+                const_grid,
+                &gpu_name,
+                &specialization.compile_options,
+                &specialization.tile_libraries,
+                ToolkitCapabilities::for_device(device_id)?,
+                &key.display_hash(),
+                None,
+            )
+        };
+        #[cfg(feature = "experimental-tune")]
+        let binary = preparation::compile_shared(&key, None, build)?;
+        #[cfg(not(feature = "experimental-tune"))]
+        let binary = build()?;
+        let kernel = load_kernel_binary(
+            &binary,
+            device_id,
+            function_entry,
             module_name,
             function_name,
-            function_entry,
             &key.function_generics,
-            &key.stride_args,
-            &key.spec_args,
-            &key.scalar_hints,
-            const_grid,
-            &gpu_name,
-            &key.compile_options,
-            &specialization.tile_libraries,
-            device_id,
             &key.display_hash(),
+            None,
         );
         // Only a kernel that links its libraries can be stale; a failed
         // compile may have read a half-written one.
@@ -2269,6 +2366,7 @@ mod tests {
         let specialization = Specialization {
             module_ast_fn: unexpected_ast_provider as ModuleAstFn,
             key: expected.clone(),
+            compile_options: CompileOptions::default(),
             tile_libraries: TileLibrarySnapshot::new(0, &[]),
         };
 

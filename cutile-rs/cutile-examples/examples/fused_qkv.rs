@@ -7,8 +7,9 @@
 //!
 //! No arguments: full-output correctness checks on a small tail/scatter fixture.
 //! `--bench`: opt-in CUDA graph timing; `--help` lists shapes and tuning options.
-//! Use CUDA 13.5's Tile IR assembler for performance evaluation. The starting
-//! kernel is not B200-tuned; timings do not imply GEMM/epilogue overlap.
+//! Use `--profile b200` to evaluate SM100 schedules with CUDA 13.5 tooling.
+//! Compiler support for individual schedules can vary. Defaults remain unchanged;
+//! timings do not imply GEMM/epilogue overlap.
 
 use cuda_async::cuda_graph::{CudaGraph, Scope};
 use cuda_core::{f8e4m3fn, Context, Stream};
@@ -24,9 +25,11 @@ const D: usize = 128;
 const EPS: f32 = 1e-6;
 const SENTINEL: u8 = 0x55;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Config {
     bench: bool,
+    automatic_schedule: bool,
+    cga: usize,
     m_list: Vec<usize>,
     k: usize,
     q_heads: usize,
@@ -42,23 +45,52 @@ struct Config {
 }
 
 impl Config {
+    fn for_problem(&self, problem: Problem, sm_count: usize, sm100: bool) -> Self {
+        let mut config = self.clone();
+        if self.automatic_schedule
+            && sm100
+            && sm_count > 0
+            && problem.k == 4096
+            && problem.hq == 32
+            && problem.hkv == 8
+            && [128, 256, 512, 1024, 2048, 4096, 8192].contains(&problem.m)
+        {
+            config.bm = 128;
+            config.bk = if problem.m >= 4096 { 64 } else { 128 };
+            config.group_m = if problem.m == 2048 { 1 } else { 8 };
+            config.programs = if problem.m == 256 { 0 } else { sm_count };
+            config.cga = if problem.m == 128 { 2 } else { 1 };
+            if config.programs > 0 {
+                config.programs = config.programs.div_ceil(config.cga) * config.cga;
+            }
+        }
+        config
+    }
+
     fn parse(args: &[String]) -> Result<Option<Self>> {
         if args.iter().any(|arg| arg == "--help") {
             println!(
                 "fused_qkv [--bench] [--m-list 128,256,512,1024,2048,4096,8192]\n\
                 [--k 4096] [--q-heads 32] [--kv-heads 8] [--bm 64] [--bk 64]\n\
                 [--group-m 8] [--programs 0] [--samples 20] [--replays 1000]\n\
-                [--warmups 50] [--nontrivial]\n\
+                [--warmups 50] [--nontrivial] [--profile default|b200]\n\
                 No arguments runs the small correctness fixture on ordinary/persistent grids.\n\
-                --bench enables timing; programs=0 launches one CTA per output tile.\n\
+                --bench enables timing; --profile b200 selects evaluated SM100 schedules.\n\
+                b200 requires standard benchmark dimensions and cannot mix with manual schedules.\n\
+                programs=0 launches one CTA per output tile.\n\
                 --nontrivial uses non-unit gamma/scales and permuted cache slots.\n\
                 Other options require --bench. Head dimension is fixed at 128."
             );
             return Ok(None);
         }
         let bench = args.iter().any(|arg| arg == "--bench");
+        let manual_schedule = args
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "--bm" | "--bk" | "--group-m" | "--programs"));
         let mut config = Self {
             bench,
+            automatic_schedule: false,
+            cga: 1,
             m_list: if bench {
                 vec![128, 256, 512, 1024, 2048, 4096, 8192]
             } else {
@@ -105,11 +137,30 @@ impl Config {
                 "--bk" => config.bk = value.parse()?,
                 "--group-m" => config.group_m = value.parse()?,
                 "--programs" => config.programs = value.parse()?,
+                "--profile" => match value.as_str() {
+                    "default" => config.automatic_schedule = false,
+                    "b200" => config.automatic_schedule = true,
+                    _ => return Err("profile must be default or b200".into()),
+                },
                 "--samples" => config.samples = value.parse()?,
                 "--replays" => config.replays = value.parse()?,
                 "--warmups" => config.warmups = value.parse()?,
                 _ => return Err(format!("unknown option {arg}").into()),
             }
+        }
+        if config.automatic_schedule
+            && (manual_schedule
+                || config.k != 4096
+                || config.q_heads != 32
+                || config.kv_heads != 8
+                || config
+                    .m_list
+                    .iter()
+                    .any(|m| ![128, 256, 512, 1024, 2048, 4096, 8192].contains(m)))
+        {
+            return Err(
+                "b200 requires standard benchmark shapes and no manual schedule options".into(),
+            );
         }
         if config.samples == 0
             || config.replays == 0
@@ -538,7 +589,11 @@ fn launch(
             .to_vec(),
     )
     .grid((programs as u32, 1, 1))
-    .compile_options(CompileOptions::default().num_cta_in_cga(1).occupancy(1));
+    .compile_options(
+        CompileOptions::default()
+            .num_cta_in_cga(config.cga as i32)
+            .occupancy(1),
+    );
     if let Some(scope) = scope {
         let _ = scope.record(op)?;
     } else {
@@ -577,10 +632,18 @@ fn run(config: Config) -> Result<()> {
         return Ok(());
     }
     let context = Context::new(0)?;
+    if config.automatic_schedule && context.compute_capability()? != (10, 0) {
+        return Err("the b200 profile requires an SM100 device".into());
+    }
     let stream = context.new_stream()?;
-    println!("fused_qkv {config:?}; FP16 X/W, FP32 accumulation/norm, E4M3FN outputs, head_dim={D}, eps={EPS}, num_cta_in_cga=1, occupancy=1");
+    println!("fused_qkv {config:?}; FP16 X/W, FP32 accumulation/norm, E4M3FN outputs, head_dim={D}, eps={EPS}, occupancy=1");
     for &m in &config.m_list {
         let p = Problem::new(m, &config)?;
+        let config = config.for_problem(
+            p,
+            context.multiprocessor_count()? as usize,
+            context.compute_capability()? == (10, 0),
+        );
         let fixture = Fixture::new(p, &config);
         fixture.validate_slots(p)?;
         let rows: Vec<_> = if config.bench && m > 8 {
@@ -619,7 +682,10 @@ fn run(config: Config) -> Result<()> {
             vec![tiles, 2]
         };
         for programs in grids {
-            println!("grid.x={programs}");
+            println!(
+                "grid.x={programs}, bm={}, bk={}, group_m={}, cga={}",
+                config.bm, config.bk, config.group_m, config.cga
+            );
             t.reset_outputs(p, &stream)?;
             launch(p, &config, programs, &t, &stream, None)?;
             t.check(&expected, &written, &stream)?;
@@ -754,6 +820,66 @@ mod tests {
                     assert!(seen.iter().all(|v| *v));
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod schedule_tests {
+    use super::*;
+
+    #[test]
+    fn automatic_sm100_schedule_selects_persistent_tiles() {
+        let args = vec![
+            "--bench".to_string(),
+            "--profile".to_string(),
+            "b200".to_string(),
+        ];
+        let config = Config::parse(&args).unwrap().unwrap();
+        let problem = Problem::new(4096, &config).unwrap();
+        let schedule = config.for_problem(problem, 148, true);
+        assert_eq!(
+            (schedule.bm, schedule.bk, schedule.programs, schedule.cga),
+            (128, 64, 148, 1)
+        );
+        assert_eq!(config.for_problem(problem, 148, false).bm, 64);
+    }
+
+    #[test]
+    fn manual_schedule_is_not_overridden() {
+        let args = vec!["--bench".to_string(), "--bm".to_string(), "32".to_string()];
+        let config = Config::parse(&args).unwrap().unwrap();
+        let problem = Problem::new(4096, &config).unwrap();
+        let schedule = config.for_problem(problem, 148, true);
+        assert_eq!((schedule.bm, schedule.bk, schedule.programs), (32, 64, 0));
+    }
+
+    #[test]
+    fn default_schedule_is_not_overridden() {
+        let config = Config::parse(&["--bench".to_string()]).unwrap().unwrap();
+        for &m in &config.m_list {
+            let schedule = config.for_problem(Problem::new(m, &config).unwrap(), 148, true);
+            assert_eq!(
+                (schedule.bm, schedule.bk, schedule.programs, schedule.cga),
+                (64, 64, 0, 1)
+            );
+        }
+    }
+
+    #[test]
+    fn b200_profile_rejects_manual_schedules_and_other_shapes() {
+        for option in [
+            "--bm",
+            "--bk",
+            "--group-m",
+            "--programs",
+            "--m-list",
+            "--k",
+            "--q-heads",
+            "--kv-heads",
+        ] {
+            let args = ["--bench", "--profile", "b200", option, "16"].map(str::to_string);
+            assert!(Config::parse(&args).is_err(), "{option}");
         }
     }
 }

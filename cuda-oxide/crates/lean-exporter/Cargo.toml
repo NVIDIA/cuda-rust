@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "lean-exporter"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Export a restricted scalar MIR subset to the cuda-oxide Lean model"
+readme = "README.md"
+
+[dependencies]
+dialect-mir = { workspace = true }
+dialect-nvvm = { workspace = true }
+pliron = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+combine = { workspace = true }

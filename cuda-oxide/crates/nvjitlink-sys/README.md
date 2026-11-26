@@ -18,8 +18,8 @@ None. The library is loaded at runtime, so the CUDA Toolkit only needs to be pre
 `LibNvJitLink::load()` tries (in order):
 
 1. `LIBNVJITLINK_PATH` env var, if set.
-2. `<root>/lib64/libnvJitLink.so`, then `<root>/lib/libnvJitLink.so`, for `<root>` in `CUDA_TOOLKIT_PATH`, `CUDA_HOME`, `CUDA_PATH`, `/usr/local/cuda`, `/opt/cuda`.
-3. The system loader (`libnvJitLink.so.13`, `libnvJitLink.so.12`, `libnvJitLink.so`).
+2. CUDA Toolkit roots and runtime search directories from `cuda-toolkit-discovery`: `<root>/lib64/libnvJitLink.so`, then `<root>/lib/libnvJitLink.so` on Linux; versioned `nvJitLink_*.dll` files under `bin/x64/` and `bin/` on Windows.
+3. The system loader (`libnvJitLink.so.13`, `libnvJitLink.so.12`, `libnvJitLink.so`) on Linux.
 
 nvJitLink ships with the standard CUDA Toolkit at `<cuda>/lib64/`; conda-forge and nixpkgs layouts place it at `<cuda>/lib/`. No separate download. Only the unversioned `libnvJitLink.so` name is probed under a root. A layout that ships only `libnvJitLink.so.13` is found through the system loader instead, and such a load cannot be tied to one file on disk, which cubin materialization (`cargo oxide build --materialize-cubin`) requires. Set `LIBNVJITLINK_PATH` to the versioned file in that case.
 

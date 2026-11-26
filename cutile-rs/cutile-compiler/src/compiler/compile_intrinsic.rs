@@ -1962,6 +1962,14 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                         }
                     }
                     "tile_to_pointer" => {
+                        // The value's Rust type can still name the caller's
+                        // generic parameters (`PointerTile<*mut E, {[]}>`
+                        // from a generic helper); its instance names the
+                        // concrete element type.
+                        let old_type = match &new_value.ty.type_instance {
+                            TypeInstance::StructuredType(inst) => inst.instance_ty.clone(),
+                            _ => old_type,
+                        };
                         let Some(element_type) =
                             get_element_type_structured(&old_type, self.modules.primitives())
                         else {
@@ -2227,6 +2235,139 @@ impl<'m> CUDATileFunctionCompiler<'m> {
                     _ => self.jit_error_result(
                         &call_expr.span(),
                         &format!("Unsupported convert compiler_op: {}", compiler_op_function),
+                    ),
+                }
+            }
+            "tensor_layout" => {
+                // `get_static_extent(shape, axis)`: the static extent of
+                // `axis` of a `Shape<S>` type (the tile a mutable tensor's
+                // `load` and `store` reach). `get_tensor_stride(tensor, axis)`:
+                // the stride of `axis`, in elements, a constant when the
+                // view's type fixes it and else the dynamic stride the view
+                // carries.
+                if call_expr.args.len() != 2 {
+                    return self.jit_error_result(
+                        &call_expr.span(),
+                        &format!("`{ident}` expects a value and an axis"),
+                    );
+                }
+                let axis = self
+                    .compile_expression(
+                        module,
+                        block_id,
+                        &call_expr.args[1],
+                        generic_vars,
+                        ctx,
+                        None,
+                    )?
+                    .and_then(|v| v.bounds)
+                    .filter(|b| b.is_exact() && b.start >= 0)
+                    .map(|b| b.start as usize)
+                    .ok_or_else(|| {
+                        self.jit_error(
+                            &call_expr.args[1].span(),
+                            "the axis must be a non-negative compile-time constant",
+                        )
+                    })?;
+                let Some(tensor) = self.compile_expression(
+                    module,
+                    block_id,
+                    &call_expr.args[0],
+                    generic_vars,
+                    ctx,
+                    None,
+                )?
+                else {
+                    return self
+                        .jit_error_result(&call_expr.args[0].span(), "failed to compile value");
+                };
+                match ident.to_string().as_str() {
+                    "get_static_extent" => {
+                        let shape = match &tensor.ty.type_instance {
+                            TypeInstance::StructuredType(inst) => Some(inst.shape.clone()),
+                            _ => get_cga_from_type(&tensor.ty.rust_ty, generic_vars),
+                        };
+                        let Some(shape) = shape else {
+                            return self.jit_error_result(
+                                &call_expr.args[0].span(),
+                                &format!(
+                                    "`{}` is not a shape with a known rank",
+                                    tensor.ty.rust_ty.to_token_stream()
+                                ),
+                            );
+                        };
+                        match shape.get(axis) {
+                            Some(&extent) if extent > 0 => self
+                                .compile_constant(module, block_id, generic_vars, extent)
+                                .map(Some),
+                            Some(_) => self.jit_error_result(
+                                &call_expr.args[0].span(),
+                                &format!(
+                                    "axis {axis} of `{}` has no static extent",
+                                    tensor.ty.rust_ty.to_token_stream()
+                                ),
+                            ),
+                            None => self.jit_error_result(
+                                &call_expr.args[1].span(),
+                                &format!(
+                                    "axis {axis} is out of range for a rank-{} shape",
+                                    shape.len()
+                                ),
+                            ),
+                        }
+                    }
+                    "get_tensor_stride" => {
+                        let Some(Type::TensorView(view)) = &tensor.ty.tile_ir_ty else {
+                            return self.jit_error_result(
+                                &call_expr.args[0].span(),
+                                "expected a tensor view",
+                            );
+                        };
+                        let Some(&stride) = view.strides.get(axis) else {
+                            return self.jit_error_result(
+                                &call_expr.args[1].span(),
+                                &format!(
+                                    "axis {axis} is out of range for a rank-{} tensor",
+                                    view.strides.len()
+                                ),
+                            );
+                        };
+                        if stride != cutile_ir::ir::DYNAMIC {
+                            let stride = i32::try_from(stride).map_err(|_| {
+                                self.jit_error(
+                                    &call_expr.span(),
+                                    &format!("stride {stride} does not fit in i32"),
+                                )
+                            })?;
+                            return self
+                                .compile_constant(module, block_id, generic_vars, stride)
+                                .map(Some);
+                        }
+                        // The view carries its dynamic strides in order.
+                        let dynamic_index = view.strides[..axis]
+                            .iter()
+                            .filter(|s| **s == cutile_ir::ir::DYNAMIC)
+                            .count();
+                        let dynamic = tensor
+                            .type_meta
+                            .as_ref()
+                            .and_then(|meta| meta.fields.get("strides"))
+                            .and_then(|strides| strides.fields.as_ref())
+                            .and_then(|fields| fields.get("dims"))
+                            .and_then(|dims| dims.values.as_ref())
+                            .and_then(|values| values.get(dynamic_index))
+                            .cloned();
+                        match dynamic {
+                            Some(value) => Ok(Some(value)),
+                            None => self.jit_error_result(
+                                &call_expr.args[0].span(),
+                                &format!("the dynamic stride of axis {axis} is not available"),
+                            ),
+                        }
+                    }
+                    other => self.jit_error_result(
+                        &call_expr.span(),
+                        &format!("unsupported tensor_layout compiler_op `{other}`"),
                     ),
                 }
             }

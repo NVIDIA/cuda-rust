@@ -7,7 +7,8 @@ use cutile::cuda_core::Stream;
 use cutile::half::f16;
 use cutile::prelude::*;
 use cutile_kernels::experimental::{
-    fmha_prefill_gqa_lpt_split, prefill_splitk_reduce_merge, rms_norm_persistent_f16,
+    fmha_prefill_gqa_lpt, fmha_prefill_gqa_lpt_split, fmha_prefill_gqa_lpt_split_strided,
+    fmha_prefill_gqa_lpt_strided, prefill_splitk_reduce_merge, rms_norm_persistent_f16,
 };
 
 fn on_test_thread(f: impl FnOnce() + Send + 'static) {
@@ -28,7 +29,7 @@ fn upload(values: &[f16], shape: &[usize], stream: &Arc<Stream>) -> Tensor<f16> 
 
 #[test]
 #[ignore = "requires a CUDA GPU and Tile IR assembler; run via run_gpu_tests.sh"]
-fn split_prefill_matches_cpu_with_tail_rows_and_empty_splits() {
+fn prefill_matches_cpu_with_reserved_cache_strides_and_empty_splits() {
     on_test_thread(|| {
         const BM: usize = 16;
         const BN: usize = 32;
@@ -46,20 +47,43 @@ fn split_prefill_matches_cpu_with_tail_rows_and_empty_splits() {
         let context = Context::new(0).unwrap();
         let stream = context.new_stream().unwrap();
         let scale = 1.0 / (D as f32).sqrt();
-        let values = |len, salt| {
+        let values = |len, offset| {
             (0..len)
-                .map(|i| f16::from_f32(((i * 17 + salt) % 41) as f32 / 41.0 - 0.5))
+                .map(|i| f16::from_f32(((i * 17 + offset) % 41) as f32 / 41.0 - 0.5))
                 .collect::<Vec<_>>()
         };
         let q_host = values(Q_LEN * Q_HEADS * D, 3);
         let q = upload(&q_host, &[Q_LEN, Q_HEADS, D], &stream);
         // Nonzero query_start covers cached-prefix prefill. The two KV lengths
         // exercise both masked tail loads and the EVEN_K specialization.
-        for (kv_len, query_start) in [(40usize, 7usize), (64, 31)] {
+        for (kv_len, query_start, k_capacity, v_capacity) in [
+            (40usize, 7usize, 40usize, 40usize),
+            (64, 31, 64, 64),
+            (40, 7, 96, 128),
+            (64, 31, 128, 96),
+        ] {
             let k_host = values(HEAD_GROUPS * kv_len * D, 9);
             let v_host = values(HEAD_GROUPS * kv_len * D, 21);
-            let k = upload(&k_host, &[HEAD_GROUPS, kv_len, D], &stream);
-            let v = upload(&v_host, &[HEAD_GROUPS, kv_len, D], &stream);
+            // Distinct nonzero padding makes a mistaken active-length head
+            // stride observable numerically even when it stays in bounds.
+            let padded = |active: &[f16], capacity, fill| {
+                let mut storage = vec![f16::from_f32(fill); HEAD_GROUPS * capacity * D];
+                for head in 0..HEAD_GROUPS {
+                    storage[head * capacity * D..head * capacity * D + kv_len * D]
+                        .copy_from_slice(&active[head * kv_len * D..(head + 1) * kv_len * D]);
+                }
+                storage
+            };
+            let k = upload(
+                &padded(&k_host, k_capacity, 4.0),
+                &[HEAD_GROUPS, k_capacity, D],
+                &stream,
+            );
+            let v = upload(
+                &padded(&v_host, v_capacity, -4.0),
+                &[HEAD_GROUPS, v_capacity, D],
+                &stream,
+            );
             let mut reference = vec![0.0f32; q_host.len()];
             for row in 0..Q_LEN {
                 for head in 0..Q_HEADS {
@@ -90,28 +114,24 @@ fn split_prefill_matches_cpu_with_tail_rows_and_empty_splits() {
                 }
             }
             for schedule in 0..=3 {
-                let partial = api::zeros::<f16>(&[TILES, NS_M, D])
+                let direct = api::full(f16::NAN, &[Q_LEN, Q_HEADS, D])
                     .sync_on(&stream)
                     .unwrap();
-                let lse = api::zeros::<f32>(&[TILES, NS_M]).sync_on(&stream).unwrap();
-                let out = api::full(f16::NAN, &[Q_LEN, Q_HEADS, D])
-                    .sync_on(&stream)
-                    .unwrap();
-                // SAFETY: CUDA allocations satisfy the alignment assumptions;
-                // all shapes, strides, specialization constants and scratch sizes
-                // match the entry contracts. Buffers remain alive and distinct,
-                // and synchronous same-stream launches order producer and merge.
+                // SAFETY: each cache has its declared physical head stride and
+                // at least kv_len active rows. Owners outlive the synchronized
+                // launch; Q/output are contiguous, aligned and nonoverlapping.
                 unsafe {
-                    fmha_prefill_gqa_lpt_split(
+                    fmha_prefill_gqa_lpt_strided(
                         q.device_pointer(),
                         k.device_pointer(),
                         v.device_pointer(),
-                        partial.device_pointer(),
-                        lse.device_pointer(),
+                        direct.device_pointer(),
                         value(scale),
                         value(GROUP as i32),
                         value(Q_LEN as i32),
                         value(kv_len as i32),
+                        value((k_capacity * D) as i32),
+                        value((v_capacity * D) as i32),
                         value(query_start as i32),
                         value(BLOCKS as i32),
                         value(HEAD_GROUPS as i32),
@@ -127,19 +147,168 @@ fn split_prefill_matches_cpu_with_tail_rows_and_empty_splits() {
                         D,
                         GROUP,
                         M_EFF,
+                        1,
                         usize::from(kv_len % BN == 0),
-                        SPLITS,
-                        NS_M,
                         1,
                         schedule,
+                        schedule % 2,
                     ]
                     .map(|v| v.to_string())
                     .to_vec(),
                 )
-                // One extra CTA verifies the guard replacing Grout's early return.
-                .grid(((TILES + 1) as u32, SPLITS as u32, 1))
+                .grid(((TILES + 1) as u32, 1, 1))
                 .sync_on(&stream)
                 .unwrap();
+                let direct_values = direct.to_host_vec().sync_on(&stream).unwrap();
+                for (index, (actual, expected)) in direct_values.iter().zip(&reference).enumerate()
+                {
+                    let actual = actual.to_f32();
+                    assert!(actual.is_finite() && (actual - expected).abs() < 0.002,
+                        "direct schedule={schedule}, kv_len={kv_len}, capacity={k_capacity}/{v_capacity}, index={index}: {actual} != {expected}");
+                }
+                if k_capacity == kv_len && v_capacity == kv_len {
+                    let contiguous = api::full(f16::NAN, &[Q_LEN, Q_HEADS, D])
+                        .sync_on(&stream)
+                        .unwrap();
+                    // SAFETY: this fixture uses the original contiguous ABI;
+                    // the same ownership, shape and ordering contracts apply.
+                    unsafe {
+                        fmha_prefill_gqa_lpt(
+                            q.device_pointer(),
+                            k.device_pointer(),
+                            v.device_pointer(),
+                            contiguous.device_pointer(),
+                            value(scale),
+                            value(GROUP as i32),
+                            value(Q_LEN as i32),
+                            value(kv_len as i32),
+                            value(query_start as i32),
+                            value(BLOCKS as i32),
+                            value(HEAD_GROUPS as i32),
+                            value(SWIZZLE as i32),
+                            value((HEAD_GROUPS / SWIZZLE) as i32),
+                            value((HEAD_GROUPS % SWIZZLE) as i32),
+                        )
+                    }
+                    .generics(
+                        [
+                            BM,
+                            BN,
+                            D,
+                            GROUP,
+                            M_EFF,
+                            1,
+                            usize::from(kv_len % BN == 0),
+                            1,
+                            schedule,
+                            schedule % 2,
+                        ]
+                        .map(|v| v.to_string())
+                        .to_vec(),
+                    )
+                    .grid(((TILES + 1) as u32, 1, 1))
+                    .sync_on(&stream)
+                    .unwrap();
+                    let contiguous_values = contiguous.to_host_vec().sync_on(&stream).unwrap();
+                    for (actual, expected) in contiguous_values.iter().zip(&reference) {
+                        assert!(actual.is_finite() && (actual.to_f32() - expected).abs() < 0.002);
+                    }
+                }
+
+                let partial = api::zeros::<f16>(&[TILES, NS_M, D])
+                    .sync_on(&stream)
+                    .unwrap();
+                let lse = api::zeros::<f32>(&[TILES, NS_M]).sync_on(&stream).unwrap();
+                let out = api::full(f16::NAN, &[Q_LEN, Q_HEADS, D])
+                    .sync_on(&stream)
+                    .unwrap();
+                // SAFETY: CUDA allocations satisfy the alignment assumptions;
+                // all shapes, strides, specialization constants and scratch sizes
+                // match the entry contracts. Buffers remain alive and distinct,
+                // and synchronous same-stream launches order producer and merge.
+                if k_capacity == kv_len && v_capacity == kv_len {
+                    unsafe {
+                        fmha_prefill_gqa_lpt_split(
+                            q.device_pointer(),
+                            k.device_pointer(),
+                            v.device_pointer(),
+                            partial.device_pointer(),
+                            lse.device_pointer(),
+                            value(scale),
+                            value(GROUP as i32),
+                            value(Q_LEN as i32),
+                            value(kv_len as i32),
+                            value(query_start as i32),
+                            value(BLOCKS as i32),
+                            value(HEAD_GROUPS as i32),
+                            value(SWIZZLE as i32),
+                            value((HEAD_GROUPS / SWIZZLE) as i32),
+                            value((HEAD_GROUPS % SWIZZLE) as i32),
+                        )
+                    }
+                    .generics(
+                        [
+                            BM,
+                            BN,
+                            D,
+                            GROUP,
+                            M_EFF,
+                            usize::from(kv_len % BN == 0),
+                            SPLITS,
+                            NS_M,
+                            1,
+                            schedule,
+                        ]
+                        .map(|v| v.to_string())
+                        .to_vec(),
+                    )
+                    // One extra CTA verifies the guard replacing Grout's early return.
+                    .grid(((TILES + 1) as u32, SPLITS as u32, 1))
+                    .sync_on(&stream)
+                    .unwrap();
+                } else {
+                    unsafe {
+                        fmha_prefill_gqa_lpt_split_strided(
+                            q.device_pointer(),
+                            k.device_pointer(),
+                            v.device_pointer(),
+                            partial.device_pointer(),
+                            lse.device_pointer(),
+                            value(scale),
+                            value(GROUP as i32),
+                            value(Q_LEN as i32),
+                            value(kv_len as i32),
+                            value((k_capacity * D) as i32),
+                            value((v_capacity * D) as i32),
+                            value(query_start as i32),
+                            value(BLOCKS as i32),
+                            value(HEAD_GROUPS as i32),
+                            value(SWIZZLE as i32),
+                            value((HEAD_GROUPS / SWIZZLE) as i32),
+                            value((HEAD_GROUPS % SWIZZLE) as i32),
+                        )
+                    }
+                    .generics(
+                        [
+                            BM,
+                            BN,
+                            D,
+                            GROUP,
+                            M_EFF,
+                            usize::from(kv_len % BN == 0),
+                            SPLITS,
+                            NS_M,
+                            1,
+                            schedule,
+                        ]
+                        .map(|v| v.to_string())
+                        .to_vec(),
+                    )
+                    // One extra CTA verifies the guard replacing Grout's early return.
+                    .grid(((TILES + 1) as u32, SPLITS as u32, 1))
+                    .sync_on(&stream)
+                    .unwrap();
+                }
                 // SAFETY: the matching producer completed above; merge writes
                 // each output element once, with two nonoverlapping D chunks.
                 unsafe {
@@ -167,7 +336,7 @@ fn split_prefill_matches_cpu_with_tail_rows_and_empty_splits() {
                 for (index, (actual, expected)) in actual.iter().zip(&reference).enumerate() {
                     let actual = actual.to_f32();
                     assert!(actual.is_finite() && (actual - expected).abs() < 0.002,
-                        "schedule={schedule}, kv_len={kv_len}, index={index}: {actual} != {expected}");
+                        "split schedule={schedule}, kv_len={kv_len}, capacity={k_capacity}/{v_capacity}, index={index}: {actual} != {expected}");
                 }
             }
         }

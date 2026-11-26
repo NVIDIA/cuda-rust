@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 //! Host construction of the rank-three tensor maps consumed by attention tiles.
-use super::TensorMap;
-use crate::nvgpu::tcgen05::SmemLayout;
+use super::{TensorMap, TmaElement};
+use crate::nvgpu::tcgen05::{MmaHalfElement, SmemLayout};
 use alloc::{format, string::String};
 use core::{ffi::c_void, marker::PhantomData, mem::MaybeUninit};
 use cuda_core::sys as driver;
@@ -31,7 +31,22 @@ pub fn create_tensor_map_tiled<L: SmemLayout>(
     cols: u64,
     row_stride_elements: u64,
 ) -> Result<TensorMap<f16, L>, String> {
+    create_tensor_map_tiled_typed::<f16, L>(base, rows, cols, row_stride_elements)
+}
+
+/// Encode a physical row-major 16-bit (`f16` or `BFloat16`) matrix into the selected
+/// rank-three SM100/SM107 shared operand layout with 128-byte L2 promotion.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub fn create_tensor_map_tiled_typed<T: TmaElement + MmaHalfElement, L: SmemLayout>(
+    base: *mut c_void,
+    rows: u64,
+    cols: u64,
+    row_stride_elements: u64,
+) -> Result<TensorMap<T, L>, String> {
     let () = L::VALID;
+    if T::BYTES != 2 {
+        return Err("SM100 rank-three TMA requires a 2-byte element type".into());
+    }
     let span = L::SPAN;
     let (tile_rows, tile_cols) = if L::MN_MAJOR {
         (L::COLS, L::ROWS)
@@ -76,7 +91,7 @@ pub fn create_tensor_map_tiled<L: SmemLayout>(
     let status = unsafe {
         driver::cuTensorMapEncodeTiled(
             out.as_mut_ptr(),
-            driver::CUtensorMapDataType_enum_CU_TENSOR_MAP_DATA_TYPE_FLOAT16,
+            T::DATA_TYPE,
             3,
             base,
             dims.as_ptr(),

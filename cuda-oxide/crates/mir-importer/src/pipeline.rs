@@ -1032,6 +1032,7 @@ union Word {
 struct SharedMarker<T, const N: usize>(core::marker::PhantomData<T>);
 unsafe impl<T, const N: usize> Sync for SharedMarker<T, N> {}
 struct ContainsPointer { pointer: *mut u32 }
+struct RecursiveNode { next: *const RecursiveNode, value: u32 }
 
 static SCALAR: u64 = 7;
 static UNION_VALUE: Word = Word { value: 11 };
@@ -1040,7 +1041,9 @@ static SHARED_I32: SharedMarker<i32, 32> = SharedMarker(core::marker::PhantomDat
 static SHARED_UNION: SharedMarker<Word, 4> = SharedMarker(core::marker::PhantomData);
 static SHARED_POINTER: SharedMarker<*mut u32, 4> = SharedMarker(core::marker::PhantomData);
 static SHARED_POINTER_STRUCT: SharedMarker<ContainsPointer, 2> = SharedMarker(core::marker::PhantomData);
-static SHARED_OPAQUE_POINTER: SharedMarker<*mut ContainsPointer, 4> = SharedMarker(core::marker::PhantomData);
+static SHARED_STRUCT_POINTER: SharedMarker<*mut ContainsPointer, 4> = SharedMarker(core::marker::PhantomData);
+static SHARED_OPAQUE_POINTER: SharedMarker<*mut Word, 4> = SharedMarker(core::marker::PhantomData);
+static SHARED_RECURSIVE_POINTER: SharedMarker<*const RecursiveNode, 4> = SharedMarker(core::marker::PhantomData);
 
 fn same_leaf(flag: bool) {
     if flag {
@@ -1183,11 +1186,19 @@ fn same_leaf(flag: bool) {
             )
         ));
         assert!(shared("SHARED_POINTER_STRUCT").is_some());
-        // A composite pointee has no bounded tree, so the pointer falls back
-        // to the opaque legacy form and the whole graph is rejected.
+        assert!(
+            shared("SHARED_STRUCT_POINTER").is_some(),
+            "non-recursive struct pointees carry a complete TypedPointer graph"
+        );
+        // An unsupported union pointee or a cycle-broken recursive struct
+        // pointee falls back to an opaque pointer and is rejected for AS3.
         assert!(
             shared("SHARED_OPAQUE_POINTER").is_none(),
             "legacy untyped pointers must be rejected"
+        );
+        assert!(
+            shared("SHARED_RECURSIVE_POINTER").is_none(),
+            "cycle-broken recursive struct pointers must be rejected for AS3"
         );
         let same_leaf: Vec<_> = supported
             .iter()

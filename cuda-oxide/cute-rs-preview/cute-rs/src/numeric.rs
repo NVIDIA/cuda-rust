@@ -164,6 +164,10 @@ impl Float8E4M3FN {
 
 impl TensorElement<Float8E4M3FN> for Float8E4M3FN {}
 
+// SAFETY: repr(transparent) over u8, no padding, references, or invalid bit patterns.
+#[cfg(feature = "host")]
+unsafe impl cuda_core::DeviceCopy for Float8E4M3FN {}
+
 /// Four neighboring [`Float8E8M0FNU`] scale bytes carried in one `u32`.
 ///
 /// ```text

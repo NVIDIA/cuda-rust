@@ -368,8 +368,6 @@ impl OperationTranslation for TmaTranslation {
             "operandSegmentSizes".into(),
             MlirAttribute::DenseI32Array(vec![1, 1, 2, 1, 0, 0, 0, 0]),
         );
-        op.properties
-            .insert("useIntrinsic".into(), MlirAttribute::Bool(false));
         operations.push(op);
         Ok(operations)
     }
@@ -413,7 +411,7 @@ impl OperationTranslation for TmaCtaTranslation {
             session,
             &mut operations,
             input.operands[0].clone(),
-            7,
+            3,
             &input.location,
         )?;
         let barrier = pointer(
@@ -447,7 +445,7 @@ impl OperationTranslation for TmaCtaTranslation {
             MlirAttribute::DenseI32Array(vec![1, 1, 2, 1, 0, 0, 0, 0]),
         );
         op.properties
-            .insert("useIntrinsic".into(), MlirAttribute::Bool(false));
+            .insert("isCTAOnly".into(), MlirAttribute::Bool(true));
         operations.push(op);
         Ok(operations)
     }

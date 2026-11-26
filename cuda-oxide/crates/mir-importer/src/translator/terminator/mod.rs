@@ -1577,7 +1577,9 @@ const KERNEL_METADATA_MARKERS: &[&str] = &[
 /// diagnostic span and runtime line table serve those different purposes.
 fn call_debug_location(pattern_name: Option<&str>, loc: Location) -> Location {
     if pattern_name.is_some_and(|name| {
-        KERNEL_SCOPE_CONSTRUCTORS.contains(&name) || KERNEL_METADATA_MARKERS.contains(&name)
+        KERNEL_SCOPE_CONSTRUCTORS.contains(&name)
+            || KERNEL_METADATA_MARKERS.contains(&name)
+            || super::verification::VERIFICATION_METADATA_MARKERS.contains(&name)
     }) {
         llvm_export::artificial_debug_location()
     } else {
@@ -3238,6 +3240,22 @@ fn try_dispatch_intrinsic(
         | "cuda_device::thread::__launch_contract_config"
         | "cuda_device::__launch_contract_block_config"
         | "cuda_device::thread::__launch_contract_block_config"
+        | "cuda_device::__launch_contract_requires_len_ge_config"
+        | "cuda_device::thread::__launch_contract_requires_len_ge_config"
+        | "cuda_device::__verify_no_oob_idx_config"
+        | "cuda_device::thread::__verify_no_oob_idx_config"
+        | "cuda_device::__verify_disjoint_writes_config"
+        | "cuda_device::thread::__verify_disjoint_writes_config"
+        | "cuda_device::__verify_writes_all_elems_config"
+        | "cuda_device::thread::__verify_writes_all_elems_config"
+        | "cuda_device::__verify_no_oob_shared_config"
+        | "cuda_device::thread::__verify_no_oob_shared_config"
+        | "cuda_device::__verify_no_data_race_config"
+        | "cuda_device::thread::__verify_no_data_race_config"
+        | "cuda_device::__verify_uniform_barriers_config"
+        | "cuda_device::thread::__verify_uniform_barriers_config"
+        | "cuda_device::__verify_tmem_lifecycle_config"
+        | "cuda_device::thread::__verify_tmem_lifecycle_config"
         | "cuda_device::__grid_constant_config"
         | "cuda_device::thread::__grid_constant_config"
         | "cuda_device::__unchecked_indexing_config"
@@ -3257,7 +3275,8 @@ fn try_dispatch_intrinsic(
                 | "cuda_device::thread::__unchecked_indexing_config" => {
                     "__unchecked_indexing_config"
                 }
-                _ => unreachable!("launch metadata arm matched an unknown marker"),
+                other => super::verification::verification_marker_leaf(other)
+                    .expect("launch metadata arm matched an unknown marker"),
             };
             if !is_cuda_device_const_marker(func, expected_marker) {
                 return Ok(None);

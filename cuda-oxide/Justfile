@@ -62,11 +62,12 @@ clippy-fix:
 # Run unit tests for every package CI covers that needs no CUDA
 test:
     cargo test --all-targets \
-        -p cuda-intrinsics-gen -p cuda-target-spec -p cuda-intrinsics -p llvm-export \
+        -p cuda-intrinsics-gen -p cuda-target-spec -p cuda-intrinsics -p llvm-export -p lean-exporter \
         -p dialect-mir -p dialect-nvvm -p mir-importer -p mir-lower \
         -p mir-transforms -p nvvm-transforms -p reserved-oxide-symbols \
         -p oxide-tile-export -p oxide-tilebc -p cuda-device -p libnvvm-sys -p nvjitlink-sys \
-        -p cuda-artifact-finalizer -p cargo-oxide \
+        -p oxide-tile-provider-sys -p oxide-tile-provider \
+        -p cuda-artifact-finalizer -p cuda-toolkit-discovery -p cargo-oxide \
         -p dialect-iket -p iket-lower -p ptx-parse -p dialect-ptx \
         -p ptx-schedule -p cute-layout -p dialect-cute \
         -p cuda-oxide-mlir-export
@@ -115,6 +116,11 @@ check-intrinsics base_ref="HEAD^":
     cargo run -p cuda-intrinsics-gen -- check
     cargo run -p cuda-intrinsics-gen -- probe --all --skip-terminal --per-target
     cargo run -p cuda-intrinsics-gen -- check-abi-history --base-ref {{base_ref}}
+
+# Run the Lean 4 formal verification model and MIR exporter proof checks (preview)
+check-lean:
+    CUDA_OXIDE_NO_LEAN_CACHE=1 python3 oxide-proofs-preview/check.py
+    CUDA_OXIDE_NO_LEAN_CACHE=1 python3 oxide-proofs-preview/check-exporter.py
 
 # Build docs warning-free + run doctests (mirrors the docs CI gate). The `test`
 # recipe uses `--all-targets`, which skips doctests, so this covers them.

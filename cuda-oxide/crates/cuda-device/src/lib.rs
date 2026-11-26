@@ -14,7 +14,7 @@ pub use cuda_repr::DeviceRepr;
 
 pub use cuda_macros::{
     cluster_launch, constant, convergent, cooperative_launch, cuda_module, device, gpu_printf,
-    kernel, launch_bounds, launch_contract, ptx_asm, pure, readonly, tile_export,
+    kernel, launch_bounds, launch_contract, ptx_asm, pure, readonly, tile_export, verify,
 };
 
 // Re-export for convenience

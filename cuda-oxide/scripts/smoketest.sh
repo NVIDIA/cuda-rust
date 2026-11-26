@@ -22,11 +22,11 @@
 #                   elsewhere PTX compilation is sufficient (plus the
 #                   ptxas gate).
 #   blackwell-mma -- Blackwell-consumer-only MMA (kind::mxf8f6f4 exists on
-#                   sm_120/sm_121 alone), always compiled with
-#                   `--arch=sm_120a` because the generated target gating
-#                   rejects every other architecture at compile time. On an
-#                   sm_120/121 host require full execution; elsewhere the
-#                   example verifies the generated PTX and exits 0.
+#                   sm_120/sm_121 alone). Target selection uses the detected
+#                   host arch on sm_120/sm_121 (sm_120a / sm_121a) and falls
+#                   back to sm_120a elsewhere. On an sm_120/121 host require
+#                   full execution; elsewhere the example verifies the
+#                   generated PTX and exits 0 (plus the ptxas gate).
 #   ltoir        -- runs with `--emit-nvvm-ir --arch=<host>`; the host
 #                   compute capability is detected via `nvidia-smi` so the
 #                   resulting cubin actually loads. Execution must succeed
@@ -348,7 +348,7 @@ fi
 # ---- Preflight -----------------------------------------------------------
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd "${script_dir}/.." && pwd)"
+repo_root="$(cd "${script_dir}/.." && (pwd -W 2>/dev/null || pwd))"
 cd "${repo_root}"
 
 if [[ ! -f "${repo_root}/../Cargo.toml" ]] || [[ ! -d "crates/rustc-codegen-cuda/examples" ]]; then
@@ -527,7 +527,11 @@ ptxas_verify() {
         PTXAS_NOTE="ptxas gate skipped: no .target line in ${ptx}"
         return 0
     fi
-    if stderr_out="$("${PTXAS_BIN}" -arch="${arch}" "${ptx}" -o /dev/null 2>&1)"; then
+    local ptxas_null="/dev/null"
+    case "${OSTYPE:-}" in
+        msys*|cygwin*|win32*) ptxas_null="NUL" ;;
+    esac
+    if stderr_out="$("${PTXAS_BIN}" -arch="${arch}" "${ptx}" -o "${ptxas_null}" 2>&1)"; then
         PTXAS_NOTE="ptxas ${arch} ok"
         return 0
     fi
@@ -2209,10 +2213,10 @@ run_cargo() {
         : >"${log}"
         if [[ -f "${nvvm_shape_check}" ]]; then
             if [[ ${VERBOSE} -eq 1 ]]; then
-                cargo oxide build "${ex}" "--arch=${nvvm_arch}" 2>&1 | tee -a "${log}"
+                cargo oxide build "${ex}" 2>&1 | tee -a "${log}"
                 CARGO_EC=${PIPESTATUS[0]}
             else
-                cargo oxide build "${ex}" "--arch=${nvvm_arch}" >>"${log}" 2>&1
+                cargo oxide build "${ex}" >>"${log}" 2>&1
                 CARGO_EC=$?
             fi
             if [[ ${CARGO_EC} -eq 0 ]] && ! bash "${nvvm_shape_check}" >>"${log}" 2>&1; then
@@ -2283,12 +2287,6 @@ run_cargo() {
         # Any concrete arch works: the finalizer (libNVVM + nvJitLink) runs
         # here too, so this lane exercises the full native-artifact path.
         args+=("--arch=sm_90")
-    fi
-    # kind::mxf8f6f4 admits only sm_120/sm_121 in the generated target
-    # gating, so the device build must always pin sm_120a; the example
-    # itself decides at runtime whether the host GPU can execute it.
-    if [[ "${cat}" == "blackwell-mma" ]]; then
-        args+=("--arch=sm_120a")
     fi
     if [[ "${cat}" == "ltoir" || ( "${cat}" == "auto-nvvm" && ${COMPILE_ONLY} -eq 1 ) ]]; then
         args+=("--emit-nvvm-ir" "--arch=${LTOIR_ARCH}")
@@ -2516,8 +2514,11 @@ fi
 # discovery rather than failing.
 if [[ -z "${CUDA_OXIDE_BACKEND:-}" ]]; then
     host_triple="$(rustc -vV 2>/dev/null | sed -n 's/^host: //p')"
-    for backend_name in librustc_codegen_cuda.so librustc_codegen_cuda.dylib; do
-        backend_so="${repo_root}/crates/rustc-codegen-cuda/target/${host_triple}/debug/${backend_name}"
+    for backend_rel in \
+        "debug/librustc_codegen_cuda.so" \
+        "debug/librustc_codegen_cuda.dylib" \
+        "release/rustc_codegen_cuda.dll"; do
+        backend_so="${repo_root}/crates/rustc-codegen-cuda/target/${host_triple}/${backend_rel}"
         if [[ -n "${host_triple}" && -f "${backend_so}" ]]; then
             export CUDA_OXIDE_BACKEND="${backend_so}"
             printf "Backend for this run: %s\n" "${CUDA_OXIDE_BACKEND}"

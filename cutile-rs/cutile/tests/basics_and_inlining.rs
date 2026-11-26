@@ -6,6 +6,23 @@ use cutile_compiler::compiler::utils::CompileOptions;
 
 mod common;
 
+#[deny(nonstandard_style, unused_variables, unreachable_code)]
+mod host_lint_regression {
+    #[test]
+    fn generated_host_code_allows_device_only_lints() {}
+
+    #[cutile::module]
+    mod generated {
+        use cutile::core::*;
+
+        #[cutile::entry]
+        fn printThenContinue(value: i32, unused: i32) {
+            cuda_tile_print!("value={}\n", value);
+            let _after_print = value;
+        }
+    }
+}
+
 #[cutile::module]
 mod basics_and_inlining_module {
 

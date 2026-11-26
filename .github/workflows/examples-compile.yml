@@ -69,13 +69,13 @@ jobs:
   examples-compile:
     needs: changes
     if: ${{ !cancelled() && (github.event_name != 'push' || needs.changes.outputs.relevant == 'true' || needs.changes.outputs.any_changed != 'true') }}
-    name: compile all examples (device pipeline, GPU-less)
+    name: compile all examples (device pipeline, GPU-less)${{ matrix.cuda.suffix }}
     runs-on: linux-amd64-cpu4
-    # CUDA 13.3.1 devel image: nvcc, cudart, libcurand, and libnvJitLink.
-    # The materialization gate below needs nvJitLink, which the devel image
-    # ships. rustup is installed in the container.
+    # CUDA devel image (see the matrix): nvcc, cudart, libcurand, and
+    # libnvJitLink. The materialization gate below needs nvJitLink, which the
+    # devel image ships. rustup is installed in the container.
     container:
-      image: nvidia/cuda:13.3.1-devel-ubuntu24.04
+      image: ${{ matrix.cuda.image }}
       env:
         DEBIAN_FRONTEND: noninteractive
     env:
@@ -86,6 +86,17 @@ jobs:
     # Leave job-level headroom around the 50-minute full compile and the
     # focused 10-minute materialization gate, plus toolkit/LLVM setup.
     timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      # The baseline lane keeps its existing job name (empty suffix); the newer
+      # image is a separate lane. The nvcr.io image has the same digest as Docker
+      # Hub's nvidia/cuda:13.5.0-devel-ubuntu24.04 and no anonymous pull limit.
+      matrix:
+        cuda:
+          - image: nvidia/cuda:13.3.1-devel-ubuntu24.04
+            suffix: ""
+          - image: nvcr.io/nvidia/cuda:13.5.0-devel-ubuntu24.04
+            suffix: " (CUDA 13.5.0)"
     steps:
       # $/ installs git before checkout. The CUDA image has no git; without
       # it checkout stores a tarball. The same step installs python3 for
@@ -336,7 +347,9 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: smoketest-compile-logs
+          # Artifact names are unique per run; the baseline lane keeps its name
+          # (empty suffix) and the newer lane adds its suffix.
+          name: smoketest-compile-logs${{ matrix.cuda.suffix }}
           # One glob per log the artifact-modes step writes. `iket-trace-*`
           # matched neither of the other two, so the one assertion that
           # exercises the full libNVVM + nvJitLink path -- and the only one
@@ -351,3 +364,83 @@ jobs:
             ${{ runner.temp }}/scalar-math-sm75-*-build.log
           if-no-files-found: ignore
           retention-days: 7
+
+  verified-examples-compile:
+    needs: changes
+    if: ${{ !cancelled() && (github.event_name != 'push' || needs.changes.outputs.relevant == 'true' || needs.changes.outputs.any_changed != 'true') }}
+    name: compile verified safe_* examples (Lean 4 preview, GPU-less)
+    runs-on: linux-amd64-cpu4
+    container:
+      image: nvcr.io/nvidia/cuda:13.5.0-devel-ubuntu24.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
+    env:
+      CUDA_TOOLKIT_PATH: /usr/local/cuda
+    timeout-minutes: 45
+    steps:
+      - uses: $/.github/actions/setup-cuda-container
+
+      - name: Clone repository
+        uses: actions/checkout@v4
+
+      - name: Install LLVM 23 (llc/opt for the NVPTX backend)
+        run: |
+          set -euo pipefail
+          source /etc/os-release
+          install -d -m 0755 /etc/apt/keyrings
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | tee /etc/apt/keyrings/apt-llvm-org.asc >/dev/null
+          echo "deb [signed-by=/etc/apt/keyrings/apt-llvm-org.asc] https://apt.llvm.org/${VERSION_CODENAME}/ llvm-toolchain-${VERSION_CODENAME}-23 main" \
+            | tee /etc/apt/sources.list.d/llvm-23.list
+          apt-get update
+          apt-get install -y --no-install-recommends llvm-23
+          llc-23 --version | head -2
+
+      - name: Install Elan and build Lean 4 proof library (oxide-proofs-preview)
+        working-directory: cuda-oxide/oxide-proofs-preview
+        run: |
+          set -euo pipefail
+          curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+            | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+          "$HOME/.elan/bin/lake" --version
+          "$HOME/.elan/bin/lake" build
+
+      - name: Compile and verify all safe_* examples end-to-end (no proof cache)
+        timeout-minutes: 30
+        working-directory: cuda-oxide
+        env:
+          CUDA_OXIDE_LLC: /usr/bin/llc-23
+          CUDA_OXIDE_REQUIRE_LEAN: "1"
+          CUDA_OXIDE_NO_LEAN_CACHE: "1"
+          CARGO_TARGET_DIR: ${{ runner.temp }}/safe-examples-shared-target
+          CARGO_INCREMENTAL: "0"
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.elan/bin:$PATH"
+          sysroot="$(rustc --print sysroot)"
+          export LIBRARY_PATH="${sysroot}/lib:${LIBRARY_PATH:-}"
+          export LD_LIBRARY_PATH="${sysroot}/lib:${LD_LIBRARY_PATH:-}"
+
+          cargo oxide setup
+
+          for spec in \
+            "safe_vecadd:sm_90a" \
+            "safe_gemm_views:sm_90a" \
+            "safe_warp_reduce:sm_90a" \
+            "safe_subwarp_stage:sm_90a" \
+            "safe_async_copy:sm_90a" \
+            "safe_warp_ring:sm_90a" \
+            "safe_tcgen05_matmul:sm_100a" \
+            "safe_cluster_clc:sm_100a" \
+            "safe_gemm_sol_final:sm_100a"
+          do
+            ex="${spec%%:*}"
+            arch="${spec##*:}"
+            log="${RUNNER_TEMP}/${ex}-build.log"
+            echo "=== Building & proving ${ex} (--arch ${arch}) ==="
+            cargo oxide build "${ex}" --arch "${arch}" 2>&1 | tee "${log}"
+            grep -Fq "[lean-verifier] Verified kernel" "${log}"
+            objcopy --dump-section ".oxart=${RUNNER_TEMP}/${ex}.oxart" "${CARGO_TARGET_DIR}/release/${ex}"
+            test -s "${RUNNER_TEMP}/${ex}.oxart"
+          done

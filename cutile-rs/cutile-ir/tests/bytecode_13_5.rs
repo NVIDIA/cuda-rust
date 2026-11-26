@@ -7,9 +7,11 @@
 //! the public-preview `preview$call` (foreign tile-library calls) and the
 //! preview header bit.
 //!
-//! The toolkit checks run when the selected `tileiras` has a
-//! `cuda-tile-translate` next to it that accepts 13.5. They never need a
-//! GPU.
+//! The translator checks use `CUTILE_REFERENCE_TRANSLATE` when configured,
+//! otherwise a `cuda-tile-translate` next to the selected 13.5 `tileiras`.
+//! The disassembler check uses `tileirdisasm`, which the toolkit installs next
+//! to `tileiras`; with `CUTILE_REQUIRE_TILELIB=1` it fails instead of skipping.
+//! They never need a GPU.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -594,9 +596,13 @@ fn preview_call_operands_must_be_tiles_or_tokens() {
     assert!(message.contains("tiles or tokens"), "{message}");
 }
 
-/// `cuda-tile-translate` next to the selected `tileiras`, when it accepts
-/// 13.5 preview bytecode.
+/// Prefer an explicitly configured translator, including one built by
+/// cuda-tile-rs without a toolkit. Explicitly selected tools must pass the test;
+/// a missing or incompatible executable is an error rather than a skip.
 fn translator() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("CUTILE_REFERENCE_TRANSLATE") {
+        return Some(path.into());
+    }
     let tileiras = cutile_ir::toolchain::tileiras_from_env();
     let tileiras = if tileiras.components().count() == 1 {
         which(&tileiras)?
@@ -661,4 +667,71 @@ fn official_translator_reads_13_5_preview_calls() {
         "{mlir}"
     );
     assert!(mlir.contains("!cuda_tile.token"), "{mlir}");
+}
+
+/// `tileirdisasm` next to the selected `tileiras`, when that assembler
+/// accepts Tile IR 13.5; the toolkit installs the two together. Without one
+/// the caller skips, and with `CUTILE_REQUIRE_TILELIB=1` this panics instead.
+fn disassembler() -> Option<PathBuf> {
+    let tileiras = cutile_ir::toolchain::tileiras_from_env();
+    let tileiras = if tileiras.components().count() == 1 {
+        which(&tileiras).unwrap_or(tileiras)
+    } else {
+        tileiras
+    };
+    let disassembler = tileiras
+        .parent()
+        .map(|bin| bin.join("tileirdisasm"))
+        .filter(|path| path.is_file());
+    let accepts_13_5 =
+        cutile_ir::toolchain::negotiate_bytecode_version(&tileiras, Some("13.5".as_ref())).is_ok();
+    if let (Some(disassembler), true) = (disassembler, accepts_13_5) {
+        return Some(disassembler);
+    }
+    let reason = format!("no tileirdisasm accepting Tile IR 13.5 next to {tileiras:?}");
+    if std::env::var("CUTILE_REQUIRE_TILELIB").as_deref() == Ok("1") {
+        panic!("CUTILE_REQUIRE_TILELIB=1 but the disassembler check cannot run: {reason}");
+    }
+    eprintln!("skipped: {reason}");
+    None
+}
+
+/// The disassembly of `bytes`, which may contain public-preview operations.
+fn disassemble(disassembler: &Path, bytes: &[u8]) -> String {
+    let dir = std::env::temp_dir().join(format!("cutile-13-5-disasm-{}", uuid_like()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("module.tilebc");
+    std::fs::write(&file, bytes).unwrap();
+    let output = Command::new(disassembler)
+        .arg("--preview=simt")
+        .arg(&file)
+        .output()
+        .unwrap();
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+/// The toolkit's own reader accepts the `preview$call` this crate writes and
+/// prints the callee, its constant arguments and the token it threads. Unlike
+/// the translator, the disassembler is in every CUDA 13.5 toolkit.
+#[test]
+fn toolkit_disassembler_reads_13_5_preview_calls() {
+    let Some(disassembler) = disassembler() else {
+        return;
+    };
+    let module = cholesky_module();
+    let text = disassemble(
+        &disassembler,
+        &write(&module, BytecodeVersion::V13_5).unwrap(),
+    );
+    assert!(
+        text.contains(r#"preview$call @cholesky<["potrf", "lower", 1, 32, f64]>"#),
+        "{text}"
+    );
+    assert!(text.contains("!cuda_tile.token"), "{text}");
 }

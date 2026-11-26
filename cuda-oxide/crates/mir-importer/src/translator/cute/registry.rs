@@ -219,6 +219,7 @@ pub(crate) const CUTE_FNS: &[CuteFnSpec] = &[
             SubstKind::Const,
             SubstKind::Const,
             SubstKind::Const,
+            SubstKind::Type,
         ],
     },
     CuteFnSpec {
@@ -235,12 +236,12 @@ pub(crate) const CUTE_FNS: &[CuteFnSpec] = &[
     CuteFnSpec {
         canonical: "cute_rs::nvgpu::tcgen05::__compiler::tma_load",
         func: CuteFn::Attention(sm100_attention::AttentionFn::TmaLoad),
-        schema: &[SubstKind::Type, SubstKind::Const],
+        schema: &[SubstKind::Type, SubstKind::Const, SubstKind::Type],
     },
     CuteFnSpec {
         canonical: "cute_rs::nvgpu::tcgen05::__compiler::tma_store",
         func: CuteFn::Attention(sm100_attention::AttentionFn::TmaStore),
-        schema: &[SubstKind::Type, SubstKind::Const],
+        schema: &[SubstKind::Type, SubstKind::Const, SubstKind::Type],
     },
     CuteFnSpec {
         canonical: "cute_rs::nvgpu::tcgen05::__compiler::sm100_tma_store",
@@ -357,6 +358,23 @@ pub(crate) const CUTE_FNS: &[CuteFnSpec] = &[
             SubstKind::Type,
             SubstKind::Const,
             SubstKind::Const,
+        ],
+    },
+    CuteFnSpec {
+        canonical: "cute_rs::nvgpu::tcgen05::__compiler::sm107_block_scaled_copy",
+        func: CuteFn::Sm100(sm100::Sm100Fn::Sm107BlockScaledCopy),
+        schema: &[SubstKind::Const],
+    },
+    CuteFnSpec {
+        canonical: "cute_rs::nvgpu::tcgen05::__compiler::sm107_block_scaled_gemm",
+        func: CuteFn::Sm100(sm100::Sm100Fn::Sm107BlockScaledGemm),
+        schema: &[
+            SubstKind::Type,
+            SubstKind::Type,
+            SubstKind::Const,
+            SubstKind::Const,
+            SubstKind::Const,
+            SubstKind::Type,
         ],
     },
     CuteFnSpec {

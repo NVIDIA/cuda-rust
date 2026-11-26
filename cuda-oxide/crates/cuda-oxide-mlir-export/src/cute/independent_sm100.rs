@@ -15,9 +15,33 @@ pub(crate) fn register_cute_sm100_attention_pack(
 ) -> Result<(), TranslationError> {
     r.register_attribute::<CuteSm100MmaAttr>(DropAttribute)?;
     r.register_attribute::<CuteSm100TmaAttr>(DropAttribute)?;
-    r.register_operation::<CuteSm100MmaSsOp>(Mma(false))?;
-    r.register_operation::<CuteSm100MmaTsOp>(Mma(true))?;
-    r.register_operation::<CuteSm100TmaLoadOp>(Tma(false))?;
-    r.register_operation::<CuteSm100TmaStoreOp>(Tma(true))?;
+    r.register_operation::<CuteSm100MmaSsOp>(Mma {
+        ts: false,
+        bf16: false,
+    })?;
+    r.register_operation::<CuteSm100Bf16MmaSsOp>(Mma {
+        ts: false,
+        bf16: true,
+    })?;
+    r.register_operation::<CuteSm100MmaTsOp>(Mma {
+        ts: true,
+        bf16: false,
+    })?;
+    r.register_operation::<CuteSm100TmaLoadOp>(Tma {
+        store: false,
+        bf16: false,
+    })?;
+    r.register_operation::<CuteSm100Bf16TmaLoadOp>(Tma {
+        store: false,
+        bf16: true,
+    })?;
+    r.register_operation::<CuteSm100TmaStoreOp>(Tma {
+        store: true,
+        bf16: false,
+    })?;
+    r.register_operation::<CuteSm100Bf16TmaStoreOp>(Tma {
+        store: true,
+        bf16: true,
+    })?;
     Ok(())
 }

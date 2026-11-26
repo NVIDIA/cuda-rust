@@ -115,7 +115,7 @@ pub trait MlirConsumerProfile {
     }
 }
 
-/// CuTe mappings supported by the pinned CUTLASS 4.7 compiler.
+/// CuTe mappings supported by the pinned CUTLASS 4.8.1 compiler.
 ///
 /// Each CUTLASS release needs its own profile until its syntax, generated code,
 /// and runtime behavior have passed validation.
@@ -127,14 +127,17 @@ pub struct CutlassFullCuteMlir22 {
 
 impl CutlassFullCuteMlir22 {
     /// Exact CUTLASS compiler release defining this profile's accepted dialects.
-    pub const CONSUMER_REVISION: &'static str = "cutlass-compiler-v4.7.0";
+    pub const CONSUMER_REVISION: &'static str = "cutlass-compiler-v4.8.1";
     /// Exact Pliron revision defining this profile's source IR contract.
     pub const PLIRON_REVISION: &'static str = "435536c8611af34c48c8f73d78e77894a05d103d";
 
-    /// Accept only sm_100a, sm_103a or sm_120a, whose mappings have been validated for this consumer.
+    /// Accept only sm_100a, sm_103a, sm_107a or sm_120a, whose mappings have been validated for this consumer.
     pub fn new(gpu_arch: impl Into<String>) -> Result<Self, ProfileError> {
         let gpu_arch = gpu_arch.into();
-        if !matches!(gpu_arch.as_str(), "sm_100a" | "sm_103a" | "sm_120a") {
+        if !matches!(
+            gpu_arch.as_str(),
+            "sm_100a" | "sm_103a" | "sm_107a" | "sm_120a"
+        ) {
             return Err(ProfileError::UnsupportedArchitecture(gpu_arch));
         }
         Ok(Self { gpu_arch })
@@ -214,6 +217,13 @@ pub(crate) fn verify_nvvm_architecture(
         if gpu_arch == "sm_120a" && id.to_string().starts_with("nvvm.tcgen05") {
             return Err(ProfileError::SourceValidation(
                 "TCGen05 is unsupported on sm_120a".into(),
+            ));
+        }
+        if gpu_arch != "sm_107a"
+            && id == dialect_cute::sm100_ops::CuteSm107BlockScaledGemmOp::get_opid_static()
+        {
+            return Err(ProfileError::SourceValidation(
+                "SM107 MXF8F6F4 block-scaled MMA requires sm_107a".into(),
             ));
         }
         if gpu_arch != "sm_120a"
@@ -416,10 +426,10 @@ mod tests {
         assert!(profile.build_registry().unwrap().is_sealed());
     }
 
-    /// Accept each reviewed target, including the B300-class sm_103a.
+    /// Accept each reviewed target, including B300 sm_103a and Rubin sm_107a.
     #[test]
     fn profile_accepts_the_reviewed_architectures() {
-        for arch in ["sm_100a", "sm_103a", "sm_120a"] {
+        for arch in ["sm_100a", "sm_103a", "sm_107a", "sm_120a"] {
             assert_eq!(
                 CutlassFullCuteMlir22::new(arch)
                     .unwrap()

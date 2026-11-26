@@ -272,43 +272,6 @@ pub mod tileir {
         unreachable!()
     }
 
-    /// Raw view load with CUDA 13.5 TMA data-validity checking on sm_107.
-    /// `valid_check` must be a compile-time boolean. True requires TMA enabled,
-    /// a supported floating-point element type (for example, `f32`, `f16`, or
-    /// `bf16`), and relaxed or acquire ordering with a memory scope. Integer
-    /// element types and weak ordering do not support validity checking.
-    /// The other arguments have the same meaning as [`load_view_raw`].
-    ///
-    /// # Safety
-    /// All requirements of [`load_view_raw`] apply. When checking is enabled,
-    /// the producer and consumer must use the element type's data-validity
-    /// protocol. Validity checking does not replace bounds checks,
-    /// synchronization, or storage lifetime guarantees.
-    #[cuda_tile::op(name = "cuda_tile.load_view_tko", since = "V13_2")]
-    #[cuda_tile::variadic_op(N = 6)]
-    pub unsafe fn load_view_tko_valid_check<
-        E: ElementType,
-        const S: [i32; N],
-        V,
-        I,
-        O: ordering::LoadMode,
-        Sc: scope::Mode,
-        T: tma::Mode,
-    >(
-        view: &V,
-        index: I,
-        token: Option<Token>,
-        memory_ordering: O,
-        memory_scope: Sc,
-        tma: T,
-        latency: Option<i32>,
-        inbounds: [bool; N],
-        shape: Shape<S>,
-        valid_check: bool,
-    ) -> (Tile<E, S>, Token) {
-        unreachable!()
-    }
-
     /// Raw atomic view reduction with CUDA 13.5 inbounds promises.
     /// False entries preserve the behavior of [`atomic_red_view_raw`].
     ///

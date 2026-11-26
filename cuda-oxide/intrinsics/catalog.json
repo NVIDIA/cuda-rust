@@ -2,7 +2,7 @@
   "schema": 46,
   "catalog_version": "0.1.0",
   "intrinsic_abi": 1,
-  "generator_version": "0.3.0",
+  "generator_version": "0.4.0",
   "source": {
     "llvm_repository": "https://github.com/rust-lang/llvm-project.git",
     "llvm_revision": "aab11ee0ea5ea9a1d462ad0bc1fae9d9bb643019",

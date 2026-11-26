@@ -1,0 +1,137 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 380" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <style>
+    :root, svg {
+      --bg: #ffffff;
+      --bg-stroke: #e2e8f0;
+      --panel: #f8fafc;
+      --panel-stroke: #cbd5e1;
+      --box: #ffffff;
+      --box-stroke: #cbd5e1;
+      --fg: #0f172a;
+      --text: #334155;
+      --sub: #475569;
+      --muted: #64748b;
+      --green: #15803d;
+      --green-text: #14532d;
+      --green-sub: #166534;
+      --green-fill: #dcfce7;
+      --green-soft: #f0fdf4;
+      --green-border: #86efac;
+      --blue: #2563eb;
+      --blue-text: #1e3a8a;
+      --blue-fill: #dbeafe;
+      --blue-soft: #eff6ff;
+      --blue-border: #93c5fd;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root, svg {
+        --bg: #161b22;
+        --bg-stroke: #30363d;
+        --panel: #1e242c;
+        --panel-stroke: #3d444d;
+        --box: #13171d;
+        --box-stroke: #3d444d;
+        --fg: #f0f6fc;
+        --text: #c9d1d9;
+        --sub: #b1bac4;
+        --muted: #8b949e;
+        --green: #3fb950;
+        --green-text: #7ee787;
+        --green-sub: #56d364;
+        --green-fill: #163323;
+        --green-soft: #12261e;
+        --green-border: #2ea043;
+        --blue: #58a6ff;
+        --blue-text: #a5d6ff;
+        --blue-fill: #172b4d;
+        --blue-soft: #132238;
+        --blue-border: #388bfd;
+      }
+    }
+  </style>
+  <defs>
+    <marker id="arrow-g7" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M 0 0.8 L 7.5 4 L 0 7.2 Z" style="fill: var(--green)"/>
+    </marker>
+    <marker id="arrow-b7" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M 0 0.8 L 7.5 4 L 0 7.2 Z" style="fill: var(--blue)"/>
+    </marker>
+  </defs>
+
+  <rect width="1080" height="380" rx="14" style="fill: var(--bg); stroke: var(--bg-stroke)" stroke-width="1.5"/>
+
+  <text x="40" y="40" font-size="18" font-weight="700" style="fill: var(--fg)">Warp-Specialized 4-Stage Producer / Consumer Ring</text>
+  <text x="40" y="62" font-size="13" style="fill: var(--muted)">Slot-indexed barrier arrays keep producer writes and consumer reads separated across laps.</text>
+
+  <!-- Producer Warp 4 -->
+  <g transform="translate(36, 90)">
+    <rect width="276" height="220" rx="10" style="fill: var(--blue-soft); stroke: var(--blue-border)" stroke-width="1.5"/>
+    <text x="138" y="28" text-anchor="middle" font-size="14.5" font-weight="700" style="fill: var(--blue-text)">Producer: Warp 4</text>
+    <text x="138" y="47" text-anchor="middle" font-size="11.5" style="fill: var(--muted)">Single leader thread (lane 0)</text>
+
+    <rect x="18" y="62" width="240" height="40" rx="6" style="fill: var(--box); stroke: var(--blue-border)"/>
+    <text x="138" y="86" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--fg)">1. wait EMPTY_BAR[s]</text>
+
+    <rect x="18" y="110" width="240" height="40" rx="6" style="fill: var(--box); stroke: var(--blue-border)"/>
+    <text x="138" y="134" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--fg)">2. TMA -&gt; RING_BUF[s]</text>
+
+    <rect x="18" y="158" width="240" height="40" rx="6" style="fill: var(--box); stroke: var(--blue-border)"/>
+    <text x="138" y="182" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--blue-text)">3. arrive FULL_BAR[s]</text>
+  </g>
+
+  <!-- Forward handoff arrow -->
+  <line x1="312" y1="168" x2="366" y2="168" style="stroke: var(--green)" stroke-width="2" marker-end="url(#arrow-g7)"/>
+  <text x="339" y="158" text-anchor="middle" font-size="10.5" font-weight="600" style="fill: var(--green-text)">FULL[s]</text>
+
+  <!-- Center 4-Stage Ring -->
+  <g transform="translate(370, 90)">
+    <rect width="340" height="220" rx="10" style="fill: var(--panel); stroke: var(--panel-stroke)" stroke-width="1.5"/>
+    <text x="170" y="28" text-anchor="middle" font-size="14.5" font-weight="700" style="fill: var(--fg)">4-Stage Shared Ring</text>
+    <text x="170" y="47" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11.5" style="fill: var(--green)">stage s in 0..4 (wraps on 4)</text>
+
+    <rect x="20"  y="68" width="68" height="54" rx="6" style="fill: var(--green-fill); stroke: var(--green)" stroke-width="1.5"/>
+    <text x="54"  y="93" text-anchor="middle" font-size="11" font-weight="700" style="fill: var(--green-text)">Slot 0</text>
+    <text x="54"  y="110" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="10" style="fill: var(--green-sub)">ready</text>
+
+    <rect x="97"  y="68" width="68" height="54" rx="6" style="fill: var(--green-fill); stroke: var(--green)" stroke-width="1.5"/>
+    <text x="131" y="93" text-anchor="middle" font-size="11" font-weight="700" style="fill: var(--green-text)">Slot 1</text>
+    <text x="131" y="110" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="10" style="fill: var(--green-sub)">ready</text>
+
+    <rect x="174" y="68" width="68" height="54" rx="6" style="fill: var(--blue-fill); stroke: var(--blue)" stroke-width="1.5"/>
+    <text x="208" y="93" text-anchor="middle" font-size="11" font-weight="700" style="fill: var(--blue-text)">Slot 2</text>
+    <text x="208" y="110" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="10" style="fill: var(--blue)">filling</text>
+
+    <rect x="251" y="68" width="68" height="54" rx="6" style="fill: var(--box); stroke: var(--box-stroke)" stroke-width="1.5"/>
+    <text x="285" y="93" text-anchor="middle" font-size="11" font-weight="700" style="fill: var(--text)">Slot 3</text>
+    <text x="285" y="110" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="10" style="fill: var(--muted)">empty</text>
+
+    <rect x="20" y="138" width="300" height="58" rx="6" style="fill: var(--box); stroke: var(--box-stroke)"/>
+    <text x="170" y="162" text-anchor="middle" font-size="11.5" font-weight="600" style="fill: var(--fg)">Matching Slot Proof (s_bar == s_data)</text>
+    <text x="170" y="182" text-anchor="middle" font-size="11" style="fill: var(--green)">All 9 shared &amp; barrier checks erased</text>
+  </g>
+
+  <!-- Forward handoff arrow to consumers -->
+  <line x1="710" y1="168" x2="764" y2="168" style="stroke: var(--green)" stroke-width="2" marker-end="url(#arrow-g7)"/>
+  <text x="737" y="158" text-anchor="middle" font-size="10.5" font-weight="600" style="fill: var(--green-text)">FULL[s]</text>
+
+  <!-- Consumer Warps 0..3 -->
+  <g transform="translate(768, 90)">
+    <rect width="276" height="220" rx="10" style="fill: var(--green-soft); stroke: var(--green)" stroke-width="1.8"/>
+    <text x="138" y="28" text-anchor="middle" font-size="14.5" font-weight="700" style="fill: var(--green-text)">Consumers: Warps 0..3</text>
+    <text x="138" y="47" text-anchor="middle" font-size="11.5" style="fill: var(--green-sub)">128 compute threads</text>
+
+    <rect x="18" y="62" width="240" height="40" rx="6" style="fill: var(--box); stroke: var(--green-border)"/>
+    <text x="138" y="86" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--fg)">1. wait FULL_BAR[s]</text>
+
+    <rect x="18" y="110" width="240" height="40" rx="6" style="fill: var(--box); stroke: var(--green-border)"/>
+    <text x="138" y="134" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--fg)">2. read RING_BUF[s]</text>
+
+    <rect x="18" y="158" width="240" height="40" rx="6" style="fill: var(--box); stroke: var(--green-border)"/>
+    <text x="138" y="182" text-anchor="middle" font-family="'Roboto Mono', monospace" font-size="11" style="fill: var(--green-text)">3. arrive EMPTY_BAR[s]</text>
+  </g>
+
+  <!-- Return back-pressure path under the boxes -->
+  <path d="M 906 310 L 906 346 L 174 346 L 174 314" fill="none" style="stroke: var(--blue)" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#arrow-b7)"/>
+  <rect x="330" y="332" width="420" height="28" rx="14" style="fill: var(--blue-soft); stroke: var(--blue-border)"/>
+  <text x="540" y="350" text-anchor="middle" font-size="11.5" font-weight="600" style="fill: var(--blue-text)">Cyclic Back-Pressure: EMPTY_BAR[s] frees slot for next lap</text>
+</svg>

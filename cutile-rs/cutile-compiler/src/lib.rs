@@ -12,6 +12,7 @@ pub mod ast;
 mod bounds;
 pub mod check_optimizations;
 pub mod compile_api;
+pub mod compile_control;
 pub mod cuda_tile_runtime_utils;
 pub mod error;
 pub mod foreign_decl;

@@ -96,6 +96,25 @@ written to stderr once per compiled module:
 | `CUTILE_DUMP` | Comma-separated stages to dump: `ir` (the Tile IR module text) and `bytecode` (alias `bc`; the encoded bytecode decoded back to text), or `all`. The `ast`, `resolved`, `typed`, and `instantiated` names are accepted but no code path emits them today | unset |
 | `CUTILE_DUMP_FILTER` | Comma-separated `module::function` paths; the dumps are per module, so only the `module` part is matched. Bare function names do not exclude any module | unset |
 
+### Capture the specialization you measured
+
+Inspect the JIT specialization actually used by the measured launch: shapes,
+strides, pointer alignment, generic arguments, target and compile options all
+matter. A standalone compile with different metadata can produce different IR.
+Record these inputs with the toolchain version when comparing variants.
+
+Compare the algorithm and access patterns first, then loop bounds, masks,
+padding, gather ranks, hoisted address calculations, MMA operand layouts and
+scheduling hints. If those match, compare generated instructions, register use
+and spills. A residual timing difference alone does not establish a frontend
+or backend defect.
+
+For Nsight Compute, select the kernel and launch range of interest after JIT and
+warmup. Avoid profiling every launch in a long correctness or tuning sweep.
+Replay and profiling cache/clock policies can change observed behavior; use
+ordinary unprofiled runs for final latency comparisons. Nsight Systems helps
+separate host submission gaps, synchronization and GPU execution time.
+
 ## Errors and Crashes
 
 Most cuTile Rust errors are caught before a kernel runs:

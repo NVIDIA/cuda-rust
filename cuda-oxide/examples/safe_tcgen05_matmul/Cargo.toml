@@ -1,0 +1,13 @@
+[package]
+name = "safe_tcgen05_matmul"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[workspace]
+
+[dependencies]
+cuda-device = { path = "../../crates/cuda-device" }
+cuda-host = { path = "../../crates/cuda-host" }
+cuda-core = { path = "../../../cuda-core" }
+half = "2.4"

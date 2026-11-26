@@ -640,22 +640,24 @@ inductive Reachable (f : MirFunc) (env : InputEnv) (t : ThreadCtx) :
       (hterm : (f.blockAt b).term = .goto target args)
       (hdst : target < f.blocks.length) :
       Reachable f env t target (bindBlockArgs outRegs outRegs (f.blockAt target).args args) outPhase
-  /-- Conditional `mir.cond_br` taking `thenBlk` when `outRegs cond = .bool true`. -/
+  /-- Conditional `mir.cond_br` taking `thenBlk` unless `outRegs cond = .bool false`.
+      A `.unk` condition, such as a comparison on a loaded value, may take either arm. -/
   | stepCondTrue {b tBlk fBlk cond phase outPhase : Nat} {regs outRegs : RegFile}
       {evs : List MemEvent} {tevs : List TmemEvent} {tArgs fArgs : List Nat}
       (hreach : Reachable f env t b regs phase)
       (hexec : execStmts f env t regs phase (f.blockAt b).term (f.blockAt b).stmts = (outRegs, outPhase, evs, tevs))
       (hterm : (f.blockAt b).term = .condBr cond tBlk tArgs fBlk fArgs)
-      (hcond : outRegs cond = .bool true)
+      (hcond : outRegs cond ≠ .bool false)
       (hdst : tBlk < f.blocks.length) :
       Reachable f env t tBlk (bindBlockArgs outRegs outRegs (f.blockAt tBlk).args tArgs) outPhase
-  /-- Conditional `mir.cond_br` taking `elseBlk` when `outRegs cond = .bool false`. -/
+  /-- Conditional `mir.cond_br` taking `elseBlk` unless `outRegs cond = .bool true`.
+      A `.unk` condition may take either arm. -/
   | stepCondFalse {b tBlk fBlk cond phase outPhase : Nat} {regs outRegs : RegFile}
       {evs : List MemEvent} {tevs : List TmemEvent} {tArgs fArgs : List Nat}
       (hreach : Reachable f env t b regs phase)
       (hexec : execStmts f env t regs phase (f.blockAt b).term (f.blockAt b).stmts = (outRegs, outPhase, evs, tevs))
       (hterm : (f.blockAt b).term = .condBr cond tBlk tArgs fBlk fArgs)
-      (hcond : outRegs cond = .bool false)
+      (hcond : outRegs cond ≠ .bool true)
       (hdst : fBlk < f.blocks.length) :
       Reachable f env t fBlk (bindBlockArgs outRegs outRegs (f.blockAt fBlk).args fArgs) outPhase
 
@@ -735,8 +737,10 @@ theorem ReachableTrapFree.toReachable {f : MirFunc} {env : InputEnv} {t : Thread
   induction h with
   | entry hpos => exact Reachable.entry hpos                 -- Base entry block `0`
   | stepGoto _ _ hex hterm hdst ih => exact Reachable.stepGoto ih hex hterm hdst
-  | stepCondTrue _ _ hex hterm hc hdst ih => exact Reachable.stepCondTrue ih hex hterm hc hdst
-  | stepCondFalse _ _ hex hterm hc hdst ih => exact Reachable.stepCondFalse ih hex hterm hc hdst
+  | stepCondTrue _ _ hex hterm hc hdst ih =>
+      exact Reachable.stepCondTrue ih hex hterm (by rw [hc]; simp) hdst
+  | stepCondFalse _ _ hex hterm hc hdst ih =>
+      exact Reachable.stepCondFalse ih hex hterm (by rw [hc]; simp) hdst
 
 /-- `MemEvent` `ev` is emitted on a trap-free execution path (every `Stmt.assertCond`
     along predecessor blocks and inside the emitting block evaluates to `.bool true`). -/

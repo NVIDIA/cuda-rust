@@ -23,6 +23,8 @@ REJECTED = (
     ("RejectedMutSliceRace.lean", "cross-thread &mut [T] read-write race"),
     ("RejectedTrappingWrite.lean", "trapping mir.assert before writes_all_elems store"),
     ("RejectedDivergentSharedRace.lean", "shared-memory race masked by divergent sync_threads"),
+    ("tests/program/RejectedUnknownGuard.lean", "branch pruned on an untracked guard"),
+    ("tests/program/RejectedUnknownWriteCoverage.lean", "write coverage claimed across an untracked guard"),
 )
 
 
@@ -76,9 +78,11 @@ def main():
     require_success("env", "lean", "tests/exporter/Scalar.lean")
     require_success("env", "lean", "tests/vecadd/Accepted.lean")
     require_success("env", "lean", "tests/vecadd/Counterexamples.lean")
+    require_success("env", "lean", "tests/program/UnknownGuard.lean")
     print("PASS: scalar semantics, vecadd access model, typed indices, and counterexamples.", flush=True)
     for filename, label in REJECTED:
-        result = run_lake("env", "lean", f"tests/vecadd/{filename}")
+        rel_path = filename if "/" in filename else f"tests/vecadd/{filename}"
+        result = run_lake("env", "lean", rel_path)
         if result.returncode == 0:
             raise RuntimeError(f"The false obligation unexpectedly passed: {filename}")
         # Require a failed proof obligation, not an import or tool error.

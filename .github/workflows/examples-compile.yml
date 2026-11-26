@@ -84,8 +84,8 @@ jobs:
     # device codegen. Typically well under an hour with the shared
     # CARGO_TARGET_DIR; the timeout leaves headroom for cold runners.
     # Leave job-level headroom around the 50-minute full compile and the
-    # focused 10-minute materialization gate, plus toolkit/LLVM setup.
-    timeout-minutes: 75
+    # focused 10-minute post-smoketest gates, plus toolkit/LLVM setup.
+    timeout-minutes: 85
     strategy:
       fail-fast: false
       # The baseline lane keeps its existing job name (empty suffix); the newer
@@ -145,7 +145,7 @@ jobs:
           opt-23 --version | head -2
 
       - name: Compile every example (smoketest --compile-only)
-        # Step-level timeout, below the job's 75: a job-level timeout
+        # Step-level timeout, below the job's 85: a job-level timeout
         # CANCELS the job and `if: failure()` never fires, losing the
         # logs. A step timeout fails the step, so the upload still runs.
         timeout-minutes: 50
@@ -172,6 +172,22 @@ jobs:
           export LD_LIBRARY_PATH="${sysroot}/lib:${LD_LIBRARY_PATH:-}"
 
           cuda-oxide/scripts/smoketest.sh --compile-only --no-color
+
+      # The scaffold tests read `cargo oxide new` output as text. This builds
+      # both templates against this checkout, so an API change that breaks a
+      # new user's first project fails here. Reuses the shared target dir.
+      - name: Both `cargo oxide new` templates build
+        timeout-minutes: 10
+        env:
+          CUDA_OXIDE_LLC: /usr/bin/llc-23
+          CARGO_TARGET_DIR: ${{ runner.temp }}/examples-shared-target
+          CARGO_INCREMENTAL: "0"
+        run: |
+          set -euo pipefail
+          sysroot="$(rustc --print sysroot)"
+          export LIBRARY_PATH="${sysroot}/lib:${LIBRARY_PATH:-}"
+          export LD_LIBRARY_PATH="${sysroot}/lib:${LD_LIBRARY_PATH:-}"
+          bash cuda-oxide/scripts/check-scaffold-builds.sh
 
       # Builds shared_static_names, then copies with added kernels, in
       # release and full-debug, and requires the original kernels' PTX to be

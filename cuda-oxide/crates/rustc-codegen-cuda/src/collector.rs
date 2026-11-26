@@ -390,8 +390,9 @@ fn is_cute_recognition_stub_identity(
 use oxide_tile_export::TileExportDesc;
 use reserved_oxide_symbols::{
     device_base_name, device_extern_base_name, is_current_device_symbol, is_current_kernel_symbol,
-    is_device_extern_symbol, is_device_symbol, is_kernel_symbol, is_legacy_kernel_symbol,
-    is_ptx_merge_required_marker, is_tile_export_meta_symbol, kernel_base_name,
+    is_device_extern_symbol, is_device_symbol, is_exported_device_symbol, is_kernel_symbol,
+    is_legacy_kernel_symbol, is_ptx_merge_required_marker, is_tile_export_meta_symbol,
+    kernel_base_name,
 };
 
 /// Sanitize a symbol name for use as a PTX identifier.
@@ -660,14 +661,6 @@ pub(crate) fn is_kernel_entry_def_path(def_path: &str) -> bool {
 /// exclusion of device-extern symbols here — `is_device_symbol` handles it.
 pub fn is_device_function(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
     is_device_symbol(&tcx.def_path_str(def_id))
-}
-
-/// Whether a device function is an OptiX callable program (`__direct_callable__*` or
-/// `__continuation_callable__*`), which OptiX resolves by name through the shader binding
-/// table: nothing in the module calls it, so the collector roots it like a kernel.
-fn is_optix_callable(raw_name: &str) -> bool {
-    let user = device_base_name(raw_name).unwrap_or(raw_name);
-    user.starts_with("__direct_callable__") || user.starts_with("__continuation_callable__")
 }
 
 /// Checks if an Instance is fully monomorphized (no unresolved type or const parameters).
@@ -1347,12 +1340,15 @@ pub fn collect_device_functions<'tcx>(
         }
     }
 
-    // Find standalone device function roots (Phase 2: device functions without kernels).
-    // When kernels exist, device functions are collected transitively via the call
-    // graph walk, except OptiX callable programs: OptiX calls those by name through the
-    // shader binding table, nothing in the module calls them, so they are roots too
-    // (`is_optix_callable`). Tile export implementations were rooted above and are
-    // skipped here so their export names are not computed twice.
+    // Find standalone and explicitly exported device function roots (Phase 2).
+    // When kernels exist, ordinary `#[device]` helpers are collected transitively
+    // via the call-graph walk, while `#[device(export)]` and
+    // `#[device(export_name = "...")]` functions (`is_exported_device_symbol`)
+    // remain roots so external callers (C++ interop, dynamic parallelism,
+    // function tables, or OptiX callable programs) can resolve them as
+    // `.visible .func` definitions alongside kernels. Tile export implementations
+    // were rooted above and are skipped here so their export names are not
+    // computed twice.
     {
         for cgu in cgus {
             for (item, _data) in cgu.items() {
@@ -1369,7 +1365,7 @@ pub fn collect_device_functions<'tcx>(
                     if raw_name.contains("{closure") || raw_name.contains("::closure") {
                         continue;
                     }
-                    if has_kernels && !is_optix_callable(&raw_name) {
+                    if has_kernels && !is_exported_device_symbol(&raw_name) {
                         continue;
                     }
 
@@ -3783,16 +3779,32 @@ mod tests {
 }
 
 #[cfg(test)]
-mod optix_callable_tests {
-    use super::is_optix_callable;
-    use reserved_oxide_symbols::{DEVICE_PREFIX, LEGACY_DEVICE_PREFIX};
+mod exported_device_tests {
+    use super::unsupported_codegen_protocol_root;
+    use reserved_oxide_symbols::{
+        device_base_name, device_export_symbol, device_symbol, is_exported_device_symbol,
+    };
 
     #[test]
-    fn optix_callables_are_recognized_by_program_name() {
-        assert!(is_optix_callable(&format!("my_crate::{DEVICE_PREFIX}__direct_callable__shade")));
-        assert!(is_optix_callable(&format!("{DEVICE_PREFIX}__continuation_callable__bounce")));
-        assert!(is_optix_callable(&format!("m::{LEGACY_DEVICE_PREFIX}__direct_callable__x")));
-        assert!(!is_optix_callable(&format!("my_crate::{DEVICE_PREFIX}helper")));
-        assert!(!is_optix_callable(&format!("my_crate::{DEVICE_PREFIX}helper__direct_callable__")));
+    fn exported_device_functions_use_explicit_marker_not_name_prefixes() {
+        let exported = format!("my_crate::shaders::{}", device_export_symbol("shade"));
+        let custom = format!(
+            "my_crate::shaders::{}",
+            device_export_symbol("__direct_callable__shade")
+        );
+        let unexported_optix_name = format!(
+            "my_crate::shaders::{}",
+            device_symbol("__direct_callable__shade")
+        );
+
+        assert!(is_exported_device_symbol(&exported));
+        assert!(is_exported_device_symbol(&custom));
+        assert!(!is_exported_device_symbol(&format!("{exported}::closure")));
+        assert!(!is_exported_device_symbol(&unexported_optix_name));
+        assert_eq!(device_base_name(&exported), Some("shade"));
+        assert_eq!(device_base_name(&custom), Some("__direct_callable__shade"));
+        assert!(!unsupported_codegen_protocol_root(&device_export_symbol(
+            "shade"
+        )));
     }
 }

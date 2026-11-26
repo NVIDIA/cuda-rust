@@ -292,15 +292,22 @@ pub(super) fn host_linker_rustflags_for(
 /// When no alternative host linker is requested (`None`, empty, or `default`),
 /// the command's rustflags are left untouched so Cargo still reads any
 /// `.cargo/config.toml` `build.rustflags`. When `wild` is requested, project
-/// `extra-rustflags` and existing `CARGO_ENCODED_RUSTFLAGS` or `RUSTFLAGS` are
+/// `extra-rustflags` (top-level, then the `[target.<triple>]` list of the
+/// command's target) and existing `CARGO_ENCODED_RUSTFLAGS` or `RUSTFLAGS` are
 /// preserved ahead of the `wild` flags in `CARGO_ENCODED_RUSTFLAGS`.
 pub(super) fn apply_host_linker_rustflags(cmd: &mut Command, ctx: &Context) -> Result<(), String> {
+    let linker_rustflags = host_linker_rustflags(ctx)?;
+    if linker_rustflags.is_empty() {
+        // Nothing is exported, so there is no target triple to resolve.
+        return Ok(());
+    }
+    let configured_rustflags = configured_rustflags_for_command(&ctx.config, cmd)?;
     let existing_encoded = std::env::var("CARGO_ENCODED_RUSTFLAGS").ok();
     let existing = std::env::var("RUSTFLAGS").ok();
     apply_host_linker_rustflags_with_existing(
         cmd,
-        &ctx.config.extra_rustflags,
-        &host_linker_rustflags(ctx)?,
+        &configured_rustflags,
+        &linker_rustflags,
         existing_encoded.as_deref(),
         existing.as_deref(),
     );
@@ -350,11 +357,17 @@ pub(super) fn apply_host_linker_rustflags_or_exit(cmd: &mut Command, ctx: &Conte
 /// `RUSTFLAGS` is whitespace-split by Cargo, which corrupts a single flag
 /// containing spaces. `CARGO_ENCODED_RUSTFLAGS` uses unit separators and keeps
 /// every configured array element and `--device-cfg` value intact.
+///
+/// `cmd` is the Cargo command the flags are for, with its arguments, working
+/// directory and project environment already set: its target triple selects
+/// the `[target.<triple>]` `extra-rustflags` list.
 fn build_encoded_rustflags(
     ctx: &Context,
+    cmd: &Command,
     profile: CodegenProfilePolicy,
     device_cfgs: &[String],
 ) -> Result<String, String> {
+    let configured_rustflags = configured_rustflags_for_command(&ctx.config, cmd)?;
     let existing_encoded = std::env::var("CARGO_ENCODED_RUSTFLAGS").ok();
     let existing = std::env::var("RUSTFLAGS").ok();
     let mut explicit_rustflags = Vec::new();
@@ -366,7 +379,7 @@ fn build_encoded_rustflags(
     Ok(build_encoded_rustflags_with_existing(
         &ctx.backend_so,
         profile,
-        &ctx.config.extra_rustflags,
+        &configured_rustflags,
         &explicit_rustflags,
         existing_encoded.as_deref(),
         existing.as_deref(),
@@ -576,7 +589,7 @@ fn apply_codegen_rustflags(
     profile: CodegenProfilePolicy,
     device_cfgs: &[String],
 ) -> Result<(), String> {
-    let mut encoded = build_encoded_rustflags(ctx, profile, device_cfgs)?;
+    let mut encoded = build_encoded_rustflags(ctx, cmd, profile, device_cfgs)?;
     let inherited_debug = std::env::var("CUDA_OXIDE_DEBUG").ok();
     append_full_debug_rustflags(&mut encoded, cmd, inherited_debug.as_deref());
 

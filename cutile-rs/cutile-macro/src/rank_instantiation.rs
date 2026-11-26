@@ -54,7 +54,8 @@
 //! - **Expression paths** — `iota::<i32, S>` → `iota::<i32, S_0, …>` (the fn
 //!   ident is preserved; only the CGA args expand).
 //! - **Struct literals** — `Shape::<{[1, 2]}> { … }` → `Shape_2 { … }`.
-//! - **Bare CGA refs in expressions** — `S` → its bound `u32`, `S[i]` → `S_i`.
+//! - **CGA values** — for `const S: [i32; N]`, `N` becomes the rank,
+//!   `S` the array of its dimensions, and `S[i]` the corresponding dimension.
 //! - **`const_shape!` / `const_array!` macros** — pre-expanded to typed
 //!   `Shape_R::<…>::const_new()` / `Array_R::<…>::const_new()` calls.
 //!
@@ -1089,8 +1090,8 @@ fn format_rank_const_expr(expr: &Expr, instances: &RankBindings) -> Result<Strin
 //     while CGA args get expanded.
 //   * **Struct-literal paths** (`Shape::<{[1,2]}> { … }`) — type-context
 //     suffixing.
-//   * **CGA references in expressions**: bare `S` → its bound `u32`,
-//     `S[i]` → `S_i`.
+//   * **CGA references in expressions**: the rank, the whole dimension array,
+//     or an individual indexed dimension.
 //   * **`const_shape!` / `const_array!` macro calls** → pre-expanded to
 //     `Shape_R::<…>::const_new()` / `Array_R::<…>::const_new()`.
 //
@@ -1306,13 +1307,17 @@ impl VisitMut for RankInstantiator {
                 }
             }
         }
-        // (2) Bare CGA-length name as expression value (e.g. `S` of
-        // `const S: [i32; N]`, with `N` bound): substitute its `u32` value.
+        // (2) A bare rank or const-generic array in value position.
         if let Expr::Path(ep) = expr {
-            if ep.path.segments.len() == 1 {
-                let name = ep.path.segments[0].ident.to_string();
+            if let Some(ident) = ep.path.get_ident() {
+                let name = ident.to_string();
                 if let Some(n) = self.bindings.inst_u32.get(&name).copied() {
                     *expr = parse_quote! { #n };
+                    return;
+                }
+                if let Some(cga) = self.bindings.inst_array.get(&name) {
+                    let dims = (0..cga.length).map(|axis| format_ident!("{ident}{axis}"));
+                    *expr = parse_quote! { [#(#dims),*] };
                     return;
                 }
             }

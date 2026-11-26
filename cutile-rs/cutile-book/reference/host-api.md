@@ -276,7 +276,8 @@ methods:
 |---|---|
 | `.grid((x, y, z))` | Set an explicit runtime launch grid instead of inferring it from partitioned tensor inputs. |
 | `.const_grid((x, y, z))` | Set a compile-time constant grid, enabling grid-dependent optimizations. |
-| `.compile_options(opts)` | Override occupancy, cluster/CTA, worker-warp, and divisibility hints for this compilation. |
+| `.compile_options(opts)` | Override occupancy, cluster/CTA, worker-warp, divisibility hints and tile libraries for this compilation. Replaces the launch's options, including libraries added before. |
+| `.tile_library(spec)` / `.tile_libraries(specs)` | Link tile libraries into this launch, keeping its other compile options. |
 | `.generics(values)` | Bind type and const generic arguments manually when they cannot be inferred. |
 
 The JIT compiler resolves `tileiras` in this order: `CUTILE_TILEIRAS_PATH`

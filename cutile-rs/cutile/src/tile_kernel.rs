@@ -1580,8 +1580,23 @@ where
     fn const_grid(self, grid: (u32, u32, u32)) -> Self;
     /// Sets the runtime launch grid dimensions.
     fn grid(self, grid: (u32, u32, u32)) -> Self;
-    /// Sets the runtime compile options (occupancy, num_cta_in_cga).
+    /// Sets the runtime compile options (occupancy, num_cta_in_cga, tile
+    /// libraries). The options replace the launch's current ones, including
+    /// libraries added with [`Self::tile_library`]: set them first.
     fn compile_options(self, options: CompileOptions) -> Self;
+    /// Links `library` into this launch, in addition to the process-wide
+    /// defaults and to the libraries the launch already links. The launch's
+    /// other compile options are kept.
+    fn tile_library(self, library: TileLibrarySpec) -> Self;
+    /// Links each of `libraries` into this launch, as [`Self::tile_library`].
+    fn tile_libraries(self, libraries: impl IntoIterator<Item = TileLibrarySpec>) -> Self
+    where
+        Self: Sized,
+    {
+        libraries
+            .into_iter()
+            .fold(self, |kernel, library| kernel.tile_library(library))
+    }
     /// Infers the launch grid from partitioned tensor inputs, or uses the explicit grid.
     fn infer_launch_grid(&self, bounds: &[GridBound]) -> Result<(u32, u32, u32), Error> {
         let grid = self.get_launch_grid();

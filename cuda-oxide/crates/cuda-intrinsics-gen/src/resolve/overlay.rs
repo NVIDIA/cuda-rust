@@ -7,7 +7,7 @@ use crate::model::{
     OverlayFile, OverlayIntrinsic, OverlayShardFile, RegisterMmaAccumulator, Tcgen05Operation,
     TmaOperation,
 };
-use crate::util::sha256_bytes;
+use crate::util::{canonical_text_bytes, sha256_bytes};
 use anyhow::{Context, Result, ensure};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -95,7 +95,7 @@ pub(super) fn read_overlay(
         }
         previous = Some(shard_name.as_str());
 
-        let relative = Path::new("intrinsics").join(shard_name);
+        let relative = format!("intrinsics/{shard_name}");
         let path = repo_root.join(&relative);
         let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
         let mut shard: OverlayShardFile =
@@ -399,13 +399,7 @@ pub(super) fn read_overlay(
             );
         }
 
-        append_overlay_hash_input(
-            &mut hash_input,
-            relative
-                .to_str()
-                .context("overlay shard path is not valid UTF-8")?,
-            &bytes,
-        );
+        append_overlay_hash_input(&mut hash_input, &relative, &bytes);
         overlay.intrinsics.extend(shard.intrinsics);
     }
 
@@ -710,10 +704,11 @@ pub(super) fn validate_overlay_shard_path(path: &str) -> Result<()> {
 }
 
 pub(super) fn append_overlay_hash_input(output: &mut Vec<u8>, path: &str, contents: &[u8]) {
+    let contents = canonical_text_bytes(contents);
     output.extend_from_slice(&(path.len() as u64).to_le_bytes());
     output.extend_from_slice(path.as_bytes());
     output.extend_from_slice(&(contents.len() as u64).to_le_bytes());
-    output.extend_from_slice(contents);
+    output.extend_from_slice(&contents);
 }
 
 pub(super) fn shares_tma_2d_g2s_symbol(record: &OverlayIntrinsic, symbol: &str) -> bool {

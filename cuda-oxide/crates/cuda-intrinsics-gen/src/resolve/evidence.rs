@@ -11,7 +11,7 @@ use crate::model::{
     OverlayBackendLowering, OverlayIntrinsic, RuntimeValidation,
 };
 use crate::ptx::OperandPattern;
-use crate::util::sha256_file;
+use crate::util::sha256_text_file;
 use anyhow::{Context, Result, bail, ensure};
 use cuda_target_spec::{CudaArch, recorded_ptx_floor};
 use std::collections::{BTreeMap, BTreeSet};
@@ -584,7 +584,7 @@ pub(super) fn read_evidence(repo_root: &Path) -> Result<(Vec<EvidenceFile>, Vec<
     for path in paths {
         let file = read_evidence_file(&path)?;
         let name = path.file_name().unwrap().to_string_lossy();
-        hashes.push(format!("{name}:{}", sha256_file(&path)?));
+        hashes.push(format!("{name}:{}", sha256_text_file(&path)?));
         files.push(file);
     }
     Ok((files, hashes))

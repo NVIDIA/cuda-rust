@@ -15,7 +15,7 @@ use crate::model::{
     CatalogBackendLowering, ClcAdmission, ClcOperation, RuntimeValidation, Tcgen05Admission,
     Tcgen05LdAdmissionVariant, Tcgen05Operation, Tcgen05StAdmissionVariant, TmaAdmission,
 };
-use crate::util::{read_json, sha256_file};
+use crate::util::{read_json, sha256_text_file};
 #[cfg(test)]
 use anyhow::bail;
 use anyhow::{Context, Result, ensure};
@@ -512,7 +512,7 @@ pub(super) fn load_resolution_base(repo_root: &Path) -> Result<ResolutionBase> {
         imported.source.nvptx_json_sha256 == lock.dumps.nvptx_sha256,
         "imported NVPTX dump hash does not match upstream.lock"
     );
-    let imported_sha256 = sha256_file(&imported_path)?;
+    let imported_sha256 = sha256_text_file(&imported_path)?;
     ensure!(
         imported_sha256 == lock.dumps.normalized_imported_sha256,
         "normalized imported.json hash mismatch: upstream.lock records {}, found {}; regenerate from the pinned dumps, and refresh the lock explicitly only for an intentional normalizer change",
@@ -541,7 +541,7 @@ pub(super) fn load_resolution_base(repo_root: &Path) -> Result<ResolutionBase> {
         },
         imported_sha256,
         overlay_sha256,
-        abi_ledger_sha256: sha256_file(&ledger_path)?,
+        abi_ledger_sha256: sha256_text_file(&ledger_path)?,
     })
 }
 

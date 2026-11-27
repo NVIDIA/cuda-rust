@@ -129,7 +129,7 @@ pub(crate) fn requires_params_from_inputs(
 
 /// Validate the `requires` relations of any `#[launch_contract]` attribute
 /// that `#[kernel]` is about to route onto a generated generic entry
-/// wrapper, and return `__launch_contract_requires_len_ge_config` markers
+/// wrapper, and return `__launch_contract_requires_step_config` markers
 /// resolved against the original parameter names.
 ///
 /// The wrapper's parameters carry synthetic `__cuda_oxide_arg_*` names, so
@@ -156,11 +156,9 @@ pub(crate) fn validate_routed_launch_contract_requires(
         }
         if let Some(params) = requires_params_from_inputs(source_inputs) {
             validate_requires_relations(&args.requires, &params)?;
-            for (lhs_idx, rhs_idx) in
-                crate::verify::extract_requires_len_ge_pairs(&args.requires, &params)
-            {
+            for (tag, val) in crate::verify::encode_requires_step_markers(&args.requires, &params) {
                 markers.push(parse_quote! {
-                    ::cuda_device::thread::__launch_contract_requires_len_ge_config::<#lhs_idx, #rhs_idx>();
+                    ::cuda_device::thread::__launch_contract_requires_step_config::<#tag, #val>();
                 });
             }
         }
@@ -200,11 +198,9 @@ pub(crate) fn inject_launch_contract_markers(args: &LaunchContractArgs, input: &
     }
 
     if let Some(params) = standalone_requires_params(input) {
-        for (lhs_idx, rhs_idx) in
-            crate::verify::extract_requires_len_ge_pairs(&args.requires, &params)
-        {
+        for (tag, val) in crate::verify::encode_requires_step_markers(&args.requires, &params) {
             let req_marker: syn::Stmt = parse_quote! {
-                ::cuda_device::thread::__launch_contract_requires_len_ge_config::<#lhs_idx, #rhs_idx>();
+                ::cuda_device::thread::__launch_contract_requires_step_config::<#tag, #val>();
             };
             input.block.stmts.insert(next, req_marker);
             next += 1;

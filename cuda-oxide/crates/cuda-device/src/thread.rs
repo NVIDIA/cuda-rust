@@ -1455,14 +1455,19 @@ pub fn __nounroll_config() {
     // No runtime code is generated.
 }
 
-/// Internal compiler marker recording a `lhs.len() >= rhs.len()` precondition
-/// from `#[launch_contract(requires = (...))]`.
+/// Internal compiler marker recording one postfix step `(TAG, VAL)` of a
+/// `#[launch_contract(requires = (...))]` relation for `mir-importer`:
+/// - `TAG = 0`: push `u64` integer literal `VAL`
+/// - `TAG = 1`: push unsigned scalar parameter `param[VAL]`
+/// - `TAG = 2`: push slice element length `param[VAL].len()`
+/// - `TAG = 3`: apply binary arithmetic operator (`0 = +`, `1 = -`, `2 = *`)
+/// - `TAG = 4`: emit comparison relation (`0 = >=`, `1 = >`, `2 = <=`, `3 = <`, `4 = ==`, `5 = !=`)
 ///
-/// Consumed and stripped during MIR import so `lean-exporter` can supply the
-/// host-checked slice-length relation as a hypothesis to Lean proofs.
+/// Consumed and stripped during MIR import so `lean-exporter` can supply every
+/// host-checked `requires` precondition as a hypothesis to Lean proofs.
 #[doc(hidden)]
 #[inline(never)]
-pub fn __launch_contract_requires_len_ge_config<const LHS_PARAM: usize, const RHS_PARAM: usize>() {
+pub fn __launch_contract_requires_step_config<const TAG: u8, const VAL: u64>() {
     // Compiler marker: deliberately empty and removed during MIR import.
 }
 

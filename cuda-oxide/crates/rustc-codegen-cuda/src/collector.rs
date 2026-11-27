@@ -859,8 +859,8 @@ fn is_launch_metadata_marker_path(fn_path: &str) -> bool {
             | "cuda_device::thread::__launch_contract_config"
             | "cuda_device::__launch_contract_block_config"
             | "cuda_device::thread::__launch_contract_block_config"
-            | "cuda_device::__launch_contract_requires_len_ge_config"
-            | "cuda_device::thread::__launch_contract_requires_len_ge_config"
+            | "cuda_device::__launch_contract_requires_step_config"
+            | "cuda_device::thread::__launch_contract_requires_step_config"
             | "cuda_device::__verify_no_oob_idx_config"
             | "cuda_device::thread::__verify_no_oob_idx_config"
             | "cuda_device::__verify_disjoint_writes_config"
@@ -886,8 +886,8 @@ fn is_launch_metadata_marker_path(fn_path: &str) -> bool {
             || path.starts_with("thread::__launch_contract_config::<")
             || path.starts_with("__launch_contract_block_config::<")
             || path.starts_with("thread::__launch_contract_block_config::<")
-            || path.starts_with("__launch_contract_requires_len_ge_config::<")
-            || path.starts_with("thread::__launch_contract_requires_len_ge_config::<")
+            || path.starts_with("__launch_contract_requires_step_config::<")
+            || path.starts_with("thread::__launch_contract_requires_step_config::<")
             || path.starts_with("__verify_no_oob_idx_config::<")
             || path.starts_with("thread::__verify_no_oob_idx_config::<")
             || path.starts_with("__verify_disjoint_writes_config::<")

@@ -249,6 +249,48 @@ structure BasicBlock where
   term : Terminator := .ret
   deriving Repr, DecidableEq
 
+/-- Comparison operator in a host-checked `#[launch_contract(requires = (...))]` relation. -/
+inductive ReqCmp where
+  /-- Greater than or equal (`lhs >= rhs`). -/
+  | ge
+  /-- Strictly greater than (`lhs > rhs`). -/
+  | gt
+  /-- Less than or equal (`lhs <= rhs`). -/
+  | le
+  /-- Strictly less than (`lhs < rhs`). -/
+  | lt
+  /-- Equal (`lhs == rhs`). -/
+  | eq
+  /-- Not equal (`lhs != rhs`). -/
+  | ne
+  deriving Repr, DecidableEq
+
+/-- Arithmetic expression in a host-checked `#[launch_contract(requires = (...))]` relation. -/
+inductive ReqExpr where
+  /-- Unsigned 64-bit integer literal (`0 <= val < 2^64`). -/
+  | const (val : Nat)
+  /-- Unsigned integer scalar kernel parameter (`u8`/`u16`/`u32`/`u64`/`usize` or `Uniform<...>`). -/
+  | scalar (param : Nat)
+  /-- Runtime element length `<param>.len()` of a slice or `DisjointSlice` parameter. -/
+  | sliceLen (param : Nat)
+  /-- Checked 64-bit unsigned addition (`lhs + rhs`). -/
+  | add (lhs rhs : ReqExpr)
+  /-- Checked 64-bit unsigned subtraction (`lhs - rhs`). -/
+  | sub (lhs rhs : ReqExpr)
+  /-- Checked 64-bit unsigned multiplication (`lhs * rhs`). -/
+  | mul (lhs rhs : ReqExpr)
+  deriving Repr, DecidableEq
+
+/-- Single host-checked `lhs <cmp> rhs` precondition from `#[launch_contract(requires = (...))]`. -/
+structure ReqRel where
+  /-- Comparison operator relating `lhs` and `rhs`. -/
+  cmp : ReqCmp
+  /-- Left-hand arithmetic expression. -/
+  lhs : ReqExpr
+  /-- Right-hand arithmetic expression. -/
+  rhs : ReqExpr
+  deriving Repr, DecidableEq
+
 /-- Complete `PostMem2Reg` kernel function transcribed line by line from `dialect-mir`. -/
 structure MirFunc where
   /-- Launch domain dimension (`1` or `2`). -/
@@ -263,8 +305,8 @@ structure MirFunc where
   u32Coords : Bool := false
   /-- Kernel entry parameter kinds (`0 .. params.length - 1`). -/
   params : List ParamKind
-  /-- Host-checked slice length relations `(lhs, rhs)` meaning `len(lhs) >= len(rhs)`. -/
-  requiresLenGe : List (Nat × Nat) := []
+  /-- Host-checked `#[launch_contract(requires = (...))]` preconditions over parameters and slice lengths. -/
+  requires : List ReqRel := []
   /-- Static `SharedArray` declarations (`0 .. sharedDecls.length - 1`). -/
   sharedDecls : List SharedDecl := []
   /-- `SharedArray` IDs proved race-free (`no_data_race`), whose uniform-index reads are CTA-uniform. -/
@@ -327,10 +369,49 @@ def paramBoundsProp (env : InputEnv) : Nat → List ParamKind → Prop
   | idx, _ :: rest =>
       env.sliceLen idx ≤ 9223372036854775807 ∧ paramBoundsProp env (idx + 1) rest
 
-/-- True when `env` satisfies scalar/slice bit-width bounds and `requiresLenGe` relations of `f`. -/
+/-- Evaluate a host-checked `ReqExpr` in `Nat` under `env`. -/
+def ReqExpr.eval (env : InputEnv) : ReqExpr → Nat
+  | .const v => v
+  | .scalar p => env.scalar p
+  | .sliceLen p => env.sliceLen p
+  | .add a b => a.eval env + b.eval env
+  | .sub a b => a.eval env - b.eval env
+  | .mul a b => a.eval env * b.eval env
+
+/-- Host `u64::checked_{add,sub,mul}` non-overflow and non-underflow guards for `ReqExpr`. -/
+def ReqExpr.checkedOk (env : InputEnv) : ReqExpr → Prop
+  | .const v => v < 18446744073709551616
+  | .scalar _ | .sliceLen _ => True
+  | .add a b =>
+      a.checkedOk env ∧ b.checkedOk env ∧
+      a.eval env + b.eval env < 18446744073709551616
+  | .sub a b =>
+      a.checkedOk env ∧ b.checkedOk env ∧
+      b.eval env ≤ a.eval env
+  | .mul a b =>
+      a.checkedOk env ∧ b.checkedOk env ∧
+      a.eval env * b.eval env < 18446744073709551616
+
+/-- Propositional truth of one host-checked `ReqRel` under `env` (`u64`-checked arithmetic + comparison). -/
+def ReqRel.holds (env : InputEnv) (rel : ReqRel) : Prop :=
+  rel.lhs.checkedOk env ∧
+  rel.rhs.checkedOk env ∧
+  match rel.cmp with
+  | .ge => rel.rhs.eval env ≤ rel.lhs.eval env
+  | .gt => rel.rhs.eval env < rel.lhs.eval env
+  | .le => rel.lhs.eval env ≤ rel.rhs.eval env
+  | .lt => rel.lhs.eval env < rel.rhs.eval env
+  | .eq => rel.lhs.eval env = rel.rhs.eval env
+  | .ne => rel.lhs.eval env ≠ rel.rhs.eval env
+
+/-- Conjunction of host-checked `#[launch_contract(requires = (...))]` relations over `rels`. -/
+def reqRelsHold (env : InputEnv) : List ReqRel → Prop
+  | [] => True
+  | r :: rest => r.holds env ∧ reqRelsHold env rest
+
+/-- True when `env` satisfies scalar/slice bit-width bounds and host `requires` relations of `f`. -/
 def MirFunc.validInput (f : MirFunc) (env : InputEnv) : Prop :=
-  paramBoundsProp env 0 f.params ∧
-  (∀ req : Nat × Nat, req ∈ f.requiresLenGe → env.sliceLen req.2 ≤ env.sliceLen req.1)
+  paramBoundsProp env 0 f.params ∧ reqRelsHold env f.requires
 
 /-- Runtime value held by an SSA variable during concrete execution of `MirFunc`. -/
 inductive Val where

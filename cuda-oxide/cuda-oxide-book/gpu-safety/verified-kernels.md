@@ -71,7 +71,7 @@ Almost all of the safety checking happens once when you build the kernel. Only t
   - Async DMA copies, producer-consumer ring buffers, 2-CTA cluster ranks, and Tensor Memory lifecycles happen in the right order.
 - **Checked once per launch (Host CPU)**:
   - Block and cluster dimensions match what the kernel declared.
-  - Runtime buffer sizes satisfy the contract's length rules (for example, inputs are at least as long as the output).
+  - Runtime buffer sizes and unsigned scalar extents satisfy every `requires` relation in `#[launch_contract(requires = (...))]` (slice `.len()`, unsigned integer scalars, literals, `+`, `-`, `*`, and `>=`, `>`, `<=`, `<`, `==`, `!=`, evaluated with checked `u64` arithmetic and forwarded 1-to-1 into Lean 4).
   - The launch grid is large enough when the kernel promises to write every output element.
 - **Paid per element on the GPU**:
   - **Nothing.** Proven bounds checks are stripped out before PTX codegen, so inner loops compile down to the exact same machine instructions as hand-written unchecked code.
@@ -109,7 +109,7 @@ Unlike a C or CUDA C++ verifier, Lean 4 does not need to prove pointer validity,
 
 cuda-oxide translates the kernel instruction by instruction before loop unrolling (while loops are still small and compact):
 - **Index math and branches** (adds, shifts, masks, loop counters, and `if` checks) are copied one-for-one into Lean 4.
-- **Floating-point math is ignored**, because float values cannot change which memory slot a thread touches.
+- **Floating-point and per-lane scalar/packed math is ignored for indexing** (including standard float operators, math functions like `.sin()`, and explicit-rounding intrinsics like `mul_rn_f32` / `add_rn_f32`), because float values cannot change which memory slot a thread touches.
 - **Barriers and async hardware ops** (block syncs, cluster syncs, hardware barriers, DMA copies, work-stealing, and Tensor Memory) are tracked in a small control-flow state machine.
 - **Lean 4 does all the proving**: it turns every memory access and thread pair into plain integer math, checks the hardware ordering rules, and only lets the compiler delete a bounds check once the proof succeeds.
 

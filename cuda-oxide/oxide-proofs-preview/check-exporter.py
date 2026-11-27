@@ -917,6 +917,68 @@ def main():
             raise RuntimeError(f"Expected un-inlined float helper to fail closed:\n{sneaky_rejected.stderr}")
         print("REJECTED as expected: un-inlined user `f32 -> f32` helper fails closed without emitting Lean.", flush=True)
 
+        # Arithmetic `contract_requires` (`s0>=4*s1`, `s0>=p2`) + `nvvm.scalar_arithmetic` (`.rn`) positive & negative checks:
+        scale_quad_source = """
+mir.func @scale_quad: builtin.function <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>, mir.slice <builtin.fp32 ,mutable:true,kind:UniqueRef>, builtin.integer ui32, builtin.fp32) -> ()>
+  [contract_requires: builtin.string "s0>=4*s1,s1>=p2", gpu_kernel: builtin.string "true", launch_contract_domain: builtin.integer <1: ui32>, reqntid_x: builtin.integer <256: ui32>, reqntid_y: builtin.integer <1: ui32>, reqntid_z: builtin.integer <1: ui32>, verify_disjoint_writes: builtin.string "1", verify_no_oob_idx: builtin.string "0,1"]
+{
+  ^entry(x: mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>, out: mir.slice <builtin.fp32 ,mutable:true,kind:UniqueRef>, n: builtin.integer ui32, scale: builtin.fp32):
+    bx32 = nvvm.read_ptx_sreg_ctaid_x () [] []: <() -> (builtin.integer ui32)>;
+    bd32 = nvvm.read_ptx_sreg_ntid_x () [] []: <() -> (builtin.integer ui32)>;
+    tx32 = nvvm.read_ptx_sreg_tid_x () [] []: <() -> (builtin.integer ui32)>;
+    bx = mir.cast (bx32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+    bd = mir.cast (bd32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+    tx = mir.cast (tx32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+    base = mir.mul (bx, bd) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+    idx = mir.add (base, tx) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+    n64 = mir.cast (n) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+    in_n = mir.lt (idx, n64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+    mir.cond_br (in_n) [^active, ^exit] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+  ^active():
+    c4 = mir.constant () [] [value: builtin.integer <4: ui64>]: <() -> (builtin.integer ui64)>;
+    c3 = mir.constant () [] [value: builtin.integer <3: ui64>]: <() -> (builtin.integer ui64)>;
+    idx4 = mir.mul (c4, idx) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+    src_idx = mir.add (idx4, c3) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+    x_ptr = mir.extract_field (x) [] [index: mir.field_index 0]: <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>)>;
+    x_elem = mir.ptr_offset (x_ptr, src_idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>)>;
+    v = mir.load (x_elem) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>) -> (builtin.fp32)>;
+    scaled = nvvm.scalar_arithmetic (v, scale) [] [nvvm_scalar_arithmetic_format: nvvm.scalar_arithmetic_format F32, nvvm_scalar_arithmetic_operation: nvvm.scalar_arithmetic_operation Mul, nvvm_scalar_arithmetic_rounding: nvvm.scalar_arithmetic_rounding Rn, nvvm_scalar_arithmetic_saturation: nvvm.scalar_arithmetic_saturation None, nvvm_scalar_arithmetic_subnormal: nvvm.scalar_arithmetic_subnormal Preserve]: <(builtin.fp32, builtin.fp32) -> (builtin.fp32)>;
+    out_ptr = mir.extract_field (out) [] [index: mir.field_index 0]: <(mir.slice <builtin.fp32 ,mutable:true,kind:UniqueRef>) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>)>;
+    out_elem = mir.ptr_offset (out_ptr, idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>)>;
+    mir.store (out_elem, scaled) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>, builtin.fp32) -> ()>;
+    mir.goto () [^exit] []: <() -> ()>
+
+  ^exit():
+    mir.return () [] []: <() -> ()>
+}
+"""
+        scale_quad_mir = temporary / "scale_quad.mir"
+        scale_quad_mir.write_text(scale_quad_source)
+        scale_quad_lean = require_export(scale_quad_mir, "scale_quad")
+        scale_quad_file = temporary / "ScaleQuadValid.lean"
+        scale_quad_file.write_text(scale_quad_lean)
+        require_success("env", "lean", str(scale_quad_file))
+        print("PASS: arithmetic `contract_requires` (`s0>=4*s1,s1>=p2`) + `nvvm.scalar_arithmetic` (`mul_rn_f32`) proves bounds and disjoint writes.", flush=True)
+
+        scale_quad_oob_mir = temporary / "scale_quad_oob.mir"
+        scale_quad_oob_mir.write_text(
+            scale_quad_source.replace(
+                "c3 = mir.constant () [] [value: builtin.integer <3: ui64>]",
+                "c3 = mir.constant () [] [value: builtin.integer <4: ui64>]",
+                1,
+            )
+        )
+        scale_quad_oob_lean = require_export(scale_quad_oob_mir, "scale_quad")
+        scale_quad_oob_file = temporary / "ScaleQuadOob.lean"
+        scale_quad_oob_file.write_text(
+            "\n".join(line for line in scale_quad_oob_lean.splitlines() if not line.startswith("#print axioms"))
+        )
+        res_scale_quad_oob = run_lake("env", "lean", str(scale_quad_oob_file))
+        if res_scale_quad_oob.returncode == 0 or "error: omega could not prove the goal:" not in res_scale_quad_oob.stdout:
+            raise RuntimeError(f"Expected `x[4 * idx + 4]` under `x.len() >= 4 * out.len()` to fail in Lean:\n{res_scale_quad_oob.stdout}")
+        print("REJECTED as expected: off-by-one `x[4 * idx + 4]` under `x.len() >= 4 * out.len()` fails `no_oob_idx`.", flush=True)
+
     print("Exporter checks passed for scalar, 1D vecadd, 2D SGEMM, Stage 3 warp/block reductions, Stage 4 sub-warp multi-buffer, Stage 5 async mbarrier, Stage 6 Blackwell tcgen05/TMEM, Stage 8 warp-specialized ring, Stage 9 2-CTA cluster + CLC, and Stage 10 dual-commit `_cg2` fixtures.")
 
 

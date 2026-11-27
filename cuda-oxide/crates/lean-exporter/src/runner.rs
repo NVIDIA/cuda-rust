@@ -536,12 +536,12 @@ pub fn verify_module_kernels(
                 for &assert_op in proven_assert_ops {
                     Operation::erase(assert_op, ctx);
                 }
-                let requires_list = if spec.requires_len_ge.is_empty() {
+                let requires_list = if spec.requires.is_empty() {
                     "none".to_string()
                 } else {
-                    spec.requires_len_ge
+                    spec.requires
                         .iter()
-                        .map(|(lhs, rhs)| format!("param[{lhs}].len() >= param[{rhs}].len()"))
+                        .map(ToString::to_string)
                         .collect::<Vec<_>>()
                         .join(", ")
                 };

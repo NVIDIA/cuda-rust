@@ -50,7 +50,7 @@ def revMirFunc : CudaOxide.Mir.Program.MirFunc :=
   , blockDimX := 256
   , blockDimY := 1
   , params := [(.slice false), (.slice true)]
-  , requiresLenGe := [(0, 1)]
+  , requires := [{ cmp := .ge, lhs := .sliceLen 0, rhs := .sliceLen 1 }]
   , blocks := [
       { args := [⟨0, 0⟩, ⟨1, 0⟩], stmts := [
           (.assign 2 .index1D),
@@ -96,11 +96,130 @@ theorem tma_read_after_wait : ControlFlow.UniformBarriersCfg tmaWaitCfg :=
   CudaOxide.Proofs.ControlFlow.uniform_barriers_cfg_of_stateMap
     (inv := CudaOxide.Proofs.ControlFlow.inferStateMap tmaWaitCfg) (by decide)
 
+/-- Scaled-extent 1D gather `if idx < out.len() { out[idx] = x[4 * idx + 3] }` under
+    `requires = (x.len() >= 4 * out.len())` (`#1869` shape, including 64-bit `checked_mul`/`checked_add`). -/
+def quadGatherMirFunc : CudaOxide.Mir.Program.MirFunc :=
+  { domain := 1
+  , blockDimX := 256
+  , blockDimY := 1
+  , params := [(.slice false), (.slice true)]
+  , requires := [
+      { cmp := .ge
+      , lhs := .sliceLen 0
+      , rhs := .mul (.const 4) (.sliceLen 1) } ]
+  , blocks := [
+      { args := [⟨0, 0⟩, ⟨1, 0⟩], stmts := [
+          (.assign 2 .index1D),
+          (.assign 3 (.sliceLen 1)),
+          (.assign 4 (.cmpOp .lt 2 3))
+        ], term := (.condBr 4 1 [] 2 []) },
+      { stmts := [
+          (.assign 5 (.constInt 64 4)),
+          (.assign 6 (.binOp .mul 64 5 2)),
+          (.assign 7 (.checkedOvf .mul 64 5 2)),
+          (.assign 8 (.notBool 7)),
+          (.assertCond 0 8),
+          (.assign 9 (.constInt 64 3)),
+          (.assign 10 (.binOp .add 64 6 9)),
+          (.assign 11 (.checkedOvf .add 64 6 9)),
+          (.assign 12 (.notBool 11)),
+          (.assertCond 1 12),
+          (.assign 13 (.sliceLen 0)),
+          (.assign 14 (.cmpOp .lt 10 13)),
+          (.assertCond 2 14),
+          (.assign 15 (.slicePtr 0)),
+          (.assign 16 (.ptrOffset 15 10)),
+          (.assign 17 (.load 16)),
+          (.assign 18 (.slicePtr 1)),
+          (.assign 19 (.ptrOffset 18 2)),
+          (.store 19 17)
+        ], term := (.goto 2 []) },
+      { stmts := [], term := .ret }
+    ] }
+
+mir_def_sym_table quadGatherMirFunc
+
+theorem quadGather_valid :
+    CudaOxide.Proofs.Program.validSymFunc quadGatherMirFunc symTable = true := rfl
+
+theorem quadGather_events :
+    CudaOxide.Proofs.Program.collectSymMemEvents quadGatherMirFunc symTable = symMemEvents := rfl
+
+theorem quadGather_asserts :
+    CudaOxide.Proofs.Program.collectSymAssertEvents quadGatherMirFunc symTable = symAssertEvents := rfl
+
+theorem quadGather_no_oob_x :
+    CudaOxide.Contracts.Program.MirNoOobGlobal quadGatherMirFunc 0 := by
+  apply CudaOxide.Proofs.Program.vcNoOobGlobal_of_table quadGather_valid quadGather_events (by mir_bind_events)
+  mir_vc quadGatherMirFunc
+
+theorem quadGather_asserts_redundant :
+    CudaOxide.Contracts.Program.MirAssertRedundant quadGatherMirFunc 0 ∧
+    CudaOxide.Contracts.Program.MirAssertRedundant quadGatherMirFunc 1 ∧
+    CudaOxide.Contracts.Program.MirAssertRedundant quadGatherMirFunc 2 := by
+  refine ⟨?_, ?_, ?_⟩
+  · apply CudaOxide.Proofs.Program.vcAssertRedundant_of_table quadGather_valid quadGather_asserts (by mir_bind_asserts)
+    mir_vc quadGatherMirFunc
+  · apply CudaOxide.Proofs.Program.vcAssertRedundant_of_table quadGather_valid quadGather_asserts (by mir_bind_asserts)
+    mir_vc quadGatherMirFunc
+  · apply CudaOxide.Proofs.Program.vcAssertRedundant_of_table quadGather_valid quadGather_asserts (by mir_bind_asserts)
+    mir_vc quadGatherMirFunc
+
+namespace RowProduct2D
+/-- Commuted 2D scalar-product `requires = (x.len() >= k * m)` proving `t * k + col < x.len()`
+    when `t < m` and `col < k`. -/
+def rowProduct2DMirFunc : CudaOxide.Mir.Program.MirFunc :=
+  { domain := 1
+  , blockDimX := 256
+  , blockDimY := 1
+  , params := [(.slice false), (.scalar 32), (.scalar 32)]
+  , requires := [
+      { cmp := .ge
+      , lhs := .sliceLen 0
+      , rhs := .mul (.scalar 1) (.scalar 2) } ]
+  , blocks := [
+      { args := [⟨0, 0⟩, ⟨1, 32⟩, ⟨2, 32⟩], stmts := [
+          (.assign 3 (.sreg .ctaidX)),
+          (.assign 4 (.sreg .tidX)),
+          (.assign 5 (.cmpOp .lt 3 2)),
+          (.assign 6 (.cmpOp .lt 4 1))
+        ], term := (.condBr 5 1 [] 3 []) },
+      { stmts := [], term := (.condBr 6 2 [] 3 []) },
+      { stmts := [
+          (.assign 7 (.intCast 64 3)),
+          (.assign 8 (.intCast 64 1)),
+          (.assign 9 (.intCast 64 4)),
+          (.assign 10 (.binOp .mul 64 7 8)),
+          (.assign 11 (.binOp .add 64 10 9)),
+          (.assign 12 (.slicePtr 0)),
+          (.assign 13 (.ptrOffset 12 11)),
+          (.assign 14 (.load 13))
+        ], term := (.goto 3 []) },
+      { stmts := [], term := .ret }
+    ] }
+
+mir_def_sym_table rowProduct2DMirFunc
+
+theorem rowProduct2D_valid :
+    CudaOxide.Proofs.Program.validSymFunc rowProduct2DMirFunc symTable = true := rfl
+
+theorem rowProduct2D_events :
+    CudaOxide.Proofs.Program.collectSymMemEvents rowProduct2DMirFunc symTable = symMemEvents := rfl
+
+theorem rowProduct2D_no_oob_x :
+    CudaOxide.Contracts.Program.MirNoOobGlobal rowProduct2DMirFunc 0 := by
+  apply CudaOxide.Proofs.Program.vcNoOobGlobal_of_table rowProduct2D_valid rowProduct2D_events (by mir_bind_events)
+  mir_vc rowProduct2DMirFunc
+end RowProduct2D
+
 #print axioms no_oob_idx_all
 #print axioms disjoint_writes_c
 #print axioms writes_all_elems_c
 #print axioms rev_writes_all_elems
 #print axioms tma_read_after_wait
+#print axioms quadGather_no_oob_x
+#print axioms quadGather_asserts_redundant
+#print axioms RowProduct2D.rowProduct2D_no_oob_x
 #print axioms CudaOxide.Mir.Program.ReachableTrapFree.toReachable
 #print axioms CudaOxide.Mir.Program.EmitsTrapFreeEvent.toEmitsEvent
 #print axioms index_lt_of_guard

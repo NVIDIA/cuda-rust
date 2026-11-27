@@ -147,6 +147,82 @@ theorem mul_lt_u64_of_u32 {a b : Nat} (ha : a < 4294967296) (hb : b < 4294967296
   have hb' : b ≤ 4294967295 := by omega                   -- Same for `b`
   exact Nat.mul_le_mul ha' hb'                            -- Multiply both upper bounds via `Nat.mul_le_mul`
 
+/-- Strict right-multiplication step: `a₁ < a₂` implies `a₁ * b + b ≤ a₂ * b` (`(a₁ + 1) * b ≤ a₂ * b`). -/
+theorem mul_add_le_mul_right {a₁ a₂ : Nat} (b : Nat) (h : a₁ < a₂) :
+    a₁ * b + b ≤ a₂ * b := by
+  have h1 : a₁ + 1 ≤ a₂ := h                              -- `a₁ < a₂` is definitionally `a₁ + 1 ≤ a₂` in `Nat`
+  have hm := Nat.mul_le_mul_right b h1                    -- Multiply both sides on the right by `b`
+  rwa [Nat.add_mul, Nat.one_mul] at hm                    -- Expand `(a₁ + 1) * b` into `a₁ * b + b`
+
+/-- Strict left-multiplication step: `b₁ < b₂` implies `a * b₁ + a ≤ a * b₂` (`a * (b₁ + 1) ≤ a * b₂`). -/
+theorem mul_add_le_mul_left (a : Nat) {b₁ b₂ : Nat} (h : b₁ < b₂) :
+    a * b₁ + a ≤ a * b₂ := by
+  have h1 : b₁ + 1 ≤ b₂ := h                              -- `b₁ < b₂` is definitionally `b₁ + 1 ≤ b₂` in `Nat`
+  have hm := Nat.mul_le_mul_left a h1                     -- Multiply both sides on the left by `a`
+  rwa [Nat.mul_add, Nat.mul_one] at hm                    -- Expand `a * (b₁ + 1)` into `a * b₁ + a`
+
+/-- Right-factor equality bridge for strict `<` (`b₁ = b₂` across `% 2^64` casts, `a₁ < a₂`). -/
+theorem mul_lt_right_of_eq {a₁ a₂ b₁ b₂ : Nat} (hb : b₁ = b₂) (ha : a₁ < a₂) :
+    a₁ * b₁ + b₁ ≤ a₂ * b₂ := by
+  subst hb                                                -- Unify `b₂` with `b₁`
+  exact mul_add_le_mul_right b₁ ha                        -- Apply strict right-multiplication step
+
+/-- Right-factor equality bridge for `≤` (`b₁ = b₂`, `a₁ ≤ a₂`). -/
+theorem mul_le_right_of_eq {a₁ a₂ b₁ b₂ : Nat} (hb : b₁ = b₂) (ha : a₁ ≤ a₂) :
+    a₁ * b₁ ≤ a₂ * b₂ := by
+  subst hb                                                -- Unify `b₂` with `b₁`
+  exact Nat.mul_le_mul_right b₁ ha                        -- Apply monotone right multiplication
+
+/-- Left-factor equality bridge for strict `<` (`a₁ = a₂`, `b₁ < b₂`). -/
+theorem mul_lt_left_of_eq {a₁ a₂ b₁ b₂ : Nat} (ha : a₁ = a₂) (hb : b₁ < b₂) :
+    a₁ * b₁ + a₁ ≤ a₂ * b₂ := by
+  subst ha                                                -- Unify `a₂` with `a₁`
+  exact mul_add_le_mul_left a₁ hb                         -- Apply strict left-multiplication step
+
+/-- Left-factor equality bridge for `≤` (`a₁ = a₂`, `b₁ ≤ b₂`). -/
+theorem mul_le_left_of_eq {a₁ a₂ b₁ b₂ : Nat} (ha : a₁ = a₂) (hb : b₁ ≤ b₂) :
+    a₁ * b₁ ≤ a₂ * b₂ := by
+  subst ha                                                -- Unify `a₂` with `a₁`
+  exact Nat.mul_le_mul_left a₁ hb                         -- Apply monotone left multiplication
+
+/-- Commuted cross-factor bridge (`b₁ = a₂`, `a₁ < b₂` -> `a₁ * b₁ + b₁ ≤ a₂ * b₂`). -/
+theorem mul_lt_comm_right {a₁ b₁ a₂ b₂ : Nat} (hb : b₁ = a₂) (ha : a₁ < b₂) :
+    a₁ * b₁ + b₁ ≤ a₂ * b₂ := by
+  subst hb                                                -- Unify `a₂` with `b₁`
+  rw [Nat.mul_comm b₁ b₂]                                 -- Commute `b₁ * b₂` into `b₂ * b₁`
+  exact mul_add_le_mul_right b₁ ha                        -- Apply strict right-multiplication step
+
+/-- Commuted cross-factor bridge for `≤` (`b₁ = a₂`, `a₁ ≤ b₂` -> `a₁ * b₁ ≤ a₂ * b₂`). -/
+theorem mul_le_comm_right {a₁ b₁ a₂ b₂ : Nat} (hb : b₁ = a₂) (ha : a₁ ≤ b₂) :
+    a₁ * b₁ ≤ a₂ * b₂ := by
+  subst hb                                                -- Unify `a₂` with `b₁`
+  rw [Nat.mul_comm b₁ b₂]                                 -- Commute `b₁ * b₂` into `b₂ * b₁`
+  exact Nat.mul_le_mul_right b₁ ha                        -- Apply monotone right multiplication
+
+/-- Symmetric commuted cross-factor bridge (`a₁ = b₂`, `b₁ < a₂` -> `a₁ * b₁ + a₁ ≤ a₂ * b₂`). -/
+theorem mul_lt_comm_left {a₁ b₁ a₂ b₂ : Nat} (ha : a₁ = b₂) (hb : b₁ < a₂) :
+    a₁ * b₁ + a₁ ≤ a₂ * b₂ := by
+  subst ha                                                -- Unify `b₂` with `a₁`
+  rw [Nat.mul_comm a₂ a₁]                                 -- Commute `a₂ * a₁` into `a₁ * a₂`
+  exact mul_add_le_mul_left a₁ hb                         -- Apply strict left-multiplication step
+
+/-- Symmetric commuted cross-factor bridge for `≤` (`a₁ = b₂`, `b₁ ≤ a₂` -> `a₁ * b₁ ≤ a₂ * b₂`). -/
+theorem mul_le_comm_left {a₁ b₁ a₂ b₂ : Nat} (ha : a₁ = b₂) (hb : b₁ ≤ a₂) :
+    a₁ * b₁ ≤ a₂ * b₂ := by
+  subst ha                                                -- Unify `b₂` with `a₁`
+  rw [Nat.mul_comm a₂ a₁]                                 -- Commute `a₂ * a₁` into `a₁ * a₂`
+  exact Nat.mul_le_mul_left a₁ hb                         -- Apply monotone left multiplication
+
+/-- Direct product congruence across `% 2^64` casts (`a₁ = a₂`, `b₁ = b₂` -> `a₁ * b₁ = a₂ * b₂`). -/
+theorem mul_eq_of_eq {a₁ b₁ a₂ b₂ : Nat} (ha : a₁ = a₂) (hb : b₁ = b₂) :
+    a₁ * b₁ = a₂ * b₂ := by
+  subst ha; subst hb; rfl
+
+/-- Commuted product congruence across `% 2^64` casts (`a₁ = b₂`, `b₁ = a₂` -> `a₁ * b₁ = a₂ * b₂`). -/
+theorem mul_eq_of_comm_eq {a₁ b₁ a₂ b₂ : Nat} (ha : a₁ = b₂) (hb : b₁ = a₂) :
+    a₁ * b₁ = a₂ * b₂ := by
+  subst ha; subst hb; exact Nat.mul_comm a₁ b₁
+
 open Lean Elab Tactic Meta in
 /-- Injects `Nat.mul_le_mul_right` / `Nat.mul_le_mul_left` monotonicity facts, 32x32->64
     non-overflow bounds (`mul_lt_u64_of_u32`), `Nat.and_le_left`/`right` bounds on residual
@@ -277,22 +353,38 @@ elab "mir_mul_mono" : tactic => withMainContext do
     for j in [:mulTerms.size] do
       if i != j then
         let (a2, b2) := mulTerms[j]!
-        if (← isDefEq b1 b2) && !(← isDefEq a1 a2) then
-          if let some ple ← proveByOmega (← mkAppM ``LE.le #[a1, a2]) then
-            k := k + 1
-            let pf ← mkAppM ``Nat.mul_le_mul_right #[b1, ple]
-            let pfTy ← inferType pf
-            let g' ← (← getMainGoal).assert (Name.mkSimple s!"hmul_{k}") pfTy pf
-            let (_, g'') ← g'.intro1P
-            replaceMainGoal [g'']
-        if (← isDefEq a1 a2) && !(← isDefEq b1 b2) then
-          if let some ple ← proveByOmega (← mkAppM ``LE.le #[b1, b2]) then
-            k := k + 1
-            let pf ← mkAppM ``Nat.mul_le_mul_left #[a1, ple]
-            let pfTy ← inferType pf
-            let g' ← (← getMainGoal).assert (Name.mkSimple s!"hmul_{k}") pfTy pf
-            let (_, g'') ← g'.intro1P
-            replaceMainGoal [g'']
+        let assertFact (pfx : String) (idx : Nat) (pf : Expr) : TacticM Unit := do
+          let g' ← (← getMainGoal).assert (Name.mkSimple s!"{pfx}_{idx}") (← inferType pf) pf
+          let (_, g'') ← g'.intro1P
+          replaceMainGoal [g'']
+        if let some eqB ← proveByOmega (← mkAppM ``Eq #[b1, b2]) then
+          if let some eqA ← proveByOmega (← mkAppM ``Eq #[a1, a2]) then
+            if i < j then
+              k := k + 1; assertFact "hmulEq" k (← mkAppM ``mul_eq_of_eq #[eqA, eqB])
+          else if let some plt ← proveByOmega (← mkAppM ``LT.lt #[a1, a2]) then
+            k := k + 1; assertFact "hmulLt" k (← mkAppM ``mul_lt_right_of_eq #[eqB, plt])
+          else if let some ple ← proveByOmega (← mkAppM ``LE.le #[a1, a2]) then
+            k := k + 1; assertFact "hmul" k (← mkAppM ``mul_le_right_of_eq #[eqB, ple])
+        if let some eqA ← proveByOmega (← mkAppM ``Eq #[a1, a2]) then
+          if !(← proveByOmega (← mkAppM ``Eq #[b1, b2])).isSome then
+            if let some plt ← proveByOmega (← mkAppM ``LT.lt #[b1, b2]) then
+              k := k + 1; assertFact "hmulLt" k (← mkAppM ``mul_lt_left_of_eq #[eqA, plt])
+            else if let some ple ← proveByOmega (← mkAppM ``LE.le #[b1, b2]) then
+              k := k + 1; assertFact "hmul" k (← mkAppM ``mul_le_left_of_eq #[eqA, ple])
+        if let some eqBA ← proveByOmega (← mkAppM ``Eq #[b1, a2]) then
+          if let some eqAB ← proveByOmega (← mkAppM ``Eq #[a1, b2]) then
+            if i < j then
+              k := k + 1; assertFact "hmulComm" k (← mkAppM ``mul_eq_of_comm_eq #[eqAB, eqBA])
+          else if let some plt ← proveByOmega (← mkAppM ``LT.lt #[a1, b2]) then
+            k := k + 1; assertFact "hmulLt" k (← mkAppM ``mul_lt_comm_right #[eqBA, plt])
+          else if let some ple ← proveByOmega (← mkAppM ``LE.le #[a1, b2]) then
+            k := k + 1; assertFact "hmul" k (← mkAppM ``mul_le_comm_right #[eqBA, ple])
+        if let some eqAB ← proveByOmega (← mkAppM ``Eq #[a1, b2]) then
+          if !(← proveByOmega (← mkAppM ``Eq #[b1, a2])).isSome then
+            if let some plt ← proveByOmega (← mkAppM ``LT.lt #[b1, a2]) then
+              k := k + 1; assertFact "hmulLt" k (← mkAppM ``mul_lt_comm_left #[eqAB, plt])
+            else if let some ple ← proveByOmega (← mkAppM ``LE.le #[b1, a2]) then
+              k := k + 1; assertFact "hmul" k (← mkAppM ``mul_le_comm_left #[eqAB, ple])
 
 /-- Classical double-negation elimination as an unconditional equality for `simp only` (`0` typeclass search). -/
 theorem prop_not_not (p : Prop) : (¬¬p) = p := propext Classical.not_not
@@ -326,14 +418,16 @@ partial def solveVcGoals (fuel iteFuel : Nat) : TacticM Unit := do
       rIdx := rIdx + 1
       gRen ← gRen.rename d.fvarId (Name.mkSimple s!"hacc_{fuel}_{rIdx}")
   replaceMainGoal [gRen]
-  try evalTactic (← `(tactic|                             -- Step 4: Unfold `SymInt.eval` / `SymBool.holds` into plain `Nat` math
-    simp only [CudaOxide.Mir.Program.paramBoundsProp, SymInt.eval, SymBool.holds,
+  try evalTactic (← `(tactic|                             -- Step 4: Unfold `SymInt.eval` / `SymBool.holds` / `reqRelsHold` into plain `Nat` math
+    simp only [CudaOxide.Mir.Program.paramBoundsProp, CudaOxide.Mir.Program.reqRelsHold,
+               CudaOxide.Mir.Program.ReqRel.holds, CudaOxide.Mir.Program.ReqExpr.checkedOk,
+               CudaOxide.Mir.Program.ReqExpr.eval, SymInt.eval, SymBool.holds,
                SymBool.normDisc, extractIteOneCond, SymBool.holdsRaw,
                SymBool.eval, symSpanInBounds, symRankInBounds, symWriteLeafOblig, symPairRaceOblig, symSlotGuardOpt,
                evalCmpOp_eq_true, evalCmpOp_eq_false, evalCmpProp,
                CudaOxide.Mir.Program.evalBinOp, CudaOxide.Mir.Program.wordMod, Option.getD,
                ↓reduceIte, eq_self, ne_eq, Nat.not_lt_zero,
-               Nat.zero_add, Nat.add_zero, Nat.reduceAdd, Nat.lt_irrefl,
+               Nat.zero_add, Nat.add_zero, Nat.reduceAdd, Nat.reduceLT, Nat.lt_irrefl,
                Nat.max_def, Nat.reduceLeDiff, Nat.reduceMod, Nat.reducePow,
                pow2_8, pow2_16, pow2_32, pow2_64,
                pow2_succ_8, pow2_succ_16, pow2_succ_32, pow2_succ_64,
@@ -434,7 +528,7 @@ elab "mir_solve_vc" : tactic => solveVcGoals 512 16
 macro "mir_vc" f:ident : tactic =>
   `(tactic| (
       unfold CudaOxide.Mir.Program.MirFunc.validInput CudaOxide.Mir.Program.MirFunc.validThread
-      dsimp only [$f:ident, List.foldr, List.all, Option.isNone, buildWriteWitnessSym, symSlotGuardOpt, symPairRaceOblig, Option.getD]
+      dsimp only [$f:ident, CudaOxide.Mir.Program.reqRelsHold, CudaOxide.Mir.Program.ReqRel.holds, CudaOxide.Mir.Program.ReqExpr.checkedOk, CudaOxide.Mir.Program.ReqExpr.eval, List.foldr, List.all, Option.isNone, buildWriteWitnessSym, symSlotGuardOpt, symPairRaceOblig, Option.getD]
       mir_solve_vc))
 
 end CudaOxide.Proofs.Program

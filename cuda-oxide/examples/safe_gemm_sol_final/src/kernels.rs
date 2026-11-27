@@ -148,6 +148,13 @@ mod kernels {
         domain = 1,
         coordinates = u32,
         block = (192, 1, 1),
+        requires = (
+            k >= 64,
+            n == _tiles_n * 128,
+            tiles_m >= 1,
+            _tiles_n >= 2,
+            out.len() >= (tiles_m * 256) * (_tiles_n * 64),
+        ),
     )]
     #[verify(
         no_oob_idx(SMEM_BUF, TMEM_ADDR, TILE_INFO, CLC_RESPONSE, TMA_BAR, MMA_BAR, TILE_READY),
@@ -159,8 +166,8 @@ mod kernels {
         #[grid_constant] a_tma: &TmaDescriptor,
         #[grid_constant] b_tma: &TmaDescriptor,
         mut out: DisjointSlice<u32>,
-        n: i32,
-        k: i32,
+        n: u32,
+        k: u32,
         tiles_m: u32,
         _tiles_n: u32,
     ) {
@@ -217,8 +224,6 @@ mod kernels {
         let b_smem_offset: usize = B_SMEM_OFFSET;
         let swizzle_g: u32 = if tiles_m == 16 { 2 } else { 8 };
 
-        let n = n as u32;
-        let k = k as u32;
         let tid = thread::threadIdx_x();
         let warp_id = warp::warp_id();
         let lane_id = tid % 32;
@@ -368,6 +373,7 @@ mod kernels {
                             (A_TILE_BYTES + B_TILE_BYTES_256) * 2
                         };
 
+                        let clc_prefetch_k = k_iters.saturating_sub(4);
                         let mut k_idx: u32 = 0;
                         #[unroll(4)]
                         while k_idx < k_iters {
@@ -378,7 +384,7 @@ mod kernels {
                             let aliased_bar = aliased_tma_bar0.add(stage);
                             let mma_bar_const = &raw const MMA_BAR[stage];
 
-                            while !mbarrier_try_wait_parity(mma_bar_const, mma_parity) {}
+                            while !mbarrier_try_wait_parity_cluster(mma_bar_const, mma_parity) {}
 
                             if elect_one_cta {
                                 let _ = mbarrier_arrive_expect_tx(tma_bar_const, 1, tx_bytes);
@@ -443,7 +449,7 @@ mod kernels {
                                     self_mask,
                                 );
                             }
-                            if k_idx + 4 == k_iters {
+                            if k_idx == clc_prefetch_k {
                                 let _ = mbarrier_arrive_expect_tx(&raw const CLC_BAR, 1, 16);
                                 if elect_one_cta {
                                     clc_try_cancel_multicast(
@@ -467,7 +473,7 @@ mod kernels {
                         }
                     }
 
-                    while !mbarrier_try_wait_parity(&raw const CLC_BAR, clc_parity) {}
+                    while !mbarrier_try_wait_parity_cluster(&raw const CLC_BAR, clc_parity) {}
                     clc_iter += 1;
 
                     let resp_lo = CLC_RESPONSE[0];
@@ -502,8 +508,7 @@ mod kernels {
                 loop {
                     let t_slot = (tile_iter & 3) as usize;
                     let t_parity = (tile_iter >> 2) & 1;
-                    while !mbarrier_try_wait_parity_cluster(&raw const TILE_READY[t_slot], t_parity)
-                    {}
+                    while !mbarrier_try_wait_parity(&raw const TILE_READY[t_slot], t_parity) {}
 
                     let has_work = TILE_INFO[t_slot * 4 + 2];
                     if has_work == 0 {
@@ -526,12 +531,17 @@ mod kernels {
                         let empty_parity =
                             ((tile_iter - NUM_ACCUM_STAGES) / NUM_ACCUM_STAGES) & 1;
                         if accum_stage == 0 {
-                            while !mbarrier_try_wait_parity(&raw const ACCUM_EMPTY0, empty_parity)
-                            {}
+                            while !mbarrier_try_wait_parity_cluster(
+                                &raw const ACCUM_EMPTY0,
+                                empty_parity,
+                            ) {}
                         } else {
-                            while !mbarrier_try_wait_parity(&raw const ACCUM_EMPTY1, empty_parity)
-                            {}
+                            while !mbarrier_try_wait_parity_cluster(
+                                &raw const ACCUM_EMPTY1,
+                                empty_parity,
+                            ) {}
                         }
+                        tcgen05_fence_after_thread_sync();
                     }
 
                     let mut k_idx: u32 = 0;
@@ -543,7 +553,8 @@ mod kernels {
                         let tma_bar_const = &raw const TMA_BAR[stage];
                         let mma_bar_mut = &raw mut MMA_BAR[stage];
 
-                        while !mbarrier_try_wait_parity(tma_bar_const, tma_parity) {}
+                        while !mbarrier_try_wait_parity_cluster(tma_bar_const, tma_parity) {}
+                        tcgen05_fence_after_thread_sync();
 
                         let tmem_dst = tmem_addr + tmem_stage_offset;
                         tcgen05_mma_f16_cg2(tmem_dst, a_desc_s, b_desc_s, idesc, k_idx > 0);
@@ -599,7 +610,7 @@ mod kernels {
             loop {
                 let t_slot = (epi_tile_iter & 3) as usize;
                 let t_parity = (epi_tile_iter >> 2) & 1;
-                while !mbarrier_try_wait_parity_cluster(&raw const TILE_READY[t_slot], t_parity) {}
+                while !mbarrier_try_wait_parity(&raw const TILE_READY[t_slot], t_parity) {}
 
                 let has_work = TILE_INFO[t_slot * 4 + 2];
                 if has_work == 0 {
@@ -616,10 +627,11 @@ mod kernels {
 
                 let full_parity = (epi_tile_iter / NUM_ACCUM_STAGES) & 1;
                 if accum_stage == 0 {
-                    while !mbarrier_try_wait_parity(&raw const ACCUM_FULL0, full_parity) {}
+                    while !mbarrier_try_wait_parity_cluster(&raw const ACCUM_FULL0, full_parity) {}
                 } else {
-                    while !mbarrier_try_wait_parity(&raw const ACCUM_FULL1, full_parity) {}
+                    while !mbarrier_try_wait_parity_cluster(&raw const ACCUM_FULL1, full_parity) {}
                 }
+                tcgen05_fence_after_thread_sync();
 
                 let n_u32 = (n / 2) as usize;
                 let tile_row_base = (tile_m * 256 + my_rank * 128 + warp_id * 32) as usize;
@@ -642,20 +654,6 @@ mod kernels {
                             tmem_addr + tmem_stage_offset + (tmem_row << 16) + col_offset,
                         );
                         tcgen05_load_wait();
-
-                        if tmem_row_block == 1 && col_chunk + 1 == col_chunks && lane_id == 0 {
-                            if elect_one_cta {
-                                if accum_stage == 0 {
-                                    let _ = mbarrier_arrive(&raw const ACCUM_EMPTY0);
-                                } else {
-                                    let _ = mbarrier_arrive(&raw const ACCUM_EMPTY1);
-                                }
-                            } else if accum_stage == 0 {
-                                mbarrier_arrive_cluster(leader_accum_empty0_addr);
-                            } else {
-                                mbarrier_arrive_cluster(leader_accum_empty1_addr);
-                            }
-                        }
 
                         let col_u32_base = (col_chunk as usize) * 32;
                         let max_pairs: usize =
@@ -709,6 +707,21 @@ mod kernels {
                         col_chunk += 1;
                     }
                     tmem_row_block += 1;
+                }
+
+                tcgen05_fence_before_thread_sync();
+                if lane_id == 0 {
+                    if elect_one_cta {
+                        if accum_stage == 0 {
+                            let _ = mbarrier_arrive(&raw const ACCUM_EMPTY0);
+                        } else {
+                            let _ = mbarrier_arrive(&raw const ACCUM_EMPTY1);
+                        }
+                    } else if accum_stage == 0 {
+                        mbarrier_arrive_cluster(leader_accum_empty0_addr);
+                    } else {
+                        mbarrier_arrive_cluster(leader_accum_empty1_addr);
+                    }
                 }
 
                 epi_tile_iter += 1;

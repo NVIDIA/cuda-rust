@@ -29,7 +29,7 @@ use cuda_device::{
     DisjointSlice,
     barrier::{
         Barrier, fence_proxy_async_shared_cta, mbarrier_arrive, mbarrier_arrive_cluster,
-        mbarrier_arrive_expect_tx, mbarrier_init, mbarrier_try_wait_parity,
+        mbarrier_arrive_expect_tx, mbarrier_init, mbarrier_try_wait_parity_cluster,
     },
     clc::{clc_query_get_first_ctaid_x, clc_query_is_canceled, clc_try_cancel_multicast},
     cluster, cluster_launch, cuda_module, kernel, launch_bounds, launch_contract,
@@ -108,7 +108,7 @@ mod kernels {
             }
         }
         if my_rank == 0 {
-            while !mbarrier_try_wait_parity(&raw const PEER_DONE, 0) {}
+            while !mbarrier_try_wait_parity_cluster(&raw const PEER_DONE, 0) {}
         }
 
         // Phase 2: Blackwell Cluster Launch Control (`CLC`) multicast query into `CLC_RESPONSE`.
@@ -127,7 +127,7 @@ mod kernels {
                 }
             }
         }
-        while !mbarrier_try_wait_parity(&raw const CLC_BAR, 0) {}
+        while !mbarrier_try_wait_parity_cluster(&raw const CLC_BAR, 0) {}
 
         let resp_lo = CLC_RESPONSE[0];
         let resp_hi = CLC_RESPONSE[1];

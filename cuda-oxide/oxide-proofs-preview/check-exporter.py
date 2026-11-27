@@ -785,6 +785,11 @@ def main():
                 1,
             )
             .replace(
+                "ready_mma = nvvm.mbarrier_try_wait_parity_shared (mma_bar_w, zero_u32)",
+                "ready_mma = nvvm.mbarrier_try_wait_parity_cluster (mma_bar_w, zero_u32)",
+                1,
+            )
+            .replace(
                 "      ^sync_before_dealloc():\n        nvvm.barrier0 () [] []: <() -> ()>;\n        mir.cond_br (is_warp0) [^dealloc_tmem, ^exit]",
                 "      ^sync_before_dealloc():\n        mir.cond_br (is_warp0) [^relinquish_cg2, ^cluster_sync_dealloc] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>\n\n      ^relinquish_cg2():\n        nvvm.tcgen05_relinquish_alloc_permit_cg2 () [] []: <() -> ()>;\n        mir.goto () [^cluster_sync_dealloc] []: <() -> ()>\n\n      ^cluster_sync_dealloc():\n        nvvm.cluster_sync () [] []: <() -> ()>;\n        mir.cond_br (is_warp0) [^dealloc_tmem, ^exit]",
                 1,
@@ -821,6 +826,44 @@ def main():
         if res_stage10_no_mma.returncode == 0:
             raise RuntimeError(f"Expected tcgen05_commit_cg2 without tcgen05_mma_cg2 to fail TmemLifecycle in Lean:\n{res_stage10_no_mma.stdout}")
         print("REJECTED as expected: `tcgen05_commit_cg2` without any `tcgen05_mma_cg2` fails `tmem_lifecycle`.", flush=True)
+
+        # Stage 10 negative check 2: `.cta` `mbarrier_try_wait_parity_shared` on `_cg2` `MMA_BAR` fails `TmemLifecycle`:
+        stage10_cta_wait_mir = temporary / "stage10_cta_wait.mir"
+        stage10_cta_wait_mir.write_text(
+            stage10_cg2_source.replace(
+                "ready_mma = nvvm.mbarrier_try_wait_parity_cluster (mma_bar_w, zero_u32)",
+                "ready_mma = nvvm.mbarrier_try_wait_parity_shared (mma_bar_w, zero_u32)",
+                1,
+            )
+        )
+        stage10_cta_wait_lean = require_export(stage10_cta_wait_mir, "tcgen05_matmul_verified")
+        stage10_cta_wait_file = temporary / "Stage10CtaWait.lean"
+        stage10_cta_wait_file.write_text(
+            "\n".join(line for line in stage10_cta_wait_lean.splitlines() if not line.startswith("#print axioms"))
+        )
+        res_stage10_cta_wait = run_lake("env", "lean", str(stage10_cta_wait_file))
+        if res_stage10_cta_wait.returncode == 0:
+            raise RuntimeError(f"Expected .cta wait on _cg2 MMA_BAR to fail TmemLifecycle in Lean:\n{res_stage10_cta_wait.stdout}")
+        print("REJECTED as expected: `.cta` `mbarrier_try_wait_parity` on `_cg2` barrier fails `tmem_lifecycle`.", flush=True)
+
+        # Stage 10 negative check 3: Missing `tcgen05_fence_after_thread_sync` before `tcgen05_ld` fails `TmemLifecycle`:
+        stage10_no_fence_mir = temporary / "stage10_no_fence.mir"
+        stage10_no_fence_mir.write_text(
+            stage10_cg2_source.replace(
+                "      ^epilogue_init():\n        nvvm.tcgen05_fence_after_thread_sync () [] []: <() -> ()>;\n",
+                "      ^epilogue_init():\n",
+                1,
+            )
+        )
+        stage10_no_fence_lean = require_export(stage10_no_fence_mir, "tcgen05_matmul_verified")
+        stage10_no_fence_file = temporary / "Stage10NoFence.lean"
+        stage10_no_fence_file.write_text(
+            "\n".join(line for line in stage10_no_fence_lean.splitlines() if not line.startswith("#print axioms"))
+        )
+        res_stage10_no_fence = run_lake("env", "lean", str(stage10_no_fence_file))
+        if res_stage10_no_fence.returncode == 0:
+            raise RuntimeError(f"Expected missing tcgen05_fence_after_thread_sync before tcgen05_ld to fail TmemLifecycle in Lean:\n{res_stage10_no_fence.stdout}")
+        print("REJECTED as expected: missing `tcgen05_fence_after_thread_sync` before `tcgen05_ld` fails `tmem_lifecycle`.", flush=True)
 
         # Pure float math intrinsic placeholder (`.sin()`) positive + un-inlined float helper negative check:
         vecadd_sin_mir = temporary / "vecadd_sin.mir"

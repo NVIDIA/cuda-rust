@@ -169,8 +169,8 @@ inductive Rhs where
   | ptrOffset (base idx : Nat)
   /-- Memory load from pointer variable `ptr` (`mir.load`). -/
   | load (ptr : Nat)
-  /-- Hardware `mbarrier_try_wait_parity(&BAR[slot], parity)` poll on `(barId, slotVar)`. -/
-  | mbarTryWait (barId slotVar : Nat)
+  /-- Hardware `mbarrier_try_wait*(&BAR[slot], parity)` poll (`isAcquire = false` for `.relaxed` waits). -/
+  | mbarTryWait (barId slotVar : Nat) (isAcquire : Bool := true)
   /-- `.shared::cta` byte offset `cvta_generic_to_shared_offset(ptr)` (`nvvm.cvta_generic_to_shared_offset`). -/
   | cvtaShared (ptr : Nat)
   /-- Load the base `TMEM` handle of `cols` columns from shared-memory slot `ptr` (`TMEM_ADDR[0]`). -/
@@ -203,8 +203,8 @@ inductive Stmt where
   | barrierSlotCheck (ptr : Nat)
   /-- Bounds-checked peer CTA rank (`rank < clusterDimX`) on `cluster::map_shared_rank*`. -/
   | clusterRankCheck (rankVar : Nat)
-  /-- Plain thread arrival `mbarrier_arrive(&BAR[slot])`. -/
-  | mbarArrive (barId slotVar : Nat)
+  /-- Plain thread arrival `mbarrier_arrive*(&BAR[slot])` (`isRelease = false` for `.relaxed` arrives). -/
+  | mbarArrive (barId slotVar : Nat) (isRelease : Bool := true)
   /-- Byte-counted arrival `mbarrier_arrive_expect_tx(&BAR[slot], count, txBytes)`. -/
   | mbarArriveExpectTx (barId slotVar txBytes : Nat)
   /-- Asynchronous TMA global-to-shared copy writing `spanElems` elements at `ptr` on `(barId, slotVar)`. -/
@@ -277,11 +277,11 @@ structure MirFunc where
 def MirFunc.blockAt (f : MirFunc) (b : Nat) : BasicBlock :=
   f.blocks.getD b { term := .unreachable }
 
-/-- True when `f` signals `Barrier` group `barId` via `mbarrier_arrive` or positive `mbarrier_arrive_expect_tx`. -/
+/-- True when `f` signals `Barrier` group `barId` via release `mbarrier_arrive` or positive `mbarrier_arrive_expect_tx`. -/
 def MirFunc.hasValidBarSignal (f : MirFunc) (barId : Nat) : Bool :=
   f.blocks.any fun blk =>
     blk.stmts.any fun
-      | .mbarArrive b _ => b == barId
+      | .mbarArrive b _ rel => b == barId && rel
       | .mbarArriveExpectTx b _ tx => b == barId && decide (0 < tx)
       | _ => false
 
@@ -471,9 +471,11 @@ def evalRhs (f : MirFunc) (env : InputEnv) (t : ThreadCtx) (regs : RegFile) : Rh
       | .ptr sp bid off, .int delta => .ptr sp bid (off + delta)
       | _, _ => .unk
   | .load _ => .unk
-  | .mbarTryWait barId slotVar =>
-      let s := match regs slotVar with | .int k => k | _ => 0
-      .bool (env.mbarFlag barId s)
+  | .mbarTryWait barId slotVar isAcquire =>
+      if !isAcquire then .unk
+      else
+        let s := match regs slotVar with | .int k => k | _ => 0
+        .bool (env.mbarFlag barId s)
   | .cvtaShared ptr =>
       match regs ptr with
       | .ptr .shared sid off =>
@@ -518,7 +520,7 @@ structure TmemEvent where
     to `hopFuel` unconditional zero-arg `.goto` blocks (`SharedArray::index` hops) if not reassigned. -/
 def findBlockArriveLocal : List Stmt → Option (Nat × Nat) × Bool × List Nat
   | [] => (none, false, [])
-  | .mbarArrive b s :: _ => (some (b, s), false, [])
+  | .mbarArrive b s true :: _ => (some (b, s), false, [])
   | .syncThreads :: _ => (none, true, [])
   | .assign dst _ :: rest =>
       let (res, stopped, defs) := findBlockArriveLocal rest
@@ -584,7 +586,7 @@ def execStmts (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
             | _ => []
           let (r', p', evs, tevs) := execStmts f env t regs phase term rest
           (r', p', ev ++ evs, tevs)
-      | .assertCond _ _ | .clusterRankCheck _ | .mbarArrive _ _ | .mbarArriveExpectTx _ _ _ =>
+      | .assertCond _ _ | .clusterRankCheck _ | .mbarArrive _ _ _ | .mbarArriveExpectTx _ _ _ =>
           execStmts f env t regs phase term rest
       | .syncThreads =>
           execStmts f env t regs (phase + 1) term rest
@@ -776,7 +778,7 @@ def Rhs.isCtaUni (_f : MirFunc) (isUni isRfPtr : Nat → Bool) : Rhs → Bool
       | .tidX | .tidY | .laneId => false
   | .binOp _ _ l r | .checkedOvf _ _ l r | .cmpOp _ l r | .ptrOffset l r | .ctaBin l r => isUni l && isUni r
   | .load ptr => isRfPtr ptr && isUni ptr
-  | .index1D | .coord2DU32 | .mbarTryWait _ _ | .loadTmemBase _ _ | .opaqueUint _ _ | .opaqueVal => false
+  | .index1D | .coord2DU32 | .mbarTryWait _ _ _ | .loadTmemBase _ _ | .opaqueUint _ _ | .opaqueVal => false
 
 /-- True when `rhs` produces a pointer into a race-free `SharedArray` (`sid ∈ f.raceFreeShared`). -/
 def Rhs.isRfSmemPtr (f : MirFunc) (isRfPtr : Nat → Bool) : Rhs → Bool

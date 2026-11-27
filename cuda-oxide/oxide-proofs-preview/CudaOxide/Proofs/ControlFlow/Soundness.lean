@@ -109,13 +109,12 @@ theorem execBlockOpsCached_eq (cfg : ControlFlowCfg) (b : Nat) (st : CtaState) (
 
 
 /-- Propagate one sweep across all blocks joining `if/else` diamonds per `visitedPosBodies` phase. -/
-def propagateOnce (cfg : ControlFlowCfg) (sig commitBars : List Nat)
-    (metaList : List (Nat × Bool × GuardExpr × Bool × List (BranchCond × Nat)))
+def propagateOnce (cfg : ControlFlowCfg) (clusterBars commitBars : List Nat)
+    (metaList : List (Nat × Bool × GuardExpr × Bool × List Nat × List (BranchCond × Nat)))
     (inv : StateMap) : StateMap :=
-  metaList.foldl (fun acc (b, isPosBody, blkGuard, inCycle, succEdges) =>
+  metaList.foldl (fun acc (b, isPosBody, blkGuard, inCycle, warpSigBars, succEdges) =>
     let cur := acc.getD b []
     let ops := (cfg.blockAt b).ops
-    let hasWarp := blkGuard.hasWarpFilter
     cur.foldl (fun acc2 st =>
       match execBlockOpsCached cfg b isPosBody blkGuard inCycle st ops with
       | none => acc2
@@ -126,18 +125,18 @@ def propagateOnce (cfg : ControlFlowCfg) (sig commitBars : List Nat)
               | _ => true
             if !enabled then acc3
             else
-              match stepEdgeWith sig commitBars hasWarp outSt cond with
+              match stepEdgeWith clusterBars commitBars warpSigBars outSt cond with
               | none => acc3
               | some nextSt => joinStateAt acc3 dst nextSt) acc2) acc) inv
 
 /-- Iterate `propagateOnce` `fuel` times until the abstract `StateMap` fixpoint stabilizes. -/
-def propagateLoop (cfg : ControlFlowCfg) (sig commitBars : List Nat)
-    (metaList : List (Nat × Bool × GuardExpr × Bool × List (BranchCond × Nat))) :
+def propagateLoop (cfg : ControlFlowCfg) (clusterBars commitBars : List Nat)
+    (metaList : List (Nat × Bool × GuardExpr × Bool × List Nat × List (BranchCond × Nat))) :
     Nat → StateMap → StateMap
   | 0, inv => inv
   | fuel + 1, inv =>
-      let next := propagateOnce cfg sig commitBars metaList inv
-      if next == inv then inv else propagateLoop cfg sig commitBars metaList fuel next
+      let next := propagateOnce cfg clusterBars commitBars metaList inv
+      if next == inv then inv else propagateLoop cfg clusterBars commitBars metaList fuel next
 
 /-- Infer the abstract inductive `StateMap` for `cfg` (`O(blocks)` space & time). -/
 def inferStateMap (cfg : ControlFlowCfg) : StateMap :=
@@ -145,19 +144,20 @@ def inferStateMap (cfg : ControlFlowCfg) : StateMap :=
   | 0 => []
   | n + 1 =>
       let posBodies := posLoopExitBodies cfg
-      let sig := signaledBarrierIds cfg
+      let clusterBars := clusterSignaledBarrierIds cfg
       let commitBars := committedTmemBarrierIds cfg
       let metaList := (List.range (n + 1)).map fun b =>
-        (b, decide (b ∈ posBodies), activeGuardAt cfg b, isCyclicBlockBool cfg b, ctaSuccs cfg b)
+        (b, decide (b ∈ posBodies), activeGuardAt cfg b, isCyclicBlockBool cfg b,
+         warpWaitSignaledBarsAt cfg b, ctaSuccs cfg b)
       let init : StateMap := [CtaState.initial cfg] :: List.replicate n []
-      propagateLoop cfg sig commitBars metaList (4 * (n + 2)) init
+      propagateLoop cfg clusterBars commitBars metaList (4 * (n + 2)) init
 
 /-- Verify in `O(blocks)` time that `inv` is an inductive abstract certificate for `cfg`. -/
 def validStateMap (requireTmem : Bool) (cfg : ControlFlowCfg) (inv : StateMap) : Bool :=
   decide (0 < cfg.blocks.length) &&
   ((inv.getD 0 []).any fun s0 => s0.subsumes (CtaState.initial cfg)) &&
   let posBodies := posLoopExitBodies cfg
-  let sig := signaledBarrierIds cfg
+  let clusterBars := clusterSignaledBarrierIds cfg
   let commitBars := committedTmemBarrierIds cfg
   (List.range cfg.blocks.length).all fun b =>
     let cur := inv.getD b []
@@ -166,7 +166,7 @@ def validStateMap (requireTmem : Bool) (cfg : ControlFlowCfg) (inv : StateMap) :
       let blkGuard := activeGuardAt cfg b
       let inCycle := isCyclicBlockBool cfg b
       let isPos := decide (b ∈ posBodies)
-      let hasWarp := blkGuard.hasWarpFilter
+      let warpSigBars := warpWaitSignaledBarsAt cfg b
       let blk := cfg.blockAt b
       cur.all fun st =>
         match execBlockOpsCached cfg b isPos blkGuard inCycle st blk.ops with
@@ -175,7 +175,7 @@ def validStateMap (requireTmem : Bool) (cfg : ControlFlowCfg) (inv : StateMap) :
             (!blk.isReturn || validReturnState requireTmem outSt) &&
             ((enabledCtaSuccs cfg b outSt).all fun (cond, dst) =>
               decide (dst < cfg.blocks.length) &&
-              match stepEdgeWith sig commitBars hasWarp outSt cond with
+              match stepEdgeWith clusterBars commitBars warpSigBars outSt cond with
               | none => false
               | some nextSt => (inv.getD dst []).any fun dstSt => dstSt.subsumes nextSt)
 
@@ -211,8 +211,8 @@ theorem ctaReachable_subsumed {requireTmem : Bool} {cfg : ControlFlowCfg} {inv :
           have hedgeA := enabledCtaSuccs_mono hsubOut hedge
           have hedge_ok := List.all_eq_true.mp hedges (cond, dst) hedgeA
           rcases Bool.and_eq_true_iff.mp hedge_ok with ⟨_, hstep_ok⟩
-          have hse : stepEdgeWith (signaledBarrierIds cfg) (committedTmemBarrierIds cfg)
-              (activeGuardAt cfg blk).hasWarpFilter outAbs cond = stepEdge cfg blk outAbs cond := rfl
+          have hse : stepEdgeWith (clusterSignaledBarrierIds cfg) (committedTmemBarrierIds cfg)
+              (warpWaitSignaledBarsAt cfg blk) outAbs cond = stepEdge cfg blk outAbs cond := rfl
           rw [hse] at hstep_ok
           cases htrA : stepEdge cfg blk outAbs cond with
           | none => rw [htrA] at hstep_ok; contradiction
@@ -264,8 +264,8 @@ theorem safeCtaExecution_of_stateMap {requireTmem : Bool} {cfg : ControlFlowCfg}
         have he := List.all_eq_true.mp hedges_ok (cond, dst) hedgeA
         rcases Bool.and_eq_true_iff.mp he with ⟨hdst, hstep⟩
         refine ⟨of_decide_eq_true hdst, ?_⟩
-        have hse : stepEdgeWith (signaledBarrierIds cfg) (committedTmemBarrierIds cfg)
-            (activeGuardAt cfg b).hasWarpFilter outAbs cond = stepEdge cfg b outAbs cond := rfl
+        have hse : stepEdgeWith (clusterSignaledBarrierIds cfg) (committedTmemBarrierIds cfg)
+            (warpWaitSignaledBarsAt cfg b) outAbs cond = stepEdge cfg b outAbs cond := rfl
         rw [hse] at hstep
         cases hsA : stepEdge cfg b outAbs cond with
         | none => rw [hsA] at hstep; contradiction
@@ -384,6 +384,8 @@ def checkTmemLifecycleWith (cfg : ControlFlowCfg) (inv : StateMap) : Bool :=
         decide (tmemDeallocSites cfg ≠ []) &&
         (tmemDeallocSites cfg).all (· == cols)
     | _ => false
+  let cg2LaunchOk := (unlaunchedCg2AllocBlocks cfg).all fun aBlk =>
+    certifyUnreachable cfg ((clusterSyncBlocks cfg).filter (· != aBlk)) 0 aBlk
   let cg2EntryOk := (cg2PreAllocInitPairs cfg).all fun (iBlk, aBlk) =>
     certifyUnreachable cfg ((clusterSyncBlocks cfg).filter (· != iBlk)) iBlk aBlk
   let cg2ExitOk := (unsyncedCg2DeallocBlocks cfg).all fun dBlk =>
@@ -391,20 +393,21 @@ def checkTmemLifecycleWith (cfg : ControlFlowCfg) (inv : StateMap) : Bool :=
     (returnBlocks cfg).all fun ret => certifyUnreachable cfg postSyncs dBlk ret
   let sinitOk := (sharedReadSites cfg).all fun (s, rBlk) =>
     certifyUnreachable cfg (sharedInitDominators cfg s) 0 rBlk
-  allocOk && cg2EntryOk && cg2ExitOk && sinitOk && validMbarArrivalCounts cfg && validStateMap true cfg inv && checkLoopBackpressure cfg
+  allocOk && cg2LaunchOk && cg2EntryOk && cg2ExitOk && sinitOk && validMbarArrivalCounts cfg && validStateMap true cfg inv && checkLoopBackpressure cfg
 
 /-- Reusable soundness theorem for `tmem_lifecycle` using a precomputed `inv : StateMap`. -/
 theorem tmem_lifecycle_of_stateMap {cfg : ControlFlowCfg} {inv : StateMap}
     (hcheck : checkTmemLifecycleWith cfg inv = true) :
     TmemLifecycle cfg := by
   unfold checkTmemLifecycleWith at hcheck
-  rcases Bool.and_eq_true_iff.mp hcheck with ⟨ha12345, hloop⟩
-  rcases Bool.and_eq_true_iff.mp ha12345 with ⟨ha1234, hvalid⟩
-  rcases Bool.and_eq_true_iff.mp ha1234 with ⟨ha123, hmbarCnt⟩
-  rcases Bool.and_eq_true_iff.mp ha123 with ⟨ha12, hsinit⟩
-  rcases Bool.and_eq_true_iff.mp ha12 with ⟨ha1, hexit⟩
-  rcases Bool.and_eq_true_iff.mp ha1 with ⟨halloc, hentry⟩
-  refine ⟨?_, ?_, ?_, ?_, hmbarCnt, safeCtaExecution_of_stateMap hvalid, noUnbackpressuredLoop_of_check hloop⟩
+  rcases Bool.and_eq_true_iff.mp hcheck with ⟨ha123456, hloop⟩
+  rcases Bool.and_eq_true_iff.mp ha123456 with ⟨ha12345, hvalid⟩
+  rcases Bool.and_eq_true_iff.mp ha12345 with ⟨ha1234, hmbarCnt⟩
+  rcases Bool.and_eq_true_iff.mp ha1234 with ⟨ha123, hsinit⟩
+  rcases Bool.and_eq_true_iff.mp ha123 with ⟨ha12, hexit⟩
+  rcases Bool.and_eq_true_iff.mp ha12 with ⟨ha1, hentry⟩
+  rcases Bool.and_eq_true_iff.mp ha1 with ⟨halloc, hlaunch⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_, hmbarCnt, safeCtaExecution_of_stateMap hvalid, noUnbackpressuredLoop_of_check hloop⟩
   · cases hs : tmemAllocSites cfg with
     | nil => rw [hs] at halloc; contradiction
     | cons cols rest =>
@@ -417,6 +420,8 @@ theorem tmem_lifecycle_of_stateMap {cfg : ControlFlowCfg} {inv : StateMap}
             refine ⟨cols, tmemValidCols_of_bool hcols, rfl, of_decide_eq_true hnonempty, ?_⟩
             intro d hd
             exact beq_iff_eq.mp (List.all_eq_true.mp hallDealloc d hd)
+  · intro aBlk haBlk
+    exact not_pathAvoiding_of_certify (List.all_eq_true.mp hlaunch aBlk haBlk)
   · intro iBlk aBlk hpair
     exact not_pathAvoiding_of_certify (List.all_eq_true.mp hentry (iBlk, aBlk) hpair)
   · intro dBlk hdBlk ret hret

@@ -55,7 +55,8 @@ use cuda_device::{
     tcgen05::{
         Tcgen05AccumulatorType, Tcgen05ElementType, Tcgen05InstructionDescriptor, Tcgen05MmaShape,
         Tcgen05SmemDescriptor, Tcgen05SwizzleMode, tcgen05_alloc, tcgen05_commit_shared_cluster,
-        tcgen05_dealloc, tcgen05_ld_32x32b_x1_raw, tcgen05_load_wait, tcgen05_mma_f16,
+        tcgen05_dealloc, tcgen05_fence_after_thread_sync, tcgen05_ld_32x32b_x1_raw,
+        tcgen05_load_wait, tcgen05_mma_f16,
     },
     thread,
     tma::{TmaDescriptor, cp_async_bulk_tensor_2d_g2s_cta},
@@ -196,6 +197,7 @@ mod kernels {
 
         while !mbarrier_try_wait_parity(&raw const TMA_A_BAR, 0) {}
         while !mbarrier_try_wait_parity(&raw const TMA_B_BAR, 0) {}
+        tcgen05_fence_after_thread_sync();
 
         // Phase 3: Thread 0 issues single-thread Blackwell `tcgen05.mma` and commits to `MMA_BAR`.
         if tid == 0 {
@@ -223,6 +225,7 @@ mod kernels {
         }
 
         while !mbarrier_try_wait_parity(&raw const MMA_BAR, 0) {}
+        tcgen05_fence_after_thread_sync();
 
         // Phase 4: Each warp `0..4` loads its own 32-lane warpgroup slice `(warp_id * 32) << 16`
         // across columns `0..128` and stores its disjoint row into `out`.

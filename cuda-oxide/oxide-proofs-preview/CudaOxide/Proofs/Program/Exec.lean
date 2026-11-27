@@ -200,10 +200,12 @@ def symEvalRhsRaw (f : MirFunc) (sregs : SymRegList) : Rhs → SymVal
       | .ptr sp bid off, .int delta => .ptr sp bid (.binOp .add 0 off delta)
       | _, _ => .unk
   | .load _ | .loadTmemBase _ _ => .unk
-  | .mbarTryWait barId slotVar =>
-      match sregs.getVar slotVar with
-      | .int s => .bool (.mbarReady barId s)
-      | _ => .unk
+  | .mbarTryWait barId slotVar isAcquire =>
+      if !isAcquire then .unk
+      else
+        match sregs.getVar slotVar with
+        | .int s => .bool (.mbarReady barId s)
+        | _ => .unk
   | .cvtaShared ptr =>
       match sregs.getVar ptr with
       | .ptr .shared sid off =>
@@ -229,11 +231,13 @@ theorem symEvalRhs_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
   | sliceLen _ | sharedBase _ | load _ | loadTmemBase _ _
   | opaqueUint _ _ | ctaUint1 _ _ _ | ctaConst | ctaUnary _ | ctaBin _ _ | opaqueVal =>
       simp [symEvalRhsRaw, evalRhs, SymVal.matchesVal, SymInt.eval, SymBool.eval]
-  | mbarTryWait barId slotVar =>
-      have hs := hmatch slotVar
-      dsimp only [symEvalRhsRaw]
-      cases hss : sregs.getVar slotVar <;> simp [hss, SymVal.matchesVal] at hs ⊢
-      simp [evalRhs, hs, SymBool.eval]
+  | mbarTryWait barId slotVar isAcquire =>
+      cases isAcquire
+      · simp [symEvalRhsRaw, SymVal.matchesVal]
+      · have hs := hmatch slotVar
+        dsimp only [symEvalRhsRaw]
+        cases hss : sregs.getVar slotVar <;> simp [hss, SymVal.matchesVal] at hs ⊢
+        simp [evalRhs, hs, SymBool.eval]
   | sreg r =>
       cases r <;> simp [symEvalRhsRaw, evalRhs, SymVal.matchesVal, SymInt.eval, evalBinOp, wordMod]
   | cvtaShared ptr =>
@@ -408,7 +412,7 @@ def symExecStmts (f : MirFunc) (pCond : SymBool) (sregs : SymRegList) (ps : Phas
           let aev : SymAssertEvent := { assertId := aid, pathCond := pCond, condOpt := cOpt }
           let (r', ps', mevs, aevs, tevs) := symExecStmts f pCond sregs ps term rest
           (r', ps', mevs, aev :: aevs, tevs)
-      | .clusterRankCheck _ | .mbarArrive _ _ | .mbarArriveExpectTx _ _ _ =>
+      | .clusterRankCheck _ | .mbarArrive _ _ _ | .mbarArriveExpectTx _ _ _ =>
           symExecStmts f pCond sregs ps term rest
       | .syncThreads =>
           symExecStmts f pCond sregs ps.stepSync term rest
@@ -717,7 +721,7 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
               simp only [List.cons_append, List.cons.injEq] at heq
               rcases heq with ⟨rfl, htl⟩
               simpa [execStmts] using hmA tl sfx aid cond htl
-      | mbarArrive _ _ =>                                 -- Case 6: `mbarrier_arrive` (tracked in `ControlFlowCfg` & `findTrailArrive`)
+      | mbarArrive _ _ _ =>                               -- Case 6: `mbarrier_arrive` (tracked in `ControlFlowCfg` & `findTrailArrive`)
           simp only [execStmts, symExecStmts] at hallSome hallTmem ⊢
           obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs phase ps hmatch hps hallSome hallTmem
           refine ⟨hmR, hmP, hmE, ?_, hmT⟩

@@ -200,6 +200,18 @@ theorem tmemPhaseSub_trans {a b c : TmemPhase}
   · exact Or.inl rfl
   · exact h2
 
+theorem listSubsumes_any_mem_false {barId : Nat} :
+    ∀ {absL concL : List (List Nat)},
+      listSubsumes (fun a c => natSubset c a) absL concL = true →
+      (absL.any fun xs => decide (barId ∈ xs)) = false →
+      (concL.any fun xs => decide (barId ∈ xs)) = false
+  | [], [], _, _ => rfl
+  | _ :: as_, _ :: cs, hsub, hany => by
+      simp only [listSubsumes, Bool.and_eq_true] at hsub
+      simp only [List.any_cons, Bool.or_eq_false_iff, decide_eq_false_iff_not] at hany ⊢
+      exact ⟨fun hm => hany.1 (natSubset_mem hsub.1 hm), listSubsumes_any_mem_false hsub.2 hany.2⟩
+  | [], _ :: _, hsub, _ | _ :: _, [], hsub, _ => by simp [listSubsumes] at hsub
+
 theorem ctaSubsumes_refl (st : CtaState) : st.subsumes st = true := by
   unfold CtaState.subsumes
   have hBool : ∀ b : Bool, (!b || b) = true := by decide
@@ -215,21 +227,25 @@ theorem ctaSubsumes_trans {a b c : CtaState} (h1 : a.subsumes b = true) (h2 : b.
   unfold CtaState.subsumes at h1 h2 ⊢
   have hbTrans : ∀ x y z : Bool, (!x || y) = true → (!y || z) = true → (!x || z) = true := by decide
   simp only [Bool.and_eq_true] at h1 h2 ⊢
-  rcases h1 with ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨hp1, ht1⟩, hc1⟩, hbp1⟩, hbs1⟩, htp1⟩, hac1⟩, hmh1⟩, hmi1⟩, hcb1⟩, htr1⟩, hpl1⟩, hss1⟩, hcs1⟩, hrp1⟩, hvp1⟩
-  rcases h2 with ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨hp2, ht2⟩, hc2⟩, hbp2⟩, hbs2⟩, htp2⟩, hac2⟩, hmh2⟩, hmi2⟩, hcb2⟩, htr2⟩, hpl2⟩, hss2⟩, hcs2⟩, hrp2⟩, hvp2⟩
+  rcases h1 with ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨hp1, ht1⟩, hc1⟩, hbp1⟩, hbs1⟩, htp1⟩, hcl1⟩, hac1⟩, hmh1⟩, hmi1⟩, hcb1⟩, htcr1⟩, htr1⟩, hufw1⟩, hufl1⟩, hpl1⟩, hss1⟩, hcs1⟩, hrp1⟩, hvp1⟩
+  rcases h2 with ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨hp2, ht2⟩, hc2⟩, hbp2⟩, hbs2⟩, htp2⟩, hcl2⟩, hac2⟩, hmh2⟩, hmi2⟩, hcb2⟩, htcr2⟩, htr2⟩, hufw2⟩, hufl2⟩, hpl2⟩, hss2⟩, hcs2⟩, hrp2⟩, hvp2⟩
   have hptT : listSubsumes (fun x y => natSubset y x) a.sharedPendingTma c.sharedPendingTma = true :=
     listSubsumes_trans (sub := fun x y => natSubset y x) (fun _ _ _ u v => natSubset_trans v u) ht1 ht2
-  exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
+  exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
     listSubsumes_trans proxySub_trans hp1 hp2, hptT⟩,
     listSubsumes_trans (sub := fun x y => !x || y) hbTrans hc1 hc2⟩,
     listSubsumes_trans proxySub_trans hbp1 hbp2⟩,
     listSubsumes_trans mbarSub_trans hbs1 hbs2⟩,
     tmemPhaseSub_trans htp1 htp2⟩,
+    hbTrans _ _ _ hcl1 hcl2⟩,
     hbTrans _ _ _ hac1 hac2⟩,
     hbTrans _ _ _ hmh2 hmh1⟩,
     hbTrans _ _ _ hmi1 hmi2⟩,
     natSubset_trans hcb1 hcb2⟩,
+    hbTrans _ _ _ htcr1 htcr2⟩,
     hbTrans _ _ _ htr1 htr2⟩,
+    hbTrans _ _ _ hufw2 hufw1⟩,
+    hbTrans _ _ _ hufl2 hufl1⟩,
     natSubset_trans hpl2 hpl1⟩,
     hbTrans _ _ _ hss1 hss2⟩,
     hbTrans _ _ _ hcs1 hcs2⟩,
@@ -242,7 +258,7 @@ theorem validReturnState_mono {req : Bool} {abs conc : CtaState}
     validReturnState req conc = true := by
   have hs := hsub; unfold CtaState.subsumes at hs
   simp only [Bool.and_eq_true] at hs
-  rcases hs with ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨_, _⟩, _⟩, _⟩, _⟩, htp⟩, _⟩, hmh⟩, _⟩, _⟩, _⟩, hpl⟩, _⟩, _⟩, _⟩, _⟩
+  rcases hs with ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨_, _⟩, _⟩, _⟩, _⟩, htp⟩, _⟩, _⟩, hmh⟩, _⟩, _⟩, _⟩, _⟩, _⟩, _⟩, hpl⟩, _⟩, _⟩, _⟩, _⟩
   have hbFalse : ∀ {x y : Bool}, (!x || y) = true → y = false → x = false := by decide
   unfold validReturnState at hret ⊢
   simp only [Bool.and_eq_true, Bool.not_eq_true'] at hret ⊢
@@ -277,7 +293,7 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
     (hstep : stepOp cfg curBlk blkGuard inCycle abs op = some abs') :
     ∃ conc', stepOp cfg curBlk blkGuard inCycle conc op = some conc' ∧ abs'.subsumes conc' = true := by
   have hs := hsub; unfold CtaState.subsumes at hs; simp only [Bool.and_eq_true] at hs
-  rcases hs with ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨hsp, hpt⟩, hsc⟩, hbp⟩, hbs⟩, htp⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htr⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩
+  rcases hs with ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨hsp, hpt⟩, hsc⟩, hbp⟩, hbs⟩, htp⟩, hcl⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htcr⟩, htr⟩, hufw⟩, hufl⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩
   have hlenSP := listSubsumes_length hsp
   have hlenPT := listSubsumes_length hpt
   have hlenSC := listSubsumes_length hsc
@@ -289,17 +305,23 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
       unfold stepOp at hstep ⊢
       injection hstep with hstep; subst hstep
       refine ⟨_, rfl, ?_⟩
+      have hcd : (!(!abs.mmaHazard && abs.pendingLoads.isEmpty) || (!conc.mmaHazard && conc.pendingLoads.isEmpty)) = true := by
+        cases ha : (!abs.mmaHazard && abs.pendingLoads.isEmpty)
+        · simp
+        · simp only [Bool.and_eq_true, Bool.not_eq_true'] at ha
+          simp [hbFalse hmh ha.1, natSubset_isEmpty hpl ha.2]
+      have huflUpd : (!(if (!conc.mmaHazard && conc.pendingLoads.isEmpty) = true then false else conc.unFencedTmemLoad) ||
+          (if (!abs.mmaHazard && abs.pendingLoads.isEmpty) = true then false else abs.unFencedTmemLoad)) = true := by
+        cases hc : (!conc.mmaHazard && conc.pendingLoads.isEmpty)
+        · have ha : (!abs.mmaHazard && abs.pendingLoads.isEmpty) = false := hbFalse hcd hc
+          simp [ha, hufl]
+        · simp
       unfold CtaState.subsumes; simp only [Bool.and_eq_true]
-      refine ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
+      exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
         listSubsumes_map proxyStepSync_mono hsp, hpt⟩, hsc⟩,
         listSubsumes_map proxyStepSync_mono hbp⟩,
-        listSubsumes_map mbarStepSync_mono hbs⟩, htp⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htr⟩, hpl⟩, ?_⟩, hcs⟩, hrp⟩, hvp⟩
-      cases ha : (!abs.mmaHazard && abs.pendingLoads.isEmpty)
-      · simp
-      · simp only [Bool.and_eq_true, Bool.not_eq_true'] at ha
-        have hc1 : conc.mmaHazard = false := hbFalse hmh ha.1
-        have hc2 : conc.pendingLoads.isEmpty = true := natSubset_isEmpty hpl ha.2
-        simp [hc1, hc2]
+        listSubsumes_map mbarStepSync_mono hbs⟩, htp⟩, hcl⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htcr⟩, htr⟩, hufw⟩,
+        by simpa only [Bool.and_eq_true] using huflUpd⟩, hpl⟩, hcd⟩, hcs⟩, hrp⟩, hvp⟩
   | clusterSync =>                                        -- Case 2: 2-CTA `cluster_sync()` enables DSMEM & `_cg2` TMEM access/dealloc
       dsimp only [stepOp] at hstep ⊢
       by_cases hcdim : cfg.clusterDimX ≤ 1
@@ -312,23 +334,30 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
           · simp
           · simp only [Bool.and_eq_true, Bool.not_eq_true'] at ha
             simp [hbFalse hmh ha.1, natSubset_isEmpty hpl ha.2]
+        have huflUpd : (!(if (!conc.mmaHazard && conc.pendingLoads.isEmpty) = true then false else conc.unFencedTmemLoad) ||
+            (if (!abs.mmaHazard && abs.pendingLoads.isEmpty) = true then false else abs.unFencedTmemLoad)) = true := by
+          cases hc : (!conc.mmaHazard && conc.pendingLoads.isEmpty)
+          · have ha : (!abs.mmaHazard && abs.pendingLoads.isEmpty) = false := hbFalse hcd hc
+            simp [ha, hufl]
+          · simp
         have hrep : listSubsumes (fun a c => !a || c)
             (List.replicate abs.sharedClusterSynced.length true)
             (List.replicate conc.sharedClusterSynced.length true) = true := by
           rw [← hlenSC]; exact listSubsumes_refl (sub := fun a c => !a || c) (by decide) _
         unfold CtaState.subsumes; simp only [Bool.and_eq_true]
-        exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
+        exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
           listSubsumes_map proxyStepSync_mono hsp, hpt⟩, hrep⟩,
           listSubsumes_map proxyStepSync_mono hbp⟩,
-          listSubsumes_map mbarStepSync_mono hbs⟩, htp⟩, rfl⟩, hmh⟩, hmi⟩, hcb⟩, htr⟩, hpl⟩, hcd⟩, hcd⟩, hrp⟩, hvp⟩
+          listSubsumes_map mbarStepSync_mono hbs⟩, htp⟩, rfl⟩, rfl⟩, hmh⟩, hmi⟩, hcb⟩, htcr⟩, htr⟩, hufw⟩,
+          by simpa only [Bool.and_eq_true] using huflUpd⟩, hpl⟩, hcd⟩, hcd⟩, hrp⟩, hvp⟩
   | proxyFenceAsyncShared =>                              -- Case 3: `fence_proxy_async_shared_cta()` flushes generic writes to `.clean`
       dsimp only [stepOp] at hstep ⊢
       injection hstep with hstep; subst hstep
       refine ⟨_, rfl, ?_⟩
       unfold CtaState.subsumes; simp only [Bool.and_eq_true]
-      exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
+      exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
         listSubsumes_map proxyStepFence_mono hsp, hpt⟩, hsc⟩,
-        listSubsumes_map proxyStepFence_mono hbp⟩, hbs⟩, htp⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htr⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩
+        listSubsumes_map proxyStepFence_mono hbp⟩, hbs⟩, htp⟩, hcl⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htcr⟩, htr⟩, hufw⟩, hufl⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩
   | sharedRead s =>                                       -- Case 4: Generic-proxy shared read
       dsimp only [stepOp] at hstep ⊢
       rw [← hlenSP]
@@ -365,9 +394,9 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
           refine ⟨_, rfl, ?_⟩
           have hspS := proxyMerge_mono _ _ (if blkGuard.isSingleLeader cfg.blockDimX cfg.blockDimY then .needsFence else .needsSyncAndFence) (listSubsumes_getD (d := .clean) rfl s hsp)
           unfold CtaState.subsumes; simp only [Bool.and_eq_true]
-          exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
+          exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
             listSubsumes_set hspS s hsp, hpt⟩,
-            listSubsumes_set (sub := fun x y => !x || y) rfl s hsc⟩, hbp⟩, hbs⟩, htp⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htr⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩
+            listSubsumes_set (sub := fun x y => !x || y) rfl s hsc⟩, hbp⟩, hbs⟩, htp⟩, hcl⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htcr⟩, htr⟩, hufw⟩, hufl⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩
   | mbarInit barId count =>                               -- Case 7: `mbarrier_init` transitions `barState[barId]` to `.initNeedsSync`
       dsimp only [stepOp] at hstep ⊢
       rw [← hlenBS]
@@ -378,10 +407,10 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
         refine ⟨_, rfl, ?_⟩
         have hbpB := proxyMerge_mono _ _ (if blkGuard.isSingleLeader cfg.blockDimX cfg.blockDimY then .needsFence else .needsSyncAndFence) (listSubsumes_getD (d := .clean) rfl barId hbp)
         unfold CtaState.subsumes; simp only [Bool.and_eq_true]
-        exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
+        exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
           hsp, hpt⟩, hsc⟩,
           listSubsumes_set hbpB barId hbp⟩,
-          listSubsumes_set rfl barId hbs⟩, htp⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htr⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩
+          listSubsumes_set rfl barId hbs⟩, htp⟩, hcl⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htcr⟩, htr⟩, hufw⟩, hufl⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩
   | mbarInval barId =>                                    -- Case 7b: `mbarrier_inval` resets `barState[barId]` to `.uninit`
       dsimp only [stepOp] at hstep ⊢
       rw [← hlenBS]
@@ -391,35 +420,50 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
         injection hstep with hstep; subst hstep
         refine ⟨_, rfl, ?_⟩
         unfold CtaState.subsumes; simp only [Bool.and_eq_true]
-        exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
+        exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
           hsp, hpt⟩, hsc⟩, hbp⟩,
-          listSubsumes_set rfl barId hbs⟩, htp⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htr⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩
-  | mbarArrive barId =>                                   -- Case 8: `mbarrier_arrive` arms `barId` (`.armedPlain`)
+          listSubsumes_set rfl barId hbs⟩, htp⟩, hcl⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htcr⟩, htr⟩, hufw⟩, hufl⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩
+  | mbarArrive barId isCluster _ =>                       -- Case 8: `mbarrier_arrive*` checks fenced TMEM loads & arms `barId` (`.armedPlain`)
       dsimp only [stepOp] at hstep ⊢
-      have hge := listSubsumes_getElem? barId hbs
-      cases ha : abs.barState[barId]? with
-      | none => rw [ha] at hstep; contradiction
-      | some va =>
-          cases hc : conc.barState[barId]? with
-          | none => rw [ha, hc] at hge; contradiction
-          | some vc =>
-              rw [ha] at hstep; rw [ha, hc] at hge; dsimp only at hge
-              have hva : va = .syncedIdle ∨ va = .armedPlain ∨ va = .armedTx ∨ va = .completed := by
-                cases va <;> first | contradiction | simp
-              have heqA : abs' = { abs with barState := abs.barState.set barId .armedPlain } := by
-                rcases hva with rfl | rfl | rfl | rfl <;> (injection hstep with h1; exact h1.symm)
-              subst heqA
-              have hvc := mbarSub_validArrive va vc hge hva
-              have hset : listSubsumes MbarState.subsumes (abs.barState.set barId .armedPlain)
-                  (conc.barState.set barId .armedPlain) = true := listSubsumes_set rfl barId hbs
-              rcases hvc with rfl | rfl | rfl | rfl <;>
-                (dsimp only; refine ⟨_, rfl, ?_⟩; unfold CtaState.subsumes; simp only [Bool.and_eq_true];
-                 exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨hsp, hpt⟩, hsc⟩, hbp⟩, hset⟩, htp⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htr⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩)
-  | mbarArriveExpectTx barId txBytes =>                   -- Case 9: `mbarrier_arrive_expect_tx` arms `barId` with byte count (`.armedTx`)
+      by_cases hp0 : ((isCluster && decide (cfg.clusterDimX ≤ 1)) || abs.unFencedTmemLoad) = true
+      · rw [if_pos hp0] at hstep; contradiction
+      · rw [if_neg hp0] at hstep
+        have hp0f := Bool.eq_false_iff.mpr hp0
+        simp only [Bool.or_eq_false_iff] at hp0f
+        have hcufl := hbFalse hufl hp0f.2
+        have hcp0 : ((isCluster && decide (cfg.clusterDimX ≤ 1)) || conc.unFencedTmemLoad) = false := by
+          simp [hp0f.1, hcufl]
+        rw [hcp0]; simp only [Bool.false_eq_true, ↓reduceIte]
+        have hge := listSubsumes_getElem? barId hbs
+        cases ha : abs.barState[barId]? with
+        | none => rw [ha] at hstep; contradiction
+        | some va =>
+            cases hc : conc.barState[barId]? with
+            | none => rw [ha, hc] at hge; contradiction
+            | some vc =>
+                rw [ha] at hstep; rw [ha, hc] at hge; dsimp only at hge
+                have hva : va = .syncedIdle ∨ va = .armedPlain ∨ va = .armedTx ∨ va = .completed := by
+                  cases va <;> first | contradiction | simp
+                have heqA : abs' = { abs with barState := abs.barState.set barId .armedPlain } := by
+                  rcases hva with rfl | rfl | rfl | rfl <;> (injection hstep with h1; exact h1.symm)
+                subst heqA
+                have hvc := mbarSub_validArrive va vc hge hva
+                have hset : listSubsumes MbarState.subsumes (abs.barState.set barId .armedPlain)
+                    (conc.barState.set barId .armedPlain) = true := listSubsumes_set rfl barId hbs
+                rcases hvc with rfl | rfl | rfl | rfl <;>
+                  (dsimp only; refine ⟨_, rfl, ?_⟩; unfold CtaState.subsumes; simp only [Bool.and_eq_true];
+                   exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨hsp, hpt⟩, hsc⟩, hbp⟩, hset⟩, htp⟩, hcl⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htcr⟩, htr⟩, hufw⟩, hufl⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩)
+  | mbarArriveExpectTx barId txBytes isCluster =>         -- Case 9: `mbarrier_arrive_expect_tx*` checks fenced TMEM loads & arms `barId` (`.armedTx`)
       dsimp only [stepOp] at hstep ⊢
-      by_cases htx : (txBytes == 0) = true
+      by_cases htx : ((txBytes == 0) || (isCluster && decide (cfg.clusterDimX ≤ 1)) || abs.unFencedTmemLoad) = true
       · rw [if_pos htx] at hstep; contradiction
-      · rw [if_neg htx] at hstep ⊢
+      · rw [if_neg htx] at hstep
+        have htxf := Bool.eq_false_iff.mpr htx
+        simp only [Bool.or_eq_false_iff] at htxf
+        have hcufl := hbFalse hufl htxf.2
+        have hctx : ((txBytes == 0) || (isCluster && decide (cfg.clusterDimX ≤ 1)) || conc.unFencedTmemLoad) = false := by
+          simp [htxf.1.1, htxf.1.2, hcufl]
+        rw [hctx]; simp only [Bool.false_eq_true, ↓reduceIte]
         have hge := listSubsumes_getElem? barId hbs
         cases ha : abs.barState[barId]? with
         | none => rw [ha] at hstep; contradiction
@@ -438,11 +482,11 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
                     (conc.barState.set barId .armedTx) = true := listSubsumes_set rfl barId hbs
                 rcases hvc with rfl | rfl | rfl | rfl <;>
                   (dsimp only; refine ⟨_, rfl, ?_⟩; unfold CtaState.subsumes; simp only [Bool.and_eq_true];
-                   exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨hsp, hpt⟩, hsc⟩, hbp⟩, hset⟩, htp⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htr⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩)
-  | tmaCopyG2S sharedId barId isCg2 =>                    -- Case 10: Async 2D TMA `g2s` checks `.clean` proxies & records pending TMA hazard
+                   exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨hsp, hpt⟩, hsc⟩, hbp⟩, hset⟩, htp⟩, hcl⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htcr⟩, htr⟩, hufw⟩, hufl⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩)
+  | tmaCopyG2S sharedId barId isCg2 isMc =>               -- Case 10: Async 2D TMA `g2s` checks `.clean` proxies & records pending TMA hazard
       dsimp only [stepOp] at hstep ⊢
       rw [← hlenSP, ← hlenPT, ← hlenBS]
-      by_cases hp1 : ((isCg2 && cfg.clusterDimX != 2) || !(blkGuard.isSingleLeader cfg.blockDimX cfg.blockDimY) || decide (sharedId ≥ abs.sharedProxy.length) || decide (sharedId ≥ abs.sharedPendingTma.length) || decide (barId ≥ abs.barState.length)) = true
+      by_cases hp1 : ((isCg2 && cfg.clusterDimX != 2) || (isMc && decide (cfg.clusterDimX ≤ 1)) || !(blkGuard.isSingleLeader cfg.blockDimX cfg.blockDimY) || decide (sharedId ≥ abs.sharedProxy.length) || decide (sharedId ≥ abs.sharedPendingTma.length) || decide (barId ≥ abs.barState.length)) = true
       · rw [if_pos hp1] at hstep; contradiction
       · rw [if_neg hp1] at hstep ⊢
         by_cases hp2 : (abs.sharedProxy.getD sharedId .needsFence != .clean || abs.barProxy.getD barId .needsFence != .clean) = true
@@ -464,13 +508,13 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
           refine ⟨_, ite_none_some_iff.mpr ⟨hcArm, rfl⟩, ?_⟩
           have hptUpd := natSubset_insert barId (listSubsumes_getD (sub := fun a c => natSubset c a) (d := []) (natSubset_refl []) sharedId hpt)
           unfold CtaState.subsumes; simp only [Bool.and_eq_true]
-          exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
+          exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
             hsp, listSubsumes_set (sub := fun a c => natSubset c a) hptUpd sharedId hpt⟩,
-            listSubsumes_set (sub := fun a c => !a || c) rfl sharedId hsc⟩, hbp⟩, hbs⟩, htp⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htr⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩
-  | clcTryCancel sharedId barId =>                        -- Case 11: Blackwell `clc_try_cancel` checks `.armedTx` & records pending hazard
+            listSubsumes_set (sub := fun a c => !a || c) rfl sharedId hsc⟩, hbp⟩, hbs⟩, htp⟩, hcl⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htcr⟩, htr⟩, hufw⟩, hufl⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩
+  | clcTryCancel sharedId barId isMc =>                   -- Case 11: Blackwell `clc_try_cancel` checks `.armedTx` & records pending hazard
       dsimp only [stepOp] at hstep ⊢
       rw [← hlenSP, ← hlenPT, ← hlenBS]
-      by_cases hp1 : (decide (cfg.clusterDimX < 1) || !(blkGuard.isSingleLeader cfg.blockDimX cfg.blockDimY) || decide (sharedId ≥ abs.sharedProxy.length) || decide (sharedId ≥ abs.sharedPendingTma.length) || decide (barId ≥ abs.barState.length)) = true
+      by_cases hp1 : (decide (cfg.clusterDimX < 1) || (isMc && decide (cfg.clusterDimX ≤ 1)) || !(blkGuard.isSingleLeader cfg.blockDimX cfg.blockDimY) || decide (sharedId ≥ abs.sharedProxy.length) || decide (sharedId ≥ abs.sharedPendingTma.length) || decide (barId ≥ abs.barState.length)) = true
       · rw [if_pos hp1] at hstep; contradiction
       · rw [if_neg hp1] at hstep ⊢
         by_cases hp2 : (abs.barProxy.getD barId .needsFence != .clean) = true
@@ -492,10 +536,10 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
             refine ⟨_, rfl, ?_⟩
             have hptUpd := natSubset_insert barId (listSubsumes_getD (sub := fun a c => natSubset c a) (d := []) (natSubset_refl []) sharedId hpt)
             unfold CtaState.subsumes; simp only [Bool.and_eq_true]
-            exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
+            exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
               hsp, listSubsumes_set (sub := fun a c => natSubset c a) hptUpd sharedId hpt⟩,
-              listSubsumes_set (sub := fun a c => !a || c) rfl sharedId hsc⟩, hbp⟩, hbs⟩, htp⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htr⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩
-  | tmemAlloc sharedId cols isCg2 =>                      -- Case 12: Full-warp `tcgen05_alloc*` transitions `.uninit` -> `.allocated`
+              listSubsumes_set (sub := fun a c => !a || c) rfl sharedId hsc⟩, hbp⟩, hbs⟩, htp⟩, hcl⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htcr⟩, htr⟩, hufw⟩, hufl⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩
+  | tmemAlloc sharedId cols isCg2 =>                      -- Case 12: Full-warp `tcgen05_alloc*` checks `clusterLaunched` & transitions `.uninit` -> `.allocated`
       dsimp only [stepOp] at hstep ⊢
       rw [← hlenSP]
       by_cases hp1 : ((isCg2 && cfg.clusterDimX != 2) || inCycle || decide (sharedId ≥ abs.sharedProxy.length) || !validTmemColsBool cols) = true
@@ -504,20 +548,26 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
         by_cases hp2 : (blkGuard.selectsSingleFullWarp cfg.blockDimX cfg.blockDimY).isNone = true
         · rw [if_pos hp2] at hstep; contradiction
         · rw [if_neg hp2] at hstep ⊢
-          by_cases hp3 : (abs.tmemPhase != .uninit) = true
+          by_cases hp3 : ((isCg2 && !abs.clusterLaunched) || abs.tmemPhase != .uninit) = true
           · rw [if_pos hp3] at hstep; contradiction
           · rw [if_neg hp3] at hstep
-            have hp3eq := bne_eq_false_iff_eq.mp (Bool.eq_false_iff.mpr hp3)
+            have hp3f := Bool.eq_false_iff.mpr hp3
+            simp only [Bool.or_eq_false_iff, bne_eq_false_iff_eq] at hp3f
+            have hcCl : (isCg2 && !conc.clusterLaunched) = false := by
+              cases isCg2
+              · rfl
+              · simp only [Bool.true_and, Bool.not_eq_false'] at hp3f ⊢
+                exact hbImp hcl hp3f.1
             have hcp : conc.tmemPhase = .uninit := by
-              simp only [TmemPhase.subsumes, hp3eq, Bool.or_eq_true, beq_iff_eq] at htp
+              simp only [TmemPhase.subsumes, hp3f.2, Bool.or_eq_true, beq_iff_eq] at htp
               rcases htp with h1 | h2; contradiction; exact h2.symm
             injection hstep with hstep; subst hstep
-            simp only [hcp, bne_self_eq_false, Bool.false_eq_true, ↓reduceIte]
+            simp only [hcCl, hcp, bne_self_eq_false, Bool.or_self, Bool.false_eq_true, ↓reduceIte]
             refine ⟨_, rfl, ?_⟩
             unfold CtaState.subsumes; simp only [Bool.and_eq_true]
-            exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
-              hsp, hpt⟩, hsc⟩, hbp⟩, hbs⟩, tmemPhaseSub_refl _⟩, by cases isCg2 <;> rfl⟩,
-              hmh⟩, hmi⟩, hcb⟩, htr⟩, hpl⟩, rfl⟩, rfl⟩, rfl⟩, hvp⟩
+            exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
+              hsp, hpt⟩, hsc⟩, hbp⟩, hbs⟩, tmemPhaseSub_refl _⟩, hcl⟩, by cases isCg2 <;> rfl⟩,
+              hmh⟩, hmi⟩, hcb⟩, htcr⟩, htr⟩, hufw⟩, hufl⟩, hpl⟩, rfl⟩, rfl⟩, rfl⟩, hvp⟩
   | tmemRelinquishPermit isCg2 =>                         -- Case 13: Full-warp `tcgen05_relinquish_alloc_permit_cg2` before dealloc
       dsimp only [stepOp] at hstep ⊢
       by_cases hp1 : (isCg2 && cfg.clusterDimX != 2) = true
@@ -538,19 +588,20 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
             injection hstep with hstep; subst hstep
             refine ⟨_, rfl, ?_⟩
             unfold CtaState.subsumes; simp only [Bool.and_eq_true]
-            exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
-              hsp, hpt⟩, hsc⟩, hbp⟩, hbs⟩, tmemPhaseSub_refl _⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htr⟩, hpl⟩, hss⟩, hcs⟩,
+            exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
+              hsp, hpt⟩, hsc⟩, hbp⟩, hbs⟩, tmemPhaseSub_refl _⟩, hcl⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htcr⟩, htr⟩, hufw⟩, hufl⟩, hpl⟩, hss⟩, hcs⟩,
               by cases isCg2 <;> rfl⟩, hvp⟩
-  | tmemAsyncIssue smemIds isCg2 =>                       -- Case 14: Leader `tcgen05_mma*` checks clean SMEM & sets `mmaHazard := true`
+  | tmemAsyncIssue smemIds isCg2 =>                       -- Case 14: Leader `tcgen05_mma*` checks fenced wait + clean SMEM & sets `mmaHazard`
       dsimp only [stepOp] at hstep ⊢
-      by_cases hp1 : ((isCg2 && cfg.clusterDimX != 2) || !(blkGuard.isSingleLeader cfg.blockDimX cfg.blockDimY) || !abs.allocClusterSynced) = true
+      by_cases hp1 : ((isCg2 && cfg.clusterDimX != 2) || !(blkGuard.isSingleLeader cfg.blockDimX cfg.blockDimY) || !abs.allocClusterSynced || abs.unFencedMbarWait) = true
       · rw [if_pos hp1] at hstep; contradiction
       · rw [if_neg hp1] at hstep
         have hp1f := Bool.eq_false_iff.mpr hp1
         simp only [Bool.or_eq_false_iff, Bool.not_eq_false'] at hp1f
-        have hcAc := hbImp hac hp1f.2
-        have hcp1 : ((isCg2 && cfg.clusterDimX != 2) || !(blkGuard.isSingleLeader cfg.blockDimX cfg.blockDimY) || !conc.allocClusterSynced) = false := by
-          simp [hp1f.1.1, hp1f.1.2, hcAc]
+        have hcAc := hbImp hac hp1f.1.2
+        have hcUfw := hbFalse hufw hp1f.2
+        have hcp1 : ((isCg2 && cfg.clusterDimX != 2) || !(blkGuard.isSingleLeader cfg.blockDimX cfg.blockDimY) || !conc.allocClusterSynced || conc.unFencedMbarWait) = false := by
+          simp [hp1f.1.1.1, hp1f.1.1.2, hcAc, hcUfw]
         rw [hcp1]; simp only [Bool.false_eq_true, ↓reduceIte]
         cases hap : abs.tmemPhase <;> rw [hap] at hstep htp <;> try contradiction
         rename_i cols allocCg2
@@ -575,20 +626,20 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
               intro s hsMem
               have hsA := List.all_eq_true.mp hsmem s hsMem
               simp only [Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq] at hsA ⊢
-              rcases hsA with ⟨⟨⟨hl1, hl2⟩, hcl⟩, hemp⟩
+              rcases hsA with ⟨⟨⟨hl1, hl2⟩, hcl'⟩, hemp⟩
               exact ⟨⟨⟨hlenSP ▸ hl1, hlenPT ▸ hl2⟩,
-                proxySub_clean_eq _ (hcl ▸ listSubsumes_getD (d := .needsFence) rfl s hsp)⟩,
+                proxySub_clean_eq _ (hcl' ▸ listSubsumes_getD (d := .needsFence) rfl s hsp)⟩,
                 natSubset_isEmpty (listSubsumes_getD (sub := fun a c => natSubset c a) (d := []) (natSubset_refl []) s hpt) hemp⟩
             injection hstep with hstep; subst hstep
             simp only [hcSmem, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
             refine ⟨_, rfl, ?_⟩
             unfold CtaState.subsumes; simp only [Bool.and_eq_true]
-            exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
-              hsp, hpt⟩, hsc⟩, hbp⟩, hbs⟩, tmemPhaseSub_refl _⟩, hac⟩, rfl⟩, rfl⟩, hcb⟩, rfl⟩, hpl⟩, rfl⟩, rfl⟩, hrp⟩, hvp⟩
-  | tmemCommit barId isCg2 =>                             -- Case 15: `tcgen05_commit*` ties prior MMA to `barId` & clears `mmaHazard`
+            exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
+              hsp, hpt⟩, hsc⟩, hbp⟩, hbs⟩, tmemPhaseSub_refl _⟩, hcl⟩, hac⟩, rfl⟩, rfl⟩, hcb⟩, rfl⟩, rfl⟩, hufw⟩, hufl⟩, hpl⟩, rfl⟩, rfl⟩, hrp⟩, hvp⟩
+  | tmemCommit barId isCg2 isMc =>                        -- Case 15: `tcgen05_commit*` ties prior MMA to `barId` & clears `mmaHazard`
       dsimp only [stepOp] at hstep ⊢
       rw [← hlenBS]
-      by_cases hp1 : ((isCg2 && cfg.clusterDimX != 2) || !(blkGuard.isSingleLeader cfg.blockDimX cfg.blockDimY) || !(abs.mmaIssued || priorTmemIssueReaches cfg curBlk) || decide (barId ≥ abs.barState.length)) = true
+      by_cases hp1 : ((isCg2 && cfg.clusterDimX != 2) || (isMc && decide (cfg.clusterDimX ≤ 1)) || !(blkGuard.isSingleLeader cfg.blockDimX cfg.blockDimY) || !(abs.mmaIssued || priorTmemIssueReaches cfg curBlk) || decide (barId ≥ abs.barState.length)) = true
       · rw [if_pos hp1] at hstep; contradiction
       · rw [if_neg hp1] at hstep
         have hp1f := Bool.eq_false_iff.mpr hp1
@@ -618,15 +669,15 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
             · rw [if_pos hcg] at hstep; contradiction
             · rw [if_neg hcg] at hstep
               injection hstep with hstep; subst hstep
-              have hcp1 : ((isCg2 && cfg.clusterDimX != 2) || !(blkGuard.isSingleLeader cfg.blockDimX cfg.blockDimY) || !(conc.mmaIssued || priorTmemIssueReaches cfg curBlk) || decide (barId ≥ abs.barState.length)) = false := by
-                simp [hp1f.1.1.1, hp1f.1.1.2, hcMma, hp1f.2]
+              have hcp1 : ((isCg2 && cfg.clusterDimX != 2) || (isMc && decide (cfg.clusterDimX ≤ 1)) || !(blkGuard.isSingleLeader cfg.blockDimX cfg.blockDimY) || !(conc.mmaIssued || priorTmemIssueReaches cfg curBlk) || decide (barId ≥ abs.barState.length)) = false := by
+                simp [hp1f.1.1.1.1, hp1f.1.1.1.2, hp1f.1.1.2, hcMma, hp1f.2]
               rw [hcp1, hbpC, hcp]; simp only [bne_self_eq_false, Bool.false_eq_true, ↓reduceIte]
               have hset := listSubsumes_set (a := .armedPlain) (c := .armedPlain) rfl barId hbs
               have hcbIns := natSubset_insert barId hcb
               rcases hcbValid with hcv | hcv | hcv | hcv <;>
                 (rw [hcv]; dsimp only; rw [if_neg hcg]; refine ⟨_, rfl, ?_⟩; unfold CtaState.subsumes; simp only [Bool.and_eq_true];
-                 exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨hsp, hpt⟩, hsc⟩, hbp⟩, hset⟩, tmemPhaseSub_refl _⟩, hac⟩, rfl⟩, hmi⟩, hcbIns⟩, rfl⟩, hpl⟩, rfl⟩, rfl⟩, hrp⟩, hvp⟩))
-  | tmemLoad ldId =>                                      -- Case 16: `tcgen05_ld` checks warp convergence + `tmemReady && !mmaHazard` & records `ldId`
+                 exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨hsp, hpt⟩, hsc⟩, hbp⟩, hset⟩, tmemPhaseSub_refl _⟩, hcl⟩, hac⟩, rfl⟩, hmi⟩, hcbIns⟩, rfl⟩, rfl⟩, hufw⟩, hufl⟩, hpl⟩, rfl⟩, rfl⟩, hrp⟩, hvp⟩))
+  | tmemLoad ldId =>                                      -- Case 16: `tcgen05_ld` checks warp convergence + `tmemReady && !mmaHazard && !unFencedMbarWait`
       dsimp only [stepOp] at hstep ⊢
       by_cases hwc : (!blkGuard.isWarpConvergent cfg.blockDimX cfg.blockDimY) = true
       · rw [if_pos hwc] at hstep; contradiction
@@ -637,20 +688,21 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
           simp only [TmemPhase.subsumes, Bool.or_eq_true, beq_iff_eq] at htp
           rcases htp with h1 | h2; contradiction; exact h2.symm
         rw [hcp]; dsimp only at hstep ⊢
-        by_cases hp1 : (!abs.allocClusterSynced || !abs.tmemReady || abs.mmaHazard) = true
+        by_cases hp1 : (!abs.allocClusterSynced || !abs.tmemReady || abs.mmaHazard || abs.unFencedMbarWait) = true
         · rw [if_pos hp1] at hstep; contradiction
         · rw [if_neg hp1] at hstep
           have hp1f := Bool.eq_false_iff.mpr hp1
           simp only [Bool.or_eq_false_iff, Bool.not_eq_false'] at hp1f
-          have hcAc := hbImp hac hp1f.1.1
-          have hcTr := hbImp htr hp1f.1.2
-          have hcMh : conc.mmaHazard = false := hbFalse hmh hp1f.2
+          have hcAc := hbImp hac hp1f.1.1.1
+          have hcTr := hbImp htr hp1f.1.1.2
+          have hcMh : conc.mmaHazard = false := hbFalse hmh hp1f.1.2
+          have hcUfw : conc.unFencedMbarWait = false := hbFalse hufw hp1f.2
           injection hstep with hstep; subst hstep
-          simp only [hcAc, hcTr, hcMh, Bool.not_true, Bool.or_self, Bool.false_eq_true, ↓reduceIte]
+          simp only [hcAc, hcTr, hcMh, hcUfw, Bool.not_true, Bool.or_self, Bool.false_eq_true, ↓reduceIte]
           refine ⟨_, rfl, ?_⟩
           unfold CtaState.subsumes; simp only [Bool.and_eq_true]
-          exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
-            hsp, hpt⟩, hsc⟩, hbp⟩, hbs⟩, tmemPhaseSub_refl _⟩, by simp⟩, by simp⟩, hmi⟩, hcb⟩, by simp⟩,
+          exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
+            hsp, hpt⟩, hsc⟩, hbp⟩, hbs⟩, tmemPhaseSub_refl _⟩, hcl⟩, by simp⟩, by simp⟩, hmi⟩, hcb⟩, htcr⟩, by simp⟩, by simp⟩, rfl⟩,
             natSubset_insert ldId hpl⟩, rfl⟩, rfl⟩, hrp⟩, hvp⟩
   | tmemLoadWait =>                                       -- Case 17: `tcgen05_load_wait()` drains `pendingLoads` to `[]`
       dsimp only [stepOp] at hstep ⊢
@@ -663,8 +715,8 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
       injection hstep with hstep; subst hstep
       refine ⟨_, rfl, ?_⟩
       unfold CtaState.subsumes; simp only [Bool.and_eq_true]
-      exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
-        hsp, hpt⟩, hsc⟩, hbp⟩, hbs⟩, tmemPhaseSub_refl _⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htr⟩,
+      exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
+        hsp, hpt⟩, hsc⟩, hbp⟩, hbs⟩, tmemPhaseSub_refl _⟩, hcl⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htcr⟩, htr⟩, hufw⟩, hufl⟩,
         natSubset_refl []⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩
   | tmemLoadUse ldId =>                                   -- Case 18: Register read of `ldId` requires `ldId ∉ pendingLoads`
       dsimp only [stepOp] at hstep ⊢
@@ -687,7 +739,29 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
         rw [hcp]; dsimp only at hstep ⊢
         injection hstep with hstep; subst hstep
         exact ⟨conc, rfl, hsub⟩
-  | tmemFenceBeforeSync | tmemFenceAfterSync =>           -- Case 18c: `tcgen05_fence_*` requires allocated `TMEM`
+  | tmemFenceBeforeSync =>                                -- Case 18c: `tcgen05_fence_before_thread_sync` checks warp convergence + retired `ld`s
+      dsimp only [stepOp] at hstep ⊢
+      by_cases hp1 : (!blkGuard.isWarpConvergent cfg.blockDimX cfg.blockDimY || !abs.pendingLoads.isEmpty) = true
+      · rw [if_pos hp1] at hstep; contradiction
+      · rw [if_neg hp1] at hstep
+        have hp1f := Bool.eq_false_iff.mpr hp1
+        simp only [Bool.or_eq_false_iff, Bool.not_eq_false'] at hp1f
+        have hcEmp := natSubset_isEmpty hpl hp1f.2
+        have hcp1 : (!blkGuard.isWarpConvergent cfg.blockDimX cfg.blockDimY || !conc.pendingLoads.isEmpty) = false := by
+          simp [hp1f.1, hcEmp]
+        rw [hcp1]; simp only [Bool.false_eq_true, ↓reduceIte]
+        cases hap : abs.tmemPhase <;> rw [hap] at hstep htp <;> try contradiction
+        rename_i cols allocCg2
+        have hcp : conc.tmemPhase = .allocated cols allocCg2 := by
+          simp only [TmemPhase.subsumes, Bool.or_eq_true, beq_iff_eq] at htp
+          rcases htp with h1 | h2; contradiction; exact h2.symm
+        rw [hcp]; dsimp only at hstep ⊢
+        injection hstep with hstep; subst hstep
+        refine ⟨_, rfl, ?_⟩
+        unfold CtaState.subsumes; simp only [Bool.and_eq_true]
+        exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
+          hsp, hpt⟩, hsc⟩, hbp⟩, hbs⟩, tmemPhaseSub_refl _⟩, hcl⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htcr⟩, htr⟩, hufw⟩, rfl⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩
+  | tmemFenceAfterSync =>                                 -- Case 18d: `tcgen05_fence_after_thread_sync` promotes `tmemCommitReady` -> `tmemReady` & clears `unFencedMbarWait`
       dsimp only [stepOp] at hstep ⊢
       cases hap : abs.tmemPhase <;> rw [hap] at hstep htp <;> try contradiction
       rename_i cols allocCg2
@@ -696,7 +770,12 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
         rcases htp with h1 | h2; contradiction; exact h2.symm
       rw [hcp]; dsimp only at hstep ⊢
       injection hstep with hstep; subst hstep
-      exact ⟨conc, rfl, hsub⟩
+      refine ⟨_, rfl, ?_⟩
+      have htrUpd := tmemReadyStep_mono abs.tmemCommitReady conc.tmemCommitReady false abs.mmaHazard conc.mmaHazard abs.tmemReady conc.tmemReady htcr hmh htr
+      unfold CtaState.subsumes; simp only [Bool.and_eq_true]
+      exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
+        hsp, hpt⟩, hsc⟩, hbp⟩, hbs⟩, tmemPhaseSub_refl _⟩, hcl⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htcr⟩,
+        by simpa using htrUpd⟩, rfl⟩, hufl⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩
   | tmemDealloc cols isCg2 =>                             -- Case 19: Full-warp `tcgen05_dealloc*` checks sync + permit & transitions `.deallocated`
       dsimp only [stepOp] at hstep ⊢
       by_cases hp1 : ((isCg2 && cfg.clusterDimX != 2) || inCycle || (blkGuard.selectsSingleFullWarp cfg.blockDimX cfg.blockDimY).isNone) = true
@@ -730,8 +809,8 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
               simp only [hcp, bne_self_eq_false, hcMh, hcEmp, hcSs, Bool.not_true, Bool.or_self, hcCgF, Bool.false_eq_true, ↓reduceIte]
               refine ⟨_, rfl, ?_⟩
               unfold CtaState.subsumes; simp only [Bool.and_eq_true]
-              exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
-                hsp, hpt⟩, hsc⟩, hbp⟩, hbs⟩, tmemPhaseSub_refl _⟩, hac⟩, by simp⟩, hmi⟩, hcb⟩, htr⟩, hpl⟩, by simp⟩, hcs⟩, hrp⟩, hvp⟩
+              exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
+                hsp, hpt⟩, hsc⟩, hbp⟩, hbs⟩, tmemPhaseSub_refl _⟩, hcl⟩, hac⟩, by simp⟩, hmi⟩, hcb⟩, htcr⟩, htr⟩, hufw⟩, hufl⟩, hpl⟩, by simp⟩, hcs⟩, hrp⟩, hvp⟩
 
 /-- Monotonicity of `execBlockOps` across an entire basic block's operation sequence. -/
 theorem execBlockOps_mono (cfg : ControlFlowCfg) (b : Nat) {abs conc outAbs : CtaState} (ops : List CfgOp)
@@ -790,7 +869,7 @@ theorem stepEdge_mono (cfg : ControlFlowCfg) (srcBlk : Nat) {abs conc nextAbs : 
     (hstep : stepEdge cfg srcBlk abs cond = some nextAbs) :
     ∃ nextConc, stepEdge cfg srcBlk conc cond = some nextConc ∧ nextAbs.subsumes nextConc = true := by
   have hs := hsub; unfold CtaState.subsumes at hs; simp only [Bool.and_eq_true] at hs
-  rcases hs with ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨hsp, hpt⟩, hsc⟩, hbp⟩, hbs⟩, htp⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htr⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩
+  rcases hs with ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨hsp, hpt⟩, hsc⟩, hbp⟩, hbs⟩, htp⟩, hcl⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htcr⟩, htr⟩, hufw⟩, hufl⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩
   have hbImp : ∀ {x y : Bool}, (!x || y) = true → x = true → y = true := by decide
   have hbFalse : ∀ {x y : Bool}, (!x || y) = true → y = false → x = false := by decide
   cases cond with                                         -- Case-split on outgoing `BranchCond` edge
@@ -821,40 +900,56 @@ theorem stepEdge_mono (cfg : ControlFlowCfg) (srcBlk : Nat) {abs conc nextAbs : 
               subst heqA
               rcases mbarSub_validArrive va vc hge hva with rfl | rfl | rfl | rfl <;>
                 (dsimp only; exact ⟨conc, rfl, hsub⟩)
-  | mbarReady barId initFree =>                           -- Case 4: `mbarrier` ready edge retires pending TMA/MMA on `barId`
+  | mbarReady barId initFree waitKind =>                  -- Case 4: `mbarrier` ready edge checks scope & retires pending TMA/MMA on `barId`
       dsimp only [stepEdge, stepEdgeWith] at hstep ⊢
-      have hge := listSubsumes_getElem? barId hbs
-      cases ha : abs.barState[barId]? with
-      | none => rw [ha] at hstep; contradiction
-      | some va =>
-          cases hc : conc.barState[barId]? with
-          | none => rw [ha, hc] at hge; contradiction
-          | some vc =>
-              rw [ha] at hstep; rw [ha, hc] at hge; dsimp only at hge hstep ⊢
-              rcases ite_none_some_iff.mp hstep with ⟨haReadyOk, hstep⟩
-              subst hstep
-              have hcReadyOk := mbarSub_readyOk va vc
-                (initFree || (decide (barId ∈ signaledBarrierIds cfg) && (activeGuardAt cfg srcBlk).hasWarpFilter))
-                hge haReadyOk
-              refine ⟨_, ite_none_some_iff.mpr ⟨hcReadyOk, rfl⟩, ?_⟩
-              have hptMap : listSubsumes (fun a c => natSubset c a)
-                  (abs.sharedPendingTma.map (·.filter (· != barId)))
-                  (conc.sharedPendingTma.map (·.filter (· != barId))) = true :=
-                listSubsumes_map (sub := fun a c => natSubset c a) (fun _ _ h => natSubset_filter (· != barId) h) hpt
-              have hbsSet := listSubsumes_set (a := .completed) (c := .completed) rfl barId hbs
-              have hmemImp : (!decide (barId ∈ abs.tmemCommitBars) || decide (barId ∈ conc.tmemCommitBars)) = true := by
-                by_cases hm : barId ∈ abs.tmemCommitBars
-                · simp [hm, natSubset_mem hcb hm]
-                · simp [hm]
-              have htrUpd := tmemReadyStep_mono
-                (decide (barId ∈ abs.tmemCommitBars))
-                (decide (barId ∈ conc.tmemCommitBars))
-                (decide (barId ∈ signaledBarrierIds cfg) && (activeGuardAt cfg srcBlk).hasWarpFilter && decide (barId ∈ committedTmemBarrierIds cfg))
-                abs.mmaHazard conc.mmaHazard abs.tmemReady conc.tmemReady hmemImp hmh htr
-              unfold CtaState.subsumes; simp only [Bool.and_eq_true]
-              exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
-                hsp, hptMap⟩, hsc⟩, hbp⟩, hbsSet⟩, htp⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩,
-                by simpa only [Bool.and_eq_true] using htrUpd⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩
+      by_cases hclScope : (decide (barId ∈ clusterSignaledBarrierIds cfg) && waitKind == .ctaAcquire) = true
+      · rw [if_pos hclScope] at hstep; contradiction
+      · rw [if_neg hclScope] at hstep ⊢
+        by_cases hrelTma : (waitKind == .clusterRelaxed && (abs.sharedPendingTma.any fun xs => decide (barId ∈ xs))) = true
+        · rw [if_pos hrelTma] at hstep; contradiction
+        · rw [if_neg hrelTma] at hstep
+          have hrelC : (waitKind == .clusterRelaxed && (conc.sharedPendingTma.any fun xs => decide (barId ∈ xs))) = false := by
+            cases hwk : waitKind == .clusterRelaxed
+            · rfl
+            · have hf := Bool.eq_false_iff.mpr hrelTma
+              rw [hwk] at hf
+              rw [Bool.true_and] at hf ⊢
+              exact listSubsumes_any_mem_false hpt hf
+          rw [hrelC]; simp only [Bool.false_eq_true, ↓reduceIte]
+          have hge := listSubsumes_getElem? barId hbs
+          cases ha : abs.barState[barId]? with
+          | none => rw [ha] at hstep; contradiction
+          | some va =>
+              cases hc : conc.barState[barId]? with
+              | none => rw [ha, hc] at hge; contradiction
+              | some vc =>
+                  rw [ha] at hstep; rw [ha, hc] at hge; dsimp only at hge hstep ⊢
+                  rcases ite_none_some_iff.mp hstep with ⟨haReadyOk, hstep⟩
+                  subst hstep
+                  have hcReadyOk := mbarSub_readyOk va vc
+                    (initFree || decide (barId ∈ warpWaitSignaledBarsAt cfg srcBlk))
+                    hge haReadyOk
+                  refine ⟨_, ite_none_some_iff.mpr ⟨hcReadyOk, rfl⟩, ?_⟩
+                  have hptNext : listSubsumes (fun a c => natSubset c a)
+                      (if waitKind == .clusterRelaxed then abs.sharedPendingTma else abs.sharedPendingTma.map (·.filter (· != barId)))
+                      (if waitKind == .clusterRelaxed then conc.sharedPendingTma else conc.sharedPendingTma.map (·.filter (· != barId))) = true := by
+                    cases waitKind == .clusterRelaxed
+                    · exact listSubsumes_map (sub := fun a c => natSubset c a) (fun _ _ h => natSubset_filter (· != barId) h) hpt
+                    · exact hpt
+                  have hbsSet := listSubsumes_set (a := .completed) (c := .completed) rfl barId hbs
+                  have hmemImp : (!decide (barId ∈ abs.tmemCommitBars) || decide (barId ∈ conc.tmemCommitBars)) = true := by
+                    by_cases hm : barId ∈ abs.tmemCommitBars
+                    · simp [hm, natSubset_mem hcb hm]
+                    · simp [hm]
+                  have htcrUpd := tmemReadyStep_mono
+                    (decide (barId ∈ abs.tmemCommitBars))
+                    (decide (barId ∈ conc.tmemCommitBars))
+                    (decide (barId ∈ warpWaitSignaledBarsAt cfg srcBlk) && decide (barId ∈ committedTmemBarrierIds cfg))
+                    abs.mmaHazard conc.mmaHazard abs.tmemCommitReady conc.tmemCommitReady hmemImp hmh htcr
+                  unfold CtaState.subsumes; simp only [Bool.and_eq_true]
+                  exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
+                    hsp, hptNext⟩, hsc⟩, hbp⟩, hbsSet⟩, htp⟩, hcl⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩,
+                    by simpa only [Bool.and_eq_true] using htcrUpd⟩, htr⟩, rfl⟩, hufl⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩
 
 
 end CudaOxide.Proofs.ControlFlow

@@ -222,9 +222,37 @@ def GuardExpr.evalBool (g : GuardExpr) (tx ty i : Nat) (cr : Nat := 0) : Option 
   | .ne a b => some (decide (a.eval tx ty i cr ≠ b.eval tx ty i cr))
   | .and p q =>
       match p.evalBool tx ty i cr, q.evalBool tx ty i cr with
-      | some bp, some bq => some (bp && bq)
+      | some false, _ | _, some false => some false
+      | some true, some true => some true
       | _, _ => none
   | .warpDiv | .unknown => none
+
+/-- Return `some warpIdx` when `g` restricts execution to a single warp `tx / 32 = warpIdx`. -/
+def GuardExpr.exactWarpOpt (g : GuardExpr) (blockDimX blockDimY : Nat) : Option Nat :=
+  if blockDimY != 1 then
+    none
+  else
+    match g with
+    | .tr => if blockDimX ≤ 32 then some 0 else none
+    | .lt .tx (.const 32) => some 0
+    | .eq .tx (.const t) | .eq (.const t) .tx => some (t / 32)
+    | .eq (.div .tx 32) (.const w) | .eq (.const w) (.div .tx 32) => some w
+    | .and p q =>
+        match p.exactWarpOpt blockDimX blockDimY, q.exactWarpOpt blockDimX blockDimY with
+        | some w1, some w2 => if w1 == w2 then some w1 else none
+        | some w, none | none, some w => some w
+        | none, none => none
+    | _ => none
+
+/-- Memory-consistency scope and ordering qualifier on an `mbarrier` wait edge. -/
+inductive MbarWaitKind where
+  /-- `.acquire.cta` (`mbarrier_try_wait_parity`, `mbarrier_try_wait`, `mbarrier_test_wait`). -/
+  | ctaAcquire
+  /-- `.acquire.cluster` (`mbarrier_try_wait_parity_cluster`). -/
+  | clusterAcquire
+  /-- `.relaxed.cluster` (`mbarrier_try_wait_parity_cluster_relaxed`, execution-only). -/
+  | clusterRelaxed
+  deriving Repr, DecidableEq, Lean.ToExpr
 
 /-- Branch label on an outgoing basic-block terminator edge in `PostMem2Reg` MIR. -/
 inductive BranchCond where
@@ -233,7 +261,7 @@ inductive BranchCond where
   /-- Thread-coordinate predicate (`tid == 0`, `warp_id == 0`, `tid < 64`, `lane == 0`). -/
   | coord (g : GuardExpr)
   /-- `mbarrier_try_wait*` ready edge (`initFree = true` when initial ring parity is `1`). -/
-  | mbarReady (barId : Nat) (initFree : Bool := false)
+  | mbarReady (barId : Nat) (initFree : Bool := false) (waitKind : MbarWaitKind := .ctaAcquire)
   /-- `mbarrier_try_wait*` spin edge (`ready = false`). -/
   | mbarSpin (barId : Nat)
   /-- Exit edge of a positive-trip counted loop (`0 < bound`) whose body starts at `bodyBlk`. -/
@@ -265,14 +293,14 @@ inductive CfgOp where
   | mbarInval (barId : Nat)
   /-- `fence_proxy_async_shared_cta()` bridging generic writes to the async proxy. -/
   | proxyFenceAsyncShared
-  /-- Plain thread arrival `mbarrier_arrive(&BAR)`. -/
-  | mbarArrive (barId : Nat)
-  /-- Byte-counted arrival `mbarrier_arrive_expect_tx(&BAR, count, txBytes)`. -/
-  | mbarArriveExpectTx (barId txBytes : Nat)
-  /-- Asynchronous TMA copy `cp_async_bulk_tensor_*_g2s(SMEM, BAR, ...)` (`isCg2` = 2-CTA mode). -/
-  | tmaCopyG2S (sharedId barId : Nat) (isCg2 : Bool := false)
-  /-- Asynchronous Blackwell CLC `clc_try_cancel*` writing `sharedId` on `barId`. -/
-  | clcTryCancel (sharedId barId : Nat)
+  /-- Plain thread arrival `mbarrier_arrive*(&BAR)` (`isCluster` for remote cluster, `isRelaxed` for `.relaxed`). -/
+  | mbarArrive (barId : Nat) (isCluster : Bool := false) (isRelaxed : Bool := false)
+  /-- Byte-counted arrival `mbarrier_arrive_expect_tx*(&BAR, count, txBytes)` (`isCluster` for `.cluster` scope). -/
+  | mbarArriveExpectTx (barId txBytes : Nat) (isCluster : Bool := false)
+  /-- Asynchronous TMA copy `cp_async_bulk_tensor_*_g2s(SMEM, BAR, ...)` (`isCg2` = 2-CTA, `isMulticast` = cluster multicast). -/
+  | tmaCopyG2S (sharedId barId : Nat) (isCg2 : Bool := false) (isMulticast : Bool := false)
+  /-- Asynchronous Blackwell CLC `clc_try_cancel*` writing `sharedId` on `barId` (`isMulticast` = `.multicast::cluster::all`). -/
+  | clcTryCancel (sharedId barId : Nat) (isMulticast : Bool := false)
   /-- Warp-collective `tcgen05_alloc(&TMEM_ADDR[0], cols)` (`isCg2` = 2-CTA mode). -/
   | tmemAlloc (sharedId cols : Nat) (isCg2 : Bool := false)
   /-- Warp-collective `tcgen05_dealloc(tmem_addr, cols)` (`isCg2` = 2-CTA mode). -/
@@ -281,8 +309,8 @@ inductive CfgOp where
   | tmemRelinquishPermit (isCg2 : Bool := false)
   /-- Single-thread async `tcgen05_mma*` or `tcgen05_cp*` reading `smemIds` into `TMEM`. -/
   | tmemAsyncIssue (smemIds : List Nat) (isCg2 : Bool := false)
-  /-- Single-thread `tcgen05_commit*(&BAR)` tracking prior `tmemAsyncIssue` on `barId`. -/
-  | tmemCommit (barId : Nat) (isCg2 : Bool := false)
+  /-- Single-thread `tcgen05_commit*(&BAR)` tracking prior `tmemAsyncIssue` on `barId` (`isMulticast` = `.multicast::cluster`). -/
+  | tmemCommit (barId : Nat) (isCg2 : Bool := false) (isMulticast : Bool := false)
   /-- Warp-restricted async `tcgen05_ld_*` writing register token `ldId`. -/
   | tmemLoad (ldId : Nat)
   /-- `tcgen05_load_wait()` retiring all in-flight `tmemLoad` operations in the thread. -/
@@ -456,6 +484,8 @@ structure CtaState where
   barState : List MbarState
   /-- Current `TMEM` allocation phase. -/
   tmemPhase : TmemPhase := .uninit
+  /-- True once peer CTAs have synchronized via `cluster_sync()` (`true` for 1-CTA; required before `alloc_cg2`). -/
+  clusterLaunched : Bool := true
   /-- True once `tcgen05_alloc_cg2` has been synchronized across the 2-CTA cluster (`true` for 1-CTA). -/
   allocClusterSynced : Bool := true
   /-- True when any incoming path has an uncommitted `tcgen05_mma` / `tcgen05_cp` hazard. -/
@@ -464,8 +494,14 @@ structure CtaState where
   mmaIssued : Bool := false
   /-- `Barrier` IDs guaranteed armed by `tcgen05_commit` on all incoming paths. -/
   tmemCommitBars : List Nat := []
-  /-- True once `mbarReady` has fired on a committed `tmemCommitBars` barrier with no uncommitted MMA. -/
+  /-- True once `mbarReady` has fired on a `tmemCommitBars` barrier (awaiting `tcgen05.fence::after_thread_sync`). -/
+  tmemCommitReady : Bool := false
+  /-- True once `tcgen05.fence::after_thread_sync` has ordered a completed `tmemCommitReady` handoff. -/
   tmemReady : Bool := false
+  /-- True when an `mbarReady` edge has not yet been followed by `tcgen05.fence::after_thread_sync`. -/
+  unFencedMbarWait : Bool := false
+  /-- True when a `tcgen05.ld` has not yet been followed by `tcgen05.fence::before_thread_sync` (or CTA sync). -/
+  unFencedTmemLoad : Bool := false
   /-- In-flight `tcgen05_ld` register IDs not yet retired by `tcgen05_load_wait()`. -/
   pendingLoads : List Nat := []
   /-- True once `sync_threads()` or `cluster_sync()` has executed after the latest `TMEM` use. -/
@@ -484,7 +520,8 @@ def CtaState.initial (cfg : ControlFlowCfg) : CtaState :=
   , sharedPendingTma := List.replicate cfg.numShared []
   , sharedClusterSynced := List.replicate cfg.numShared true
   , barProxy := List.replicate cfg.numBarriers .clean
-  , barState := List.replicate cfg.numBarriers .uninit }
+  , barState := List.replicate cfg.numBarriers .uninit
+  , clusterLaunched := decide (cfg.clusterDimX ≤ 1) }
 
 /-- Sound abstract join of two `CtaState`s at a CFG merge block (`1` summary per block). -/
 def CtaState.join (a b : CtaState) : CtaState :=
@@ -494,11 +531,15 @@ def CtaState.join (a b : CtaState) : CtaState :=
   , barProxy := List.zipWith ProxyState.merge a.barProxy b.barProxy
   , barState := List.zipWith MbarState.join a.barState b.barState
   , tmemPhase := TmemPhase.join a.tmemPhase b.tmemPhase
+  , clusterLaunched := a.clusterLaunched && b.clusterLaunched
   , allocClusterSynced := a.allocClusterSynced && b.allocClusterSynced
   , mmaHazard := a.mmaHazard || b.mmaHazard
   , mmaIssued := a.mmaIssued && b.mmaIssued
   , tmemCommitBars := interSortedNat a.tmemCommitBars b.tmemCommitBars
+  , tmemCommitReady := a.tmemCommitReady && b.tmemCommitReady
   , tmemReady := a.tmemReady && b.tmemReady
+  , unFencedMbarWait := a.unFencedMbarWait || b.unFencedMbarWait
+  , unFencedTmemLoad := a.unFencedTmemLoad || b.unFencedTmemLoad
   , pendingLoads := unionSortedNat a.pendingLoads b.pendingLoads
   , syncedSinceTmemUse := a.syncedSinceTmemUse && b.syncedSinceTmemUse
   , clusterSyncedSinceTmemUse := a.clusterSyncedSinceTmemUse && b.clusterSyncedSinceTmemUse
@@ -515,11 +556,15 @@ def CtaState.subsumes (abs conc : CtaState) : Bool :=
   listSubsumes ProxyState.subsumes abs.barProxy conc.barProxy &&
   listSubsumes MbarState.subsumes abs.barState conc.barState &&
   TmemPhase.subsumes abs.tmemPhase conc.tmemPhase &&
+  (!abs.clusterLaunched || conc.clusterLaunched) &&
   (!abs.allocClusterSynced || conc.allocClusterSynced) &&
   (!conc.mmaHazard || abs.mmaHazard) &&
   (!abs.mmaIssued || conc.mmaIssued) &&
   natSubset abs.tmemCommitBars conc.tmemCommitBars &&
+  (!abs.tmemCommitReady || conc.tmemCommitReady) &&
   (!abs.tmemReady || conc.tmemReady) &&
+  (!conc.unFencedMbarWait || abs.unFencedMbarWait) &&
+  (!conc.unFencedTmemLoad || abs.unFencedTmemLoad) &&
   natSubset conc.pendingLoads abs.pendingLoads &&
   (!abs.syncedSinceTmemUse || conc.syncedSinceTmemUse) &&
   (!abs.clusterSyncedSinceTmemUse || conc.clusterSyncedSinceTmemUse) &&
@@ -577,7 +622,7 @@ def BranchCond.toGuardExpr (c : BranchCond) : GuardExpr :=
   | .coord g => g
   | .warpUniform => .warpDiv
   | .unknown => .unknown
-  | .always | .mbarReady _ _ | .mbarSpin _ | .posLoopExit _ | .uniform => .tr
+  | .always | .mbarReady _ _ _ | .mbarSpin _ | .posLoopExit _ | .uniform => .tr
 
 /-- Compute the active dominating `GuardExpr` at basic block `b` across all 2-way branches.
     Any nested `.unknown` branch (`1..N` levels deep) attaches `.unknown` until reconvergence. -/
@@ -642,7 +687,7 @@ def enabledCtaSuccs (cfg : ControlFlowCfg) (b : Nat) (st : CtaState) : List (Bra
 def cfgHasExpectTx (cfg : ControlFlowCfg) (barId : Nat) : Bool :=
   cfg.blocks.any fun blk =>
     blk.ops.any fun
-      | .mbarArriveExpectTx b _ => b == barId
+      | .mbarArriveExpectTx b _ _ => b == barId
       | _ => false
 
 /-- True when a distinct basic block `bi ≠ curBlk` containing `.tmemAsyncIssue` can reach `curBlk`. -/
@@ -659,6 +704,7 @@ def stepOp (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr) (inCycle
   let leaderClean := blkGuard.isSingleLeader cfg.blockDimX cfg.blockDimY
   match op with
   | .syncThreads =>
+      let cleanDone := !st.mmaHazard && st.pendingLoads.isEmpty
       some
         { st with
           sharedProxy := st.sharedProxy.map fun
@@ -670,7 +716,8 @@ def stepOp (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr) (inCycle
           barState := st.barState.map fun
             | .initUnsynced => .syncedIdle
             | other => other
-          syncedSinceTmemUse := !st.mmaHazard && st.pendingLoads.isEmpty }
+          unFencedTmemLoad := if cleanDone then false else st.unFencedTmemLoad
+          syncedSinceTmemUse := cleanDone }
   | .clusterSync =>
       if cfg.clusterDimX ≤ 1 then
         none
@@ -688,7 +735,9 @@ def stepOp (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr) (inCycle
             barState := st.barState.map fun
               | .initUnsynced => .syncedIdle
               | other => other
+            clusterLaunched := true
             allocClusterSynced := true
+            unFencedTmemLoad := if cleanDone then false else st.unFencedTmemLoad
             syncedSinceTmemUse := cleanDone
             clusterSyncedSinceTmemUse := cleanDone }
   | .proxyFenceAsyncShared =>
@@ -736,26 +785,29 @@ def stepOp (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr) (inCycle
         none
       else
         some { st with barState := st.barState.set barId .uninit }
-  | .mbarArrive barId =>
-      match st.barState[barId]? with
-      | some .syncedIdle | some .armedPlain | some .armedTx | some .completed =>
-          some { st with barState := st.barState.set barId .armedPlain }
-      | _ => none
-  | .mbarArriveExpectTx barId txBytes =>
-      if txBytes == 0 then
+  | .mbarArrive barId isCluster _ =>
+      if (isCluster && cfg.clusterDimX ≤ 1) || st.unFencedTmemLoad then
+        none
+      else
+        match st.barState[barId]? with
+        | some .syncedIdle | some .armedPlain | some .armedTx | some .completed =>
+            some { st with barState := st.barState.set barId .armedPlain }
+        | _ => none
+  | .mbarArriveExpectTx barId txBytes isCluster =>
+      if txBytes == 0 || (isCluster && cfg.clusterDimX ≤ 1) || st.unFencedTmemLoad then
         none
       else
         match st.barState[barId]? with
         | some .syncedIdle | some .armedPlain | some .armedTx | some .completed =>
             some { st with barState := st.barState.set barId .armedTx }
         | _ => none
-  | .tmaCopyG2S sharedId barId isCg2 =>
+  | .tmaCopyG2S sharedId barId isCg2 isMc =>
       let barArmedOk :=
         match st.barState.getD barId .uninit with
         | .armedTx => true
         | .syncedIdle | .armedPlain | .completed => isCg2 && cfgHasExpectTx cfg barId
         | _ => false
-      if (isCg2 && cfg.clusterDimX != 2)
+      if (isCg2 && cfg.clusterDimX != 2) || (isMc && cfg.clusterDimX ≤ 1)
           || !leaderClean || sharedId ≥ st.sharedProxy.length
           || sharedId ≥ st.sharedPendingTma.length || barId ≥ st.barState.length then
         none
@@ -770,8 +822,8 @@ def stepOp (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr) (inCycle
             sharedPendingTma := st.sharedPendingTma.set sharedId
               (insertSortedNat barId (st.sharedPendingTma.getD sharedId []))
             sharedClusterSynced := st.sharedClusterSynced.set sharedId false }
-  | .clcTryCancel sharedId barId =>
-      if cfg.clusterDimX < 1
+  | .clcTryCancel sharedId barId isMc =>
+      if cfg.clusterDimX < 1 || (isMc && cfg.clusterDimX ≤ 1)
           || !leaderClean || sharedId ≥ st.sharedProxy.length
           || sharedId ≥ st.sharedPendingTma.length || barId ≥ st.barState.length then
         none
@@ -791,7 +843,7 @@ def stepOp (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr) (inCycle
         none
       else if (blkGuard.selectsSingleFullWarp cfg.blockDimX cfg.blockDimY).isNone then
         none
-      else if st.tmemPhase != .uninit then
+      else if (isCg2 && !st.clusterLaunched) || st.tmemPhase != .uninit then
         none
       else
         some
@@ -813,7 +865,8 @@ def stepOp (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr) (inCycle
             else some { st with relinquishedPermitCg2 := isCg2 }
         | _ => none
   | .tmemAsyncIssue smemIds isCg2 =>
-      if (isCg2 && cfg.clusterDimX != 2) || !leaderClean || !st.allocClusterSynced then
+      if (isCg2 && cfg.clusterDimX != 2) || !leaderClean
+          || !st.allocClusterSynced || st.unFencedMbarWait then
         none
       else
         match st.tmemPhase with
@@ -833,13 +886,14 @@ def stepOp (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr) (inCycle
                   { st with
                     mmaHazard := true
                     mmaIssued := true
+                    tmemCommitReady := false
                     tmemReady := false
                     syncedSinceTmemUse := false
                     clusterSyncedSinceTmemUse := false }
         | _ => none
-  | .tmemCommit barId isCg2 =>
+  | .tmemCommit barId isCg2 isMc =>
       let hasPriorMma := st.mmaIssued || priorTmemIssueReaches cfg curBlk
-      if (isCg2 && cfg.clusterDimX != 2)
+      if (isCg2 && cfg.clusterDimX != 2) || (isMc && cfg.clusterDimX ≤ 1)
           || !leaderClean || !hasPriorMma || barId ≥ st.barState.length then
         none
       else if st.barProxy.getD barId .needsFence != .clean then
@@ -859,6 +913,7 @@ def stepOp (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr) (inCycle
                   barState := st.barState.set barId .armedPlain
                   mmaHazard := false
                   tmemCommitBars := nextCommitBars
+                  tmemCommitReady := false
                   tmemReady := false
                   syncedSinceTmemUse := false
                   clusterSyncedSinceTmemUse := false }
@@ -869,12 +924,13 @@ def stepOp (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr) (inCycle
       else
         match st.tmemPhase with
         | .allocated _ _ =>
-            if !st.allocClusterSynced || !st.tmemReady || st.mmaHazard then
+            if !st.allocClusterSynced || !st.tmemReady || st.mmaHazard || st.unFencedMbarWait then
               none
             else
               let nextPending := insertSortedNat ldId st.pendingLoads
               some
                 { st with
+                  unFencedTmemLoad := true
                   pendingLoads := nextPending
                   syncedSinceTmemUse := false
                   clusterSyncedSinceTmemUse := false }
@@ -892,9 +948,18 @@ def stepOp (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr) (inCycle
         match st.tmemPhase with
         | .allocated _ _ => some st
         | _ => none
-  | .tmemFenceBeforeSync | .tmemFenceAfterSync =>
+  | .tmemFenceBeforeSync =>
+      if !blkGuard.isWarpConvergent cfg.blockDimX cfg.blockDimY || !st.pendingLoads.isEmpty then
+        none
+      else
+        match st.tmemPhase with
+        | .allocated _ _ => some { st with unFencedTmemLoad := false }
+        | _ => none
+  | .tmemFenceAfterSync =>
       match st.tmemPhase with
-      | .allocated _ _ => some st
+      | .allocated _ _ =>
+          let nextReady := if st.tmemCommitReady && !st.mmaHazard then true else st.tmemReady
+          some { st with tmemReady := nextReady, unFencedMbarWait := false }
       | _ => none
   | .tmemDealloc cols isCg2 =>
       if (isCg2 && cfg.clusterDimX != 2)
@@ -938,44 +1003,101 @@ def execBlockOps (cfg : ControlFlowCfg) (b : Nat) (st : CtaState) (ops : List Cf
   execBlockOpsWith cfg b (decide (b ∈ posLoopExitBodies cfg)) (activeGuardAt cfg b)
     (isCyclicBlockBool cfg b) st ops
 
-/-- Barrier IDs signaled anywhere in `cfg` by `mbarArrive`, `mbarArriveExpectTx`, or `tmemCommit`. -/
+/-- Barrier IDs signaled anywhere in `cfg` by non-relaxed `mbarArrive`, `mbarArriveExpectTx`, or `tmemCommit`. -/
 def signaledBarrierIds (cfg : ControlFlowCfg) : List Nat :=
   (List.range cfg.numBarriers).filter fun barId =>
     cfg.blocks.any fun blk =>
       blk.ops.any fun
-        | .mbarArrive b | .mbarArriveExpectTx b _ | .tmemCommit b _ => b == barId
+        | .mbarArrive b _ isRelaxed => b == barId && !isRelaxed
+        | .mbarArriveExpectTx b _ _ | .tmemCommit b _ _ => b == barId
         | _ => false
+
+/-- Basic blocks in `cfg` that signal `barId` via non-relaxed `mbarrier_arrive`, `mbarrier_arrive_expect_tx`, or `tmemCommit`. -/
+def barSignalBlocks (cfg : ControlFlowCfg) (barId : Nat) : List Nat :=
+  (List.range cfg.blocks.length).filter fun b =>
+    (cfg.blockAt b).ops.any fun
+      | .mbarArrive bid _ isRelaxed => bid == barId && !isRelaxed
+      | .mbarArriveExpectTx bid _ _ | .tmemCommit bid _ _ => bid == barId
+      | _ => false
+
+/-- True when `barId` is signaled either by a distinct warp outside `srcBlk`'s warp guard, or
+    along an intra-warp path reachable from entry `0` strictly before `srcBlk`. -/
+def validWarpWaitSignal (cfg : ControlFlowCfg) (srcBlk barId : Nat) : Bool :=
+  let waitGuard := activeGuardAt cfg srcBlk
+  if !waitGuard.hasWarpFilter then
+    false
+  else
+    let sigBlks := barSignalBlocks cfg barId
+    let waitWarp := waitGuard.exactWarpOpt cfg.blockDimX cfg.blockDimY
+    sigBlks.any fun sBlk =>
+      let sigGuard := activeGuardAt cfg sBlk
+      let sigWarp := sigGuard.exactWarpOpt cfg.blockDimX cfg.blockDimY
+      let otherWarp :=
+        match waitWarp, sigWarp with
+        | some wW, some wS => wW != wS
+        | some wW, none =>
+            sigGuard.evalBool (wW * 32) 0 0 == some false ||
+            existsValidThread cfg (.and sigGuard (waitGuard.negate))
+        | none, some wS => waitGuard.evalBool (wS * 32) 0 0 == some false
+        | none, none => false
+      otherWarp ||
+        (sBlk != srcBlk && canReachAvoiding cfg 0 sBlk [srcBlk] && canReachAvoiding cfg sBlk srcBlk [])
+
+/-- Barrier IDs signaled across CTAs (remote `mbarrier_arrive_cluster`, `_cg2`/multicast TMA,
+    multicast `clc_try_cancel_multicast`, or `_cg2`/multicast `tcgen05_commit`), requiring a
+    cluster-scoped wait (`mbarrier_try_wait_parity_cluster*`) per PTX ISA Section 8.7. -/
+def clusterSignaledBarrierIds (cfg : ControlFlowCfg) : List Nat :=
+  if cfg.clusterDimX ≤ 1 then []
+  else
+    (List.range cfg.numBarriers).filter fun barId =>
+      cfg.blocks.any fun blk =>
+        blk.ops.any fun
+          | .mbarArrive b true _ => b == barId
+          | .mbarArriveExpectTx b _ true => b == barId
+          | .tmaCopyG2S _ b isCg2 isMc => b == barId && (isCg2 || isMc)
+          | .clcTryCancel _ b isMc => b == barId && isMc
+          | .tmemCommit b isCg2 isMc => b == barId && (isCg2 || isMc)
+          | _ => false
 
 /-- Barrier IDs signaled by `tcgen05_commit` in `cfg`. -/
 def committedTmemBarrierIds (cfg : ControlFlowCfg) : List Nat :=
   (List.range cfg.numBarriers).filter fun barId =>
     cfg.blocks.any fun blk =>
       blk.ops.any fun
-        | .tmemCommit b _ => b == barId
+        | .tmemCommit b _ _ => b == barId
         | _ => false
 
-/-- Apply an outgoing terminator edge label `cond` using precomputed `(sig, commitBars, hasWarp)`. -/
-def stepEdgeWith (sig commitBars : List Nat) (hasWarp : Bool) (st : CtaState) (cond : BranchCond) :
+/-- Apply an outgoing terminator edge label `cond` using precomputed `(clusterBars, commitBars, warpSigBars)`. -/
+def stepEdgeWith (clusterBars commitBars warpSigBars : List Nat) (st : CtaState) (cond : BranchCond) :
     Option CtaState :=
   match cond with
-  | .mbarReady barId initFree =>
-      let crossWarpSig := barId ∈ sig && hasWarp
-      let readyOk := match st.barState[barId]? with
-        | some .armedPlain | some .armedTx | some .completed => true
-        | some .syncedIdle => initFree || crossWarpSig
-        | _ => false
-      if !readyOk then
+  | .mbarReady barId initFree waitKind =>
+      if barId ∈ clusterBars && waitKind == .ctaAcquire then
+        none
+      else if waitKind == .clusterRelaxed && st.sharedPendingTma.any (barId ∈ ·) then
         none
       else
-        let isCommitBar :=
-          barId ∈ st.tmemCommitBars || (crossWarpSig && barId ∈ commitBars)
-        let nextReady :=
-          if isCommitBar && !st.mmaHazard then true else st.tmemReady
-        some
-          { st with
-            sharedPendingTma := st.sharedPendingTma.map (·.filter (· != barId))
-            barState := st.barState.set barId .completed
-            tmemReady := nextReady }
+        let crossWarpSig := barId ∈ warpSigBars
+        let readyOk := match st.barState[barId]? with
+          | some .armedPlain | some .armedTx | some .completed => true
+          | some .syncedIdle => initFree || crossWarpSig
+          | _ => false
+        if !readyOk then
+          none
+        else
+          let isCommitBar :=
+            barId ∈ st.tmemCommitBars || (crossWarpSig && barId ∈ commitBars)
+          let nextCommitReady :=
+            if isCommitBar && !st.mmaHazard then true else st.tmemCommitReady
+          let nextPendingTma :=
+            if waitKind == .clusterRelaxed then st.sharedPendingTma
+            else st.sharedPendingTma.map (·.filter (· != barId))
+          some
+            { st with
+              sharedPendingTma := nextPendingTma
+              barState := st.barState.set barId .completed
+              tmemCommitReady := nextCommitReady
+              unFencedMbarWait := true }
   | .mbarSpin barId =>
       match st.barState[barId]? with
       | some .syncedIdle | some .armedPlain | some .armedTx | some .completed => some st
@@ -984,10 +1106,14 @@ def stepEdgeWith (sig commitBars : List Nat) (hasWarp : Bool) (st : CtaState) (c
       if bodyBlk ∈ st.visitedPosBodies then some st else none
   | .always | .coord _ | .uniform | .warpUniform | .unknown => some st
 
+/-- Precompute the list of barriers satisfying `validWarpWaitSignal cfg srcBlk` at block `srcBlk`. -/
+def warpWaitSignaledBarsAt (cfg : ControlFlowCfg) (srcBlk : Nat) : List Nat :=
+  (List.range cfg.numBarriers).filter (validWarpWaitSignal cfg srcBlk)
+
 /-- Apply an outgoing terminator edge label `cond` from `srcBlk` to post-block state `st`. -/
 def stepEdge (cfg : ControlFlowCfg) (srcBlk : Nat) (st : CtaState) (cond : BranchCond) : Option CtaState :=
-  stepEdgeWith (signaledBarrierIds cfg) (committedTmemBarrierIds cfg)
-    (activeGuardAt cfg srcBlk).hasWarpFilter st cond
+  stepEdgeWith (clusterSignaledBarrierIds cfg) (committedTmemBarrierIds cfg)
+    (warpWaitSignaledBarsAt cfg srcBlk) st cond
 
 /-- True when `st` is a clean CTA return state (no leaked `TMEM`, no uncommitted MMA,
     and no un-awaited `tcgen05_ld` registers). -/
@@ -1051,7 +1177,7 @@ def signaledMbarReadyBlocks (cfg : ControlFlowCfg) : List Nat :=
   let sig := signaledBarrierIds cfg
   let raw := cfg.blocks.flatMap fun blk =>
     blk.succs.filterMap fun
-      | (.mbarReady barId _, dst) => if barId ∈ sig then some dst else none
+      | (.mbarReady barId _ _, dst) => if barId ∈ sig then some dst else none
       | _ => none
   raw.filter fun dst => activeGuardAt cfg dst == .tr
 
@@ -1062,7 +1188,7 @@ def countEffectiveBarriers (cfg : ControlFlowCfg) : Nat :=
   let sig := signaledBarrierIds cfg
   let mbarCount := (cfg.blocks.flatMap fun blk =>
     blk.succs.filterMap fun
-      | (.mbarReady barId _, dst) => if barId ∈ sig then some dst else none
+      | (.mbarReady barId _ _, dst) => if barId ∈ sig then some dst else none
       | _ => none).length
   syncCount + mbarCount
 
@@ -1077,7 +1203,7 @@ def loopBackpressurePairs (cfg : ControlFlowCfg) : List (Nat × Nat × List Nat)
   let tmaPairs := (List.range cfg.numShared).flatMap fun s =>
     let prodPair := indices.findSome? fun b =>
       (cfg.blockAt b).ops.findSome? fun
-        | .tmaCopyG2S sid bid _ => if sid == s then some (b, bid) else none
+        | .tmaCopyG2S sid bid _ _ => if sid == s then some (b, bid) else none
         | _ => none
     match prodPair with
     | none => []
@@ -1087,7 +1213,7 @@ def loopBackpressurePairs (cfg : ControlFlowCfg) : List (Nat × Nat × List Nat)
         else
           let emptyReadyBlks := cfg.blocks.flatMap fun blk =>
             blk.succs.filterMap fun
-              | (.mbarReady bid _, dst) => if bid != tmaBar && bid ∈ sig then some dst else none
+              | (.mbarReady bid _ _, dst) => if bid != tmaBar && bid ∈ sig then some dst else none
               | _ => none
           let bp := syncs ++ emptyReadyBlks
           let consumers := indices.filter fun b =>
@@ -1115,7 +1241,7 @@ def loopBackpressurePairs (cfg : ControlFlowCfg) : List (Nat × Nat × List Nat)
       | _ => false
   let tmemEmptyReady := cfg.blocks.flatMap fun blk =>
     blk.succs.filterMap fun
-      | (.mbarReady bid _, dst) => if !(bid ∈ committed) && bid ∈ sig then some dst else none
+      | (.mbarReady bid _ _, dst) => if !(bid ∈ committed) && bid ∈ sig then some dst else none
       | _ => none
   let tmemBp := syncs ++ tmemEmptyReady
   let tmemPairs := tmemProds.flatMap fun pBlk =>
@@ -1143,7 +1269,7 @@ def exposedSharedReadBlocks (cfg : ControlFlowCfg) (s : Nat) : List Nat :=
   (List.range cfg.blocks.length).filter fun b =>
     let (_, exposed) := (cfg.blockAt b).ops.foldl (fun (written, exp) op =>
       match op with
-      | .sharedWrite sid | .tmaCopyG2S sid _ _ | .clcTryCancel sid _ | .tmemAlloc sid _ _ =>
+      | .sharedWrite sid | .tmaCopyG2S sid _ _ _ | .clcTryCancel sid _ _ | .tmemAlloc sid _ _ =>
           if sid == s then (true, exp) else (written, exp)
       | .sharedRead sid =>
           if sid == s && !written then (written, true) else (written, exp)
@@ -1155,7 +1281,7 @@ def sharedWriterBlocks (cfg : ControlFlowCfg) (s : Nat) : List Nat :=
   (List.range cfg.blocks.length).filter fun b =>
     !(activeGuardAt cfg b).hasUnknown &&
     (cfg.blockAt b).ops.any fun
-      | .sharedWrite sid | .tmaCopyG2S sid _ _ | .clcTryCancel sid _ | .tmemAlloc sid _ _ => sid == s
+      | .sharedWrite sid | .tmaCopyG2S sid _ _ _ | .clcTryCancel sid _ _ | .tmemAlloc sid _ _ => sid == s
       | _ => false
 
 /-- Blocks guaranteeing `SharedArray` `s` has been written before an upward-exposed `.sharedRead s`
@@ -1170,7 +1296,7 @@ def sharedInitDominators (cfg : ControlFlowCfg) (s : Nat) : List Nat :=
     let sig := signaledBarrierIds cfg
     let readyBlks := cfg.blocks.flatMap fun blk =>
       blk.succs.filterMap fun
-        | (.mbarReady bid _, dst) => if bid ∈ sig then some dst else none
+        | (.mbarReady bid _ wk, dst) => if bid ∈ sig && wk != .clusterRelaxed then some dst else none
         | _ => none
     writers ++ syncsAfterWrite ++ readyBlks
 
@@ -1191,7 +1317,7 @@ def validMbarArrivalCounts (cfg : ControlFlowCfg) : Bool :=
           | _ => none
       let arrBlks := (List.range cfg.blocks.length).filter fun blkIdx =>
         (cfg.blockAt blkIdx).ops.any fun
-          | .mbarArrive b | .mbarArriveExpectTx b _ | .tmemCommit b _ => b == barId
+          | .mbarArrive b _ _ | .mbarArriveExpectTx b _ _ | .tmemCommit b _ _ => b == barId
           | _ => false
       let count1Ok :=
         !(1 ∈ inits) ||
@@ -1203,6 +1329,17 @@ def validMbarArrivalCounts (cfg : ControlFlowCfg) : Bool :=
             !(activeGuardAt cfg b).isSingleLeader cfg.blockDimX cfg.blockDimY
         | _ => true
       count1Ok && countGt1Ok
+
+/-- Basic blocks executing 2-CTA `tcgen05_alloc_cg2` (`isCg2 = true`) without a preceding
+    same-block `clusterSync` (requiring `cluster_sync()` on all paths from kernel entry `0`). -/
+def unlaunchedCg2AllocBlocks (cfg : ControlFlowCfg) : List Nat :=
+  (List.range cfg.blocks.length).filter fun b =>
+    let (_, bad) := (cfg.blockAt b).ops.foldl (fun (synced, err) op =>
+      match op with
+      | .clusterSync => (true, err)
+      | .tmemAlloc _ _ true => (synced, err || !synced)
+      | _ => (synced, err)) (false, false)
+    bad
 
 /-- Pairs `(initBlk, allocBlk)` where `initBlk` performs `mbarInit` or `sharedWrite` without a
     same-block `clusterSync` and reaches a 2-CTA `tcgen05_alloc_cg2` (`isCg2 = true`) at `allocBlk`. -/

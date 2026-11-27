@@ -77,10 +77,30 @@ theorem rev_writes_all_elems :
   apply CudaOxide.Proofs.Program.vcWritesAllElems rfl (by mir_bind_writes)
   mir_vc revMirFunc
 
+/-- Thread `0` arms `BAR` and starts a TMA copy into `TILE` (block `3`), every thread waits on `BAR`
+    (block `4`), then reads `TILE` (block `5`): the shape of `examples/safe_async_copy`.
+    `RejectedTmaReadAfterSync.lean` replaces the wait with `sync_threads()`. -/
+def tmaWaitCfg : ControlFlow.ControlFlowCfg :=
+  { blockDimX := 256, blockDimY := 1, numShared := 1, numBarriers := 1
+  , blocks := [
+      { succs := [(.coord (.eq .tx (.const 0)), 1), (.coord (.ne .tx (.const 0)), 2)] },
+      { ops := [.mbarInit 0 1, .proxyFenceAsyncShared], succs := [(.always, 2)] },
+      { ops := [.syncThreads]
+      , succs := [(.coord (.eq .tx (.const 0)), 3), (.coord (.ne .tx (.const 0)), 4)] },
+      { ops := [.mbarArriveExpectTx 0 16384, .tmaCopyG2S 0 0], succs := [(.always, 4)] },
+      { succs := [(.mbarSpin 0, 4), (.mbarReady 0 false, 5)] },
+      { ops := [.sharedRead 0], succs := [(.always, 6)] },
+      { isReturn := true } ] }
+
+theorem tma_read_after_wait : ControlFlow.UniformBarriersCfg tmaWaitCfg :=
+  CudaOxide.Proofs.ControlFlow.uniform_barriers_cfg_of_stateMap
+    (inv := CudaOxide.Proofs.ControlFlow.inferStateMap tmaWaitCfg) (by decide)
+
 #print axioms no_oob_idx_all
 #print axioms disjoint_writes_c
 #print axioms writes_all_elems_c
 #print axioms rev_writes_all_elems
+#print axioms tma_read_after_wait
 #print axioms CudaOxide.Mir.Program.ReachableTrapFree.toReachable
 #print axioms CudaOxide.Mir.Program.EmitsTrapFreeEvent.toEmitsEvent
 #print axioms index_lt_of_guard

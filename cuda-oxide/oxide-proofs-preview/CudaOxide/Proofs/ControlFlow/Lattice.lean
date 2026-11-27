@@ -358,12 +358,20 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
       exact ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨
         listSubsumes_map proxyStepFence_mono hsp, hpt⟩, hsc⟩,
         listSubsumes_map proxyStepFence_mono hbp⟩, hbs⟩, htp⟩, hcl⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htcr⟩, htr⟩, hufw⟩, hufl⟩, hpl⟩, hss⟩, hcs⟩, hrp⟩, hvp⟩
-  | sharedRead s =>                                       -- Case 4: Generic-proxy shared read
+  | sharedRead s =>                                       -- Case 4: Generic-proxy shared read requires no pending TMA on `s`
       dsimp only [stepOp] at hstep ⊢
-      rw [← hlenSP]
-      by_cases hslt : s < abs.sharedProxy.length
-      · rw [if_pos hslt] at hstep ⊢; injection hstep with hstep; subst hstep; exact ⟨conc, rfl, hsub⟩
-      · rw [if_neg hslt] at hstep; contradiction
+      rw [← hlenSP, ← hlenPT]
+      by_cases hpre : (decide (s ≥ abs.sharedProxy.length) || decide (s ≥ abs.sharedPendingTma.length)) = true
+      · rw [if_pos hpre] at hstep; contradiction
+      · rw [if_neg hpre] at hstep ⊢
+        cases hemp : (abs.sharedPendingTma.getD s []).isEmpty
+        · rw [hemp] at hstep; contradiction
+        · rw [hemp] at hstep; simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte] at hstep
+          have hptS := listSubsumes_getD (sub := fun a c => natSubset c a) (d := []) (natSubset_refl []) s hpt
+          have hcEmp : (conc.sharedPendingTma.getD s []).isEmpty = true := natSubset_isEmpty hptS hemp
+          injection hstep with hstep; subst hstep
+          simp only [hcEmp, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
+          exact ⟨conc, rfl, hsub⟩
   | dsmemAccess s =>                                      -- Case 5: Cross-CTA DSMEM access requires `sharedClusterSynced[s]`
       dsimp only [stepOp] at hstep ⊢
       rw [← hlenSC]

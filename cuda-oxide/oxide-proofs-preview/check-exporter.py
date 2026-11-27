@@ -467,6 +467,30 @@ def main():
             raise RuntimeError(f"Expected bypassing mbarrier_try_wait_parity to fail NoDataRace in Lean:\n{res_no_wait.stdout}")
         print("REJECTED as expected: reading `TILE` without `mbarrier_try_wait_parity` fails `no_data_race`.", flush=True)
 
+        # Mutate async_copy_stage MIR by replacing the `mbarrier_try_wait_parity` loop with `sync_threads()`.
+        # The copy and the read then sit in different barrier phases, so only `uniform_barriers` can refuse it:
+        wait_loop = async_source[async_source.index("      ^wait_header():"):async_source.index("      ^consume_tile():")]
+        sync_for_wait_mir = temporary / "async_copy_sync_for_wait.mir"
+        sync_for_wait_mir.write_text(
+            async_source.replace(
+                wait_loop,
+                "      ^wait_header():\n"
+                "        nvvm.barrier0 () [] []: <() -> ()>;\n"
+                "        mir.goto () [^consume_tile] []: <() -> ()>\n\n",
+                1,
+            )
+        )
+        sync_for_wait_lean = require_export(sync_for_wait_mir, "async_copy_stage")
+        sync_for_wait_file = temporary / "AsyncCopySyncForWait.lean"
+        sync_for_wait_file.write_text(
+            "\n".join(line for line in sync_for_wait_lean.splitlines() if not line.startswith("#print axioms"))
+        )
+        res_sync_for_wait = run_lake("env", "lean", str(sync_for_wait_file))
+        if (res_sync_for_wait.returncode == 0 or "checkUniformBarriersWith" not in res_sync_for_wait.stdout
+                or "error: omega could not prove the goal:" in res_sync_for_wait.stdout):
+            raise RuntimeError(f"Expected sync_threads in place of the mbarrier wait to fail only UniformBarriers in Lean:\n{res_sync_for_wait.stdout}")
+        print("REJECTED as expected: `sync_threads()` in place of `mbarrier_try_wait_parity` before reading `TILE` fails `uniform_barriers`.", flush=True)
+
         # Mutate async_copy_stage MIR with oversized 32 KB TMA byte count into 16 KB `TILE`:
         oversized_tma_mir = temporary / "async_copy_oversized.mir"
         oversized_tma_mir.write_text(

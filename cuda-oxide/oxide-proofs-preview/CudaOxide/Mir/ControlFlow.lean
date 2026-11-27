@@ -750,7 +750,12 @@ def stepOp (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr) (inCycle
             | .needsFence => .clean
             | other => other }
   | .sharedRead s =>
-      if s < st.sharedProxy.length then some st else none
+      if s ≥ st.sharedProxy.length || s ≥ st.sharedPendingTma.length then
+        none
+      else if !(st.sharedPendingTma.getD s []).isEmpty then
+        none
+      else
+        some st
   | .dsmemAccess s =>
       if cfg.clusterDimX ≤ 1 || s ≥ st.sharedClusterSynced.length then
         none

@@ -4,19 +4,20 @@ SPDX-License-Identifier: Apache-2.0
 -/
 
 import CudaOxide.Mir.ControlFlow
+import CudaOxide.Mir.Program
 
 /-!
 # Declarative Control-Flow & Lifecycle Contracts (`CudaOxide.Contracts.ControlFlow`)
 
 Defines the path-level and operational reachability propositions (`Prop`) proved
-in Lean 4 over a kernel's transcribed `ControlFlowCfg`, mapping 1-to-1 to the
-control-flow clauses written in `#[verify(...)]`:
+in Lean 4 over a kernel's transcribed `MirFunc` and `ControlFlowCfg`, mapping
+1-to-1 to the control-flow clauses written in `#[verify(...)]`:
 
 ```text
   Rust `#[verify(...)]` Clause     Lean Proposition (`CudaOxide.Contracts.ControlFlow`)
   ────────────────────────────     ────────────────────────────────────────────────────
-  `uniform_barriers`               `UniformBarriers cfg`
-  `tmem_lifecycle`                 `TmemLifecycle cfg`
+  `uniform_barriers`               `UniformBarriers mirFunc controlFlowCfg`
+  `tmem_lifecycle`                 `TmemLifecycle controlFlowCfg`
 ```
 
 Every proposition quantifies over inductive CFG paths (`PathAvoiding`) and
@@ -26,6 +27,7 @@ checker. Reusable decision checkers and soundness proofs live in
 -/
 namespace CudaOxide.Contracts.ControlFlow
 open CudaOxide.Mir.ControlFlow
+open CudaOxide.Mir.Program
 
 /-- Valid non-exclusive Blackwell `tcgen05.alloc` column counts (PTX ISA Table 58:
     power of two in `[32, 512]`). -/
@@ -92,12 +94,11 @@ def NoUnbackpressuredLoop (cfg : ControlFlowCfg) : Prop :=
     (prod, cons, bp) ∈ loopBackpressurePairs cfg →          -- IF `cons` reads a buffer/TMEM written by cyclic `prod`,
     ¬ PathAvoiding cfg bp cons prod                         -- THEN NO CFG path `cons ->* prod` bypasses `bp`.
 
-/-- **`uniform_barriers`**: At least one barrier synchronizes the kernel, every
-    `thread::sync_threads()` and signaled `mbarrier` wait executes in thread-uniform
-    control flow across all paths from entry `0` to `return`, and (when `Barrier`s
-    are present without `TMEM`) `mbarrier` init/sync, PTX proxy fences, and loop
-    back-pressure hold across all reachable CTA states. -/
-def UniformBarriers (cfg : ControlFlowCfg) : Prop :=
+/-- Structural CFG obligations for `uniform_barriers` on a refined `ControlFlowCfg`:
+    at least one barrier synchronizes the kernel, every `sync_threads()` and signaled
+    `mbarrier` wait executes in thread-uniform control flow across all paths from entry `0`
+    to `return`, and `mbarrier`/proxy/back-pressure invariants hold. -/
+def UniformBarriersCfg (cfg : ControlFlowCfg) : Prop :=
   0 < countEffectiveBarriers cfg ∧                          -- At least one barrier synchronizes the phases, AND
   (∀ b : Nat, b ∈ syncBarrierBlocks cfg →                   -- For EVERY block `b` containing `sync_threads()`:
     activeGuardAt cfg b = .tr ∧                             --   (1) `b` sits outside thread-divergent `if` guards,
@@ -125,6 +126,89 @@ def UniformBarriers (cfg : ControlFlowCfg) : Prop :=
   validMbarArrivalCounts cfg = true ∧                       --   (7) 1-CTA `mbarrier` arrival sites match `mbarrier_init` counts, AND
   (0 < cfg.numBarriers ∧ tmemAllocSites cfg = [] →          --   (8) when `Barrier`s are used (outside `tmem_lifecycle`),
     SafeCtaExecution false cfg ∧ NoUnbackpressuredLoop cfg) --       `mbarrier` init/proxy/back-pressure hold on all paths.
+
+/-- Build the 1-to-1 structural `ControlFlowCfg` skeleton directly from `f.blocks`. -/
+def mirToCfg (f : MirFunc) : ControlFlowCfg :=
+  { blockDimX := f.blockDimX, blockDimY := f.blockDimY, clusterDimX := f.clusterDimX
+  , numShared := f.sharedDecls.length, numBarriers := 0
+  , blocks := f.blocks.map fun blk =>
+      match blk.term with
+      | .ret => { isReturn := true }
+      | .unreachable => {}
+      | .goto dst _ => { succs := [(.always, dst)] }
+      | .condBr cond tBlk _ fBlk _ =>
+          { condVarOpt := some cond, succs := [(.unknown, tBlk), (.unknown, fBlk)] } }
+
+/-- Branch arm `(u, armBlk, armIdx)` reaches incoming parameter edge `e = (dstBlk, k, argVar, srcBlk, edgeArm, val)`
+    before hitting `avoid`: either `e` is the direct outgoing arm `armIdx` of `u`, or a path
+    in `cfg` avoiding `avoid` connects `armBlk` to `srcBlk`. -/
+def armReachesEdge (cfg : ControlFlowCfg) (u armBlk armIdx : Nat) (avoid : List Nat)
+    (e : Nat × Nat × Nat × Nat × Nat × Nat) : Prop :=
+  (e.2.2.2.1 = u ∧ e.2.2.2.2.1 = armIdx) ∨ PathAvoiding cfg avoid armBlk e.2.2.2.1
+
+/-- Declarative `Split -> Assign -> Meet` CTA-uniformity invariant over `MirFunc`:
+    `uniVars` and `rfPtrs` name the cross-block SSA variables guaranteed CTA-uniform
+    (resp. race-free `SharedArray` pointers), while `checkExecUniStmts` steps block-local
+    scratch registers sequentially to each block's terminator (`exitAt b`). -/
+def MirValidUniSet (f : MirFunc) (uniVars rfPtrs uniConds : List Nat) : Prop :=
+  let mcfg := mirToCfg f
+  let allEdges := collectAllArgEdges f
+  let exitAt := fun b => checkExecUniStmts f uniVars rfPtrs uniVars rfPtrs (f.blockAt b).stmts
+  (∀ v : Nat, v ∈ (f.blockAt 0).args.map BlockArg.varId → v ∉ rfPtrs) ∧ -- (1) Entry params are not SMEM pointers,
+  (∀ b : Nat, b < f.blocks.length → (exitAt b).1 = true) ∧  -- (2) Every assignment to `uniVars`/`rfPtrs` is valid,
+  (∀ e : Nat × Nat × Nat × Nat × Nat × Nat, e ∈ allEdges →  -- (3) Incoming block-argument edges preserve uniformity:
+    (e.2.2.1 ∈ uniVars → e.2.2.2.2.2 ∈ (exitAt e.2.2.2.1).2.1) ∧
+    (e.2.2.1 ∈ rfPtrs → e.2.2.2.2.2 ∈ (exitAt e.2.2.2.1).2.2)) ∧
+  (∀ mb : Nat, mb < f.blocks.length →                       -- (4) Every `cond ∈ uniConds` is exit-uniform at its `condBr`:
+    ∀ cond tBlk fBlk : Nat, ∀ tArgs fArgs : List Nat,
+      (f.blockAt mb).term = .condBr cond tBlk tArgs fBlk fArgs →
+      cond ∈ uniConds → cond ∈ (exitAt mb).2.1) ∧
+  (∀ u : Nat, u < f.blocks.length →                         -- (5) `Split -> Assign -> Meet`: for every divergent `condBr` at `u`,
+    ∀ cond tBlk fBlk : Nat, ∀ tArgs fArgs : List Nat,
+      (f.blockAt u).term = .condBr cond tBlk tArgs fBlk fArgs →
+      cond ∉ (exitAt u).2.1 →
+      ∃ mOpt : Option Nat,                                  --     there exists an optional single reconvergence block `mOpt` with:
+        (∀ m : Nat, mOpt = some m →                         --     • if `mOpt = some m`, `m ≠ u` post-dominates `u` to all `return`s,
+          m ≠ u ∧ ∀ ret : Nat, ret ∈ returnBlocks mcfg → ¬ PathAvoiding mcfg [m] u ret) ∧
+        let avoid := match mOpt with | some m => [m] | none => []
+        (∀ e0 e1 : Nat × Nat × Nat × Nat × Nat × Nat,       --     • (5a) Two-arm pre-reconvergence join on `(b, k)`:
+          e0 ∈ allEdges → e1 ∈ allEdges →
+          e0.1 = e1.1 → e0.2.1 = e1.2.1 →
+          e0.2.2.1 ∈ uniVars →
+          armReachesEdge mcfg u tBlk 0 avoid e0 →
+          armReachesEdge mcfg u fBlk 1 avoid e1 →
+          e0.2.2.2.2.2 = e1.2.2.2.2.2) ∧
+        (∀ e : Nat × Nat × Nat × Nat × Nat × Nat,           --     • (5b) Divergent loop cycle through `e.dstBlk`:
+          e ∈ allEdges →
+          e.2.2.1 ∈ uniVars →
+          PathAvoiding mcfg avoid e.1 u →
+          (armReachesEdge mcfg u tBlk 0 avoid e ∨ armReachesEdge mcfg u fBlk 1 avoid e) →
+          e.2.2.2.2.2 = e.2.2.1))
+
+/-- Downgrade `.uniform` and `.posLoopExit` branch labels at block `cb` to `.unknown` whenever
+    its recorded `condVarOpt` is not in the certified `uniConds` list. -/
+def refineCfgWithUni (cfg : ControlFlowCfg) (uniConds : List Nat) : ControlFlowCfg :=
+  { cfg with
+    blocks := cfg.blocks.map fun cb =>
+      let condUni :=
+        match cb.condVarOpt with
+        | some cond => uniConds.contains cond
+        | none => false
+      if condUni then cb
+      else
+        { cb with
+          succs := cb.succs.map fun (bc, dst) =>
+            match bc with
+            | .uniform | .posLoopExit _ => (.unknown, dst)
+            | _ => (bc, dst) } }
+
+/-- **`uniform_barriers`**: There exists a CTA-uniformity set `(uniVars, rfPtrs, uniConds)`
+    certified over `f` (`MirValidUniSet f uniVars rfPtrs uniConds`) under which the refined
+    `ControlFlowCfg` satisfies all structural barrier-uniformity and lifecycle obligations. -/
+def UniformBarriers (f : MirFunc) (cfg : ControlFlowCfg) : Prop :=
+  ∃ uniVars rfPtrs uniConds : List Nat,                     -- Certified CTA-uniform SSA variables & condition IDs:
+    MirValidUniSet f uniVars rfPtrs uniConds ∧              --   (1) Satisfies `Split -> Assign -> Meet` over `f`, AND
+    UniformBarriersCfg (refineCfgWithUni cfg uniConds)      --   (2) Proves `UniformBarriersCfg` after downgrading divergent branches.
 
 /-- **`tmem_lifecycle`**: Blackwell Tensor Memory (`TMEM`) is allocated once by a
     single full 32-lane warp with a valid power-of-two column count in `[32, 512]`,

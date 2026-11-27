@@ -241,12 +241,16 @@ fn format_cfg_block(blk: &TranscribedCfgBlock) -> String {
         .map(|(c, dst)| format!("({}, {dst})", format_cfg_branch_cond(c)))
         .collect::<Vec<_>>()
         .join(", ");
+    let cond_suffix = match blk.cond_var {
+        Some(cv) => format!(", condVarOpt := some {cv}"),
+        None => String::new(),
+    };
     let ret_suffix = if blk.is_return {
         ", isReturn := true"
     } else {
         ""
     };
-    format!("{{ ops := [{ops_str}], succs := [{succs_str}]{ret_suffix} }}")
+    format!("{{ ops := [{ops_str}], succs := [{succs_str}]{cond_suffix}{ret_suffix} }}")
 }
 
 /// Format the full [`TranscribedControlFlowCfg`] as a Lean `def controlFlowCfg` declaration.
@@ -292,6 +296,10 @@ fn format_mir_rhs(rhs: &MirRhs) -> String {
         MirRhs::CvtaShared(p) => format!("(.cvtaShared {p})"),
         MirRhs::LoadTmemBase(p, cols) => format!("(.loadTmemBase {p} {cols})"),
         MirRhs::OpaqueUint(id, w) => format!("(.opaqueUint {id} {w})"),
+        MirRhs::CtaUint1(id, w, s) => format!("(.ctaUint1 {id} {w} {s})"),
+        MirRhs::CtaConst => ".ctaConst".to_string(),
+        MirRhs::CtaUnary(s) => format!("(.ctaUnary {s})"),
+        MirRhs::CtaBin(l, r) => format!("(.ctaBin {l} {r})"),
         MirRhs::OpaqueVal => ".opaqueVal".to_string(),
     }
 }
@@ -395,10 +403,16 @@ fn render_mir_program_module(
         || (program.control_flow_cfg.num_barriers > 0 && !spec.tmem_lifecycle);
     let need_cfg = need_uniform_barriers || spec.tmem_lifecycle;
     let cfg_section = if need_cfg {
-        format!(
-            "{}\n\ncfg_def_state_map controlFlowCfg\n\n",
+        let mut s = format!(
+            "{}\n\n",
             format_control_flow_cfg(bx, by, cdx, &program.control_flow_cfg)
-        )
+        );
+        if need_uniform_barriers {
+            s.push_str("cfg_def_uni_state_map mirFunc controlFlowCfg\n\n");
+        } else {
+            s.push_str("cfg_def_state_map controlFlowCfg\n\n");
+        }
+        s
     } else {
         String::new()
     };
@@ -481,9 +495,15 @@ fn render_mir_program_module(
     }
     if need_uniform_barriers {
         theorems.push(
-            "theorem verify_uniform_barriers :\n    \
-             CudaOxide.Contracts.ControlFlow.UniformBarriers controlFlowCfg := by\n  \
-             exact CudaOxide.Proofs.ControlFlow.uniform_barriers_of_stateMap (cfg := controlFlowCfg) (inv := cfgStateMap) rfl"
+            "theorem mirUni_valid :\n    \
+             CudaOxide.Proofs.ControlFlow.checkMirValidUniSetFast mirFunc cfgUniVars cfgRfPtrs cfgUniSums cfgRets cfgAllEdges cfgUniConds = true :=\n  \
+             rfl\n\n\
+             theorem cfgBarriers_valid :\n    \
+             CudaOxide.Proofs.ControlFlow.checkUniformBarriersWith cfgRefined cfgUniStateMap = true :=\n  \
+             rfl\n\n\
+             theorem verify_uniform_barriers :\n    \
+             CudaOxide.Contracts.ControlFlow.UniformBarriers mirFunc controlFlowCfg := by\n  \
+             exact CudaOxide.Proofs.ControlFlow.uniform_barriers_of_certs rfl rfl rfl rfl mirUni_valid cfgBarriers_valid"
                 .to_string(),
         );
         axiom_prints.push("#print axioms verify_uniform_barriers".to_string());
@@ -538,6 +558,18 @@ fn render_mir_program_module(
         axiom_prints.push(format!("#print axioms {thm}"));
     }
 
+    let rf_shared_line = if program.race_free_shared.is_empty() {
+        String::new()
+    } else {
+        let rfs = program
+            .race_free_shared
+            .iter()
+            .map(usize::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("  , raceFreeShared := [{rfs}]\n")
+    };
+
     Ok(format!(
         "-- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.\n\
          -- SPDX-License-Identifier: Apache-2.0\n\
@@ -557,8 +589,8 @@ fn render_mir_program_module(
          , u32Coords := {}\n  \
          , params := [{}]\n  \
          , requiresLenGe := [{}]\n  \
-         , sharedDecls := [{}]\n  \
-         , blocks := [\n{}\n    ]\n  }}\n\n\
+         , sharedDecls := [{}]\n\
+         {rf_shared_line}  , blocks := [\n{}\n    ]\n  }}\n\n\
          {cfg_section}\
          {}\n\n\
          {}\n\n\

@@ -27,6 +27,7 @@ const ASYNC_COPY_FIXTURE: &str = include_str!("../fixtures/async_copy_stage.mir"
 const TCGEN05_MATMUL_FIXTURE: &str = include_str!("../fixtures/tcgen05_matmul.mir");
 const WARP_RING_FIXTURE: &str = include_str!("../fixtures/warp_ring_stage.mir");
 const CLUSTER_CLC_FIXTURE: &str = include_str!("../fixtures/cluster_clc_stage.mir");
+const DIVERGENT_UNIFORMITY_FIXTURE: &str = include_str!("../fixtures/divergent_uniformity.mir");
 
 fn export(source: &str) -> String {
     export_named_source(source, "global_index").expect("valid scalar MIR")
@@ -601,7 +602,8 @@ fn verifies_2d_sgemm_tiled_views_and_rejects_shared_races_oob_and_divergent_barr
     let divergent_lean = export_named_source(&divergent_barrier, "sgemm_tiled_views")
         .expect("exports controlFlowCfg for divergent barrier obligation");
     assert!(
-        divergent_lean.contains("CudaOxide.Contracts.ControlFlow.UniformBarriers controlFlowCfg")
+        divergent_lean
+            .contains("CudaOxide.Contracts.ControlFlow.UniformBarriers mirFunc controlFlowCfg")
     );
     let err = lean_exporter::runner::check_generated_lean(&divergent_lean, &lean_dir)
         .expect_err("Lean must reject divergent barrier when early return skips barrier loop");
@@ -2854,4 +2856,123 @@ fn ensure_lean_library_built_succeeds_on_valid_package_and_fails_closed_on_inval
         err.to_string().contains("`lake build` failed"),
         "unexpected error from broken lakefile.toml: {err}"
     );
+}
+
+/// Verify that Lean 4's `Split -> Assign -> Meet` (`MirValidUniSet`) check rejects barrier
+/// loops bounded by divergent `if/else` joins, `mbarrier` spin counts, and `continue` loops
+/// jumping back up to a loop header, while accepting CTA-uniform controls and divergent
+/// non-barrier loops followed by a uniform barrier.
+#[test]
+fn rejects_barrier_loops_bounded_by_divergent_joins_and_spin_counts() {
+    let join_lean = export_named_source(DIVERGENT_UNIFORMITY_FIXTURE, "sync_dep_barrier")
+        .expect("exports the sync-dependent barrier loop");
+
+    let uniform_join = DIVERGENT_UNIFORMITY_FIXTURE.replacen(
+        "tx = nvvm.read_ptx_sreg_tid_x () [] []",
+        "tx = nvvm.read_ptx_sreg_ctaid_x () [] []",
+        1,
+    );
+    let uniform_join_lean = export_named_source(&uniform_join, "sync_dep_barrier")
+        .expect("exports the CTA-uniform barrier loop");
+
+    let spin_lean = export_named_source(DIVERGENT_UNIFORMITY_FIXTURE, "spin_count_barrier")
+        .expect("exports the spin-count barrier loop");
+
+    let uniform_spin = DIVERGENT_UNIFORMITY_FIXTURE
+        .replacen("more = mir.lt (k, spins) [] []", "more = mir.lt (k, k_bound) [] []", 1)
+        .replacen(
+            "      ^bar_head(k: builtin.integer ui32):\n",
+            "      ^bar_head(k: builtin.integer ui32):\n        k_bound = mir.constant () [] [value: builtin.integer <2: ui32>]: <() -> (builtin.integer ui32)>;\n",
+            1,
+        );
+    let uniform_spin_lean = export_named_source(&uniform_spin, "spin_count_barrier")
+        .expect("exports the constant-trip barrier loop");
+
+    // Two `continue`/loop-end edges jumping UP into `^outer_head(k, n)` with `n = 1` vs `n = 3`.
+    let continue_loop = r#"
+builtin.module @continue_split {
+  ^entry():
+    mir.func @continue_split_barrier: builtin.function <(mir.disjoint_slice <builtin.integer ui32,[]>) -> ()>
+      [gpu_kernel: builtin.string "true", launch_contract_domain: builtin.integer <1: ui32>, reqntid_x: builtin.integer <64: ui32>, reqntid_y: builtin.integer <1: ui32>, reqntid_z: builtin.integer <1: ui32>, verify_uniform_barriers: builtin.string "true"]
+    {
+      ^entry(out: mir.disjoint_slice <builtin.integer ui32,[]>):
+        tx = nvvm.read_ptx_sreg_tid_x () [] []: <() -> (builtin.integer ui32)>;
+        k0 = mir.constant () [] [value: builtin.integer <0: ui32>]: <() -> (builtin.integer ui32)>;
+        n0 = mir.constant () [] [value: builtin.integer <0: ui32>]: <() -> (builtin.integer ui32)>;
+        mir.goto (k0, n0) [^outer_head] []: <(builtin.integer ui32, builtin.integer ui32) -> ()>
+
+      ^outer_head(k: builtin.integer ui32, n: builtin.integer ui32):
+        two = mir.constant () [] [value: builtin.integer <2: ui32>]: <() -> (builtin.integer ui32)>;
+        outer_more = mir.lt (k, two) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer i1)>;
+        mir.cond_br (outer_more) [^outer_body, ^after_outer] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^outer_body():
+        one = mir.constant () [] [value: builtin.integer <1: ui32>]: <() -> (builtin.integer ui32)>;
+        k_next = mir.add (k, one) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;
+        c16 = mir.constant () [] [value: builtin.integer <16: ui32>]: <() -> (builtin.integer ui32)>;
+        lo = mir.lt (tx, c16) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer i1)>;
+        mir.cond_br (lo) [^cont_arm, ^else_arm] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^cont_arm():
+        c1 = mir.constant () [] [value: builtin.integer <1: ui32>]: <() -> (builtin.integer ui32)>;
+        mir.goto (k_next, c1) [^outer_head] []: <(builtin.integer ui32, builtin.integer ui32) -> ()>
+
+      ^else_arm():
+        c3 = mir.constant () [] [value: builtin.integer <3: ui32>]: <() -> (builtin.integer ui32)>;
+        mir.goto (k_next, c3) [^outer_head] []: <(builtin.integer ui32, builtin.integer ui32) -> ()>
+
+      ^after_outer():
+        i0 = mir.constant () [] [value: builtin.integer <0: ui32>]: <() -> (builtin.integer ui32)>;
+        mir.goto (i0) [^bar_head] []: <(builtin.integer ui32) -> ()>
+
+      ^bar_head(i: builtin.integer ui32):
+        more = mir.lt (i, n) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer i1)>;
+        mir.cond_br (more) [^bar_body, ^tail] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^bar_body():
+        nvvm.barrier0 () [] []: <() -> ()>;
+        step = mir.constant () [] [value: builtin.integer <1: ui32>]: <() -> (builtin.integer ui32)>;
+        i_next = mir.add (i, step) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;
+        mir.goto (i_next) [^bar_head] []: <(builtin.integer ui32) -> ()>
+
+      ^tail():
+        nvvm.barrier0 () [] []: <() -> ()>;
+        mir.return () [] []: <() -> ()>
+    }
+}
+"#;
+    let continue_lean = export_named_source(continue_loop, "continue_split_barrier")
+        .expect("exports two-backedge continue split loop");
+
+    // Safe control: an unrelated divergent `n = if tx < 16 { 1 } else { 3 }` alongside a
+    // constant-bounded `while i < 2 { sync_threads() }` loop keeps `i < 2` uniform and verifies.
+    let safe_unrelated_div = DIVERGENT_UNIFORMITY_FIXTURE
+        .replacen(
+            "more = mir.lt (i, n) [] []",
+            "more = mir.lt (i, bound2) [] []",
+            1,
+        )
+        .replacen(
+            "      ^head(i: builtin.integer ui32):\n",
+            "      ^head(i: builtin.integer ui32):\n        bound2 = mir.constant () [] [value: builtin.integer <2: ui32>]: <() -> (builtin.integer ui32)>;\n",
+            1,
+        );
+    let safe_unrelated_lean = export_named_source(&safe_unrelated_div, "sync_dep_barrier")
+        .expect("exports constant-trip barrier loop after unrelated divergent join");
+
+    let Some(lean_dir) = lean_package_dir_if_available() else {
+        return;
+    };
+    lean_exporter::runner::check_generated_lean(&join_lean, &lean_dir)
+        .expect_err("Lean 4 must reject a barrier loop bounded by a divergent join");
+    lean_exporter::runner::check_generated_lean(&spin_lean, &lean_dir)
+        .expect_err("Lean 4 must reject a barrier loop bounded by a spin count");
+    lean_exporter::runner::check_generated_lean(&continue_lean, &lean_dir)
+        .expect_err("Lean 4 must reject a barrier loop bounded by a `continue` split join");
+    lean_exporter::runner::check_generated_lean(&safe_unrelated_lean, &lean_dir)
+        .expect("Lean 4 accepts constant-trip barrier loop after unrelated divergent join");
+    lean_exporter::runner::check_generated_lean(&uniform_join_lean, &lean_dir)
+        .expect("Lean 4 accepts the CTA-uniform barrier loop");
+    lean_exporter::runner::check_generated_lean(&uniform_spin_lean, &lean_dir)
+        .expect("Lean 4 accepts the constant-trip barrier loop");
 }

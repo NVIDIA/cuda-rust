@@ -98,6 +98,14 @@ pub enum MirRhs {
     LoadTmemBase(usize, u64),
     /// Arbitrary `width`-bit unsigned integer produced by an opaque operation `(var_id, width)`.
     OpaqueUint(usize, u32),
+    /// `width`-bit unsigned integer whose CTA-uniformity follows `src` (`(var_id, width, src)`).
+    CtaUint1(usize, u32, usize),
+    /// Zero-operand CTA-uniform constant (`mir.float_constant`).
+    CtaConst,
+    /// Single-operand pure combinational / CTA-query op (`clc_query_is_canceled`).
+    CtaUnary(usize),
+    /// Two-operand pure combinational non-index op (floating-point comparison).
+    CtaBin(usize, usize),
     /// Non-index float or aggregate value.
     OpaqueVal,
 }
@@ -164,6 +172,8 @@ pub struct MirProgramData {
     pub params: Vec<MirParamKind>,
     /// Static `SharedArray` `(short_name, size, elem_bytes)` declarations.
     pub shared_decls: Vec<(String, u64, u64)>,
+    /// `SharedArray` IDs proved race-free (`no_data_race`).
+    pub race_free_shared: Vec<usize>,
     /// RPO-ordered basic blocks (`0` is the entry block).
     pub blocks: Vec<MirBlockData>,
     /// `(assert_id, op_ptr)` pairs for `mir.assert` checks guarding verified `no_oob_idx` accesses.
@@ -1713,6 +1723,7 @@ pub(super) fn translate_mir_program(
                             };
                             cfg_blocks[new_b].succs.push((br_cond.0, t_dst));
                             cfg_blocks[new_b].succs.push((br_cond.1, f_dst));
+                            cfg_blocks[new_b].cond_var = Some(val_ids[&cond_v]);
                             term = MirTerminator::CondBr(
                                 val_ids[&cond_v],
                                 t_dst,
@@ -2228,17 +2239,27 @@ pub(super) fn translate_mir_program(
                         span_elems,
                     ));
                 }
-                "nvvm.clc_query_is_canceled"
-                | "nvvm.clc_query_get_first_ctaid_x"
+                "nvvm.clc_query_is_canceled" if op.get_num_results() == 1 => {
+                    let res = op.get_result(0);
+                    let rhs = match op.operands().next() {
+                        Some(v) => MirRhs::CtaUnary(val_ids[&v]),
+                        None => MirRhs::CtaConst,
+                    };
+                    stmts.push(MirStmt::Assign(val_ids[&res], rhs));
+                }
+                "nvvm.clc_query_get_first_ctaid_x"
                 | "nvvm.clc_query_get_first_ctaid_y"
                 | "nvvm.clc_query_get_first_ctaid_z"
                     if op.get_num_results() == 1 =>
                 {
                     let res = op.get_result(0);
-                    stmts.push(MirStmt::Assign(
-                        val_ids[&res],
-                        fallback_rhs_for(res, &val_ids),
-                    ));
+                    let w = mir_uint_width(ctx, res.get_type(ctx));
+                    let eff_w = if w > 1 { w } else { 32 };
+                    let rhs = match op.operands().next() {
+                        Some(v) => MirRhs::CtaUint1(val_ids[&res], eff_w, val_ids[&v]),
+                        None => MirRhs::OpaqueUint(val_ids[&res], eff_w),
+                    };
+                    stmts.push(MirStmt::Assign(val_ids[&res], rhs));
                 }
                 "nvvm.cvta_generic_to_shared_offset"
                 | "nvvm.cvta_generic_to_cluster_shared_offset"
@@ -2867,7 +2888,7 @@ pub(super) fn translate_mir_program(
                 "mir.float_constant" if op.get_num_results() == 1 => {
                     stmts.push(MirStmt::Assign(
                         val_ids[&op.get_result(0)],
-                        MirRhs::OpaqueVal,
+                        MirRhs::CtaConst,
                     ));
                 }
                 "nvvm.read_ptx_sreg_tid_x"
@@ -3133,10 +3154,20 @@ pub(super) fn translate_mir_program(
                                 {
                                     tags.insert(res, t);
                                 }
-                                stmts.push(MirStmt::Assign(
-                                    val_ids[&res],
-                                    fallback_rhs_for(res, &opaque_ids),
-                                ));
+                                let rhs = if matches!(
+                                    tags.get(&src),
+                                    Some(LocalTag::UnverifiedPtr | LocalTag::TmemLoadedReg(_))
+                                ) {
+                                    fallback_rhs_for(res, &opaque_ids)
+                                } else {
+                                    let w = mir_uint_width(ctx, res.get_type(ctx));
+                                    if w > 1 {
+                                        MirRhs::CtaUint1(opaque_ids[&res], w, val_ids[&src])
+                                    } else {
+                                        MirRhs::CtaUnary(val_ids[&src])
+                                    }
+                                };
+                                stmts.push(MirStmt::Assign(val_ids[&res], rhs));
                             }
                         }
                     }
@@ -3500,10 +3531,12 @@ pub(super) fn translate_mir_program(
                                     MirRhs::Load(val_ids[&ptr_v]),
                                 ));
                                 if lw > 1 {
-                                    stmts.push(MirStmt::Assign(
-                                        val_ids[&res],
-                                        MirRhs::OpaqueUint(opaque_ids[&res], lw),
-                                    ));
+                                    let rhs = if spec.no_data_race.contains(&sid) {
+                                        MirRhs::CtaUint1(opaque_ids[&res], lw, val_ids[&res])
+                                    } else {
+                                        MirRhs::OpaqueUint(opaque_ids[&res], lw)
+                                    };
+                                    stmts.push(MirStmt::Assign(val_ids[&res], rhs));
                                 }
                             }
                         }
@@ -3856,7 +3889,10 @@ pub(super) fn translate_mir_program(
                             MirRhs::CmpOp(lean_cmp, val_ids[&l], val_ids[&r]),
                         ));
                     } else {
-                        stmts.push(MirStmt::Assign(val_ids[&res], MirRhs::OpaqueVal));
+                        stmts.push(MirStmt::Assign(
+                            val_ids[&res],
+                            MirRhs::CtaBin(val_ids[&l], val_ids[&r]),
+                        ));
                     }
                 }
                 "mir.not" if op.get_num_operands() == 1 && op.get_num_results() == 1 => {
@@ -3986,12 +4022,14 @@ pub(super) fn translate_mir_program(
     let proven_assert_ops: Vec<Ptr<Operation>> =
         candidate_asserts.iter().map(|&(_, op)| op).collect();
 
+    let race_free_shared: Vec<usize> = spec.no_data_race.to_vec();
     Ok(TranslatedFunction::MirProgram {
         arity,
         spec: Box::new(spec),
         program: Box::new(MirProgramData {
             params,
             shared_decls,
+            race_free_shared,
             blocks: mir_blocks,
             candidate_asserts,
             control_flow_cfg,

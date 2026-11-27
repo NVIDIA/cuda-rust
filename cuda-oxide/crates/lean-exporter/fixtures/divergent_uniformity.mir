@@ -1,0 +1,100 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+// PostMem2Reg dialect-mir fixture: barrier loops whose trip count differs across threads
+// although every operand feeding it is uniform.
+//
+// `sync_dep_barrier`: `n = if tid < 16 { 1 } else { 3 }` reaches the loop through two
+// `goto`s carrying constants (sync dependence on a divergent branch).
+// `spin_count_barrier`: each thread counts failed `mbarrier_try_wait_parity` polls and
+// runs that many barriers (temporal divergence through a spin loop's exit).
+builtin.module @divergent_uniformity {
+  ^entry():
+    mir.func @sync_dep_barrier: builtin.function <(mir.disjoint_slice <builtin.integer ui32,[]>) -> ()>
+      [gpu_kernel: builtin.string "true", launch_contract_domain: builtin.integer <1: ui32>, reqntid_x: builtin.integer <64: ui32>, reqntid_y: builtin.integer <1: ui32>, reqntid_z: builtin.integer <1: ui32>, verify_uniform_barriers: builtin.string "true"]
+    {
+      ^entry(out: mir.disjoint_slice <builtin.integer ui32,[]>):
+        tx = nvvm.read_ptx_sreg_tid_x () [] []: <() -> (builtin.integer ui32)>;
+        c16 = mir.constant () [] [value: builtin.integer <16: ui32>]: <() -> (builtin.integer ui32)>;
+        lo = mir.lt (tx, c16) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer i1)>;
+        mir.cond_br (lo) [^short, ^long] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^short():
+        c1 = mir.constant () [] [value: builtin.integer <1: ui32>]: <() -> (builtin.integer ui32)>;
+        mir.goto (c1) [^join] []: <(builtin.integer ui32) -> ()>
+
+      ^long():
+        c3 = mir.constant () [] [value: builtin.integer <3: ui32>]: <() -> (builtin.integer ui32)>;
+        mir.goto (c3) [^join] []: <(builtin.integer ui32) -> ()>
+
+      ^join(n: builtin.integer ui32):
+        c0 = mir.constant () [] [value: builtin.integer <0: ui32>]: <() -> (builtin.integer ui32)>;
+        mir.goto (c0) [^head] []: <(builtin.integer ui32) -> ()>
+
+      ^head(i: builtin.integer ui32):
+        more = mir.lt (i, n) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer i1)>;
+        mir.cond_br (more) [^body, ^tail] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^body():
+        nvvm.barrier0 () [] []: <() -> ()>;
+        one = mir.constant () [] [value: builtin.integer <1: ui32>]: <() -> (builtin.integer ui32)>;
+        i_next = mir.add (i, one) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;
+        mir.goto (i_next) [^head] []: <(builtin.integer ui32) -> ()>
+
+      ^tail():
+        nvvm.barrier0 () [] []: <() -> ()>;
+        mir.return () [] []: <() -> ()>
+    };
+    mir.func @spin_count_barrier: builtin.function <(mir.disjoint_slice <builtin.integer ui32,[]>) -> ()>
+      [gpu_kernel: builtin.string "true", launch_contract_domain: builtin.integer <1: ui32>, reqntid_x: builtin.integer <64: ui32>, reqntid_y: builtin.integer <1: ui32>, reqntid_z: builtin.integer <1: ui32>, verify_uniform_barriers: builtin.string "true"]
+    {
+      ^entry(out: mir.disjoint_slice <builtin.integer ui32,[]>):
+        tx = nvvm.read_ptx_sreg_tid_x () [] []: <() -> (builtin.integer ui32)>;
+        c0 = mir.constant () [] [value: builtin.integer <0: ui32>]: <() -> (builtin.integer ui32)>;
+        is_leader = mir.eq (tx, c0) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer i1)>;
+        mir.cond_br (is_leader) [^init_bar, ^after_init] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^init_bar():
+        bar_init = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string "BAR", source_name: builtin.string "divergent_uniformity::spin_count_barrier::BAR"]: <() -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;
+        c64 = mir.constant () [] [value: builtin.integer <64: ui32>]: <() -> (builtin.integer ui32)>;
+        nvvm.mbarrier_init_shared (bar_init, c64) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui32) -> ()>;
+        nvvm.fence_proxy_async_shared_cta () [] []: <() -> ()>;
+        mir.goto () [^after_init] []: <() -> ()>
+
+      ^after_init():
+        nvvm.barrier0 () [] []: <() -> ()>;
+        bar_arrive = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string "BAR", source_name: builtin.string "divergent_uniformity::spin_count_barrier::BAR"]: <() -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;
+        _tok = nvvm.mbarrier_arrive_shared (bar_arrive) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>) -> (builtin.integer ui64)>;
+        spin0 = mir.constant () [] [value: builtin.integer <0: ui32>]: <() -> (builtin.integer ui32)>;
+        mir.goto (spin0) [^spin_head] []: <(builtin.integer ui32) -> ()>
+
+      ^spin_head(spins: builtin.integer ui32):
+        bar_wait = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string "BAR", source_name: builtin.string "divergent_uniformity::spin_count_barrier::BAR"]: <() -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;
+        parity = mir.constant () [] [value: builtin.integer <0: ui32>]: <() -> (builtin.integer ui32)>;
+        ready = nvvm.mbarrier_try_wait_parity_shared (bar_wait, parity) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui32) -> (builtin.integer i1)>;
+        not_ready = mir.not (ready) [] []: <(builtin.integer i1) -> (builtin.integer i1)>;
+        mir.cond_br (not_ready) [^spin_body, ^spun] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^spin_body():
+        spin_one = mir.constant () [] [value: builtin.integer <1: ui32>]: <() -> (builtin.integer ui32)>;
+        spins_next = mir.add (spins, spin_one) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;
+        mir.goto (spins_next) [^spin_head] []: <(builtin.integer ui32) -> ()>
+
+      ^spun():
+        k0 = mir.constant () [] [value: builtin.integer <0: ui32>]: <() -> (builtin.integer ui32)>;
+        mir.goto (k0) [^bar_head] []: <(builtin.integer ui32) -> ()>
+
+      ^bar_head(k: builtin.integer ui32):
+        more = mir.lt (k, spins) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer i1)>;
+        mir.cond_br (more) [^bar_body, ^tail] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^bar_body():
+        nvvm.barrier0 () [] []: <() -> ()>;
+        k_one = mir.constant () [] [value: builtin.integer <1: ui32>]: <() -> (builtin.integer ui32)>;
+        k_next = mir.add (k, k_one) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;
+        mir.goto (k_next) [^bar_head] []: <(builtin.integer ui32) -> ()>
+
+      ^tail():
+        nvvm.barrier0 () [] []: <() -> ()>;
+        mir.return () [] []: <() -> ()>
+    }
+}

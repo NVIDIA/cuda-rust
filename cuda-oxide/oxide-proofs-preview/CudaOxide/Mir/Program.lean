@@ -177,6 +177,14 @@ inductive Rhs where
   | loadTmemBase (ptr cols : Nat)
   /-- Arbitrary `width`-bit unsigned integer produced by an opaque call/extract (`id`, `width`). -/
   | opaqueUint (id width : Nat)
+  /-- Arbitrary `width`-bit unsigned integer whose CTA-uniformity follows `src` (`clc_query_*`, race-free SMEM `u32`). -/
+  | ctaUint1 (id width src : Nat)
+  /-- Zero-operand CTA-uniform non-index constant (`mir.float_constant`). -/
+  | ctaConst
+  /-- Single-operand pure combinational / CTA-query op (`clc_query_is_canceled`). -/
+  | ctaUnary (src : Nat)
+  /-- Two-operand pure combinational non-index op (floating-point comparison). -/
+  | ctaBin (lhs rhs : Nat)
   /-- Non-index floating-point or aggregate value (`fp16`, `bf16`, `fp32`, etc.). -/
   | opaqueVal
   deriving Repr, DecidableEq
@@ -259,6 +267,8 @@ structure MirFunc where
   requiresLenGe : List (Nat × Nat) := []
   /-- Static `SharedArray` declarations (`0 .. sharedDecls.length - 1`). -/
   sharedDecls : List SharedDecl := []
+  /-- `SharedArray` IDs proved race-free (`no_data_race`), whose uniform-index reads are CTA-uniform. -/
+  raceFreeShared : List Nat := []
   /-- Topologically ordered basic blocks (`0` is the entry block). -/
   blocks : List BasicBlock
   deriving Repr, DecidableEq
@@ -473,8 +483,8 @@ def evalRhs (f : MirFunc) (env : InputEnv) (t : ThreadCtx) (regs : RegFile) : Rh
           .smemOff sid (off * eb)
       | _ => .unk
   | .loadTmemBase _ _ => .unk
-  | .opaqueUint id w => .int (wordMod w (env.opaqueUint t id))
-  | .opaqueVal => .unk
+  | .opaqueUint id w | .ctaUint1 id w _ => .int (wordMod w (env.opaqueUint t id))
+  | .ctaConst | .ctaUnary _ | .ctaBin _ _ | .opaqueVal => .unk
 
 /-- Memory access event observed while executing a basic block. -/
 structure MemEvent where
@@ -756,5 +766,66 @@ def EmitsTrapFreeEvent (f : MirFunc) (env : InputEnv) (t : ThreadCtx) (ev : MemE
 theorem EmitsTrapFreeEvent.toEmitsEvent {f : MirFunc} {env : InputEnv} {t : ThreadCtx} {ev : MemEvent} :
     EmitsTrapFreeEvent f env t ev → EmitsEvent f env t ev
   | ⟨b, phase, regs, hr, _, hmem⟩ => ⟨b, phase, regs, hr.toReachable, hmem⟩
+
+/-- True when `rhs` produces a CTA-uniform value given uniform variable predicate `isUni`
+    and race-free `SharedArray` pointer predicate `isRfPtr`. -/
+def Rhs.isCtaUni (_f : MirFunc) (isUni isRfPtr : Nat → Bool) : Rhs → Bool
+  | .copy src | .notBool src | .intCast _ src | .cvtaShared src | .ctaUint1 _ _ src | .ctaUnary src => isUni src
+  | .constInt _ _ | .constBool _ | .paramScalar _ | .slicePtr _ | .sliceLen _ | .sharedBase _ | .ctaConst => true
+  | .sreg r =>
+      match r with
+      | .ctaidX | .ctaidY | .ntidX | .ntidY | .clusterCtaidX => true
+      | .tidX | .tidY | .laneId => false
+  | .binOp _ _ l r | .checkedOvf _ _ l r | .cmpOp _ l r | .ptrOffset l r | .ctaBin l r => isUni l && isUni r
+  | .load ptr => isRfPtr ptr && isUni ptr
+  | .index1D | .coord2DU32 | .mbarTryWait _ _ _ | .loadTmemBase _ _ | .opaqueUint _ _ | .opaqueVal => false
+
+/-- True when `rhs` produces a pointer into a race-free `SharedArray` (`sid ∈ f.raceFreeShared`). -/
+def Rhs.isRfSmemPtr (f : MirFunc) (isRfPtr : Nat → Bool) : Rhs → Bool
+  | .sharedBase sid => f.raceFreeShared.contains sid
+  | .copy src | .ptrOffset src _ => isRfPtr src
+  | _ => false
+
+/-- Step `(ok, curUni, curRf)` sequentially across `stmts` starting from `(globalUni, globalRf)`:
+    any assignment to a variable in `globalUni` (resp. `globalRf`) must be locally uniform (resp. `rfPtr`),
+    while block-local scratch registers update `(curUni, curRf)` locally within the block. -/
+def checkExecUniStmts (f : MirFunc) (globalUni globalRf : List Nat) :
+    List Nat → List Nat → List Stmt → Bool × List Nat × List Nat
+  | curUni, curRf, [] => (true, curUni, curRf)
+  | curUni, curRf, stmt :: rest =>
+      match stmt with
+      | .assign dst rhs =>
+          let uOk := rhs.isCtaUni f curUni.contains curRf.contains
+          let rOk := rhs.isRfSmemPtr f curRf.contains
+          if (globalUni.contains dst && !uOk) || (globalRf.contains dst && !rOk) then
+            (false, [], [])
+          else
+            let nextUni := if uOk then (if curUni.contains dst then curUni else dst :: curUni) else curUni.filter (· != dst)
+            let nextRf := if rOk then (if curRf.contains dst then curRf else dst :: curRf) else curRf.filter (· != dst)
+            checkExecUniStmts f globalUni globalRf nextUni nextRf rest
+      | _ => checkExecUniStmts f globalUni globalRf curUni curRf rest
+
+/-- Collect every valid non-entry block-argument edge `(dstBlk, paramIdx, argVarId, srcBlk, armIdx, passedVarId)`
+    across `f` in a single pass (`armIdx = 0` for `goto` / `condBr` then-arm, `1` for else-arm). -/
+def collectAllArgEdges (f : MirFunc) : List (Nat × Nat × Nat × Nat × Nat × Nat) :=
+  let dstArgLists := f.blocks.map fun blk => blk.args.map BlockArg.varId
+  let pushArgs := fun (dst src arm : Nat) (args : List Nat) (acc : List (Nat × Nat × Nat × Nat × Nat × Nat)) =>
+    if dst == 0 then acc
+    else
+      let dArgs := dstArgLists.getD dst []
+      (List.range (min dArgs.length args.length)).foldr (fun k a =>
+        match dArgs[k]?, args[k]? with
+        | some argId, some v => (dst, k, argId, src, arm, v) :: a
+        | _, _ => a) acc
+  let rec go : Nat → List BasicBlock → List (Nat × Nat × Nat × Nat × Nat × Nat)
+    | _, [] => []
+    | p, blk :: rest =>
+        let tail := go (p + 1) rest
+        match blk.term with
+        | .goto dst args => pushArgs dst p 0 args tail
+        | .condBr _ tBlk tArgs fBlk fArgs =>
+            pushArgs tBlk p 0 tArgs (pushArgs fBlk p 1 fArgs tail)
+        | .ret | .unreachable => tail
+  go 0 f.blocks
 
 end CudaOxide.Mir.Program

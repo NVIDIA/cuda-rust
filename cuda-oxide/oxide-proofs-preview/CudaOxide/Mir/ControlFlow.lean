@@ -49,7 +49,7 @@ inductive IdxExpr where
   | div (a : IdxExpr) (d : Nat)
   /-- Euclidean remainder `a % d`. -/
   | mod (a : IdxExpr) (d : Nat)
-  deriving Repr, DecidableEq
+  deriving Repr, DecidableEq, Lean.ToExpr
 
 /-- Evaluate an `IdxExpr` on concrete `(tx, ty, i, cr)`. -/
 def IdxExpr.eval (e : IdxExpr) (tx ty i : Nat) (cr : Nat := 0) : Nat :=
@@ -85,7 +85,7 @@ inductive GuardExpr where
   /-- Per-lane data-dependent or unmodeled branch condition (`if data[tid] > 0.0`).
       Poisons both warp-collective and block-uniformity checks until reconvergence. -/
   | unknown
-  deriving Repr, DecidableEq
+  deriving Repr, DecidableEq, Lean.ToExpr
 
 /-- Logical negation of a `GuardExpr` across a `cond_br` false arm. -/
 def GuardExpr.negate (g : GuardExpr) : GuardExpr :=
@@ -272,7 +272,7 @@ inductive BranchCond where
   | warpUniform
   /-- Per-thread data-dependent or unmodeled runtime branch (`data[tid] > 0.0`). -/
   | unknown
-  deriving Repr, DecidableEq
+  deriving Repr, DecidableEq, Lean.ToExpr
 
 /-- Control-flow-sensitive GPU or shared-memory operation inside a basic block,
     transcribed in exact program order from `PostMem2Reg` `dialect-mir`. -/
@@ -323,7 +323,7 @@ inductive CfgOp where
   | tmemFenceBeforeSync
   /-- `tcgen05_fence_after_thread_sync()` ordering `tcgen05` after thread synchronization. -/
   | tmemFenceAfterSync
-  deriving Repr, DecidableEq
+  deriving Repr, DecidableEq, Lean.ToExpr
 
 /-- One basic block in the kernel's transcribed `PostMem2Reg` control-flow graph. -/
 structure CfgBlock where
@@ -331,9 +331,11 @@ structure CfgBlock where
   ops : List CfgOp := []
   /-- Outgoing CFG edges `(branchCondition, targetBlockIndex)`. -/
   succs : List (BranchCond × Nat) := []
+  /-- Optional `MirFunc` SSA condition variable ID when this block ends in `mir.cond_br`. -/
+  condVarOpt : Option Nat := none
   /-- True when this block terminates in `mir.return`. -/
   isReturn : Bool := false
-  deriving Repr, DecidableEq
+  deriving Repr, DecidableEq, Lean.ToExpr
 
 /-- Compact kernel control-flow graph transcribed from `PostMem2Reg` `dialect-mir`. -/
 structure ControlFlowCfg where
@@ -349,7 +351,7 @@ structure ControlFlowCfg where
   numBarriers : Nat
   /-- Basic blocks indexed `0 .. blocks.length - 1` (`0` is the entry block). -/
   blocks : List CfgBlock
-  deriving Repr, DecidableEq
+  deriving Repr, DecidableEq, Lean.ToExpr
 
 /-- Look up basic block `b` in `cfg`, returning an empty block if out of range. -/
 def ControlFlowCfg.blockAt (cfg : ControlFlowCfg) (b : Nat) : CfgBlock :=

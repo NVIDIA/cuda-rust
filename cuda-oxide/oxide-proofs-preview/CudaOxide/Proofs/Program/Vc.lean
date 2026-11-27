@@ -800,7 +800,7 @@ theorem mem_upperTriPairs {α : Type} {x y : α} :
 theorem vcNoSharedRace_of_table {f : MirFunc} {cfg : ControlFlowCfg} {tbl : List SymBlockInv}
     {memEvs : List SymMemEvent} {sharedId : Nat}
     {pairs : List (SymMemEvent × SymMemEvent × Option (SymInt × SymInt))}
-    (hunif : UniformBarriers cfg)
+    (hunif : UniformBarriers f cfg)
     (hvalid : validSymFunc f tbl = true)
     (hmem : collectSymMemEvents f tbl = memEvs)
     (hpairs : (let sevs := dedupEvents (memEvs.filter fun s => s.space == .shared && s.bufId == sharedId)
@@ -1037,7 +1037,7 @@ theorem symRankEventsOfStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadC
               exact ⟨rev, hmem, hp, hrEq⟩
           | copy _ | constInt _ _ | constBool _ | sreg _ | index1D | coord2DU32 | paramScalar _ | slicePtr _
           | sliceLen _ | sharedBase _ | binOp _ _ _ _ | checkedOvf _ _ _ _ | cmpOp _ _ _ | notBool _ | intCast _ _
-          | ptrOffset _ _ | mbarTryWait _ _ _ | cvtaShared _ | opaqueUint _ _ | opaqueVal =>
+          | ptrOffset _ _ | mbarTryWait _ _ _ | cvtaShared _ | opaqueUint _ _ | ctaUint1 _ _ _ | ctaConst | ctaUnary _ | ctaBin _ _ | opaqueVal =>
               obtain ⟨rev, hmem, hp, hrEq⟩ := symRankEventsOfStmts_correct f env t havoc pCond term
                 rest tl sfx _ _ phase rv r hnextGen htl (by simpa [execStmts] using hr)
               exact ⟨rev, hmem, hp, hrEq⟩
@@ -1181,7 +1181,7 @@ theorem findBlockGlobalWrite_sound (f : MirFunc) (paramId : Nat) (env : InputEnv
                 exact ⟨ev, List.mem_append_right _ hev, hprops⟩⟩
           | copy _ | constInt _ _ | constBool _ | sreg _ | index1D | coord2DU32 | paramScalar _ | slicePtr _
           | sliceLen _ | sharedBase _ | binOp _ _ _ _ | checkedOvf _ _ _ _ | cmpOp _ _ _ | notBool _ | intCast _ _
-          | ptrOffset _ _ | mbarTryWait _ _ _ | cvtaShared _ | opaqueUint _ _ | opaqueVal =>
+          | ptrOffset _ _ | mbarTryWait _ _ _ | cvtaShared _ | opaqueUint _ _ | ctaUint1 _ _ _ | ctaConst | ctaUnary _ | ctaBin _ _ | opaqueVal =>
               exact findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest _ _ phase hnextGen
       | assertCond aid cond =>
           obtain ⟨hr, hnt, hw⟩ := findBlockGlobalWrite f paramId pCond sregs rest |> fun _ =>

@@ -74,7 +74,7 @@ def asyncOrdered (f : MirFunc) (env : InputEnv) (ev₁ ev₂ : MemEvent) : Prop 
     (`¬ asyncOrdered f env ev₁ ev₂`), at least one is a write, and their element indices
     collide (`ev₁.index = ev₂.index`), then `t₁ = t₂`. -/
 def MirNoSharedRace (f : MirFunc) (cfg : ControlFlowCfg) (sharedId : Nat) : Prop :=
-  UniformBarriers cfg ∧                                     -- CTA barriers are uniform so `ev.phase` epochs align, AND
+  UniformBarriers f cfg ∧                                   -- CTA barriers are uniform so `ev.phase` epochs align, AND
   ∀ env : InputEnv, ∀ t₁ t₂ : ThreadCtx, ∀ ev₁ ev₂ : MemEvent, -- Pick ANY launch `env`, two CTA threads, and two events:
     f.validInput env →                                      -- IF `env` satisfies launch preconditions,
     f.validThread t₁ → f.validThread t₂ →                   -- AND both `t₁` and `t₂` are valid CTA threads,

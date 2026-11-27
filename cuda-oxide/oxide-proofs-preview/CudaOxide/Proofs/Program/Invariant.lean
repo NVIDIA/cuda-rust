@@ -225,8 +225,8 @@ def initialSymRegs (f : MirFunc) : SymRegList :=
 
 /-- SSA variables referenced inside a single `Rhs`. -/
 def rhsUsedVars : Rhs → List Nat
-  | .copy s | .notBool s | .intCast _ s | .load s | .cvtaShared s | .loadTmemBase s _ => [s]
-  | .binOp _ _ l r | .checkedOvf _ _ l r | .cmpOp _ l r | .ptrOffset l r => [l, r]
+  | .copy s | .notBool s | .intCast _ s | .load s | .cvtaShared s | .loadTmemBase s _ | .ctaUint1 _ _ s | .ctaUnary s => [s]
+  | .binOp _ _ l r | .checkedOvf _ _ l r | .cmpOp _ l r | .ptrOffset l r | .ctaBin l r => [l, r]
   | .mbarTryWait _ sv _ => [sv]
   | _ => []
 

@@ -293,6 +293,8 @@ pub struct TranscribedCfgBlock {
     pub ops: Vec<CfgOpItem>,
     /// Outgoing `(condition, target_block_idx)` edges.
     pub succs: Vec<(CfgBranchCond, usize)>,
+    /// Optional `MirFunc` SSA condition variable ID when ending in `mir.cond_br`.
+    pub cond_var: Option<usize>,
     /// True when this basic block ends with `mir.return`.
     pub is_return: bool,
 }
@@ -375,6 +377,7 @@ impl TranscribedControlFlowCfg {
                 {
                     let target = *d0;
                     blk.succs = vec![(CfgBranchCond::Always, target)];
+                    blk.cond_var = None;
                     changed = true;
                 }
             }

@@ -312,10 +312,10 @@ def checkUniformBarriersWith (cfg : ControlFlowCfg) (inv : StateMap) : Bool :=
   (!(decide (0 < cfg.numBarriers) && decide (tmemAllocSites cfg = [])) ||
     (validStateMap false cfg inv && checkLoopBackpressure cfg))
 
-/-- Reusable soundness theorem for `uniform_barriers` using a precomputed `inv : StateMap`. -/
-theorem uniform_barriers_of_stateMap {cfg : ControlFlowCfg} {inv : StateMap}
+/-- Reusable soundness theorem for `UniformBarriersCfg` using a precomputed `inv : StateMap`. -/
+theorem uniform_barriers_cfg_of_stateMap {cfg : ControlFlowCfg} {inv : StateMap}
     (hcheck : checkUniformBarriersWith cfg inv = true) :
-    UniformBarriers cfg := by
+    UniformBarriersCfg cfg := by
   unfold checkUniformBarriersWith at hcheck
   rcases Bool.and_eq_true_iff.mp hcheck with ⟨h0123456, hasync⟩
   rcases Bool.and_eq_true_iff.mp h0123456 with ⟨h012345, hmbarCnt⟩

@@ -58,6 +58,7 @@ theorem rejected_divergent_shared_race :
   apply CudaOxide.Proofs.Program.vcNoSharedRace_of_table ?_ divRaceMir_valid divRaceEvents_eq (by mir_bind_shared_pairs)
   · mir_vc divRaceMir                                       -- Equal-phase pair check is empty,
   · have h : (let (uv, rf, su, rs, ie, uc, ref, sm) := CudaOxide.Proofs.ControlFlow.inferUniformityBundle divRaceMir divRaceCfg
-              CudaOxide.Proofs.ControlFlow.checkUniformBarriersMir divRaceMir uv rf su rs ref ie uc sm) = true := by
+              let ch := CudaOxide.Proofs.ControlFlow.chunk16 su.length (su.map CudaOxide.Proofs.ControlFlow.BlockUniSummary.succDsts)
+              CudaOxide.Proofs.ControlFlow.checkUniformBarriersMir divRaceMir uv rf su ch rs ref ie uc sm) = true := by
       decide +revert; omega                                 -- BUT `UniformBarriers` fails on divergent block `1`!
-    exact CudaOxide.Proofs.ControlFlow.uniform_barriers_of_stateMap rfl rfl rfl rfl h
+    exact CudaOxide.Proofs.ControlFlow.uniform_barriers_of_stateMap rfl rfl rfl rfl rfl h

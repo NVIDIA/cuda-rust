@@ -13,7 +13,8 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use dialect_mir::types::{
-    MirDisjointSliceType, MirEnumType, MirPtrType, MirSliceType, MirStructType,
+    MirArrayType, MirDisjointSliceType, MirEnumType, MirPtrType, MirSliceType, MirStructType,
+    MirTupleType,
 };
 use pliron::{
     basic_block::BasicBlock,
@@ -477,132 +478,6 @@ pub(super) fn translate_mir_program(
         }
     }
 
-    let mut enum_payload_ids: HashMap<Value, usize> = HashMap::new();
-    let mut opaque_ids: HashMap<Value, usize> = HashMap::new();
-    let mut next_opaque_id = 0usize;
-    let is_enum_val = |v: Value| -> bool {
-        v.get_type(ctx)
-            .deref(ctx)
-            .downcast_ref::<MirEnumType>()
-            .is_some()
-    };
-    let is_struct_val = |v: Value| -> bool {
-        v.get_type(ctx)
-            .deref(ctx)
-            .downcast_ref::<MirStructType>()
-            .is_some()
-    };
-
-    // Partition SSA values into cross-block values (assigned compact IDs `0..global_end` so
-    // `pruneIntraBlockRegs` trims every per-block `SymRegList` to `O(cross_live)`) vs. strictly
-    // intra-block temporaries (reusing `global_end..global_end + max_block_locals` per block).
-    let mut def_block: HashMap<Value, usize> = HashMap::new();
-    let mut cross_vals: HashSet<Value> = HashSet::new();
-    for &old_idx in &rpo_old {
-        let blk = graph.blocks[old_idx].deref(ctx);
-        for arg in blk.arguments() {
-            def_block.insert(arg, old_idx);
-            cross_vals.insert(arg);
-            opaque_ids.entry(arg).or_insert_with(|| {
-                let id = next_opaque_id;
-                next_opaque_id += 1;
-                id
-            });
-        }
-        for op_ptr in blk.iter(ctx) {
-            let op = op_ptr.deref(ctx);
-            for r_idx in 0..op.get_num_results() {
-                let res = op.get_result(r_idx);
-                def_block.insert(res, old_idx);
-                opaque_ids.entry(res).or_insert_with(|| {
-                    let id = next_opaque_id;
-                    next_opaque_id += 1;
-                    id
-                });
-                if is_enum_val(res) || is_struct_val(res) {
-                    cross_vals.insert(res);
-                }
-            }
-        }
-    }
-    for &old_idx in &rpo_old {
-        let blk = graph.blocks[old_idx].deref(ctx);
-        for op_ptr in blk.iter(ctx) {
-            let name = op_name(ctx, op_ptr);
-            let is_term = matches!(name.as_str(), "mir.goto" | "mir.cond_br");
-            let is_store = name == "mir.store";
-            let op = op_ptr.deref(ctx);
-            for o_idx in 0..op.get_num_operands() {
-                let ov = op.get_operand(o_idx);
-                if is_term
-                    || (is_store && o_idx == 1)
-                    || def_block.get(&ov).copied() != Some(old_idx)
-                {
-                    cross_vals.insert(ov);
-                }
-            }
-        }
-    }
-
-    let mut zero_slot_vid = 0usize;
-    for &old_idx in &rpo_old {
-        let blk = graph.blocks[old_idx].deref(ctx);
-        for arg in blk.arguments() {
-            val_ids.entry(arg).or_insert_with(|| {
-                let id = next_var_id;
-                next_var_id += 1;
-                id
-            });
-            if old_idx != 0 && is_enum_val(arg) {
-                let pid = next_var_id;
-                next_var_id += 1;
-                enum_payload_ids.insert(arg, pid);
-            }
-        }
-        if old_idx == 0 {
-            zero_slot_vid = next_var_id;
-            next_var_id += 1;
-        }
-        for op_ptr in blk.iter(ctx) {
-            let op = op_ptr.deref(ctx);
-            for r_idx in 0..op.get_num_results() {
-                let res = op.get_result(r_idx);
-                if cross_vals.contains(&res) {
-                    val_ids.entry(res).or_insert_with(|| {
-                        let id = next_var_id;
-                        next_var_id += 1;
-                        id
-                    });
-                    if is_enum_val(res) {
-                        let pid = next_var_id;
-                        next_var_id += 1;
-                        enum_payload_ids.insert(res, pid);
-                    }
-                }
-            }
-        }
-    }
-    let local_base_vid = next_var_id;
-    let mut max_local_vid = local_base_vid;
-    for &old_idx in &rpo_old {
-        let blk = graph.blocks[old_idx].deref(ctx);
-        let mut cur_local = local_base_vid;
-        for op_ptr in blk.iter(ctx) {
-            let op = op_ptr.deref(ctx);
-            for r_idx in 0..op.get_num_results() {
-                let res = op.get_result(r_idx);
-                if let std::collections::hash_map::Entry::Vacant(entry) = val_ids.entry(res) {
-                    entry.insert(cur_local);
-                    cur_local += 1;
-                }
-            }
-        }
-        if cur_local > max_local_vid {
-            max_local_vid = cur_local;
-        }
-    }
-    next_var_id = max_local_vid;
-
     // 3. Track CTA-uniform vs. thread-divergent SSA values for `ControlFlowCfg`.
     //    Reads from race-free `SharedArray`s (`spec.no_data_race`) at CTA-uniform indices
     //    return the same shared-memory word across all 32 lanes of an active warp.
@@ -971,9 +846,7 @@ pub(super) fn translate_mir_program(
                         && let Some(fi) = fi_opt
                     {
                         stack_field_ptrs.insert(op.get_result(0), (base, fi as usize));
-                    } else if fi_opt == Some(0)
-                        && let Some(t @ LocalTag::BarrierPtr { .. }) = tags.get(&base).copied()
-                    {
+                    } else if let Some(t @ LocalTag::BarrierPtr { .. }) = tags.get(&base).copied() {
                         tags.insert(op.get_result(0), t);
                     }
                 } else if on == "mir.store" && op.get_num_operands() >= 2 {
@@ -1023,7 +896,8 @@ pub(super) fn translate_mir_program(
                 {
                     let (bs, fv, res) = (op.get_operand(0), op.get_operand(1), op.get_result(0));
                     let mut fts = struct_field_tags.get(&bs).cloned().unwrap_or_default();
-                    if let Some(fi) = attribute_field_index(&op.attributes, "index")
+                    if let Some(fi) = attribute_field_index(&op.attributes, "insert_index")
+                        .or_else(|| attribute_field_index(&op.attributes, "index"))
                         .or_else(|| attribute_field_index(&op.attributes, "field_index"))
                     {
                         let i = fi as usize;
@@ -1283,6 +1157,12 @@ pub(super) fn translate_mir_program(
                     && let Some(&t) = tags.get(&op.get_operand(0))
                 {
                     enum_payload_tags.insert(op.get_result(0), t);
+                } else if on == "mir.enum_payload"
+                    && op.get_num_operands() == 1
+                    && op.get_num_results() == 1
+                    && let Some(&t) = enum_payload_tags.get(&op.get_operand(0))
+                {
+                    tags.insert(op.get_result(0), t);
                 } else if on == "mir.goto" && op.get_num_successors() == 1 {
                     let dst = op.get_successor(0);
                     for (i, v) in op.operands().enumerate() {
@@ -1397,6 +1277,162 @@ pub(super) fn translate_mir_program(
             }
         }
     }
+
+    // 5. Assign global `opaque_ids` and partition SSA values into persistent Tier 1 (`cross_vals`)
+    //    vs. block-local Tier 2 temporaries (`val_ids`) after Step 4 has populated `tags`.
+    //
+    // Cross-block register lifetime invariant:
+    // - Tier 1 (`0..local_base_vid`): globally unique persistent registers (entry/block args,
+    //   `zero_slot_vid`, `enum_payload_ids`, and `cross_vals`), preserved across block boundaries.
+    // - Tier 2 (`local_base_vid..max_local_vid`): per-block recycled temporaries, valid only
+    //   inside the defining basic block.
+    // - Tier 3 (`max_local_vid..next_var_id`): globally unique synthetic temporaries (`c4_vid`,
+    //   `sum_vid`, `ovf_vid`) allocated during statement emission.
+    // Every SSA value whose `val_ids[&v]` is persisted across blocks in a side table
+    // (`struct_fields`, `alloca_vars`, `bar_slot_vars`, `enum_payload_tags` via `mir.construct_enum`,
+    // or `LocalTag` wrapper IDs) must be in Tier 1 (`cross_vals`), and register-keyed side tables
+    // (`smem_desc_ready`) must evict Tier-2 IDs at block boundaries.
+    let mut enum_payload_ids: HashMap<Value, usize> = HashMap::new();
+    let mut opaque_ids: HashMap<Value, usize> = HashMap::new();
+    let mut next_opaque_id = 0usize;
+    let is_enum_val = |v: Value| -> bool {
+        v.get_type(ctx)
+            .deref(ctx)
+            .downcast_ref::<MirEnumType>()
+            .is_some()
+    };
+    let is_aggregate_val = |v: Value| -> bool {
+        let ty = v.get_type(ctx);
+        let ty_ref = ty.deref(ctx);
+        ty_ref.downcast_ref::<MirStructType>().is_some()
+            || ty_ref.downcast_ref::<MirTupleType>().is_some()
+            || ty_ref.downcast_ref::<MirArrayType>().is_some()
+    };
+
+    let mut def_block: HashMap<Value, usize> = HashMap::new();
+    let mut cross_vals: HashSet<Value> = HashSet::new();
+    for &old_idx in &rpo_old {
+        let blk = graph.blocks[old_idx].deref(ctx);
+        for arg in blk.arguments() {
+            def_block.insert(arg, old_idx);
+            cross_vals.insert(arg);
+            opaque_ids.entry(arg).or_insert_with(|| {
+                let id = next_opaque_id;
+                next_opaque_id += 1;
+                id
+            });
+        }
+        for op_ptr in blk.iter(ctx) {
+            let op = op_ptr.deref(ctx);
+            for r_idx in 0..op.get_num_results() {
+                let res = op.get_result(r_idx);
+                def_block.insert(res, old_idx);
+                opaque_ids.entry(res).or_insert_with(|| {
+                    let id = next_opaque_id;
+                    next_opaque_id += 1;
+                    id
+                });
+                if is_enum_val(res) || is_aggregate_val(res) {
+                    cross_vals.insert(res);
+                }
+            }
+        }
+    }
+    for &old_idx in &rpo_old {
+        let blk = graph.blocks[old_idx].deref(ctx);
+        for op_ptr in blk.iter(ctx) {
+            let name = op_name(ctx, op_ptr);
+            let is_term = matches!(name.as_str(), "mir.goto" | "mir.cond_br");
+            let op = op_ptr.deref(ctx);
+            let promotes_all_operands = is_term
+                || matches!(
+                    name.as_str(),
+                    "mir.construct_struct"
+                        | "mir.construct_tuple"
+                        | "mir.construct_array"
+                        | "mir.construct_enum"
+                        | "mir.insert_field"
+                );
+            let promotes_rhs_operand = name == "mir.store"
+                || (name == "mir.ptr_offset"
+                    && op.get_num_operands() >= 2
+                    && matches!(
+                        tags.get(&op.get_operand(0)),
+                        Some(LocalTag::BarrierPtr {
+                            shared_opt: Some(_),
+                            ..
+                        })
+                    ));
+            for o_idx in 0..op.get_num_operands() {
+                let ov = op.get_operand(o_idx);
+                if promotes_all_operands
+                    || (promotes_rhs_operand && o_idx == 1)
+                    || def_block.get(&ov).copied() != Some(old_idx)
+                {
+                    cross_vals.insert(ov);
+                }
+            }
+        }
+    }
+
+    let mut zero_slot_vid = 0usize;
+    for &old_idx in &rpo_old {
+        let blk = graph.blocks[old_idx].deref(ctx);
+        for arg in blk.arguments() {
+            val_ids.entry(arg).or_insert_with(|| {
+                let id = next_var_id;
+                next_var_id += 1;
+                id
+            });
+            if old_idx != 0 && is_enum_val(arg) {
+                let pid = next_var_id;
+                next_var_id += 1;
+                enum_payload_ids.insert(arg, pid);
+            }
+        }
+        if old_idx == 0 {
+            zero_slot_vid = next_var_id;
+            next_var_id += 1;
+        }
+        for op_ptr in blk.iter(ctx) {
+            let op = op_ptr.deref(ctx);
+            for r_idx in 0..op.get_num_results() {
+                let res = op.get_result(r_idx);
+                if cross_vals.contains(&res) {
+                    val_ids.entry(res).or_insert_with(|| {
+                        let id = next_var_id;
+                        next_var_id += 1;
+                        id
+                    });
+                    if is_enum_val(res) {
+                        let pid = next_var_id;
+                        next_var_id += 1;
+                        enum_payload_ids.insert(res, pid);
+                    }
+                }
+            }
+        }
+    }
+    let local_base_vid = next_var_id;
+    let mut max_local_vid = local_base_vid;
+    for &old_idx in &rpo_old {
+        let blk = graph.blocks[old_idx].deref(ctx);
+        let mut cur_local = local_base_vid;
+        for op_ptr in blk.iter(ctx) {
+            let op = op_ptr.deref(ctx);
+            for r_idx in 0..op.get_num_results() {
+                let res = op.get_result(r_idx);
+                if let std::collections::hash_map::Entry::Vacant(entry) = val_ids.entry(res) {
+                    entry.insert(cur_local);
+                    cur_local += 1;
+                }
+            }
+        }
+        if cur_local > max_local_vid {
+            max_local_vid = cur_local;
+        }
+    }
+    next_var_id = max_local_vid;
 
     // Compute tight worst-case `mbarrier_arrive_expect_tx` byte counts per `Barrier` ID across reachable blocks,
     // and identify loop-header arguments initialized to `0` or `1` on forward entry edges.
@@ -1566,6 +1602,9 @@ pub(super) fn translate_mir_program(
     };
 
     for (new_b, &old_b) in rpo_old.iter().enumerate() {
+        // Evict block-local Tier-2 register IDs (`local_base_vid..max_local_vid`) at block
+        // boundaries so recycled temporary slots cannot falsely keep `smem_desc_ready` state.
+        smem_desc_ready.retain(|&vid| vid < local_base_vid || vid >= max_local_vid);
         if graph.succs.iter().filter(|ss| ss.contains(&old_b)).count() != 1 {
             pending_asserts.clear();
         }
@@ -2787,7 +2826,8 @@ pub(super) fn translate_mir_program(
                     let (base_s, fv, res) =
                         (op.get_operand(0), op.get_operand(1), op.get_result(0));
                     let mut flds = struct_fields.get(&base_s).cloned().unwrap_or_default();
-                    if let Some(idx) = attribute_field_index(&op.attributes, "index")
+                    if let Some(idx) = attribute_field_index(&op.attributes, "insert_index")
+                        .or_else(|| attribute_field_index(&op.attributes, "index"))
                         .or_else(|| attribute_field_index(&op.attributes, "field_index"))
                     {
                         let i = idx as usize;
@@ -4025,6 +4065,8 @@ pub(super) fn translate_mir_program(
         candidate_asserts.iter().map(|&(_, op)| op).collect();
 
     let race_free_shared: Vec<usize> = spec.no_data_race.to_vec();
+    check_no_tier2_cross_block_escape(&mir_blocks, local_base_vid, max_local_vid, &reject)?;
+
     Ok(TranslatedFunction::MirProgram {
         arity,
         spec: Box::new(spec),
@@ -4039,6 +4081,122 @@ pub(super) fn translate_mir_program(
         }),
         proven_assert_ops,
     })
+}
+
+/// Collect the source register IDs read by `stmt` using an exhaustive match over
+/// [`MirStmt`] and [`MirRhs`], pushing each register into `out`.
+fn push_stmt_read_regs(stmt: &MirStmt, out: &mut Vec<usize>) {
+    match stmt {
+        MirStmt::Assign(_, rhs) => match rhs {
+            MirRhs::Copy(src)
+            | MirRhs::NotBool(src)
+            | MirRhs::IntCast(_, src)
+            | MirRhs::Load(src)
+            | MirRhs::CvtaShared(src)
+            | MirRhs::LoadTmemBase(src, _)
+            | MirRhs::CtaUint1(_, _, src)
+            | MirRhs::CtaUnary(src) => out.push(*src),
+            MirRhs::BinOp(_, _, l, r)
+            | MirRhs::CheckedOvf(_, _, l, r)
+            | MirRhs::CmpOp(_, l, r)
+            | MirRhs::PtrOffset(l, r)
+            | MirRhs::CtaBin(l, r) => {
+                out.push(*l);
+                out.push(*r);
+            }
+            MirRhs::MbarTryWait(_, slot, _) => out.push(*slot),
+            MirRhs::ConstInt(_, _)
+            | MirRhs::ConstBool(_)
+            | MirRhs::Sreg(_)
+            | MirRhs::Index1D
+            | MirRhs::Coord2DU32
+            | MirRhs::SlicePtr(_)
+            | MirRhs::SliceLen(_)
+            | MirRhs::SharedBase(_)
+            | MirRhs::OpaqueUint(_, _)
+            | MirRhs::CtaConst
+            | MirRhs::OpaqueVal => {}
+        },
+        MirStmt::Store(p, v) => {
+            out.push(*p);
+            out.push(*v);
+        }
+        MirStmt::AssertCond(_, c) => out.push(*c),
+        MirStmt::BarrierSlotCheck(r)
+        | MirStmt::ClusterRankCheck(r)
+        | MirStmt::MbarArrive(_, r, _)
+        | MirStmt::MbarArriveExpectTx(_, r, _)
+        | MirStmt::TmemAlloc(r, _)
+        | MirStmt::SmemDescRead(r, _)
+        | MirStmt::TmemAccess(r, _, _, _) => out.push(*r),
+        MirStmt::TmaCopyG2S(p, _, s, _) => {
+            out.push(*p);
+            out.push(*s);
+        }
+        MirStmt::SyncThreads => {}
+    }
+}
+
+/// Fail closed in both debug and release builds if any basic block reads an upward-exposed
+/// Tier-2 register ID (`local_base_vid..max_local_vid`) defined in another block.
+fn check_no_tier2_cross_block_escape(
+    blocks: &[MirBlockData],
+    local_base_vid: usize,
+    max_local_vid: usize,
+    reject: &dyn Fn(&str, String) -> crate::ExportError,
+) -> Result<(), crate::ExportError> {
+    let mut read_regs = Vec::new();
+    for (b_idx, blk) in blocks.iter().enumerate() {
+        let mut defined_here: HashSet<usize> =
+            HashSet::with_capacity(blk.args.len() + blk.stmts.len());
+        for &(vid, _) in &blk.args {
+            if vid >= local_base_vid {
+                return Err(reject(
+                    "register_allocation",
+                    format!("block {b_idx} argument {vid} must be in Tier 1 (< {local_base_vid})"),
+                ));
+            }
+            defined_here.insert(vid);
+        }
+        for stmt in &blk.stmts {
+            read_regs.clear();
+            push_stmt_read_regs(stmt, &mut read_regs);
+            for &r in &read_regs {
+                if !defined_here.contains(&r) && r >= local_base_vid && r < max_local_vid {
+                    return Err(reject(
+                        "register_allocation",
+                        format!(
+                            "block {b_idx} reads upward-exposed Tier-2 register {r} (in {local_base_vid}..{max_local_vid})"
+                        ),
+                    ));
+                }
+            }
+            if let MirStmt::Assign(dst, _) = stmt {
+                defined_here.insert(*dst);
+            }
+        }
+        read_regs.clear();
+        match &blk.term {
+            MirTerminator::Ret | MirTerminator::Unreachable => {}
+            MirTerminator::Goto(_, args) => read_regs.extend_from_slice(args),
+            MirTerminator::CondBr(c, _, ta, _, fa) => {
+                read_regs.push(*c);
+                read_regs.extend_from_slice(ta);
+                read_regs.extend_from_slice(fa);
+            }
+        }
+        for &r in &read_regs {
+            if !defined_here.contains(&r) && r >= local_base_vid && r < max_local_vid {
+                return Err(reject(
+                    "register_allocation",
+                    format!(
+                        "block {b_idx} terminator reads upward-exposed Tier-2 register {r} (in {local_base_vid}..{max_local_vid})"
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Find the defining operation name of `val` across `graph.blocks`, if any.

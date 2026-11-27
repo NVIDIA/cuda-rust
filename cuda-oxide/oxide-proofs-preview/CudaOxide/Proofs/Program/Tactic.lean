@@ -411,16 +411,16 @@ partial def solveVcGoals (fuel iteFuel : Nat) : TacticM Unit := do
         solveVcGoals (fuel - 1) (iteFuel - 1)
         setGoals []
         return
-      for d in (← getLCtx) do                             -- Step 8: Case-split any `P ∨ Q` disjunction hypothesis
-        if !d.isImplementationDetail then
-          let dTy ← whnfR (← instantiateMVars d.type)
-          if dTy.isAppOfArity ``Or 2 then
-            let subs ← (← getMainGoal).cases d.fvarId
-            for sub in subs do
-              setGoals [sub.mvarId]
-              solveVcGoals (fuel - 1) iteFuel
-            setGoals []
-            return
+    for d in (← getLCtx) do                               -- Step 8: Case-split any `P ∨ Q` disjunction hypothesis
+      if !d.isImplementationDetail then
+        let dTy ← whnfR (← instantiateMVars d.type)
+        if dTy.isAppOfArity ``Or 2 then
+          let subs ← (← getMainGoal).cases d.fvarId
+          for sub in subs do
+            setGoals [sub.mvarId]
+            solveVcGoals (fuel - 1) iteFuel
+          setGoals []
+          return
     if (← try evalTactic (← `(tactic| (mir_mul_mono; omega))); pure true catch _ => pure false) then return -- Step 9: Nonlinear bounds + `omega`
     evalTactic (← `(tactic| omega))                       -- Final step: run `omega` directly so any failure prints a clean counterexample
 

@@ -80,6 +80,7 @@ def main():
     require_success("env", "lean", "tests/vecadd/Accepted.lean")
     require_success("env", "lean", "tests/vecadd/Counterexamples.lean")
     require_success("env", "lean", "tests/program/UnknownGuard.lean")
+    require_success("env", "lean", "tests/program/OrSplitAfterIteFuel.lean")
     print("PASS: scalar semantics, vecadd access model, typed indices, and counterexamples.", flush=True)
     for filename, label in REJECTED:
         rel_path = filename if "/" in filename else f"tests/vecadd/{filename}"

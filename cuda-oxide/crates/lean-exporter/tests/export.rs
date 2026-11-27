@@ -2810,6 +2810,144 @@ fn accepts_raw_pointer_read_of_a_slice_parameter_no_verify_clause_names() {
         .expect("raw read of a slice parameter that no verify clause names stays accepted");
 }
 
+/// Collect all `(id, width)` pairs from [`lean_exporter::translate::program::MirRhs::OpaqueUint`]
+/// assignments in RPO block and statement emission order.
+fn collect_program_opaque_uints(
+    program: &lean_exporter::translate::program::MirProgramData,
+) -> Vec<(usize, u32)> {
+    use lean_exporter::translate::program::{MirRhs, MirStmt};
+
+    let mut out = Vec::new();
+    for blk in &program.blocks {
+        for stmt in &blk.stmts {
+            if let MirStmt::Assign(
+                _,
+                MirRhs::OpaqueUint(id, width) | MirRhs::CtaUint1(id, width, _),
+            ) = stmt
+            {
+                out.push((*id, *width));
+            }
+        }
+    }
+    out
+}
+
+/// Ensure `nvvm.clc_query_*`, `mir.extract_array_element`, and `mir.load` allocate
+/// globally distinct, strictly monotonic `OpaqueUint` IDs from `opaque_ids` across both a
+/// minimal multi-block synthetic kernel and all shipped `MirFunc` exporter fixtures.
+#[test]
+fn clc_query_and_array_element_use_distinct_opaque_ids() {
+    let collision_mir = r#"
+builtin.module @opaque_id_collision {
+  ^entry():
+    mir.func @opaque_id_collision_k: builtin.function <(mir.slice <builtin.integer ui32 ,mutable:false,kind:SharedRef>) -> ()>
+      [gpu_kernel: builtin.string "true", launch_contract_domain: builtin.integer <1: ui32>, reqntid_x: builtin.integer <32: ui32>, reqntid_y: builtin.integer <1: ui32>, reqntid_z: builtin.integer <1: ui32>, verify_no_oob_idx: builtin.string "0"]
+    {
+      ^entry(a: mir.slice <builtin.integer ui32 ,mutable:false,kind:SharedRef>):
+        z64 = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+        a_ptr = mir.extract_field (a) [] [index: mir.field_index 0]: <(mir.slice <builtin.integer ui32 ,mutable:false,kind:SharedRef>) -> (mir.ptr <builtin.integer ui32 ,mutable:false,addrspace:0,kind:Erased>)>;
+        a_len = mir.extract_field (a) [] [index: mir.field_index 1]: <(mir.slice <builtin.integer ui32 ,mutable:false,kind:SharedRef>) -> (builtin.integer ui64)>;
+        ok = mir.lt (z64, a_len) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+        mir.cond_br (ok) [^blk0, ^exit] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+      ^blk0():
+        p0 = mir.ptr_offset (a_ptr, z64) [] []: <(mir.ptr <builtin.integer ui32 ,mutable:false,addrspace:0,kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.integer ui32 ,mutable:false,addrspace:0,kind:Erased>)>;
+        ld0 = mir.load (p0) [] []: <(mir.ptr <builtin.integer ui32 ,mutable:false,addrspace:0,kind:Erased>) -> (builtin.integer ui32)>;
+        p1 = mir.ptr_offset (a_ptr, z64) [] []: <(mir.ptr <builtin.integer ui32 ,mutable:false,addrspace:0,kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.integer ui32 ,mutable:false,addrspace:0,kind:Erased>)>;
+        ld1 = mir.load (p1) [] []: <(mir.ptr <builtin.integer ui32 ,mutable:false,addrspace:0,kind:Erased>) -> (builtin.integer ui32)>;
+        mir.goto () [^blk1] []: <() -> ()>
+
+      ^blk1():
+        c_arr = mir.construct_array (ld0, ld1) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (mir.array <builtin.integer ui32, 2>)>;
+        _elem_v = mir.extract_array_element (c_arr, z64) [] []: <(mir.array <builtin.integer ui32, 2>, builtin.integer ui64) -> (builtin.integer ui32)>;
+        _q_x = nvvm.clc_query_get_first_ctaid_x (z64, z64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui32)>;
+        _q_c = nvvm.clc_query_is_canceled (z64, z64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui32)>;
+        mir.return () [] []: <() -> ()>
+
+      ^exit():
+        mir.return () [] []: <() -> ()>
+    }
+}
+"#;
+    let prog = translate_named_mir_program(collision_mir, "opaque_id_collision_k");
+    let opaques = collect_program_opaque_uints(&prog);
+    assert_eq!(
+        opaques.len(),
+        5,
+        "expected 5 OpaqueUint values: {opaques:?}"
+    );
+    let unique: std::collections::HashSet<usize> = opaques.iter().map(|&(id, _)| id).collect();
+    assert_eq!(
+        unique.len(),
+        5,
+        "load, extract_array_element, and clc_query_* must have distinct OpaqueUint IDs: {opaques:?}"
+    );
+    assert!(
+        opaques.windows(2).all(|w| w[0].0 < w[1].0),
+        "OpaqueUint IDs must be strictly increasing in RPO emission order: {opaques:?}"
+    );
+    let lean = export_named_source(collision_mir, "opaque_id_collision_k")
+        .expect("transcribes opaque_id_collision_k");
+    if let Some(lean_dir) = lean_package_dir_if_available() {
+        lean_exporter::runner::check_generated_lean(&lean, &lean_dir)
+            .expect("Lean 4 accepts kernel with distinct OpaqueUint IDs");
+    }
+
+    for (name, src, fn_name) in [
+        ("vecadd", VECADD_FIXTURE, "vecadd"),
+        (
+            "sgemm_tiled_views",
+            SGEMM_TILED_FIXTURE,
+            "sgemm_tiled_views",
+        ),
+        ("sgemm_tiled_raw", SGEMM_TILED_FIXTURE, "sgemm_tiled_raw"),
+        ("warp_reduce_sum", WARP_REDUCE_FIXTURE, "warp_reduce_sum"),
+        ("block_reduce_sum", WARP_REDUCE_FIXTURE, "block_reduce_sum"),
+        (
+            "subwarp_bit_split_stage",
+            SUBWARP_MULTIBUF_FIXTURE,
+            "subwarp_bit_split_stage",
+        ),
+        (
+            "multibuf_subwarp_stage",
+            SUBWARP_MULTIBUF_FIXTURE,
+            "multibuf_subwarp_stage",
+        ),
+        ("async_copy_stage", ASYNC_COPY_FIXTURE, "async_copy_stage"),
+        (
+            "tcgen05_matmul_verified",
+            TCGEN05_MATMUL_FIXTURE,
+            "tcgen05_matmul_verified",
+        ),
+        ("warp_ring_stage", WARP_RING_FIXTURE, "warp_ring_stage"),
+        (
+            "cluster_clc_stage",
+            CLUSTER_CLC_FIXTURE,
+            "cluster_clc_stage",
+        ),
+    ] {
+        let fx_prog = translate_named_mir_program(src, fn_name);
+        let fx_opaques = collect_program_opaque_uints(&fx_prog);
+        let fx_unique: std::collections::HashSet<usize> =
+            fx_opaques.iter().map(|&(id, _)| id).collect();
+        assert_eq!(
+            fx_unique.len(),
+            fx_opaques.len(),
+            "{name}: OpaqueUint IDs must all be globally distinct: {fx_opaques:?}"
+        );
+        assert!(
+            fx_opaques.windows(2).all(|w| w[0].0 < w[1].0),
+            "{name}: OpaqueUint IDs must be strictly increasing in RPO emission order: {fx_opaques:?}"
+        );
+        if name == "cluster_clc_stage" {
+            assert!(
+                fx_opaques.len() >= 4,
+                "cluster_clc_stage must emit loads + clc_query_* OpaqueUint IDs: {fx_opaques:?}"
+            );
+        }
+    }
+}
+
 /// Allow pure compiler float/integer math intrinsic placeholders (`.sin()`, `.cos()`, `ctpop`)
 /// while rejecting un-inlined user float/zero-arg functions and unchecked UB intrinsics.
 #[test]

@@ -46,11 +46,72 @@ structure BlockUniSummary where
   split : SplitCert := {}
   deriving Repr, DecidableEq, Lean.ToExpr
 
-/-- Fast `Bool`-only check that `vis` is closed under `succDsts` outside `avoid`. -/
-def isClosedSuccs (sums : List BlockUniSummary) (avoid vis : List Nat) : Bool :=
+/-- Chunk a flat list into blocks of 16 elements so `(chunks.getD (x / 16) []).getD (x % 16) []`
+    runs in `O(N / 16 + 16)` tiny pointer hops instead of `O(N)` struct traversals in WHNF. -/
+def chunk16 {α : Type} : Nat → List α → List (List α)
+  | 0, _ => []
+  | _, [] => []
+  | fuel + 1, xs => xs.take 16 :: chunk16 fuel (xs.drop 16)
+
+/-- Lookup index `x` in a 16-way chunked table. -/
+def lookupChunk16 {α : Type} (d : α) (chunks : List (List α)) (x : Nat) : α :=
+  (chunks.getD (x / 16) []).getD (x % 16) d
+
+/-- Soundness of `lookupChunk16` when `chunks = chunk16 fuel xs` with `xs.length ≤ 16 * fuel`. -/
+theorem lookupChunk16_eq_getD {α : Type} (d : α) :
+    ∀ (fuel : Nat) (xs : List α) (x : Nat), xs.length ≤ 16 * fuel →
+      lookupChunk16 d (chunk16 fuel xs) x = xs.getD x d := by
+  intro fuel
+  induction fuel with
+  | zero =>
+      intro xs x hlen
+      cases xs with
+      | nil => simp [lookupChunk16, chunk16]
+      | cons _ _ => simp at hlen
+  | succ f ih =>
+      intro xs x hlen
+      cases xs with
+      | nil => simp [lookupChunk16, chunk16]
+      | cons hd tl =>
+          let xs := hd :: tl
+          change (((xs.take 16 :: chunk16 f (xs.drop 16)).getD (x / 16) []).getD (x % 16) d) = xs.getD x d
+          by_cases hx : x < 16
+          · have hdiv : x / 16 = 0 := Nat.div_eq_of_lt hx
+            have hmod : x % 16 = x := Nat.mod_eq_of_lt hx
+            rw [hdiv, hmod, List.getD_cons_zero]
+            by_cases hlt : x < xs.length
+            · have ht : x < (xs.take 16).length := by simp; omega
+              rw [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem ht,
+                  List.getD_eq_getElem?_getD, List.getElem?_eq_getElem hlt, List.getElem_take]
+            · have ht : (xs.take 16).length ≤ x := by simp; omega
+              have hge : xs.length ≤ x := by omega
+              rw [List.getD_eq_getElem?_getD, List.getElem?_eq_none ht,
+                  List.getD_eq_getElem?_getD, List.getElem?_eq_none hge]
+          · obtain ⟨q, hq⟩ : ∃ q, x / 16 = q + 1 := ⟨x / 16 - 1, by omega⟩
+            rw [hq, List.getD_cons_succ]
+            have hdropLen : (xs.drop 16).length ≤ 16 * f := by simp; omega
+            have hih := ih (xs.drop 16) (x - 16) hdropLen
+            unfold lookupChunk16 at hih
+            have hq2 : (x - 16) / 16 = q := by omega
+            have hm2 : (x - 16) % 16 = x % 16 := by omega
+            rw [hq2, hm2] at hih
+            rw [hih]
+            by_cases hlt : x < xs.length
+            · have hdlt : x - 16 < (xs.drop 16).length := by simp; omega
+              rw [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem hdlt,
+                  List.getD_eq_getElem?_getD, List.getElem?_eq_getElem hlt, List.getElem_drop]
+              have hadd : 16 + (x - 16) = x := by omega
+              simp [hadd]
+            · have hdge : (xs.drop 16).length ≤ x - 16 := by simp; omega
+              have hge : xs.length ≤ x := by omega
+              rw [List.getD_eq_getElem?_getD, List.getElem?_eq_none hdge,
+                  List.getD_eq_getElem?_getD, List.getElem?_eq_none hge]
+
+/-- Fast 16-way chunked check that `vis` is closed under `succChunks` outside `avoid`. -/
+def isClosedSuccs (succChunks : List (List (List Nat))) (avoid vis : List Nat) : Bool :=
   vis.all fun x =>
     !avoid.contains x &&
-    ((sums.getD x {}).succDsts.all fun w => avoid.contains w || vis.contains w)
+    ((lookupChunk16 [] succChunks x).all fun w => avoid.contains w || vis.contains w)
 
 /-- Extract `(succDsts, condBrOpt)` per block in one linear pass over `f.blocks`. -/
 def extractTermSkeleton (f : MirFunc) : List (List Nat × Option (Nat × Nat × Nat)) :=
@@ -97,11 +158,14 @@ theorem mirToCfg_succs_snd (f : MirFunc) (x : Nat) :
     rfl
 
 /-- Bridge `isClosedSuccs` + `!vis.contains dst` to `validUnreachWitness (mirToCfg f)`. -/
-theorem validUnreachWitness_of_succs {f : MirFunc} {sums : List BlockUniSummary} {avoid vis : List Nat} {dst : Nat}
+theorem validUnreachWitness_of_succs {f : MirFunc} {sums : List BlockUniSummary}
+    {succChunks : List (List (List Nat))} {avoid vis : List Nat} {dst : Nat}
     (hsk : sums.map (fun s => (s.succDsts, s.condBrOpt)) = extractTermSkeleton f)
-    (hcl : isClosedSuccs sums avoid vis = true)
+    (hch : chunk16 sums.length (sums.map BlockUniSummary.succDsts) = succChunks)
+    (hcl : isClosedSuccs succChunks avoid vis = true)
     (hndst : (!vis.contains dst) = true) :
     validUnreachWitness (mirToCfg f) avoid dst vis = true := by
+  subst hch
   unfold validUnreachWitness
   refine Bool.and_eq_true_iff.mpr ⟨?_, List.all_eq_true.mpr ?_⟩
   · simp only [Bool.not_eq_true'] at hndst ⊢
@@ -109,6 +173,9 @@ theorem validUnreachWitness_of_succs {f : MirFunc} {sums : List BlockUniSummary}
   · intro u hu
     have huOk := List.all_eq_true.mp hcl u hu
     rcases Bool.and_eq_true_iff.mp huOk with ⟨hna, hsuccs⟩
+    have hmapLen : (sums.map BlockUniSummary.succDsts).length ≤ 16 * sums.length := by simp; omega
+    rw [lookupChunk16_eq_getD [] sums.length _ u hmapLen,
+        getD_map_eq sums BlockUniSummary.succDsts {} u] at hsuccs
     refine Bool.and_eq_true_iff.mpr ⟨?_, List.all_eq_true.mpr ?_⟩
     · simp only [Bool.not_eq_true'] at hna ⊢
       exact decide_eq_false (fun hm => by rw [List.contains_iff_mem.mpr hm] at hna; contradiction)
@@ -123,10 +190,12 @@ theorem validUnreachWitness_of_succs {f : MirFunc} {sums : List BlockUniSummary}
       · exact Bool.or_eq_true_iff.mpr (Or.inr (decide_eq_true (List.contains_iff_mem.mp hvi)))
 
 /-- Soundness of `isClosedSuccs` refuting `PathAvoiding (mirToCfg f) avoid src dst`. -/
-theorem not_pathAvoiding_of_succs {f : MirFunc} {sums : List BlockUniSummary} {avoid vis : List Nat} {src dst : Nat}
+theorem not_pathAvoiding_of_succs {f : MirFunc} {sums : List BlockUniSummary}
+    {succChunks : List (List (List Nat))} {avoid vis : List Nat} {src dst : Nat}
     (hlen : sums.length = f.blocks.length)
     (hsk : sums.map (fun s => (s.succDsts, s.condBrOpt)) = extractTermSkeleton f)
-    (hcl : isClosedSuccs sums avoid vis = true)
+    (hch : chunk16 sums.length (sums.map BlockUniSummary.succDsts) = succChunks)
+    (hcl : isClosedSuccs succChunks avoid vis = true)
     (hsrc : (avoid.contains src || Nat.ble sums.length src || vis.contains src) = true)
     (hndst : (!vis.contains dst) = true) :
     ¬ PathAvoiding (mirToCfg f) avoid src dst := by
@@ -142,18 +211,20 @@ theorem not_pathAvoiding_of_succs {f : MirFunc} {sums : List BlockUniSummary} {a
       cases hp with
       | refl hb _ => omega
       | step hb _ _ _ => omega
-  · exact pathAvoiding_false_of_witness (validUnreachWitness_of_succs hsk hcl hndst) hp (List.contains_iff_mem.mp hmem)
+  · exact pathAvoiding_false_of_witness (validUnreachWitness_of_succs hsk hch hcl hndst) hp (List.contains_iff_mem.mp hmem)
 
 /-- Fast `Bool`-only `O(1)` test refuting `armReachesEdge` via `visArm`. -/
 def checkArmDisjointCert (u armIdx : Nat) (visArm : List Nat) (e : Nat × Nat × Nat × Nat × Nat × Nat) : Bool :=
   !(e.2.2.2.1 == u && e.2.2.2.2.1 == armIdx) && !visArm.contains e.2.2.2.1
 
 /-- Soundness of `checkArmDisjointCert`. -/
-theorem not_armReachesEdge_of_succs {f : MirFunc} {sums : List BlockUniSummary} {u armBlk armIdx : Nat}
+theorem not_armReachesEdge_of_succs {f : MirFunc} {sums : List BlockUniSummary}
+    {succChunks : List (List (List Nat))} {u armBlk armIdx : Nat}
     {avoid visArm : List Nat} {e : Nat × Nat × Nat × Nat × Nat × Nat}
     (hlen : sums.length = f.blocks.length)
     (hsk : sums.map (fun s => (s.succDsts, s.condBrOpt)) = extractTermSkeleton f)
-    (hcl : isClosedSuccs sums avoid visArm = true)
+    (hch : chunk16 sums.length (sums.map BlockUniSummary.succDsts) = succChunks)
+    (hcl : isClosedSuccs succChunks avoid visArm = true)
     (hsrc : (avoid.contains armBlk || Nat.ble sums.length armBlk || visArm.contains armBlk) = true)
     (hchk : checkArmDisjointCert u armIdx visArm e = true) :
     ¬ armReachesEdge (mirToCfg f) u armBlk armIdx avoid e := by
@@ -163,26 +234,26 @@ theorem not_armReachesEdge_of_succs {f : MirFunc} {sums : List BlockUniSummary} 
   rcases harm with ⟨he1, he2⟩ | hp
   · have hb : (e.2.2.2.1 == u && e.2.2.2.2.1 == armIdx) = true := by simp [he1, he2]
     rw [hb] at hdir; contradiction
-  · exact not_pathAvoiding_of_succs hlen hsk hcl hsrc hnin hp
+  · exact not_pathAvoiding_of_succs hlen hsk hch hcl hsrc hnin hp
 
-/-- Validate one `SplitCert` using `sums` and `rets` directly. -/
-def validSplitCertFast (sums : List BlockUniSummary) (rets : List Nat) (u tBlk fBlk : Nat) (sc : SplitCert) : Bool :=
-  let n := sums.length
+/-- Validate one `SplitCert` using 16-way chunked `succChunks` and `rets` directly. -/
+def validSplitCertFast (numBlocks : Nat) (succChunks : List (List (List Nat)))
+    (rets : List Nat) (u tBlk fBlk : Nat) (sc : SplitCert) : Bool :=
   let avoid := match sc.mOpt with | some m => [m] | none => []
   let pdomOk := match sc.mOpt with
     | none => true
     | some m =>
         (m != u) &&
-        isClosedSuccs sums [m] sc.visU &&
-        (([m] : List Nat).contains u || Nat.ble n u || sc.visU.contains u) &&
+        isClosedSuccs succChunks [m] sc.visU &&
+        (([m] : List Nat).contains u || Nat.ble numBlocks u || sc.visU.contains u) &&
         rets.all fun ret => !sc.visU.contains ret
   let tOk :=
-    isClosedSuccs sums avoid sc.visT &&
-    (avoid.contains tBlk || Nat.ble n tBlk || sc.visT.contains tBlk)
+    isClosedSuccs succChunks avoid sc.visT &&
+    (avoid.contains tBlk || Nat.ble numBlocks tBlk || sc.visT.contains tBlk)
   let fOk :=
-    isClosedSuccs sums avoid sc.visF &&
-    (avoid.contains fBlk || Nat.ble n fBlk || sc.visF.contains fBlk)
-  let cycOk := isClosedSuccs sums avoid sc.cantReachU && !sc.cantReachU.contains u
+    isClosedSuccs succChunks avoid sc.visF &&
+    (avoid.contains fBlk || Nat.ble numBlocks fBlk || sc.visF.contains fBlk)
+  let cycOk := isClosedSuccs succChunks avoid sc.cantReachU && !sc.cantReachU.contains u
   pdomOk && tOk && fOk && cycOk
 
 /-- Check `(5a)` and `(5b)` over pre-filtered `uniEdges`. -/
@@ -203,7 +274,7 @@ def checkSplitUniEdges (u : Nat) (sc : SplitCert)
   joinOk && loopOk
 
 /-- Linear scan checking `validSplitCertFast` & `checkSplitUniEdges` without `sums.getD u`. -/
-def checkSplitsRec (allSums : List BlockUniSummary) (rets : List Nat)
+def checkSplitsRec (numBlocks : Nat) (succChunks : List (List (List Nat))) (rets : List Nat)
     (uniEdges allEdges : List (Nat × Nat × Nat × Nat × Nat × Nat)) :
     Nat → List BlockUniSummary → Bool
   | _, [] => true
@@ -211,21 +282,21 @@ def checkSplitsRec (allSums : List BlockUniSummary) (rets : List Nat)
       (match su.condBrOpt with
        | some (cond, tBlk, fBlk) =>
            su.exitUni.contains cond ||
-           (validSplitCertFast allSums rets u tBlk fBlk su.split &&
+           (validSplitCertFast numBlocks succChunks rets u tBlk fBlk su.split &&
             checkSplitUniEdges u su.split uniEdges allEdges)
        | none => true) &&
-      checkSplitsRec allSums rets uniEdges allEdges (u + 1) rest
+      checkSplitsRec numBlocks succChunks rets uniEdges allEdges (u + 1) rest
 
 /-- Extract block `u` from `checkSplitsRec k ss`. -/
-theorem checkSplitsRec_at {allSums : List BlockUniSummary} {rets : List Nat}
+theorem checkSplitsRec_at {numBlocks : Nat} {succChunks : List (List (List Nat))} {rets : List Nat}
     {uniEdges allEdges : List (Nat × Nat × Nat × Nat × Nat × Nat)} :
     ∀ (k : Nat) (ss : List BlockUniSummary) (i : Nat), i < ss.length →
-      checkSplitsRec allSums rets uniEdges allEdges k ss = true →
+      checkSplitsRec numBlocks succChunks rets uniEdges allEdges k ss = true →
       (let su := ss.getD i {}
        match su.condBrOpt with
        | some (cond, tBlk, fBlk) =>
            su.exitUni.contains cond ||
-           (validSplitCertFast allSums rets (k + i) tBlk fBlk su.split &&
+           (validSplitCertFast numBlocks succChunks rets (k + i) tBlk fBlk su.split &&
             checkSplitUniEdges (k + i) su.split uniEdges allEdges)
        | none => true) = true := by
   intro k ss
@@ -370,9 +441,9 @@ theorem collectAllArgEdges_src_lt {f : MirFunc} {e : Nat × Nat × Nat × Nat ×
           · simp [hsrc]
           · have ⟨_, h2⟩ := ih (p + 1) hrest; simp only [List.length_cons]; omega
 
-/-- Ultra-compact kernel validator for `MirValidUniSet f uniVars rfPtrs uniConds` (zero `hflow`!). -/
+/-- Ultra-compact kernel validator for `MirValidUniSet f uniVars rfPtrs uniConds` using 16-way `succChunks`. -/
 def checkMirValidUniSetFast (f : MirFunc) (uniVars rfPtrs : List Nat)
-    (sums : List BlockUniSummary) (rets : List Nat)
+    (sums : List BlockUniSummary) (succChunks : List (List (List Nat))) (rets : List Nat)
     (allEdges : List (Nat × Nat × Nat × Nat × Nat × Nat))
     (uniConds : List Nat) : Bool :=
   let uniEdges := allEdges.filter fun e => uniVars.contains e.2.2.1
@@ -386,16 +457,17 @@ def checkMirValidUniSetFast (f : MirFunc) (uniVars rfPtrs : List Nat)
     match su.condBrOpt with
     | some (cond, _, _) => !uniConds.contains cond || su.exitUni.contains cond
     | none => true) &&
-  checkSplitsRec sums rets uniEdges allEdges 0 sums
+  checkSplitsRec sums.length succChunks rets uniEdges allEdges 0 sums
 
 /-- Soundness of `checkMirValidUniSetFast`: establishes `MirValidUniSet`. -/
 theorem mirValidUniSet_of_check {f : MirFunc} {uniVars rfPtrs : List Nat}
-    {sums : List BlockUniSummary} {rets : List Nat}
+    {sums : List BlockUniSummary} {succChunks : List (List (List Nat))} {rets : List Nat}
     {allEdges : List (Nat × Nat × Nat × Nat × Nat × Nat)} {uniConds : List Nat}
     (hsk : sums.map (fun s => (s.succDsts, s.condBrOpt)) = extractTermSkeleton f)
+    (hch : chunk16 sums.length (sums.map BlockUniSummary.succDsts) = succChunks)
     (hrets : returnBlocks (mirToCfg f) = rets)
     (hae : collectAllArgEdges f = allEdges)
-    (hchk : checkMirValidUniSetFast f uniVars rfPtrs sums rets allEdges uniConds = true) :
+    (hchk : checkMirValidUniSetFast f uniVars rfPtrs sums succChunks rets allEdges uniConds = true) :
     MirValidUniSet f uniVars rfPtrs uniConds := by
   subst hrets; subst hae
   unfold checkMirValidUniSetFast at hchk
@@ -459,7 +531,7 @@ theorem mirValidUniSet_of_check {f : MirFunc} {uniVars rfPtrs : List Nat}
     rcases Bool.and_eq_true_iff.mp htOk with ⟨hclT, hsrcT⟩
     rcases Bool.and_eq_true_iff.mp hfOk with ⟨hclF, hsrcF⟩
     rcases Bool.and_eq_true_iff.mp hcycFast with ⟨hclCyc, hnuCyc⟩
-    have hcycWit := validUnreachWitness_of_succs hsk hclCyc hnuCyc
+    have hcycWit := validUnreachWitness_of_succs hsk hch hclCyc hnuCyc
     unfold checkSplitUniEdges at hse
     rcases Bool.and_eq_true_iff.mp hse with ⟨hjoin, hloop⟩
     refine ⟨(sums.getD u {}).split.mOpt, ?_, ?_⟩
@@ -470,7 +542,7 @@ theorem mirValidUniSet_of_check {f : MirFunc} {uniVars rfPtrs : List Nat}
       rcases Bool.and_eq_true_iff.mp hp1 with ⟨hne, hclU⟩
       refine ⟨bne_iff_ne.mp hne, ?_⟩
       intro ret hret
-      exact not_pathAvoiding_of_succs hlen hsk hclU hsrcU (List.all_eq_true.mp hallRet ret hret)
+      exact not_pathAvoiding_of_succs hlen hsk hch hclU hsrcU (List.all_eq_true.mp hallRet ret hret)
     · intro avoid
       refine ⟨?_, ?_⟩
       · intro e0 e1 he0 he1 hbEq hkEq hargUni hr0 hr1
@@ -478,13 +550,13 @@ theorem mirValidUniSet_of_check {f : MirFunc} {uniVars rfPtrs : List Nat}
           List.mem_filter.mpr ⟨he0, List.contains_iff_mem.mpr hargUni⟩
         have h0 := List.all_eq_true.mp hjoin e0 he0U
         rcases Bool.or_eq_true_iff.mp h0 with hc0 | hall1
-        · exact False.elim (not_armReachesEdge_of_succs hlen hsk hclT hsrcT hc0 hr0)
+        · exact False.elim (not_armReachesEdge_of_succs hlen hsk hch hclT hsrcT hc0 hr0)
         · have h1 := List.all_eq_true.mp hall1 e1 he1
           have hbk : (e0.1 == e1.1 && e0.2.1 == e1.2.1) = true := by simp [hbEq, hkEq]
           rw [hbk] at h1; simp only [Bool.not_true, Bool.false_or] at h1
           rcases Bool.or_eq_true_iff.mp h1 with heq | hc1
           · exact beq_iff_eq.mp heq
-          · exact False.elim (not_armReachesEdge_of_succs hlen hsk hclF hsrcF hc1 hr1)
+          · exact False.elim (not_armReachesEdge_of_succs hlen hsk hch hclF hsrcF hc1 hr1)
       · intro e he hargUni hcyc hreach
         have heU : e ∈ (collectAllArgEdges f).filter (fun e => uniVars.contains e.2.2.1) :=
           List.mem_filter.mpr ⟨he, List.contains_iff_mem.mpr hargUni⟩
@@ -495,51 +567,53 @@ theorem mirValidUniSet_of_check {f : MirFunc} {uniVars rfPtrs : List Nat}
           · exact beq_iff_eq.mp heq
         · rcases Bool.and_eq_true_iff.mp hboth with ⟨hc0, hc1⟩
           rcases hreach with hr0 | hr1
-          · exact False.elim (not_armReachesEdge_of_succs hlen hsk hclT hsrcT hc0 hr0)
-          · exact False.elim (not_armReachesEdge_of_succs hlen hsk hclF hsrcF hc1 hr1)
+          · exact False.elim (not_armReachesEdge_of_succs hlen hsk hch hclT hsrcT hc0 hr0)
+          · exact False.elim (not_armReachesEdge_of_succs hlen hsk hch hclF hsrcF hc1 hr1)
 
 /-- Reusable soundness theorem combining separate `MirValidUniSet` and `UniformBarriersCfg` proofs
     (allowing Lean 4's parallel theorem checker to verify them concurrently in separate WHNF arenas). -/
 theorem uniform_barriers_of_certs {f : MirFunc} {cfg cfgRefined : ControlFlowCfg}
     {uniVars rfPtrs : List Nat}
-    {sums : List BlockUniSummary} {rets : List Nat}
+    {sums : List BlockUniSummary} {succChunks : List (List (List Nat))} {rets : List Nat}
     {allEdges : List (Nat × Nat × Nat × Nat × Nat × Nat)}
     {uniConds : List Nat} {inv : StateMap}
     (hsk : sums.map (fun s => (s.succDsts, s.condBrOpt)) = extractTermSkeleton f)
+    (hch : chunk16 sums.length (sums.map BlockUniSummary.succDsts) = succChunks)
     (hrets : returnBlocks (mirToCfg f) = rets)
     (href : refineCfgWithUni cfg uniConds = cfgRefined)
     (hae : collectAllArgEdges f = allEdges)
-    (huni : checkMirValidUniSetFast f uniVars rfPtrs sums rets allEdges uniConds = true)
+    (huni : checkMirValidUniSetFast f uniVars rfPtrs sums succChunks rets allEdges uniConds = true)
     (hcfg : checkUniformBarriersWith cfgRefined inv = true) :
     UniformBarriers f cfg := by
   have hbar := uniform_barriers_cfg_of_stateMap hcfg
   rw [← href] at hbar
-  exact ⟨uniVars, rfPtrs, uniConds, mirValidUniSet_of_check hsk hrets hae huni, hbar⟩
+  exact ⟨uniVars, rfPtrs, uniConds, mirValidUniSet_of_check hsk hch hrets hae huni, hbar⟩
 
 /-- Single-theorem wrapper retained for compact negative tests. -/
 def checkUniformBarriersMir (f : MirFunc) (uniVars rfPtrs : List Nat)
-    (sums : List BlockUniSummary) (rets : List Nat)
+    (sums : List BlockUniSummary) (succChunks : List (List (List Nat))) (rets : List Nat)
     (cfgRefined : ControlFlowCfg)
     (allEdges : List (Nat × Nat × Nat × Nat × Nat × Nat))
     (uniConds : List Nat) (inv : StateMap) : Bool :=
-  checkMirValidUniSetFast f uniVars rfPtrs sums rets allEdges uniConds &&
+  checkMirValidUniSetFast f uniVars rfPtrs sums succChunks rets allEdges uniConds &&
   checkUniformBarriersWith cfgRefined inv
 
 /-- Reusable soundness theorem for `UniformBarriers f cfg`. -/
 theorem uniform_barriers_of_stateMap {f : MirFunc} {cfg cfgRefined : ControlFlowCfg}
     {uniVars rfPtrs : List Nat}
-    {sums : List BlockUniSummary} {rets : List Nat}
+    {sums : List BlockUniSummary} {succChunks : List (List (List Nat))} {rets : List Nat}
     {allEdges : List (Nat × Nat × Nat × Nat × Nat × Nat)}
     {uniConds : List Nat} {inv : StateMap}
     (hsk : sums.map (fun s => (s.succDsts, s.condBrOpt)) = extractTermSkeleton f)
+    (hch : chunk16 sums.length (sums.map BlockUniSummary.succDsts) = succChunks)
     (hrets : returnBlocks (mirToCfg f) = rets)
     (href : refineCfgWithUni cfg uniConds = cfgRefined)
     (hae : collectAllArgEdges f = allEdges)
-    (hcheck : checkUniformBarriersMir f uniVars rfPtrs sums rets cfgRefined allEdges uniConds inv = true) :
+    (hcheck : checkUniformBarriersMir f uniVars rfPtrs sums succChunks rets cfgRefined allEdges uniConds inv = true) :
     UniformBarriers f cfg := by
   unfold checkUniformBarriersMir at hcheck
   rcases Bool.and_eq_true_iff.mp hcheck with ⟨huni, hcfg⟩
-  exact uniform_barriers_of_certs hsk hrets href hae huni hcfg
+  exact uniform_barriers_of_certs hsk hch hrets href hae huni hcfg
 
 /-- Variables referenced inside a single `Rhs` expression. -/
 def uniRhsVars : Rhs → List Nat
@@ -597,6 +671,21 @@ def inferSplitCertFor (f : MirFunc) (mcfg : ControlFlowCfg) (pdomLists : List (L
     (allEdges : List (Nat × Nat × Nat × Nat × Nat × Nat)) (u : Nat) : SplitCert :=
   match (f.blockAt u).term with
   | .condBr _ tBlk _ fBlk _ =>
+      if (f.blockAt fBlk).term == .unreachable && tBlk != u then
+        let fList := if fBlk == tBlk || fBlk ∈ rets then [] else [fBlk]
+        let visU := if fBlk == u || fList.isEmpty then [u] else [u, fBlk]
+        if fList.isEmpty then
+          { mOpt := none }
+        else
+          { mOpt := some tBlk, visU := visU, visT := [], visF := fList, cantReachU := [] }
+      else if (f.blockAt tBlk).term == .unreachable && fBlk != u then
+        let tList := if tBlk == fBlk || tBlk ∈ rets then [] else [tBlk]
+        let visU := if tBlk == u || tList.isEmpty then [u] else [u, tBlk]
+        if tList.isEmpty then
+          { mOpt := none }
+        else
+          { mOpt := some fBlk, visU := visU, visT := tList, visF := [], cantReachU := [] }
+      else
       let cands := ((pdomLists.getD u []).filter (· != u)).filter fun m =>
         rets.all fun ret => !(reachableNodesAvoiding mcfg u [m]).contains ret
       let mOpt := match cands.find? (fun m => canReachAvoiding mcfg u m (cands.filter (· != m))) with
@@ -725,7 +814,21 @@ def inferUniformityBundle (f : MirFunc) (cfg : ControlFlowCfg) :
   (uniVars, rfPtrs, sums, rets, allEdges, uniConds, refined, inferStateMap refined)
 
 open Lean Elab Command Meta in
-/-- Emits compact `cfgUniVars`, `cfgRfPtrs`, `cfgUniSums`, `cfgRets`, `cfgAllEdges`,
+/-- Collapse `@OfNat.ofNat Nat (lit n) _` wrappers generated by `toExpr` into 1-node raw `Literal.natVal n`
+    kernel literals (`8x` smaller `Expr` trees and zero `OfNat.ofNat` unfolding in WHNF). -/
+partial def stripOfNatWrappers (e : Expr) : Expr :=
+  match e with
+  | .app (.app (.app (.const ``OfNat.ofNat _) (.const ``Nat _)) lit@(.lit (.natVal _))) _ => lit
+  | .app f a => .app (stripOfNatWrappers f) (stripOfNatWrappers a)
+  | .lam n t b bi => .lam n (stripOfNatWrappers t) (stripOfNatWrappers b) bi
+  | .forallE n t b bi => .forallE n (stripOfNatWrappers t) (stripOfNatWrappers b) bi
+  | .letE n t v b nd => .letE n (stripOfNatWrappers t) (stripOfNatWrappers v) (stripOfNatWrappers b) nd
+  | .mdata m b => .mdata m (stripOfNatWrappers b)
+  | .proj s i b => .proj s i (stripOfNatWrappers b)
+  | _ => e
+
+open Lean Elab Command Meta in
+/-- Emits compact `cfgUniVars`, `cfgRfPtrs`, `cfgUniSums`, `cfgSuccChunks`, `cfgRets`, `cfgAllEdges`,
     `cfgUniConds`, `cfgRefined`, and `cfgUniStateMap` constants. -/
 elab "cfg_def_uni_state_map " fnId:ident cfgId:ident : command => do
   Command.liftTermElabM do
@@ -744,35 +847,41 @@ elab "cfg_def_uni_state_map " fnId:ident cfgId:ident : command => do
     let edgeTy ← Meta.mkAppM ``Prod #[natTy, n5]
     let allEdgesTy ← Meta.mkAppM ``List #[edgeTy]
     let sumListTy ← Meta.mkAppM ``List #[mkConst ``BlockUniSummary]
+    let natList2Ty ← Meta.mkAppM ``List #[natListTy]
+    let natList3Ty ← Meta.mkAppM ``List #[natList2Ty]
+    let succChunks := chunk16 sums.length (sums.map BlockUniSummary.succDsts)
     let stListTy ← Meta.mkAppM ``List #[mkConst ``CtaState]
     let smTy ← Meta.mkAppM ``List #[stListTy]
     addDecl <| Declaration.defnDecl {
-      name := ns ++ `cfgUniVars, levelParams := [], type := natListTy, value := toExpr uniVars,
+      name := ns ++ `cfgUniVars, levelParams := [], type := natListTy, value := stripOfNatWrappers (toExpr uniVars),
       hints := ReducibilityHints.regular 1, safety := DefinitionSafety.safe }
     addDecl <| Declaration.defnDecl {
-      name := ns ++ `cfgRfPtrs, levelParams := [], type := natListTy, value := toExpr rfPtrs,
+      name := ns ++ `cfgRfPtrs, levelParams := [], type := natListTy, value := stripOfNatWrappers (toExpr rfPtrs),
       hints := ReducibilityHints.regular 1, safety := DefinitionSafety.safe }
     addDecl <| Declaration.defnDecl {
-      name := ns ++ `cfgUniSums, levelParams := [], type := sumListTy, value := toExpr sums,
+      name := ns ++ `cfgUniSums, levelParams := [], type := sumListTy, value := stripOfNatWrappers (toExpr sums),
       hints := ReducibilityHints.regular 1, safety := DefinitionSafety.safe }
     addDecl <| Declaration.defnDecl {
-      name := ns ++ `cfgRets, levelParams := [], type := natListTy, value := toExpr rets,
+      name := ns ++ `cfgSuccChunks, levelParams := [], type := natList3Ty, value := stripOfNatWrappers (toExpr succChunks),
       hints := ReducibilityHints.regular 1, safety := DefinitionSafety.safe }
     addDecl <| Declaration.defnDecl {
-      name := ns ++ `cfgAllEdges, levelParams := [], type := allEdgesTy, value := toExpr allEdges,
+      name := ns ++ `cfgRets, levelParams := [], type := natListTy, value := stripOfNatWrappers (toExpr rets),
       hints := ReducibilityHints.regular 1, safety := DefinitionSafety.safe }
     addDecl <| Declaration.defnDecl {
-      name := ns ++ `cfgUniConds, levelParams := [], type := natListTy, value := toExpr uniConds,
+      name := ns ++ `cfgAllEdges, levelParams := [], type := allEdgesTy, value := stripOfNatWrappers (toExpr allEdges),
       hints := ReducibilityHints.regular 1, safety := DefinitionSafety.safe }
     addDecl <| Declaration.defnDecl {
-      name := ns ++ `cfgRefined, levelParams := [], type := mkConst ``ControlFlowCfg, value := toExpr refinedCfg,
+      name := ns ++ `cfgUniConds, levelParams := [], type := natListTy, value := stripOfNatWrappers (toExpr uniConds),
+      hints := ReducibilityHints.regular 1, safety := DefinitionSafety.safe }
+    addDecl <| Declaration.defnDecl {
+      name := ns ++ `cfgRefined, levelParams := [], type := mkConst ``ControlFlowCfg, value := stripOfNatWrappers (toExpr refinedCfg),
       hints := ReducibilityHints.regular 1, safety := DefinitionSafety.safe }
     let origSmVal := if refinedCfg == cVal then smVal else inferStateMap cVal
     addDecl <| Declaration.defnDecl {
-      name := ns ++ `cfgUniStateMap, levelParams := [], type := smTy, value := toExpr smVal,
+      name := ns ++ `cfgUniStateMap, levelParams := [], type := smTy, value := stripOfNatWrappers (toExpr smVal),
       hints := ReducibilityHints.regular 1, safety := DefinitionSafety.safe }
     addDecl <| Declaration.defnDecl {
-      name := ns ++ `cfgStateMap, levelParams := [], type := smTy, value := toExpr origSmVal,
+      name := ns ++ `cfgStateMap, levelParams := [], type := smTy, value := stripOfNatWrappers (toExpr origSmVal),
       hints := ReducibilityHints.regular 1, safety := DefinitionSafety.safe }
 
 end CudaOxide.Proofs.ControlFlow

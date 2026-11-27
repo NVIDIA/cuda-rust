@@ -496,14 +496,14 @@ fn render_mir_program_module(
     if need_uniform_barriers {
         theorems.push(
             "theorem mirUni_valid :\n    \
-             CudaOxide.Proofs.ControlFlow.checkMirValidUniSetFast mirFunc cfgUniVars cfgRfPtrs cfgUniSums cfgRets cfgAllEdges cfgUniConds = true :=\n  \
+             CudaOxide.Proofs.ControlFlow.checkMirValidUniSetFast mirFunc cfgUniVars cfgRfPtrs cfgUniSums cfgSuccChunks cfgRets cfgAllEdges cfgUniConds = true :=\n  \
              rfl\n\n\
              theorem cfgBarriers_valid :\n    \
              CudaOxide.Proofs.ControlFlow.checkUniformBarriersWith cfgRefined cfgUniStateMap = true :=\n  \
              rfl\n\n\
              theorem verify_uniform_barriers :\n    \
              CudaOxide.Contracts.ControlFlow.UniformBarriers mirFunc controlFlowCfg := by\n  \
-             exact CudaOxide.Proofs.ControlFlow.uniform_barriers_of_certs rfl rfl rfl rfl mirUni_valid cfgBarriers_valid"
+             exact CudaOxide.Proofs.ControlFlow.uniform_barriers_of_certs rfl rfl rfl rfl rfl mirUni_valid cfgBarriers_valid"
                 .to_string(),
         );
         axiom_prints.push("#print axioms verify_uniform_barriers".to_string());

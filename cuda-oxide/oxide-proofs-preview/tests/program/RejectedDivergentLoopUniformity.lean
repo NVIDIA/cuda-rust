@@ -46,7 +46,7 @@ cfg_def_uni_state_map splitLoopMir splitLoopCfg
 -- Attempting to prove `UniformBarriers splitLoopMir splitLoopCfg` fails because `9 ∉ cfgUniVars`.
 theorem rejected_split_loop_uniform_barriers :
     UniformBarriers splitLoopMir splitLoopCfg := by
-  have h : checkUniformBarriersMir splitLoopMir cfgUniVars cfgRfPtrs cfgUniSums cfgRets cfgRefined cfgAllEdges cfgUniConds cfgUniStateMap = true := by
-    have hf : checkUniformBarriersMir splitLoopMir cfgUniVars cfgRfPtrs cfgUniSums cfgRets cfgRefined cfgAllEdges cfgUniConds cfgUniStateMap = false := rfl
+  have h : checkUniformBarriersMir splitLoopMir cfgUniVars cfgRfPtrs cfgUniSums cfgSuccChunks cfgRets cfgRefined cfgAllEdges cfgUniConds cfgUniStateMap = true := by
+    have hf : checkUniformBarriersMir splitLoopMir cfgUniVars cfgRfPtrs cfgUniSums cfgSuccChunks cfgRets cfgRefined cfgAllEdges cfgUniConds cfgUniStateMap = false := rfl
     omega                                                   -- `false = true` fails in `omega`!
-  exact uniform_barriers_of_stateMap rfl rfl rfl rfl h
+  exact uniform_barriers_of_stateMap rfl rfl rfl rfl rfl h

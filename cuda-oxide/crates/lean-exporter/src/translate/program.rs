@@ -3357,10 +3357,12 @@ pub(super) fn translate_mir_program(
                                 MirRhs::IntCast(eff_dw, val_ids[&src]),
                             ));
                         } else {
-                            stmts.push(MirStmt::Assign(
-                                val_ids[&res],
-                                fallback_rhs_for(res, &opaque_ids),
-                            ));
+                            let rhs = if dw > 1 {
+                                MirRhs::CtaUint1(opaque_ids[&res], dw, val_ids[&src])
+                            } else {
+                                MirRhs::CtaUnary(val_ids[&src])
+                            };
+                            stmts.push(MirStmt::Assign(val_ids[&res], rhs));
                         }
                     } else {
                         stmts.push(MirStmt::Assign(

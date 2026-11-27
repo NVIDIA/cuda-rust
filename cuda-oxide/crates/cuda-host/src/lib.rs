@@ -95,6 +95,17 @@ mod ltoir_cache;
 pub mod tiling;
 pub mod type_id;
 
+mod prepare_launch_diagnostic_seal {
+    /// Seals the diagnostic-only prepared-launch trait against downstream impls.
+    pub trait Sealed {}
+}
+
+/// Diagnostic bound for the hidden `prepare_*` methods generated for kernels
+/// without `#[launch_contract]`. It intentionally has no implementations.
+#[doc(hidden)]
+#[allow(private_bounds)]
+pub trait PrepareLaunchRequiresContract: prepare_launch_diagnostic_seal::Sealed {}
+
 pub use kernel_family::{
     KernelFamily, KernelFamilyBuildError, KernelFamilyId, KernelProblem, KernelSelectionCache,
     KernelSelectionError, KernelSelectionResult, KernelSelector, KernelVariant,

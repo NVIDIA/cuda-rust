@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 // A `#[cutile::foreign]` function declares a tile-library function; the
 // library supplies the body, so a body is an error.
 #[cutile::module]

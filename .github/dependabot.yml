@@ -2,8 +2,6 @@
 #                         All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# Explicitly left behind: there is no `dependabot.yml` in the root of the repository.
-
 ---
 version: 2
 updates:

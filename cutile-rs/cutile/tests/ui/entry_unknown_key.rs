@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 // A misspelled `#[cutile::entry(..)]` key used to be silently ignored — the
 // JIT only looks keys up by name — so `prnt_ir` never printed anything. It is
 // now a compile error pointing at the key.

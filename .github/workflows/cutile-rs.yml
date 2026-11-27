@@ -74,6 +74,9 @@ jobs:
               - 'rust-toolchain.toml'
               - '.github/workflows/cutile-rs.yml'
               - '.github/actions/setup-cutile-rs/**'
+              - 'cuda-oxide/scripts/check-dependency-licenses.sh'
+              - 'cuda-oxide/scripts/check-spdx-headers.sh'
+              - 'cuda-oxide/dependency-licenses.csv'
               - '.github/copy-pr-bot.yaml'
             # `*` covers a root file such as AGENTS.md. `**` covers every nested path.
             any_changed:
@@ -96,6 +99,15 @@ jobs:
         run: cargo install cargo-deny --version 0.19.0 --locked
       - name: Check Tile dependencies including optional reference examples
         run: cargo deny --workspace --all-features --locked check
+      - name: Mark checkout as safe for repository guards
+        working-directory: ${{ github.workspace }}
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Verify dependency inventories
+        working-directory: ${{ github.workspace }}
+        run: bash cuda-oxide/scripts/check-dependency-licenses.sh
+      - name: Verify source headers
+        working-directory: ${{ github.workspace }}
+        run: bash cuda-oxide/scripts/check-spdx-headers.sh
 
   # Tile IR assembler lanes. The base lane exercises the oldest assembler,
   # including its lack of --list-versions; the newest lane needs an assembler
@@ -200,8 +212,13 @@ jobs:
           command -v tileiras
           tileiras --help | grep -q "sm_120"
 
-      - uses: $/.github/actions/setup-cutile-rs
+      - name: Install Git for checkout
+        working-directory: ${{ github.workspace }}
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends git
       - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-cutile-rs
 
       - name: Mark checkout as safe
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -292,13 +309,18 @@ jobs:
       CUDA_TOOLKIT_PATH: /usr/local/cuda
     timeout-minutes: 90
     steps:
-      # Before checkout, so that checkout finds git and makes a repository, which
-      # the submodule step needs. The Rust cache is off: the target directory of
-      # this job holds the LLVM build tree.
-      - uses: $/.github/actions/setup-cutile-rs
+      # Checkout needs Git to create the repository used by the submodule step.
+      # The local setup action becomes available after checkout. Its Rust cache
+      # is off because this job's target directory holds the LLVM build tree.
+      - name: Install Git for checkout
+        working-directory: ${{ github.workspace }}
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends git
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-cutile-rs
         with:
           cache: "false"
-      - uses: actions/checkout@v7
 
       - name: Read the cuda-tile commit
         id: cuda-tile

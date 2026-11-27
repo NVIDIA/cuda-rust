@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 // Entry options are read as literals by the JIT at first launch, where a
 // non-literal value used to panic ("print_ir is not a literal"). It is now a
 // compile error pointing at the value.

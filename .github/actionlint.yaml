@@ -3,3 +3,5 @@
 self-hosted-runner:
   labels:
     - linux-amd64-cpu16
+    - linux-amd64-cpu4
+    - linux-amd64-gpu-rtxpro6000-latest-1

@@ -27,16 +27,12 @@
 # #835 did for shell scripts. Every one of the eight passes unchanged, so this
 # only closes the hole.
 #
-# Three kinds of files are deliberately not held to the standard header:
+# Existing exceptions to the standard header:
 #
 #   * cuda-oxide/crates/fuzzer/rustlantis/** is embedded third-party code (attributed in
 #     THIRD_PARTY_NOTICES). Its files keep their upstream form; adding an
 #     NVIDIA copyright line to code we do not own would be wrong, so the whole
 #     subtree is out of scope.
-#   * cutile-rs/** is a nested import of a separate product. Its sources keep
-#     the headers that tree already uses; do not rewrite them to the Oxide
-#     Apache-2.0 pair. Drop the `cutile-rs/` grep below when Oxide should
-#     require that header on this path again.
 #   * CUTLASS-derived benchmark helpers and vendored reference sources below
 #     retain their copyright and `SPDX-License-Identifier: BSD-3-Clause`.
 #     The two gemm_sol helpers were reviewed and accepted as-is by the OSRB.
@@ -45,6 +41,8 @@
 #     against the tree so a rename fails the run instead of quietly exempting
 #     nothing.
 #
+# Imported Tile sources keep their existing proprietary or MIT notices.
+# Their exact license identifiers are checked separately.
 # A new BSD-derived (or otherwise non-Apache) file is supposed to fail here:
 # adding it to the exemption list is the explicit, reviewable act that
 # replaces silence.
@@ -59,6 +57,10 @@ cd "${GIT_ROOT}"
 copyright_re='SPDX-FileCopyrightText: Copyright \(c\) [0-9]{4}( ?- ?[0-9]{4})? NVIDIA CORPORATION & AFFILIATES\. All rights reserved\.'
 license_re='SPDX-License-Identifier: Apache-2\.0'
 HEADER_WINDOW=15
+TILE_LICENSE_EXCEPTIONS=(
+    cutile-rs/cutile-book/_static/css/nvidia-sphinx-theme.css:LicenseRef-NvidiaProprietary
+    cutile-rs/cutile-kernels/src/experimental/qkv.rs:MIT
+)
 
 # CUTLASS-derived files retain their upstream BSD-3-Clause terms. Path plus
 # the identifier each must still carry; vendored copies are attributed in
@@ -117,6 +119,18 @@ for f in "${BSD_EXEMPT_FILES[@]}"; do
     fi
 done
 
+# Preserve the existing notices on these explicitly named Tile sources.
+for entry in "${TILE_LICENSE_EXCEPTIONS[@]}"; do
+    file="${entry%:*}"
+    license="${entry##*:}"
+    if [[ ! -f "${file}" ]] ||
+        ! grep -Eq "${copyright_re}" <<<"$(window "${file}")" ||
+        ! grep -Eq "SPDX-License-Identifier: ${license}[[:space:]]*$" <<<"$(window "${file}")"; then
+        echo "error: ${file} must retain its existing ${license} SPDX header" >&2
+        exit 1
+    fi
+done
+
 violations=''
 while IFS= read -r f; do
     w="$(window "${f}")"
@@ -127,8 +141,8 @@ while IFS= read -r f; do
     fi
 done < <(git ls-files -- '*.rs' '*.sh' '*.py' '*.cu' '*.c' '*.h' '*.ll' \
     '*.js' '*.css' '*.html' '*.nix' |
-    grep -v '^cutile-rs/' |
     grep -v '^cuda-oxide/crates/fuzzer/rustlantis/' |
+    grep -vxF -f <(printf '%s\n' "${TILE_LICENSE_EXCEPTIONS[@]%:*}") |
     grep -vxF -f <(printf '%s\n' "${BSD_EXEMPT_FILES[@]}"))
 
 if [ -n "${violations}" ]; then

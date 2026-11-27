@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 // A kernel launcher is a `GraphNode` only when its argument op is: inputs
 // recorded into a CUDA graph must be pre-allocated, because an allocation
 // node recorded during capture returns a different address on replay while

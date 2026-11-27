@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 // A `*mut` pointer operand states that the library writes through it:
 // rustc rejects the `*const` address of a shared tensor borrow.
 #[cutile::module]

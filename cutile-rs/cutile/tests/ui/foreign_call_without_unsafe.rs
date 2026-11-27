@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 // Calling a foreign function needs an `unsafe` block: the caller vouches
 // that the declaration matches the library.
 #[cutile::module]

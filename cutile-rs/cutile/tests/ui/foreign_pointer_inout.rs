@@ -1,3 +1,7 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 // A pointer operand is never written back: the callee writes through it,
 // so `#[inout]` is rejected.
 #[cutile::module]

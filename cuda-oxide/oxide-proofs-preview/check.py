@@ -25,6 +25,7 @@ REJECTED = (
     ("RejectedDivergentSharedRace.lean", "shared-memory race masked by divergent sync_threads"),
     ("tests/program/RejectedUnknownGuard.lean", "branch pruned on an untracked guard"),
     ("tests/program/RejectedUnknownWriteCoverage.lean", "write coverage claimed across an untracked guard"),
+    ("tests/program/RejectedDivergentLoopUniformity.lean", "barrier loop bounded by a split-thread join"),
 )
 
 

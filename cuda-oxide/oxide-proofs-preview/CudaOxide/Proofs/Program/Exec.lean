@@ -210,8 +210,8 @@ def symEvalRhsRaw (f : MirFunc) (sregs : SymRegList) : Rhs → SymVal
           let eb := max 1 (f.sharedDecls.getD sid { size := 0 }).elemBytes
           .smemOff sid (.binOp .mul 0 off (.const eb))
       | _ => .unk
-  | .opaqueUint id w => .int (.opaqueUint id w)
-  | .opaqueVal => .unk
+  | .opaqueUint id w | .ctaUint1 id w _ => .int (.opaqueUint id w)
+  | .ctaConst | .ctaUnary _ | .ctaBin _ _ | .opaqueVal => .unk
 
 /-- Symbolically evaluate one `Rhs` expression with depth-10 widening on deep arithmetic chains. -/
 def symEvalRhs (f : MirFunc) (sregs : SymRegList) (rhs : Rhs) : SymVal :=
@@ -227,7 +227,7 @@ theorem symEvalRhs_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
   | copy src => exact hmatch src
   | constInt _ _ | constBool _ | index1D | coord2DU32 | paramScalar _ | slicePtr _
   | sliceLen _ | sharedBase _ | load _ | loadTmemBase _ _
-  | opaqueUint _ _ | opaqueVal =>
+  | opaqueUint _ _ | ctaUint1 _ _ _ | ctaConst | ctaUnary _ | ctaBin _ _ | opaqueVal =>
       simp [symEvalRhsRaw, evalRhs, SymVal.matchesVal, SymInt.eval, SymBool.eval]
   | mbarTryWait barId slotVar =>
       have hs := hmatch slotVar

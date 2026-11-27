@@ -10,6 +10,10 @@ members = [
     "cuda-async",
     # no_std representation contracts shared by host and device crates.
     "cuda-repr",
+    # Scalar storage formats and the DType bound. Usable without a toolkit.
+    "cuda-dtype",
+    # Staged obligation vocabulary shared by the compiler and the host launcher.
+    "cuda-obligation",
 ]
 # Nested workspaces. Without these, Cargo treats crates under them as part of
 # this workspace and `edition.workspace = true` in cuda-device (etc.) looks at

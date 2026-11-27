@@ -79,11 +79,7 @@ use proc_macro::TokenStream;
 // Note: These modules are private because proc-macro crates can only export proc-macro functions.
 // Use `cargo doc --document-private-items` to generate documentation for these modules.
 mod _module;
-mod error;
 mod kernel_launcher_generator;
-mod rank_instantiation;
-mod shadow_dispatch;
-mod validate_dsl_syntax;
 
 /// Transforms a Rust module into GPU kernel code with kernel launchers.
 ///

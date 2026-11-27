@@ -19,6 +19,9 @@
 use crate::error::{device_assert, device_error, DeviceError};
 use crate::scheduling_policies::{SchedulingPolicy, StreamPoolRoundRobin};
 use cuda_core::{Context, Function, MemPool, Module, Stream};
+pub use cuda_obligation::launch_validation::{
+    PointerParamType, ScalarParamType, TensorParamType, ValidParamType, Validator,
+};
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -52,41 +55,6 @@ pub trait FunctionKey: Hash {
         let hash_value: u64 = hasher.finish();
         format!("{:x}", hash_value)
     }
-}
-
-#[derive(Debug, Clone)]
-pub enum ValidParamType {
-    Scalar(ScalarParamType),
-    Pointer(PointerParamType),
-    Tensor(TensorParamType),
-}
-
-#[derive(Debug, Clone)]
-pub struct ScalarParamType {
-    pub element_type: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct PointerParamType {
-    pub mutable: bool,
-    pub element_type: String,
-}
-
-// TODO (hme): This is note entirely tile-agnostic with this param type.
-#[derive(Debug, Clone)]
-pub struct TensorParamType {
-    pub element_type: String,
-    pub shape: Vec<i32>,
-}
-
-#[derive(Debug, Clone)]
-pub struct Validator {
-    pub params: Vec<ValidParamType>,
-    /// Compiler-emitted checks to run at launch, before `cuLaunchKernel`. Each
-    /// is a canonical [`crate::predicate::Predicate`] the compiler hoisted out
-    /// of the device kernel; the host evaluates it against the launched tensors'
-    /// extents. Empty unless a kernel hoists a launch-known safety check.
-    pub launch_checks: Vec<crate::predicate::LaunchCheck>,
 }
 
 // ── Global Context (process-wide, per-device singleton) ─────────────────────

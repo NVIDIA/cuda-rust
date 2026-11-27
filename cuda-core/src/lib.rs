@@ -14,7 +14,7 @@ pub mod completion;
 pub mod context;
 pub(crate) mod cudarc_shim;
 pub mod device_buffer;
-mod dtype;
+pub use cuda_dtype as dtype;
 pub mod embedded;
 mod error;
 pub mod event;

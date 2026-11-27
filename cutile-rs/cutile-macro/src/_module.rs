@@ -52,7 +52,16 @@
 //! [`module_asts`] generates the runtime hook that returns the captured
 //! source AST for the JIT.
 
+use crate::kernel_launcher_generator::generate_kernel_launcher;
 use convert_case::{Case, Casing};
+use cutile_expand::error::{Error, SpannedError};
+use cutile_expand::rank_instantiation::*;
+use cutile_expand::shadow_dispatch::{
+    desugar_variadic_trait_decl, desugar_variadic_trait_impl, emit_shadow_dispatch,
+};
+use cutile_expand::validate_dsl_syntax::validate_entry_point_parameters;
+use cutile_frontend::kernel_naming::KernelNaming;
+use cutile_frontend::syn_utils::*;
 use proc_macro::TokenStream;
 use proc_macro2::Ident;
 use proc_macro2::{LineColumn, Span, TokenStream as TokenStream2};
@@ -61,22 +70,11 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::{env, fs};
-
 use syn::spanned::Spanned;
 use syn::{
     parse_file, parse_macro_input, parse_quote, AngleBracketedGenericArguments, GenericArgument,
     GenericParam, ItemFn, ItemImpl, ItemMod, ItemStruct, ItemTrait, ItemType, Path,
 };
-
-use crate::error::{Error, SpannedError};
-use crate::kernel_launcher_generator::generate_kernel_launcher;
-use crate::rank_instantiation::*;
-use crate::shadow_dispatch::{
-    desugar_variadic_trait_decl, desugar_variadic_trait_impl, emit_shadow_dispatch,
-};
-use crate::validate_dsl_syntax::validate_entry_point_parameters;
-use cutile_compiler::kernel_naming::KernelNaming;
-use cutile_compiler::syn_utils::*;
 
 fn line_column_to_offset(source: &str, loc: LineColumn) -> Option<usize> {
     let mut line_start = 0usize;
@@ -123,7 +121,7 @@ fn source_slice_from_file(path: &str, start: LineColumn, end: LineColumn) -> Opt
 ///
 /// This is used throughout the code generation to reference AST types.
 pub fn get_ast_path(tile_rust_crate_root: &Ident) -> Path {
-    let s = format!("{tile_rust_crate_root}::cutile_compiler::ast");
+    let s = format!("{tile_rust_crate_root}::cutile_frontend::ast");
     syn::parse::<Path>(s.parse().unwrap()).unwrap()
 }
 
@@ -134,7 +132,7 @@ pub fn get_ast_path(tile_rust_crate_root: &Ident) -> Path {
 /// name the registry without each downstream crate depending on `linkme`
 /// directly.
 pub fn get_registry_path(tile_rust_crate_root: &Ident) -> Path {
-    let s = format!("{tile_rust_crate_root}::cutile_compiler::registry");
+    let s = format!("{tile_rust_crate_root}::cutile_frontend::registry");
     syn::parse::<Path>(s.parse().unwrap()).unwrap()
 }
 
@@ -173,7 +171,7 @@ pub fn get_self_ast_ident() -> Ident {
 /// ```rust,ignore
 /// pub mod my_module {
 ///     // Imports and dependencies
-///     use cutile_compiler::ast;
+///     use cutile_frontend::ast;
 ///     use cutile::tile_kernel::*;
 ///
 ///     // Per-module AST builder used by the linker-registry entry below.
@@ -246,7 +244,7 @@ fn process_items(
 ) -> Result<(Vec<TokenStream2>, Vec<TokenStream2>), Error> {
     let mut concrete_items: Vec<TokenStream2> = vec![];
     let mut entry_functions: Vec<TokenStream2> = vec![];
-    let type_aliases = cutile_compiler::type_aliases::collect_type_aliases(items);
+    let type_aliases = cutile_frontend::type_aliases::collect_type_aliases(items);
 
     for item in items {
         match item {
@@ -254,7 +252,7 @@ fn process_items(
                 concrete_items.push(use_item.to_token_stream());
             }
             syn::Item::Fn(function_item) => {
-                if cutile_compiler::foreign_decl::is_foreign_fn(function_item) {
+                if cutile_frontend::foreign_decl::is_foreign_fn(function_item) {
                     return Err(Error::from(syn::Error::new(
                         function_item.block.span(),
                         "a `#[cutile::foreign]` function is a declaration of a tile-library \
@@ -285,11 +283,11 @@ fn process_items(
             }
             syn::Item::Verbatim(tokens) => {
                 // A body-less function: a foreign tile-library declaration.
-                match cutile_compiler::foreign_decl::ForeignFnDecl::parse_verbatim(tokens)
+                match cutile_frontend::foreign_decl::ForeignFnDecl::parse_verbatim(tokens)
                     .map_err(Error::from)?
                 {
                     Some(declaration) => {
-                        let stub = cutile_compiler::foreign_decl::rustc_stub(&declaration);
+                        let stub = cutile_frontend::foreign_decl::rustc_stub(&declaration);
                         concrete_items
                             .push(instantiate_function_for_rank(&stub)?.to_token_stream());
                     }
@@ -428,7 +426,7 @@ fn module_inner(
                 use #tile_rust_crate_root::cuda_async::scheduling_policies::SchedulingPolicy;
                 use #tile_rust_crate_root::cuda_core::{DeviceCopy, Context, Function, Module, Stream, DriverError, LaunchConfig};
                 // use #tile_rust_crate_root::cutile_compiler::cuda_tile::ModuleOperation;
-                // use #tile_rust_crate_root::cutile_compiler::compiler::{CUDATileModules, CUDATileFunctionCompiler};
+                // use #tile_rust_crate_root::cutile_frontend::compiler::{CUDATileModules, CUDATileFunctionCompiler};
                 // Module asts and generated type data.
                 use #ast_path;
                 #ast_module_tokens
@@ -665,11 +663,11 @@ pub fn function(
 ) -> Result<TokenStream2, Error> {
     let is_entry = get_meta_list_by_last_segment("entry", &item.attrs).is_some();
     if is_entry {
-        let validation_item = cutile_compiler::type_aliases::normalize_item_fn_param_type_aliases(
+        let validation_item = cutile_frontend::type_aliases::normalize_item_fn_param_type_aliases(
             &item,
             type_aliases,
         )
-        .map_err(|msg| crate::error::syn_err(item.sig.ident.span(), &msg))?;
+        .map_err(|msg| cutile_expand::error::syn_err(item.sig.ident.span(), &msg))?;
         validate_entry_point_parameters(&validation_item)?
     }
     let attributes = get_meta_list("cuda_tile :: variadic_op", &item.attrs);
@@ -802,7 +800,7 @@ fn validate_entry_attribute(item: &ItemFn) -> Result<(), Error> {
     let entries = list
         .parse_args_with(syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated)
         .map_err(|e| {
-            crate::error::syn_err(
+            cutile_expand::error::syn_err(
                 e.span(),
                 &format!("malformed `#[cutile::entry(..)]` arguments: {e}"),
             )
@@ -875,8 +873,8 @@ pub fn kernel_launcher(
     let launcher_args_name = format!("{}Args", launcher_name);
     let unsafety = item.sig.unsafety;
     let launcher_item =
-        cutile_compiler::type_aliases::normalize_item_fn_param_type_aliases(item, type_aliases)
-            .map_err(|msg| crate::error::syn_err(item.sig.ident.span(), &msg))?;
+        cutile_frontend::type_aliases::normalize_item_fn_param_type_aliases(item, type_aliases)
+            .map_err(|msg| cutile_expand::error::syn_err(item.sig.ident.span(), &msg))?;
 
     let (
         required_generics,

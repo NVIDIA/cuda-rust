@@ -127,6 +127,7 @@ dependencies = [
  "anyhow",
  "cuda-bindings",
  "cuda-core",
+ "cuda-obligation",
  "dashmap",
  "futures",
  "half",
@@ -156,6 +157,7 @@ dependencies = [
  "bytemuck",
  "cuda-bindings",
  "cuda-core-derive",
+ "cuda-dtype",
  "cuda-repr",
  "half",
  "oxide-artifacts",
@@ -170,6 +172,18 @@ dependencies = [
  "quote",
  "syn",
 ]
+
+[[package]]
+name = "cuda-dtype"
+version = "0.5.0"
+dependencies = [
+ "bytemuck",
+ "half",
+]
+
+[[package]]
+name = "cuda-obligation"
+version = "0.5.0"
 
 [[package]]
 name = "cuda-repr"

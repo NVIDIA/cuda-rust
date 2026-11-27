@@ -20,8 +20,6 @@
 //!            • `BitVec` semantics      • `ControlFlowCfg` (barriers & `TMEM`)
 //! ```
 
-/// Join blocks and loop shapes that make block arguments depend on divergent branches.
-mod divergence;
 /// Shared `BlockGraph` adjacency queries and Pliron operand/attribute/shape helpers.
 mod ir_utils;
 /// Line-by-line `PostMem2Reg` `dialect-mir` -> `CudaOxide.Mir.Program.MirFunc` transcriber.

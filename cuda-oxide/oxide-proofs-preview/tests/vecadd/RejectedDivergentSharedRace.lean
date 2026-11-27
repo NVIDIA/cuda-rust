@@ -52,11 +52,12 @@ theorem divRaceEvents_eq :
     CudaOxide.Proofs.Program.collectSymMemEvents divRaceMir symTable = symMemEvents :=
   rfl
 
--- `vcNoSharedRace_of_table` requires `UniformBarriers divRaceCfg`, which fails on block `1` (`tx < 32`).
+-- `vcNoSharedRace_of_table` requires `UniformBarriers divRaceMir divRaceCfg`, which fails on block `1` (`tx < 32`).
 theorem rejected_divergent_shared_race :
     MirNoSharedRace divRaceMir divRaceCfg 0 := by
   apply CudaOxide.Proofs.Program.vcNoSharedRace_of_table ?_ divRaceMir_valid divRaceEvents_eq (by mir_bind_shared_pairs)
   · mir_vc divRaceMir                                       -- Equal-phase pair check is empty,
-  · have h : checkUniformBarriersWith divRaceCfg (inferStateMap divRaceCfg) = true := by
+  · have h : (let (uv, rf, su, rs, ie, uc, ref, sm) := CudaOxide.Proofs.ControlFlow.inferUniformityBundle divRaceMir divRaceCfg
+              CudaOxide.Proofs.ControlFlow.checkUniformBarriersMir divRaceMir uv rf su rs ref ie uc sm) = true := by
       decide +revert; omega                                 -- BUT `UniformBarriers` fails on divergent block `1`!
-    exact CudaOxide.Proofs.ControlFlow.uniform_barriers_of_stateMap h
+    exact CudaOxide.Proofs.ControlFlow.uniform_barriers_of_stateMap rfl rfl rfl rfl h

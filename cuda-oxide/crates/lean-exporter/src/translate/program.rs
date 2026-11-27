@@ -38,7 +38,7 @@ use crate::{
     ExportError, reject,
     spec::{KernelVerificationSpec, get_string_attr},
     ssa::{
-        CfgBranchCond, CfgOpItem, GuardExpr, IdxExpr, TranscribedCfgBlock,
+        CfgBranchCond, CfgMbarWaitKind, CfgOpItem, GuardExpr, IdxExpr, TranscribedCfgBlock,
         TranscribedControlFlowCfg,
     },
     symbol_name,
@@ -90,8 +90,8 @@ pub enum MirRhs {
     PtrOffset(usize, usize),
     /// Memory load `*ptr`.
     Load(usize),
-    /// `mbarrier_try_wait_parity(&BAR[slot], parity)` poll on `(bar_id, slot_var)`.
-    MbarTryWait(usize, usize),
+    /// `mbarrier_try_wait*(&BAR[slot], parity)` poll on `(bar_id, slot_var, is_acquire)`.
+    MbarTryWait(usize, usize, bool),
     /// `.shared::cta` byte offset `cvta_generic_to_shared_offset(ptr_var)`.
     CvtaShared(usize),
     /// Load base `TMEM` handle of `cols` columns from shared-memory slot `ptr_var`.
@@ -117,8 +117,8 @@ pub enum MirStmt {
     BarrierSlotCheck(usize),
     /// Bounds-checked peer CTA rank (`rank < clusterDimX`) on `cluster::map_shared_rank*`.
     ClusterRankCheck(usize),
-    /// Plain arrival `mbarrier_arrive(&BAR[slot])` on `(bar_id, slot_var)`.
-    MbarArrive(usize, usize),
+    /// Plain arrival `mbarrier_arrive*(&BAR[slot])` on `(bar_id, slot_var, is_release)`.
+    MbarArrive(usize, usize, bool),
     /// Byte-counted `mbarrier_arrive_expect_tx(&BAR[slot], count, tx_bytes)` on `(bar_id, slot_var, tx_bytes)`.
     MbarArriveExpectTx(usize, usize, u64),
     /// Asynchronous TMA copy `cp_async_bulk_tensor_*_g2s(ptr_var, bar_id, slot_var, span_elems)`.
@@ -1507,8 +1507,8 @@ pub(super) fn translate_mir_program(
     let mut lt_const_bound: HashMap<Value, (Value, u64)> = HashMap::new();
     let mut coord_exprs: HashMap<Value, IdxExpr> = HashMap::new();
     let mut coord_guards: HashMap<Value, GuardExpr> = HashMap::new();
-    let mut mbar_ready_bar: HashMap<Value, (usize, bool)> = HashMap::new();
-    let mut mbar_not_ready_bar: HashMap<Value, (usize, bool)> = HashMap::new();
+    let mut mbar_ready_bar: HashMap<Value, (usize, bool, CfgMbarWaitKind)> = HashMap::new();
+    let mut mbar_not_ready_bar: HashMap<Value, (usize, bool, CfgMbarWaitKind)> = HashMap::new();
     let mut mir_blocks: Vec<MirBlockData> = Vec::with_capacity(rpo_old.len());
     let mut cfg_blocks: Vec<TranscribedCfgBlock> =
         vec![TranscribedCfgBlock::default(); rpo_old.len()];
@@ -1667,49 +1667,50 @@ pub(super) fn translate_mir_program(
                             }
                             let is_cyc =
                                 loop_headers.contains(&new_b) || t_dst <= new_b || f_dst <= new_b;
-                            let br_cond =
-                                if let Some(&(bar_id, init_free)) = mbar_ready_bar.get(&cond_v) {
-                                    (
-                                        CfgBranchCond::MbarReady(bar_id, init_free),
-                                        CfgBranchCond::MbarSpin(bar_id),
-                                    )
-                                } else if let Some(&(bar_id, init_free)) =
-                                    mbar_not_ready_bar.get(&cond_v)
-                                {
-                                    (
-                                        CfgBranchCond::MbarSpin(bar_id),
-                                        CfgBranchCond::MbarReady(bar_id, init_free),
-                                    )
-                                } else if loop_headers.contains(&new_b)
-                                    && pos_counted_lt.contains(&cond_v)
-                                    && !divergent_vals.contains(&cond_v)
-                                {
-                                    (CfgBranchCond::Uniform, CfgBranchCond::PosLoopExit(t_dst))
-                                } else if loop_headers.contains(&new_b)
-                                    && pos_counted_ge.contains(&cond_v)
-                                    && !divergent_vals.contains(&cond_v)
-                                {
-                                    (CfgBranchCond::PosLoopExit(f_dst), CfgBranchCond::Uniform)
-                                } else if is_cyc
-                                    && matches!(
-                                        op_name_of_def(ctx, &graph, cond_v).as_deref(),
-                                        Some("mir.lt" | "mir.ge" | "mir.not")
-                                    )
-                                    && !divergent_vals.contains(&cond_v)
-                                {
-                                    (CfgBranchCond::Uniform, CfgBranchCond::Uniform)
-                                } else if let Some(g) = coord_guards.get(&cond_v) {
-                                    (
-                                        CfgBranchCond::Coord(g.clone()),
-                                        CfgBranchCond::Coord(g.negate()),
-                                    )
-                                } else if !divergent_vals.contains(&cond_v) && is_cyc {
-                                    (CfgBranchCond::Uniform, CfgBranchCond::Uniform)
-                                } else if !lane_divergent_vals.contains(&cond_v) {
-                                    (CfgBranchCond::WarpUniform, CfgBranchCond::WarpUniform)
-                                } else {
-                                    (CfgBranchCond::Unknown, CfgBranchCond::Unknown)
-                                };
+                            let br_cond = if let Some(&(bar_id, init_free, wk)) =
+                                mbar_ready_bar.get(&cond_v)
+                            {
+                                (
+                                    CfgBranchCond::MbarReady(bar_id, init_free, wk),
+                                    CfgBranchCond::MbarSpin(bar_id),
+                                )
+                            } else if let Some(&(bar_id, init_free, wk)) =
+                                mbar_not_ready_bar.get(&cond_v)
+                            {
+                                (
+                                    CfgBranchCond::MbarSpin(bar_id),
+                                    CfgBranchCond::MbarReady(bar_id, init_free, wk),
+                                )
+                            } else if loop_headers.contains(&new_b)
+                                && pos_counted_lt.contains(&cond_v)
+                                && !divergent_vals.contains(&cond_v)
+                            {
+                                (CfgBranchCond::Uniform, CfgBranchCond::PosLoopExit(t_dst))
+                            } else if loop_headers.contains(&new_b)
+                                && pos_counted_ge.contains(&cond_v)
+                                && !divergent_vals.contains(&cond_v)
+                            {
+                                (CfgBranchCond::PosLoopExit(f_dst), CfgBranchCond::Uniform)
+                            } else if is_cyc
+                                && matches!(
+                                    op_name_of_def(ctx, &graph, cond_v).as_deref(),
+                                    Some("mir.lt" | "mir.ge" | "mir.not")
+                                )
+                                && !divergent_vals.contains(&cond_v)
+                            {
+                                (CfgBranchCond::Uniform, CfgBranchCond::Uniform)
+                            } else if let Some(g) = coord_guards.get(&cond_v) {
+                                (
+                                    CfgBranchCond::Coord(g.clone()),
+                                    CfgBranchCond::Coord(g.negate()),
+                                )
+                            } else if !divergent_vals.contains(&cond_v) && is_cyc {
+                                (CfgBranchCond::Uniform, CfgBranchCond::Uniform)
+                            } else if !lane_divergent_vals.contains(&cond_v) {
+                                (CfgBranchCond::WarpUniform, CfgBranchCond::WarpUniform)
+                            } else {
+                                (CfgBranchCond::Unknown, CfgBranchCond::Unknown)
+                            };
                             cfg_blocks[new_b].succs.push((br_cond.0, t_dst));
                             cfg_blocks[new_b].succs.push((br_cond.1, f_dst));
                             term = MirTerminator::CondBr(
@@ -1906,8 +1907,14 @@ pub(super) fn translate_mir_program(
                     } else {
                         zero_slot_vid
                     };
-                    cfg_blocks[new_b].ops.push(CfgOpItem::MbarArrive { bar_id });
-                    stmts.push(MirStmt::MbarArrive(bar_id, slot_vid));
+                    let is_cluster = opid != "nvvm.mbarrier_arrive_shared";
+                    let is_relaxed = opid == "nvvm.mbarrier_arrive_cluster_relaxed";
+                    cfg_blocks[new_b].ops.push(CfgOpItem::MbarArrive {
+                        bar_id,
+                        is_cluster,
+                        is_relaxed,
+                    });
+                    stmts.push(MirStmt::MbarArrive(bar_id, slot_vid, !is_relaxed));
                     if op.get_num_results() == 1 {
                         stmts.push(MirStmt::Assign(
                             val_ids[&op.get_result(0)],
@@ -1957,9 +1964,12 @@ pub(super) fn translate_mir_program(
                     } else {
                         zero_slot_vid
                     };
-                    cfg_blocks[new_b]
-                        .ops
-                        .push(CfgOpItem::MbarArriveExpectTx { bar_id, tx_bytes });
+                    let is_cluster = opid == "nvvm.mbarrier_arrive_expect_tx_cluster";
+                    cfg_blocks[new_b].ops.push(CfgOpItem::MbarArriveExpectTx {
+                        bar_id,
+                        tx_bytes,
+                        is_cluster,
+                    });
                     stmts.push(MirStmt::MbarArriveExpectTx(bar_id, slot_vid, tx_bytes));
                     if op.get_num_results() == 1 {
                         stmts.push(MirStmt::Assign(
@@ -2013,11 +2023,19 @@ pub(super) fn translate_mir_program(
                         const_u64_vals.get(&pv) == Some(&1)
                             || hdr_arg_entry_const.get(&pv) == Some(&1)
                     });
+                    let wait_kind = match opid.as_str() {
+                        "nvvm.mbarrier_try_wait_parity_cluster" => CfgMbarWaitKind::ClusterAcquire,
+                        "nvvm.mbarrier_try_wait_parity_cluster_relaxed" => {
+                            CfgMbarWaitKind::ClusterRelaxed
+                        }
+                        _ => CfgMbarWaitKind::CtaAcquire,
+                    };
+                    let is_acquire = wait_kind != CfgMbarWaitKind::ClusterRelaxed;
                     let res = op.get_result(0);
-                    mbar_ready_bar.insert(res, (bar_id, init_free));
+                    mbar_ready_bar.insert(res, (bar_id, init_free, wait_kind));
                     stmts.push(MirStmt::Assign(
                         val_ids[&res],
-                        MirRhs::MbarTryWait(bar_id, slot_vid),
+                        MirRhs::MbarTryWait(bar_id, slot_vid, is_acquire),
                     ));
                 }
                 _ if opid.starts_with("nvvm.cp_async_bulk") => {
@@ -2083,6 +2101,7 @@ pub(super) fn translate_mir_program(
                         zero_slot_vid
                     };
                     let is_cg2 = opid.ends_with("_cg2");
+                    let is_multicast = opid.contains("multicast");
                     let bar_dests = tma_dests_per_bar.get(&bar_id);
                     let total_sites = bar_dests.map_or(1, Vec::len);
                     let sub_panel_step = ptr_const_offset
@@ -2119,6 +2138,7 @@ pub(super) fn translate_mir_program(
                         shared_id: sid,
                         bar_id,
                         is_cg2,
+                        is_multicast,
                     });
                     stmts.push(MirStmt::TmaCopyG2S(
                         val_ids[&smem_v],
@@ -2195,9 +2215,11 @@ pub(super) fn translate_mir_program(
                         .unwrap_or(16)
                         .max(16);
                     let span_elems = tx_bytes.div_ceil(elem_bytes).max(1);
+                    let is_multicast = opid == "nvvm.clc_try_cancel_multicast";
                     cfg_blocks[new_b].ops.push(CfgOpItem::ClcTryCancel {
                         shared_id: sid,
                         bar_id,
+                        is_multicast,
                     });
                     stmts.push(MirStmt::TmaCopyG2S(
                         val_ids[&resp_v],
@@ -2481,9 +2503,12 @@ pub(super) fn translate_mir_program(
                         stmts.push(MirStmt::BarrierSlotCheck(val_ids[&bar_v]));
                     }
                     let is_cg2 = opid.ends_with("_cg2");
-                    cfg_blocks[new_b]
-                        .ops
-                        .push(CfgOpItem::TmemCommit { bar_id, is_cg2 });
+                    let is_multicast = opid.contains("multicast");
+                    cfg_blocks[new_b].ops.push(CfgOpItem::TmemCommit {
+                        bar_id,
+                        is_cg2,
+                        is_multicast,
+                    });
                 }
                 "nvvm.tcgen05_store_wait" => {
                     cfg_blocks[new_b].ops.push(CfgOpItem::TmemStoreWait);

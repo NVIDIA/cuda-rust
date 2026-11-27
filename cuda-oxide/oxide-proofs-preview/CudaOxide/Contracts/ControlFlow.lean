@@ -137,7 +137,9 @@ def TmemLifecycle (cfg : ControlFlowCfg) : Prop :=
     tmemAllocSites cfg = [cols] ∧                           --   (2) a single `tcgen05_alloc` of `cols` columns,
     tmemDeallocSites cfg ≠ [] ∧                             --   (3) at least one `tcgen05_dealloc` site, AND
     (∀ d : Nat, d ∈ tmemDeallocSites cfg → d = cols)) ∧     --   (4) every `tcgen05_dealloc` frees `cols`, AND
-  (∀ iBlk aBlk : Nat,                                       --   (5) in 2-CTA `_cg2` mode, any prior SMEM/`mbarrier_init`
+  (∀ aBlk : Nat, aBlk ∈ unlaunchedCg2AllocBlocks cfg →      --   (5) in 2-CTA `_cg2` mode, peer CTA launch is synchronized
+    ¬ PathAvoiding cfg ((clusterSyncBlocks cfg).filter (· != aBlk)) 0 aBlk) ∧ -- via `cluster_sync()` from entry `0` before `alloc_cg2`, AND
+  (∀ iBlk aBlk : Nat,                                       --   (6) in 2-CTA `_cg2` mode, any prior SMEM/`mbarrier_init`
     (iBlk, aBlk) ∈ cg2PreAllocInitPairs cfg →               --       synchronizes via `cluster_sync()` before `alloc_cg2`,
     ¬ PathAvoiding cfg ((clusterSyncBlocks cfg).filter (· != iBlk)) iBlk aBlk) ∧
   (∀ dBlk : Nat, dBlk ∈ unsyncedCg2DeallocBlocks cfg →      --   (6) in 2-CTA `_cg2` mode, every `dealloc_cg2` executes

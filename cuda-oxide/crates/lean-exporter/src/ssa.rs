@@ -116,6 +116,22 @@ impl GuardExpr {
     }
 }
 
+/// Memory-consistency scope and ordering qualifier on an `mbarrier_try_wait*` edge.
+/// Transcribed 1-to-1 into `CudaOxide.Mir.ControlFlow.MbarWaitKind` so Lean 4 checks
+/// that cross-CTA barriers use `.cluster` waits and data visibility uses `.acquire`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CfgMbarWaitKind {
+    /// `.acquire.cta` (`mbarrier_try_wait_parity`, `mbarrier_try_wait`, `mbarrier_test_wait`).
+    /// Synchronizes memory and barrier phases within the executing CTA only.
+    CtaAcquire,
+    /// `.acquire.cluster` (`mbarrier_try_wait_parity_cluster`).
+    /// Synchronizes memory and barrier phases across all CTAs in the cluster.
+    ClusterAcquire,
+    /// `.relaxed.cluster` (`mbarrier_try_wait_parity_cluster_relaxed`).
+    /// Orders barrier completion at cluster scope without memory visibility guarantees.
+    ClusterRelaxed,
+}
+
 /// Outgoing basic-block terminator branch condition transcribed into
 /// `CudaOxide.Mir.ControlFlow.BranchCond`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -124,8 +140,8 @@ pub enum CfgBranchCond {
     Always,
     /// Thread-coordinate predicate (`tid == 0`, `warp_id == 0`, `tid < 64`, `lane == 0`).
     Coord(GuardExpr),
-    /// `mbarrier_try_wait*` ready branch (`ready == true`, `init_free` for parity-1 empty rings).
-    MbarReady(usize, bool),
+    /// `mbarrier_try_wait*` ready branch (`ready == true`, `init_free`, `wait_kind`).
+    MbarReady(usize, bool, CfgMbarWaitKind),
     /// `mbarrier_try_wait*` spin branch (`ready == false`).
     MbarSpin(usize),
     /// Exit edge of a positive-trip counted loop (`0 < bound`) whose body starts at `body_blk`.
@@ -175,17 +191,23 @@ pub enum CfgOpItem {
     },
     /// `fence_proxy_async_shared_cta()` flushing generic writes to the async proxy.
     ProxyFenceAsyncShared,
-    /// Plain arrival `mbarrier_arrive(&BAR)`.
+    /// Plain arrival `mbarrier_arrive*(&BAR)`.
     MbarArrive {
         /// Index of the `Barrier` static (`0..num_barriers`).
         bar_id: usize,
+        /// True for remote `.cluster` arrivals (`mbarrier_arrive_cluster*`).
+        is_cluster: bool,
+        /// True for `.relaxed` arrivals without release ordering (`mbarrier_arrive_cluster_relaxed`).
+        is_relaxed: bool,
     },
-    /// Byte-counted arrival `mbarrier_arrive_expect_tx(&BAR, count, tx_bytes)`.
+    /// Byte-counted arrival `mbarrier_arrive_expect_tx*(&BAR, count, tx_bytes)`.
     MbarArriveExpectTx {
         /// Index of the `Barrier` static (`0..num_barriers`).
         bar_id: usize,
         /// Expected asynchronous byte transfer count.
         tx_bytes: u64,
+        /// True for `.cluster`-scoped `mbarrier_arrive_expect_tx_cluster`.
+        is_cluster: bool,
     },
     /// Asynchronous TMA copy `cp_async_bulk_tensor_*_g2s(SMEM, BAR, ...)`.
     TmaCopyG2S {
@@ -195,6 +217,8 @@ pub enum CfgOpItem {
         bar_id: usize,
         /// True for `.cta_group::2` (`_cg2`) multicast TMA.
         is_cg2: bool,
+        /// True when the TMA instruction carries `.multicast::cluster`.
+        is_multicast: bool,
     },
     /// Asynchronous Blackwell CLC `clc_try_cancel*` writing `shared_id` on `bar_id`.
     ClcTryCancel {
@@ -202,6 +226,8 @@ pub enum CfgOpItem {
         shared_id: usize,
         /// Completion `CLC_BAR` `Barrier` index (`0..num_barriers`).
         bar_id: usize,
+        /// True for `.multicast::cluster::all` (`clc_try_cancel_multicast`).
+        is_multicast: bool,
     },
     /// Warp-collective `tcgen05_alloc(&TMEM_ADDR[0], cols)`.
     TmemAlloc {
@@ -237,6 +263,8 @@ pub enum CfgOpItem {
         bar_id: usize,
         /// True for `.cta_group::2` (`_cg2`) commit.
         is_cg2: bool,
+        /// True when the commit multicasts across the cluster (`_multicast*`).
+        is_multicast: bool,
     },
     /// Warp-restricted async `tcgen05_ld_*` producing register token `ld_id`.
     TmemLoad {
@@ -334,13 +362,13 @@ impl TranscribedControlFlowCfg {
                     && d0 == d1
                     && !matches!(
                         c0,
-                        CfgBranchCond::MbarReady(_, _)
+                        CfgBranchCond::MbarReady(_, _, _)
                             | CfgBranchCond::MbarSpin(_)
                             | CfgBranchCond::PosLoopExit(_)
                     )
                     && !matches!(
                         c1,
-                        CfgBranchCond::MbarReady(_, _)
+                        CfgBranchCond::MbarReady(_, _, _)
                             | CfgBranchCond::MbarSpin(_)
                             | CfgBranchCond::PosLoopExit(_)
                     )

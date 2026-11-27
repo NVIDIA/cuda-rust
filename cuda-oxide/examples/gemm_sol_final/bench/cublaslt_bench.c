@@ -45,7 +45,7 @@ typedef struct {
     cublasLtMatmulDesc_t op;
     cublasLtMatrixLayout_t a, b, c;
     void *A, *B, *C, *workspace;
-    int n;
+    int m, n, k;
 } Problem;
 typedef struct {
     cublasLtMatmulAlgo_t algo;
@@ -174,39 +174,44 @@ static int bv(int col, int k) {
     return (int)(((uint64_t)col * 11 + (uint64_t)k * 5 + (uint64_t)(k / 13) * 2) % 7) - 3;
 }
 static void validate(Problem *p, const cublasLtMatmulAlgo_t *a) {
-    size_t count = (size_t)p->n * p->n, bytes = count * 2;
-    uint16_t *host = malloc(bytes);
+    size_t bytes_a = (size_t)p->m * p->k * 2;
+    size_t bytes_b = (size_t)p->n * p->k * 2;
+    size_t bytes_c = (size_t)p->m * p->n * 2;
+    size_t max_bytes = bytes_a > bytes_b ? bytes_a : bytes_b;
+    if (bytes_c > max_bytes)
+        max_bytes = bytes_c;
+    uint16_t *host = malloc(max_bytes);
     if (!host)
         exit(1);
-    for (int row = 0; row < p->n; row++)
-        for (int k = 0; k < p->n; k++)
-            host[(size_t)row * p->n + k] = small_half(av(row, k));
-    CHECK_CUDA(cudaMemcpy(p->A, host, bytes, cudaMemcpyHostToDevice));
+    for (int row = 0; row < p->m; row++)
+        for (int kk = 0; kk < p->k; kk++)
+            host[(size_t)row * p->k + kk] = small_half(av(row, kk));
+    CHECK_CUDA(cudaMemcpy(p->A, host, bytes_a, cudaMemcpyHostToDevice));
     for (int col = 0; col < p->n; col++)
-        for (int k = 0; k < p->n; k++)
-            host[(size_t)col * p->n + k] = small_half(bv(col, k));
-    CHECK_CUDA(cudaMemcpy(p->B, host, bytes, cudaMemcpyHostToDevice));
+        for (int kk = 0; kk < p->k; kk++)
+            host[(size_t)col * p->k + kk] = small_half(bv(col, kk));
+    CHECK_CUDA(cudaMemcpy(p->B, host, bytes_b, cudaMemcpyHostToDevice));
     CHECK_BLAS(launch(p, a));
     CHECK_CUDA(cudaStreamSynchronize(p->stream));
-    CHECK_CUDA(cudaMemcpy(host, p->C, bytes, cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaMemcpy(host, p->C, bytes_c, cudaMemcpyDeviceToHost));
     for (int i = 0; i < 64; i++) {
-        int row = (i * 7919 + 17) % p->n, col = (i * 6701 + 31) % p->n;
+        int row = (i * 7919 + 17) % p->m, col = (i * 6701 + 31) % p->n;
         double expected = 0;
-        for (int k = 0; k < p->n; k++)
-            expected += av(row, k) * bv(col, k) / 64.0;
-        double actual = from16(host[(size_t)col * p->n + row]);
+        for (int kk = 0; kk < p->k; kk++)
+            expected += av(row, kk) * bv(col, kk) / 64.0;
+        double actual = from16(host[(size_t)col * p->m + row]);
         double tolerance =
             fmax(0.03125, fabs(expected) * (output_type == CUDA_R_16BF ? 0.004 : 0.0005));
         if (!isfinite(actual) || fabs(actual - expected) > tolerance) {
-            fprintf(stderr, "VALIDATION FAILED n=%d row=%d col=%d actual=%g expected=%g\n", p->n,
-                    row, col, actual, expected);
+            fprintf(stderr, "VALIDATION FAILED %dx%dx%d row=%d col=%d actual=%g expected=%g\n",
+                    p->m, p->n, p->k, row, col, actual, expected);
             exit(1);
         }
     }
     free(host);
-    CHECK_CUDA(cudaMemset(p->A, 0, bytes));
-    CHECK_CUDA(cudaMemset(p->B, 0, bytes));
-    CHECK_CUDA(cudaMemset(p->C, 0, bytes));
+    CHECK_CUDA(cudaMemset(p->A, 0, bytes_a));
+    CHECK_CUDA(cudaMemset(p->B, 0, bytes_b));
+    CHECK_CUDA(cudaMemset(p->C, 0, bytes_c));
     CHECK_CUDA(cudaStreamSynchronize(p->stream));
 }
 static Candidate refine(Problem *p, Candidate *best, int count) {
@@ -240,48 +245,53 @@ static void report(Problem *p, Candidate chosen, const char *label, long checked
         }
     }
     printf("RESULT "
-           "{\"implementation\":\"cublaslt\",\"mode\":\"%s\",\"n\":%d,\"input\":\"fp16\","
+           "{\"implementation\":\"cublaslt\",\"mode\":\"%s\",\"m\":%d,\"n\":%d,\"k\":%d,\"input\":\"fp16\","
            "\"output\":\"%s\",\"compute\":\"fp32\",\"workspace_limit\":%zu,\"workspace_used\":%zu,"
            "\"warmup\":%d,\"iters\":%d,\"repeats\":%d,\"samples_us\":[",
-           label, p->n, output_name, workspace_size, chosen.workspace, warmup, iters, repeats);
+           label, p->m, p->n, p->k, output_name, workspace_size, chosen.workspace, warmup, iters,
+           repeats);
     for (int r = 0; r < repeats; r++)
         printf("%s%.9f", r ? "," : "", times[r]);
     double us = median(times, repeats);
-    double tf = 2.0 * p->n * p->n * p->n / us / 1e6;
+    double tf = 2.0 * p->m * p->n * p->k / us / 1e6;
     printf("],\"median_us\":%.9f,\"tflops\":%.9f,\"configs_checked\":%ld,\"configs_timed\":%ld,"
            "\"algo_ids\":%d,\"validation\":\"64-nonzero-cpu-dot-products-pass\",",
            us, tf, checked, valid, algo_count);
     describe(&chosen.algo);
     printf("}\n");
     if (!strcmp(label, "top8") || !strcmp(mode, "exhaustive"))
-        printf("  FP16 FP32 compute %dx%dx%d %.9f ms %.9f TFLOPS\n", p->n, p->n, p->n, us / 1000,
+        printf("  FP16 FP32 compute %dx%dx%d %.9f ms %.9f TFLOPS\n", p->m, p->n, p->k, us / 1000,
                tf);
     free(times);
     fflush(stdout);
 }
-static void bench(cublasLtHandle_t h, int n) {
+static void bench_mnk(cublasLtHandle_t h, int m, int n, int k) {
     Problem p = {0};
     p.h = h;
+    p.m = m;
     p.n = n;
+    p.k = k;
     CHECK_CUDA(cudaStreamCreate(&p.stream));
     CHECK_CUDA(cudaEventCreate(&p.start));
     CHECK_CUDA(cudaEventCreate(&p.stop));
-    size_t bytes = (size_t)n * n * 2;
-    CHECK_CUDA(cudaMalloc(&p.A, bytes));
-    CHECK_CUDA(cudaMalloc(&p.B, bytes));
-    CHECK_CUDA(cudaMalloc(&p.C, bytes));
+    size_t bytes_a = (size_t)m * k * 2;
+    size_t bytes_b = (size_t)n * k * 2;
+    size_t bytes_c = (size_t)m * n * 2;
+    CHECK_CUDA(cudaMalloc(&p.A, bytes_a));
+    CHECK_CUDA(cudaMalloc(&p.B, bytes_b));
+    CHECK_CUDA(cudaMalloc(&p.C, bytes_c));
     CHECK_CUDA(cudaMalloc(&p.workspace, workspace_size));
-    CHECK_CUDA(cudaMemset(p.A, 0, bytes));
-    CHECK_CUDA(cudaMemset(p.B, 0, bytes));
-    CHECK_CUDA(cudaMemset(p.C, 0, bytes));
+    CHECK_CUDA(cudaMemset(p.A, 0, bytes_a));
+    CHECK_CUDA(cudaMemset(p.B, 0, bytes_b));
+    CHECK_CUDA(cudaMemset(p.C, 0, bytes_c));
     CHECK_BLAS(cublasLtMatmulDescCreate(&p.op, CUBLAS_COMPUTE_32F, CUDA_R_32F));
     cublasOperation_t t = CUBLAS_OP_T, normal = CUBLAS_OP_N;
     CHECK_BLAS(cublasLtMatmulDescSetAttribute(p.op, CUBLASLT_MATMUL_DESC_TRANSA, &t, sizeof(t)));
     CHECK_BLAS(
         cublasLtMatmulDescSetAttribute(p.op, CUBLASLT_MATMUL_DESC_TRANSB, &normal, sizeof(normal)));
-    CHECK_BLAS(cublasLtMatrixLayoutCreate(&p.a, CUDA_R_16F, n, n, n));
-    CHECK_BLAS(cublasLtMatrixLayoutCreate(&p.b, CUDA_R_16F, n, n, n));
-    CHECK_BLAS(cublasLtMatrixLayoutCreate(&p.c, output_type, n, n, n));
+    CHECK_BLAS(cublasLtMatrixLayoutCreate(&p.a, CUDA_R_16F, k, m, k));
+    CHECK_BLAS(cublasLtMatrixLayoutCreate(&p.b, CUDA_R_16F, k, n, k));
+    CHECK_BLAS(cublasLtMatrixLayoutCreate(&p.c, output_type, m, n, m));
     cublasLtMatmulPreference_t pref;
     CHECK_BLAS(cublasLtMatmulPreferenceCreate(&pref));
     CHECK_BLAS(cublasLtMatmulPreferenceSetAttribute(pref, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES,
@@ -291,8 +301,8 @@ static void bench(cublasLtHandle_t h, int n) {
     cublasStatus_t status =
         cublasLtMatmulAlgoGetHeuristic(h, p.op, p.a, p.b, p.c, p.c, pref, 8, heur, &returned);
     if (status != CUBLAS_STATUS_SUCCESS || !returned) {
-        fprintf(stderr, "No supported FP16->%s heuristic for %d (status=%d count=%d)\n",
-                output_name, n, status, returned);
+        fprintf(stderr, "No supported FP16->%s heuristic for %dx%dx%d (status=%d count=%d)\n",
+                output_name, m, n, k, status, returned);
         exit(2);
     }
     Candidate top[FINALISTS];
@@ -362,8 +372,9 @@ static void bench(cublasLtHandle_t h, int n) {
                                         checked++;
                                         valid += trial(&p, &a, finalists, &nf);
                                     }
-            fprintf(stderr, "SEARCH n=%d algo=%d/%d id=%d checked=%ld timed=%ld best_us=%.3f\n", n,
-                    ai + 1, count, ids[ai], checked, valid, finalists[0].us);
+            fprintf(stderr,
+                    "SEARCH %dx%dx%d algo=%d/%d id=%d checked=%ld timed=%ld best_us=%.3f\n", m, n,
+                    k, ai + 1, count, ids[ai], checked, valid, finalists[0].us);
             fflush(stderr);
             free(tiles);
             free(stages);
@@ -454,11 +465,14 @@ int main(int argc, char **argv) {
     cublasLtHandle_t h;
     CHECK_BLAS(cublasLtCreate(&h));
     if (only)
-        bench(h, only);
+        bench_mnk(h, only, only, only);
     else {
-        bench(h, 4096);
-        bench(h, 8192);
-        bench(h, 16384);
+        bench_mnk(h, 4096, 4096, 64);
+        bench_mnk(h, 4096, 4096, 128);
+        bench_mnk(h, 4096, 4096, 192);
+        bench_mnk(h, 4096, 4096, 4096);
+        bench_mnk(h, 8192, 8192, 8192);
+        bench_mnk(h, 16384, 16384, 16384);
     }
     CHECK_BLAS(cublasLtDestroy(h));
     return 0;

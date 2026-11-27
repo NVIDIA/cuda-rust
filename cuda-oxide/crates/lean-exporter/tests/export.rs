@@ -1762,7 +1762,7 @@ fn verifies_stage8_warp_ring_and_rejects_slot_mismatch_wrap_oob_and_missing_back
     let ring_lean =
         export_named_source(WARP_RING_FIXTURE, "warp_ring_stage").expect("exports warp_ring_stage");
     assert!(ring_lean.contains("(.barrierSlotCheck"));
-    assert!(ring_lean.contains("(.mbarReady 0 true)"));
+    assert!(ring_lean.contains("(.mbarReady 0 true .ctaAcquire)"));
     assert!(ring_lean.contains("(.posLoopExit"));
     lean_exporter::runner::check_generated_lean(&ring_lean, &lean_dir)
         .expect("Lean 4 proves warp_ring_stage with 0 sorryAx");
@@ -1840,10 +1840,32 @@ fn verifies_stage9_cluster_dsmem_clc_and_cg2_tmem_lifecycle() {
     assert!(clc_lean.contains("clusterDimX := 2"));
     assert!(clc_lean.contains("(.clusterRankCheck"));
     assert!(clc_lean.contains("(.dsmemAccess 1)"));
-    assert!(clc_lean.contains("(.clcTryCancel 0 0)"));
+    assert!(clc_lean.contains("(.clcTryCancel 0 0 true)"));
+    assert!(clc_lean.contains("(.mbarReady 0 false .clusterAcquire)"));
     assert!(clc_lean.contains("CudaOxide.Contracts.Program.MirNoOobClusterRank mirFunc"));
     lean_exporter::runner::check_generated_lean(&clc_lean, &lean_dir)
         .expect("Lean 4 proves cluster_clc_stage with 0 sorryAx");
+
+    // 1b. Negative (`.ctaAcquire` wait on remote `PEER_DONE` or multicast `CLC_BAR`):
+    let cta_wait_peer = CLUSTER_CLC_FIXTURE.replacen(
+        "peer_ready = nvvm.mbarrier_try_wait_parity_cluster (peer_bar_w, zero_u32)",
+        "peer_ready = nvvm.mbarrier_try_wait_parity_shared (peer_bar_w, zero_u32)",
+        1,
+    );
+    let cta_wait_peer_lean = export_named_source(&cta_wait_peer, "cluster_clc_stage")
+        .expect("transcribes .cta wait on remote PEER_DONE");
+    lean_exporter::runner::check_generated_lean(&cta_wait_peer_lean, &lean_dir)
+        .expect_err("Lean 4 must reject .cta try_wait on remote cluster-signaled PEER_DONE");
+
+    let relaxed_wait_clc = CLUSTER_CLC_FIXTURE.replacen(
+        "clc_ready = nvvm.mbarrier_try_wait_parity_cluster (clc_bar_w, zero_u32)",
+        "clc_ready = nvvm.mbarrier_try_wait_parity_cluster_relaxed (clc_bar_w, zero_u32)",
+        1,
+    );
+    let relaxed_wait_clc_lean = export_named_source(&relaxed_wait_clc, "cluster_clc_stage")
+        .expect("transcribes .relaxed.cluster wait on CLC_BAR");
+    lean_exporter::runner::check_generated_lean(&relaxed_wait_clc_lean, &lean_dir)
+        .expect_err("Lean 4 must reject .relaxed wait on CLC_BAR before reading CLC_RESPONSE");
 
     // 2. Negative (`MirNoOobClusterRank` in Lean 4): `my_rank + 1` overflows `clusterDimX == 2` on CTA 1!
     let oob_rank = CLUSTER_CLC_FIXTURE.replacen(
@@ -1940,6 +1962,11 @@ fn verifies_stage9_cluster_dsmem_clc_and_cg2_tmem_lifecycle() {
         .replacen(
             "nvvm.tcgen05_commit_shared_cluster (",
             "nvvm.tcgen05_commit_shared_cluster_cg2 (",
+            1,
+        )
+        .replacen(
+            "ready_mma = nvvm.mbarrier_try_wait_parity_shared (mma_bar_w, zero_u32)",
+            "ready_mma = nvvm.mbarrier_try_wait_parity_cluster (mma_bar_w, zero_u32)",
             1,
         )
         .replacen(
@@ -2052,6 +2079,11 @@ fn verifies_stage10_dual_commit_cg2_multicast_and_dynamic_tile_kind_bounds() {
             1,
         )
         .replacen(
+            "ready_mma = nvvm.mbarrier_try_wait_parity_shared (mma_bar_w, zero_u32)",
+            "ready_mma = nvvm.mbarrier_try_wait_parity_cluster (mma_bar_w, zero_u32)",
+            1,
+        )
+        .replacen(
             "      ^sync_before_dealloc():\n        nvvm.barrier0 () [] []: <() -> ()>;\n        mir.cond_br (is_warp0) [^dealloc_tmem, ^exit]",
             "      ^sync_before_dealloc():\n        mir.cond_br (is_warp0) [^relinquish_cg2, ^cluster_sync_dealloc] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>\n\n      ^relinquish_cg2():\n        nvvm.tcgen05_relinquish_alloc_permit_cg2 () [] []: <() -> ()>;\n        mir.goto () [^cluster_sync_dealloc] []: <() -> ()>\n\n      ^cluster_sync_dealloc():\n        nvvm.cluster_sync () [] []: <() -> ()>;\n        mir.cond_br (is_warp0) [^dealloc_tmem, ^exit]",
             1,
@@ -2068,6 +2100,30 @@ fn verifies_stage10_dual_commit_cg2_multicast_and_dynamic_tile_kind_bounds() {
         .expect("exports Stage 10 dual-commit _cg2 kernel");
     lean_exporter::runner::check_generated_lean(&dual_commit_lean, &lean_dir)
         .expect("Lean 4 proves Stage 10 dual-commit _cg2 TmemLifecycle");
+
+    // 1b. Negative: `.ctaAcquire` wait on `_cg2` `MMA_BAR` fails `TmemLifecycle`!
+    let cg2_cta_wait = base_cg2.replacen(
+        "ready_mma = nvvm.mbarrier_try_wait_parity_cluster (mma_bar_w, zero_u32)",
+        "ready_mma = nvvm.mbarrier_try_wait_parity_shared (mma_bar_w, zero_u32)",
+        1,
+    );
+    let cg2_cta_wait_lean = export_named_source(&cg2_cta_wait, "tcgen05_matmul_verified")
+        .expect("transcribes .cta wait on _cg2 MMA_BAR");
+    lean_exporter::runner::check_generated_lean(&cg2_cta_wait_lean, &lean_dir)
+        .expect_err("Lean 4 must reject .cta wait on _cg2 committed MMA_BAR");
+
+    // 1c. Negative: Missing `tcgen05_fence_after_thread_sync` between `MMA_BAR` wait and `tcgen05_ld` fails!
+    let cg2_missing_after_fence = base_cg2.replacen(
+        "      ^epilogue_init():\n        nvvm.tcgen05_fence_after_thread_sync () [] []: <() -> ()>;\n",
+        "      ^epilogue_init():\n",
+        1,
+    );
+    let cg2_no_fence_lean =
+        export_named_source(&cg2_missing_after_fence, "tcgen05_matmul_verified")
+            .expect("transcribes missing tcgen05_fence_after_thread_sync before tcgen05_ld");
+    lean_exporter::runner::check_generated_lean(&cg2_no_fence_lean, &lean_dir).expect_err(
+        "Lean 4 must reject tcgen05_ld after mbarrier wait without tcgen05_fence_after_thread_sync",
+    );
 
     // 2. Negative: `tcgen05_commit_shared_cluster_cg2` with zero `tcgen05_mma` anywhere in the kernel fails `TmemLifecycle`!
     let commit_without_any_mma = base_cg2.replacen(

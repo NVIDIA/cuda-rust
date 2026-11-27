@@ -71,7 +71,7 @@ builtin.module @safe_cluster_clc {
 
       ^wait_peer_hdr():
         peer_bar_w = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string "PEER_DONE", source_name: builtin.string "safe_cluster_clc::kernels::cluster_clc_stage::PEER_DONE"]: <() -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;
-        peer_ready = nvvm.mbarrier_try_wait_parity_shared (peer_bar_w, zero_u32) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui32) -> (builtin.integer i1)>;
+        peer_ready = nvvm.mbarrier_try_wait_parity_cluster (peer_bar_w, zero_u32) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui32) -> (builtin.integer i1)>;
         peer_not_ready = mir.not (peer_ready) [] []: <(builtin.integer i1) -> (builtin.integer i1)>;
         mir.cond_br (peer_not_ready) [^wait_peer_spin, ^clc_warp_check] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
 
@@ -101,7 +101,7 @@ builtin.module @safe_cluster_clc {
 
       ^wait_clc_hdr():
         clc_bar_w = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui64, size: builtin.integer <1: i64>, alloc_key: builtin.string "CLC_BAR", source_name: builtin.string "safe_cluster_clc::kernels::cluster_clc_stage::CLC_BAR"]: <() -> (mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>)>;
-        clc_ready = nvvm.mbarrier_try_wait_parity_shared (clc_bar_w, zero_u32) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui32) -> (builtin.integer i1)>;
+        clc_ready = nvvm.mbarrier_try_wait_parity_cluster (clc_bar_w, zero_u32) [] []: <(mir.ptr <builtin.integer ui64 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui32) -> (builtin.integer i1)>;
         clc_not_ready = mir.not (clc_ready) [] []: <(builtin.integer i1) -> (builtin.integer i1)>;
         mir.cond_br (clc_not_ready) [^wait_clc_spin, ^consume_clc] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
 

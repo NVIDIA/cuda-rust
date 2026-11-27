@@ -18,7 +18,7 @@ use crate::{
     ExportError,
     spec::KernelVerificationSpec,
     ssa::{
-        CfgBranchCond, CfgOpItem, GuardExpr, IdxExpr, TranscribedCfgBlock,
+        CfgBranchCond, CfgMbarWaitKind, CfgOpItem, GuardExpr, IdxExpr, TranscribedCfgBlock,
         TranscribedControlFlowCfg,
     },
     translate::{
@@ -133,12 +133,27 @@ fn format_guard_expr(guard: &GuardExpr) -> String {
     }
 }
 
+/// Format a [`CfgMbarWaitKind`] into its `CudaOxide.Mir.ControlFlow.MbarWaitKind` constructor.
+/// Preserves the exact scope/ordering tag transcribed from the MIR `mbarrier_try_wait*` op.
+fn format_mbar_wait_kind(kind: CfgMbarWaitKind) -> &'static str {
+    match kind {
+        CfgMbarWaitKind::CtaAcquire => ".ctaAcquire",
+        CfgMbarWaitKind::ClusterAcquire => ".clusterAcquire",
+        CfgMbarWaitKind::ClusterRelaxed => ".clusterRelaxed",
+    }
+}
+
 /// Format a [`CfgBranchCond`] into a Lean `CudaOxide.Mir.ControlFlow.BranchCond` expression.
 fn format_cfg_branch_cond(cond: &CfgBranchCond) -> String {
     match cond {
         CfgBranchCond::Always => ".always".to_string(),
         CfgBranchCond::Coord(g) => format!("(.coord {})", format_guard_expr(g)),
-        CfgBranchCond::MbarReady(b, init_free) => format!("(.mbarReady {b} {init_free})"),
+        CfgBranchCond::MbarReady(b, init_free, wk) => {
+            format!(
+                "(.mbarReady {b} {init_free} {})",
+                format_mbar_wait_kind(*wk)
+            )
+        }
         CfgBranchCond::MbarSpin(b) => format!("(.mbarSpin {b})"),
         CfgBranchCond::PosLoopExit(body) => format!("(.posLoopExit {body})"),
         CfgBranchCond::Uniform => ".uniform".to_string(),
@@ -158,18 +173,27 @@ fn format_cfg_op(op: &CfgOpItem) -> String {
         CfgOpItem::MbarInit { bar_id, count } => format!("(.mbarInit {bar_id} {count})"),
         CfgOpItem::MbarInval { bar_id } => format!("(.mbarInval {bar_id})"),
         CfgOpItem::ProxyFenceAsyncShared => ".proxyFenceAsyncShared".to_string(),
-        CfgOpItem::MbarArrive { bar_id } => format!("(.mbarArrive {bar_id})"),
-        CfgOpItem::MbarArriveExpectTx { bar_id, tx_bytes } => {
-            format!("(.mbarArriveExpectTx {bar_id} {tx_bytes})")
-        }
+        CfgOpItem::MbarArrive {
+            bar_id,
+            is_cluster,
+            is_relaxed,
+        } => format!("(.mbarArrive {bar_id} {is_cluster} {is_relaxed})"),
+        CfgOpItem::MbarArriveExpectTx {
+            bar_id,
+            tx_bytes,
+            is_cluster,
+        } => format!("(.mbarArriveExpectTx {bar_id} {tx_bytes} {is_cluster})"),
         CfgOpItem::TmaCopyG2S {
             shared_id,
             bar_id,
             is_cg2,
-        } => format!("(.tmaCopyG2S {shared_id} {bar_id} {is_cg2})"),
-        CfgOpItem::ClcTryCancel { shared_id, bar_id } => {
-            format!("(.clcTryCancel {shared_id} {bar_id})")
-        }
+            is_multicast,
+        } => format!("(.tmaCopyG2S {shared_id} {bar_id} {is_cg2} {is_multicast})"),
+        CfgOpItem::ClcTryCancel {
+            shared_id,
+            bar_id,
+            is_multicast,
+        } => format!("(.clcTryCancel {shared_id} {bar_id} {is_multicast})"),
         CfgOpItem::TmemAlloc {
             shared_id,
             cols,
@@ -189,7 +213,11 @@ fn format_cfg_op(op: &CfgOpItem) -> String {
                 .join(", ");
             format!("(.tmemAsyncIssue [{list}] {is_cg2})")
         }
-        CfgOpItem::TmemCommit { bar_id, is_cg2 } => format!("(.tmemCommit {bar_id} {is_cg2})"),
+        CfgOpItem::TmemCommit {
+            bar_id,
+            is_cg2,
+            is_multicast,
+        } => format!("(.tmemCommit {bar_id} {is_cg2} {is_multicast})"),
         CfgOpItem::TmemLoad { ld_id } => format!("(.tmemLoad {ld_id})"),
         CfgOpItem::TmemLoadWait => ".tmemLoadWait".to_string(),
         CfgOpItem::TmemLoadUse { ld_id } => format!("(.tmemLoadUse {ld_id})"),
@@ -260,7 +288,7 @@ fn format_mir_rhs(rhs: &MirRhs) -> String {
         MirRhs::IntCast(dw, s) => format!("(.intCast {dw} {s})"),
         MirRhs::PtrOffset(b, i) => format!("(.ptrOffset {b} {i})"),
         MirRhs::Load(p) => format!("(.load {p})"),
-        MirRhs::MbarTryWait(b, s) => format!("(.mbarTryWait {b} {s})"),
+        MirRhs::MbarTryWait(b, s, is_acq) => format!("(.mbarTryWait {b} {s} {is_acq})"),
         MirRhs::CvtaShared(p) => format!("(.cvtaShared {p})"),
         MirRhs::LoadTmemBase(p, cols) => format!("(.loadTmemBase {p} {cols})"),
         MirRhs::OpaqueUint(id, w) => format!("(.opaqueUint {id} {w})"),
@@ -316,7 +344,7 @@ fn render_mir_program_module(
                 MirStmt::SyncThreads => ".syncThreads".to_string(),
                 MirStmt::BarrierSlotCheck(p) => format!("(.barrierSlotCheck {p})"),
                 MirStmt::ClusterRankCheck(r) => format!("(.clusterRankCheck {r})"),
-                MirStmt::MbarArrive(b, s) => format!("(.mbarArrive {b} {s})"),
+                MirStmt::MbarArrive(b, s, is_rel) => format!("(.mbarArrive {b} {s} {is_rel})"),
                 MirStmt::MbarArriveExpectTx(b, s, tx) => {
                     format!("(.mbarArriveExpectTx {b} {s} {tx})")
                 }

@@ -1037,7 +1037,7 @@ theorem symRankEventsOfStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadC
               exact ⟨rev, hmem, hp, hrEq⟩
           | copy _ | constInt _ _ | constBool _ | sreg _ | index1D | coord2DU32 | paramScalar _ | slicePtr _
           | sliceLen _ | sharedBase _ | binOp _ _ _ _ | checkedOvf _ _ _ _ | cmpOp _ _ _ | notBool _ | intCast _ _
-          | ptrOffset _ _ | mbarTryWait _ _ | cvtaShared _ | opaqueUint _ _ | opaqueVal =>
+          | ptrOffset _ _ | mbarTryWait _ _ _ | cvtaShared _ | opaqueUint _ _ | opaqueVal =>
               obtain ⟨rev, hmem, hp, hrEq⟩ := symRankEventsOfStmts_correct f env t havoc pCond term
                 rest tl sfx _ _ phase rv r hnextGen htl (by simpa [execStmts] using hr)
               exact ⟨rev, hmem, hp, hrEq⟩
@@ -1045,7 +1045,7 @@ theorem symRankEventsOfStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadC
           obtain ⟨rev, hmem, hp, hrEq⟩ := symRankEventsOfStmts_correct f env t havoc pCond term
             rest tl sfx regs sregs phase rv r hmatch htl (by simpa [execStmts] using hr)
           exact ⟨rev, List.Mem.tail _ hmem, hp, hrEq⟩
-      | store _ _ | barrierSlotCheck _ | assertCond _ _ | mbarArrive _ _ | mbarArriveExpectTx _ _ _
+      | store _ _ | barrierSlotCheck _ | assertCond _ _ | mbarArrive _ _ _ | mbarArriveExpectTx _ _ _
       | tmaCopyG2S _ _ _ _ | tmemAlloc _ _ | smemDescRead _ _ | tmemAccess _ _ _ _ =>
           obtain ⟨rev, hmem, hp, hrEq⟩ := symRankEventsOfStmts_correct f env t havoc pCond term
             rest tl sfx regs sregs phase rv r hmatch htl (by simpa [execStmts] using hr)
@@ -1181,7 +1181,7 @@ theorem findBlockGlobalWrite_sound (f : MirFunc) (paramId : Nat) (env : InputEnv
                 exact ⟨ev, List.mem_append_right _ hev, hprops⟩⟩
           | copy _ | constInt _ _ | constBool _ | sreg _ | index1D | coord2DU32 | paramScalar _ | slicePtr _
           | sliceLen _ | sharedBase _ | binOp _ _ _ _ | checkedOvf _ _ _ _ | cmpOp _ _ _ | notBool _ | intCast _ _
-          | ptrOffset _ _ | mbarTryWait _ _ | cvtaShared _ | opaqueUint _ _ | opaqueVal =>
+          | ptrOffset _ _ | mbarTryWait _ _ _ | cvtaShared _ | opaqueUint _ _ | opaqueVal =>
               exact findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest _ _ phase hnextGen
       | assertCond aid cond =>
           obtain ⟨hr, hnt, hw⟩ := findBlockGlobalWrite f paramId pCond sregs rest |> fun _ =>
@@ -1253,7 +1253,7 @@ theorem findBlockGlobalWrite_sound (f : MirFunc) (paramId : Nat) (env : InputEnv
           exact ⟨hr, hnt, fun idxSym hs => by
             obtain ⟨ev, hev, hprops⟩ := hw idxSym hs
             exact ⟨ev, List.mem_append_right _ hev, hprops⟩⟩
-      | clusterRankCheck _ | mbarArrive _ _ | mbarArriveExpectTx _ _ _ | tmemAccess _ _ _ _ =>
+      | clusterRankCheck _ | mbarArrive _ _ _ | mbarArriveExpectTx _ _ _ | tmemAccess _ _ _ _ =>
           exact findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest regs sregs phase hmatch
 
 /-- Symbolic leaf collected from entry block `0` for `MirWritesAllElems`:

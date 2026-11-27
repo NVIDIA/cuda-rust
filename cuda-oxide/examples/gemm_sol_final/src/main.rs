@@ -24,6 +24,7 @@ use cuda_core::{CudaContext, CudaStream, DeviceBuffer, IntoResult, LaunchConfig}
 use cuda_device::barrier::{
     Barrier, fence_proxy_async_shared_cta, mbarrier_arrive, mbarrier_arrive_cluster,
     mbarrier_arrive_expect_tx, mbarrier_init, mbarrier_try_wait_parity,
+    mbarrier_try_wait_parity_cluster,
 };
 use cuda_device::clc::{
     clc_query_get_first_ctaid_x, clc_query_is_canceled, clc_try_cancel_multicast,
@@ -34,8 +35,8 @@ use cuda_device::shared::{SharedArray, cvta_generic_to_shared_offset};
 use cuda_device::tcgen05::{
     Tcgen05AccumulatorType, Tcgen05ElementType, Tcgen05InstructionDescriptor, Tcgen05MmaShape,
     tcgen05_alloc_cg2, tcgen05_commit_multicast_cg2, tcgen05_dealloc_cg2,
-    tcgen05_ld_16x256b_x8_pure, tcgen05_load_wait, tcgen05_mma_f16_cg2,
-    tcgen05_relinquish_alloc_permit_cg2,
+    tcgen05_fence_after_thread_sync, tcgen05_fence_before_thread_sync, tcgen05_ld_16x256b_x8_pure,
+    tcgen05_load_wait, tcgen05_mma_f16_cg2, tcgen05_relinquish_alloc_permit_cg2,
 };
 use cuda_device::tma::{TmaDescriptor, cp_async_bulk_tensor_2d_g2s_multicast_cg2};
 use cuda_device::{DisjointSlice, cluster_launch, kernel, thread, warp};
@@ -58,14 +59,22 @@ mod cublas_baseline {
     use std::path::{Path, PathBuf};
     use std::sync::OnceLock;
 
-    /// Cached per-shape (`M -> TFLOPS`) measurements parsed from `bench/cublaslt_bench`.
-    /// Populated at most once per process via [`warmup`] or [`reference_tflops`].
-    static BASELINE: OnceLock<Option<HashMap<usize, f64>>> = OnceLock::new();
+    /// Per-shape `(M, N, K) -> TFLOPS` map parsed from `bench/cublaslt_bench` stdout.
+    /// Stores live tuned `cuBLASLt` FP16 throughput baselines on the host GPU.
+    type CublasReferenceMap = HashMap<(usize, usize, usize), f64>;
 
-    /// Return the live `cuBLASLt` FP16 TFLOPS for an `M × M × M` GEMM on the host GPU,
+    /// Cached per-shape (`(M, N, K) -> TFLOPS`) measurements parsed from `bench/cublaslt_bench`.
+    /// Populated at most once per process via [`warmup`] or [`reference_tflops`].
+    static BASELINE: OnceLock<Option<CublasReferenceMap>> = OnceLock::new();
+
+    /// Return the live `cuBLASLt` FP16->BF16 TFLOPS for an `M x N x K` GEMM on the host GPU,
     /// or `None` if `bench/cublaslt_bench` was skipped or has not been built.
-    pub fn reference_tflops(m: usize) -> Option<f64> {
-        BASELINE.get_or_init(load).as_ref()?.get(&m).copied()
+    pub fn reference_tflops(m: usize, n: usize, k: usize) -> Option<f64> {
+        BASELINE
+            .get_or_init(load)
+            .as_ref()?
+            .get(&(m, n, k))
+            .copied()
     }
 
     /// Pre-warm the `cuBLASLt` reference before the timed Rust benchmark loop starts
@@ -84,7 +93,7 @@ mod cublas_baseline {
 
     /// Execute `bench/cublaslt_bench` with matching warmup/iteration/repeat overrides
     /// and parse its `--- FP16 ---` throughput rows.
-    fn load() -> Option<HashMap<usize, f64>> {
+    fn load() -> Option<CublasReferenceMap> {
         if std::env::var("GEMM_CUBLAS_SKIP").as_deref() == Ok("1") {
             return None;
         }
@@ -134,11 +143,12 @@ mod cublas_baseline {
             eprintln!("⚠️  Could not parse FP16 rows from cublaslt_bench output:\n{stdout}");
             None
         } else {
-            let mut sizes: Vec<(usize, f64)> = map.iter().map(|(m, t)| (*m, *t)).collect();
-            sizes.sort_by_key(|(m, _)| *m);
+            let mut sizes: Vec<((usize, usize, usize), f64)> =
+                map.iter().map(|(k, t)| (*k, *t)).collect();
+            sizes.sort_by_key(|(dims, _)| *dims);
             let pretty = sizes
                 .iter()
-                .map(|(m, t)| format!("{m}={t:.1}"))
+                .map(|((m, n, k), t)| format!("{m}x{n}x{k}={t:.1}"))
                 .collect::<Vec<_>>()
                 .join(", ");
             eprintln!("✓ live cuBLASLt FP16 reference (TFLOPS): {pretty}");
@@ -146,9 +156,9 @@ mod cublas_baseline {
         }
     }
 
-    /// Extract `(M, TFLOPS)` pairs from the `--- FP16 ---` section of `cublaslt_bench` stdout.
+    /// Extract `((M, N, K), TFLOPS)` pairs from the `--- FP16 ---` section of `cublaslt_bench` stdout.
     /// Ignores lines outside the `--- FP16 ---` block.
-    fn parse_fp16_reference(s: &str) -> HashMap<usize, f64> {
+    fn parse_fp16_reference(s: &str) -> CublasReferenceMap {
         let mut map = HashMap::new();
         let mut in_fp16 = false;
         for line in s.lines() {
@@ -166,24 +176,26 @@ mod cublas_baseline {
             }
             let toks: Vec<&str> = l.split_whitespace().collect();
             let size = toks.get(3).copied().unwrap_or("");
-            let m: Option<usize> = size.split('x').next().and_then(|s| s.trim().parse().ok());
-            let tf: Option<f64> = toks.iter().rev().nth(1).and_then(|s| s.parse().ok());
-            if let (Some(m), Some(tf)) = (m, tf) {
-                map.insert(m, tf);
+            let mut dims = size.split('x').filter_map(|p| p.trim().parse().ok());
+            let tf: Option<f64> = toks.iter().rev().nth(1).and_then(|p| p.parse().ok());
+            if let (Some(m), Some(n), Some(k), Some(tf)) =
+                (dims.next(), dims.next(), dims.next(), tf)
+            {
+                map.insert((m, n, k), tf);
             }
         }
         map
     }
 }
 
-/// Print the `"vs cuBLAS"` comparison line for size `m` using the live `cuBLASLt`
+/// Print the `"vs cuBLAS"` comparison line for shape `(m, n, k)` using the live `cuBLASLt`
 /// baseline if `bench/cublaslt_bench` is present.
-fn print_cublas_comparison(tflops: f64, m: usize) {
-    match cublas_baseline::reference_tflops(m) {
+fn print_cublas_comparison(tflops: f64, m: usize, n: usize, k: usize) {
+    match cublas_baseline::reference_tflops(m, n, k) {
         Some(sol) => {
             let pct = (tflops / sol) * 100.0;
             println!(
-                "  vs cuBLAS:   {pct:.2}% of live cublasLt tuned FP16 reference ({sol:.0} TFLOPS)"
+                "  vs cuBLAS:   {pct:.2}% of live cublasLt tuned FP16 reference ({sol:.1} TFLOPS)"
             );
         }
         None => {
@@ -192,11 +204,15 @@ fn print_cublas_comparison(tflops: f64, m: usize) {
     }
 }
 
-/// Print a compact summary of the measured fixed-size `4096³`, `8192³`, and `16384³` results.
-fn print_benchmark_summary(measurements: &[(usize, f64)]) {
+/// Print a compact summary of the measured fixed-size `(M, N, K)` results.
+fn print_benchmark_summary(measurements: &[(usize, usize, usize, f64)]) {
     println!("── Individual fixed-size results ────────────────────");
-    for (m, tflops) in measurements {
-        println!("  {m}³: {tflops:.3} TFLOPS");
+    for (m, n, k, tflops) in measurements {
+        if m == n && n == k {
+            println!("  {m}³: {tflops:.3} TFLOPS");
+        } else {
+            println!("  {m}x{n}x{k}: {tflops:.3} TFLOPS");
+        }
     }
     println!("─────────────────────────────────────────────────────");
 }
@@ -340,7 +356,7 @@ fn gemm_kernel_family() -> Result<GemmKernelFamily, KernelFamilyBuildError> {
                     output_tile: "M256xN256",
                     m_tile: 256,
                     n_tile: 256,
-                    k_tile_multiple: 256,
+                    k_tile_multiple: 64,
                     preferred_from_tiles_m: 0,
                 },
             ),
@@ -353,7 +369,7 @@ fn gemm_kernel_family() -> Result<GemmKernelFamily, KernelFamilyBuildError> {
                     output_tile: "M512xN256",
                     m_tile: 512,
                     n_tile: 256,
-                    k_tile_multiple: 256,
+                    k_tile_multiple: 64,
                     preferred_from_tiles_m: 64,
                 },
             ),
@@ -660,6 +676,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if matches!(mode, RunMode::Validate | RunMode::Both) {
         println!("── Full-output correctness tests ────────────────────\n");
+        for short_k in [64, 128, 192, 256, 512] {
+            run_short_k_correctness_test(
+                &stream,
+                &module,
+                kernels::LoadedModule::gemm_sol_clc_multicast_4_stage_pipeline,
+                "gemm_sol_clc_multicast_4_stage_pipeline",
+                "M256xN256",
+                4096,
+                4096,
+                short_k,
+            )?;
+        }
         run_correctness_test_clc_multicast_4_stage_pipeline(
             &stream,
             &module,
@@ -686,6 +714,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         cublas_baseline::warmup();
         println!("\n── Benchmarks ───────────────────────────────────────\n");
         let sizes = [
+            (4096, 4096, 64),
+            (4096, 4096, 128),
+            (4096, 4096, 192),
             (4096, 4096, 4096),
             (8192, 8192, 8192),
             (16384, 16384, 16384),
@@ -701,7 +732,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 n,
                 k,
             )?;
-            measurements.push((m, tflops));
+            measurements.push((m, n, k, tflops));
         }
         print_benchmark_summary(&measurements);
     }
@@ -940,6 +971,106 @@ fn run_correctness_test_clc_multicast_4_stage_pipeline(
     Ok(())
 }
 
+/// Validate `launch_kernel` at `4096 x 4096 x k` for short `K` multiples of `64`
+/// (`K = 64, 128, 192, 256, 512`) using 6-bit orthogonal Walsh codes.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "validation runner takes the stream, module, launcher, labels, and M/N/K dimensions"
+)]
+fn run_short_k_correctness_test(
+    stream: &CudaStream,
+    module: &kernels::LoadedModule,
+    launch_kernel: GemmKernelLauncher,
+    kernel_name: &str,
+    output_tile: &str,
+    m: usize,
+    n: usize,
+    k: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    assert!(
+        m == 4096 && n == 4096 && k >= 64 && k.is_multiple_of(64),
+        "6-bit short-K Walsh validator expects 4096x4096xk with k >= 64 and k % 64 == 0"
+    );
+    let k_code = |kk: usize| -> u32 { ((kk as u32).wrapping_mul(37).wrapping_add(11)) & 0x3F };
+    let r_code = |r: usize| -> u32 { ((r as u32).wrapping_mul(29).wrapping_add(19)) & 0x3F };
+    let c_code = |c: usize| -> u32 { ((c as u32).wrapping_mul(43).wrapping_add(53)) & 0x3F };
+    let fp =
+        |pos: u32, kk: usize| -> f32 { (7 - 2 * (pos ^ k_code(kk)).count_ones() as i32) as f32 };
+
+    let host_a: Vec<u16> = (0..m)
+        .flat_map(|i| (0..k).map(move |kk| f16::from_f32(fp(r_code(i), kk)).to_bits()))
+        .collect();
+    let host_b: Vec<u16> = (0..n)
+        .flat_map(|j| (0..k).map(move |kk| f16::from_f32(fp(c_code(j), kk)).to_bits()))
+        .collect();
+    let expected_by_xor: Vec<u16> = (0..64)
+        .map(|d| {
+            let score = 7 - 2 * (d as u32).count_ones() as i64;
+            bf16::from_f32((k as i64 * score) as f32).to_bits()
+        })
+        .collect();
+
+    let dev_a = DeviceBuffer::from_host(stream, &host_a)?;
+    let dev_b = DeviceBuffer::from_host(stream, &host_b)?;
+    let a_tma = encode_tma_2d_f16_swizzled(&dev_a, k as u64, m as u64, 64, 128)?;
+    let b_tma = encode_tma_2d_f16_swizzled(&dev_b, k as u64, n as u64, 64, 32)?;
+    let dev_a_tma = DeviceBuffer::from_host(stream, &a_tma.opaque)?;
+    let dev_b_tma = DeviceBuffer::from_host(stream, &b_tma.opaque)?;
+
+    let tiles_m = (m / 256) as u32;
+    let tiles_n = (n / 128) as u32;
+    let wide_total = tiles_m * (tiles_n / 2);
+    let total_tiles = wide_total.div_ceil(B200_CLUSTER_PAIRS) * B200_CLUSTER_PAIRS;
+    let cfg = LaunchConfig {
+        grid_dim: (total_tiles * 2, 1, 1),
+        block_dim: (192, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    let mut dev_output = DeviceBuffer::<u32>::zeroed(stream, m * n / 2)?;
+
+    // SAFETY: `dev_a_tma`, `dev_b_tma`, and `dev_output` match `m x n x k` on `stream`.
+    unsafe {
+        launch_kernel(
+            module,
+            stream,
+            cfg,
+            dev_a_tma.cu_deviceptr() as *const TmaDescriptor,
+            dev_b_tma.cu_deviceptr() as *const TmaDescriptor,
+            &mut dev_output,
+            n as i32,
+            k as i32,
+            tiles_m,
+            tiles_n,
+        )
+    }?;
+    stream.synchronize()?;
+
+    let host_output = dev_output.to_host_vec(stream)?;
+    for row in 0..m {
+        for col in 0..n {
+            let packed = host_output[row * (n / 2) + col / 2];
+            let got_bits = if col.is_multiple_of(2) {
+                packed as u16
+            } else {
+                (packed >> 16) as u16
+            };
+            let exp_bits = expected_by_xor[(r_code(row) ^ c_code(col)) as usize];
+            if got_bits != exp_bits {
+                return Err(format!(
+                    "short-K mismatch ({output_tile}, K={k}) at C[{row},{col}]: got {} vs expected {}",
+                    bf16_to_f32(got_bits),
+                    bf16_to_f32(exp_bits)
+                )
+                .into());
+            }
+        }
+    }
+    println!(
+        "PASSED: {kernel_name} ({output_tile}) {m}x{n}x{k} (all 16,777,216 BF16 elements exact!)"
+    );
+    Ok(())
+}
+
 /// Benchmark the selected `KernelFamily` entry at `m × n × k` using `2,000` warmup launches
 /// followed by the median of `5 × 301` CUDA-event timed batches.
 fn run_benchmark_clc_multicast_4_stage_pipeline(
@@ -1068,9 +1199,9 @@ fn run_benchmark_clc_multicast_4_stage_pipeline(
     println!("  FLOPS/kern:  {flops:.3e}");
     println!("  Throughput:  {tflops:.3} TFLOPS");
     println!(
-        "RESULT {{\"implementation\":\"cuda-oxide\",\"n\":{m},\"warmup\":{warmup},\"iters\":{iters},\"repeats\":{repeats},\"samples_us\":{samples_us:?},\"median_us\":{avg_us:.9},\"tflops\":{tflops:.9},\"variant\":\"{output_tile}\",\"input\":\"fp16\",\"output\":\"bf16\",\"compute\":\"fp32\"}}"
+        "RESULT {{\"implementation\":\"cuda-oxide\",\"m\":{m},\"n\":{n},\"k\":{k},\"warmup\":{warmup},\"iters\":{iters},\"repeats\":{repeats},\"samples_us\":{samples_us:?},\"median_us\":{avg_us:.9},\"tflops\":{tflops:.9},\"variant\":\"{output_tile}\",\"input\":\"fp16\",\"output\":\"bf16\",\"compute\":\"fp32\"}}"
     );
-    print_cublas_comparison(tflops, m);
+    print_cublas_comparison(tflops, m, n, k);
     println!("═══════════════════════════════════════════════════════\n");
 
     Ok(tflops)
@@ -1242,12 +1373,19 @@ mod kernel_family_tests {
     }
 
     #[test]
-    fn family_rejects_shapes_outside_both_kernel_contracts() {
+    fn family_accepts_short_k_multiples_of_64_and_rejects_unaligned_k() {
         let family = gemm_kernel_family().unwrap();
+        for valid_k in [64, 128, 192, 256, 512, 4224] {
+            let problem = GemmProblem::new(4096, 4096, valid_k);
+            let selected = select_gemm_variant(&family, &problem, SelectionMode::Auto).unwrap();
+            assert_eq!(*selected.variant().id(), GemmVariantId::M256xN256);
+        }
         for problem in [
             GemmProblem::new(0, 0, 0),
             GemmProblem::new(4096, 4224, 4096),
-            GemmProblem::new(4096, 4096, 4224),
+            GemmProblem::new(4096, 4096, 32),
+            GemmProblem::new(4096, 4096, 96),
+            GemmProblem::new(4096, 4096, 4128),
         ] {
             let error = select_gemm_variant(&family, &problem, SelectionMode::Auto).unwrap_err();
             assert!(matches!(

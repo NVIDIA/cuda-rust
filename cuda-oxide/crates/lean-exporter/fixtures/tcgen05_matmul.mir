@@ -81,6 +81,7 @@ builtin.module @safe_tcgen05_matmul {
         mir.goto () [^wait_tma_b_hdr] []: <() -> ()>
 
       ^after_tma_wait():
+        nvvm.tcgen05_fence_after_thread_sync () [] []: <() -> ()>;
         mir.cond_br (is_leader) [^issue_mma, ^wait_mma_hdr] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
 
       ^issue_mma():
@@ -114,6 +115,7 @@ builtin.module @safe_tcgen05_matmul {
         mir.goto () [^wait_mma_hdr] []: <() -> ()>
 
       ^epilogue_init():
+        nvvm.tcgen05_fence_after_thread_sync () [] []: <() -> ()>;
         warp_lane_base = mir.mul (warp_id, c32_u32) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;
         c16_sh = mir.constant () [] [value: builtin.integer <16: ui32>]: <() -> (builtin.integer ui32)>;
         lane_shifted = mir.shl (warp_lane_base, c16_sh) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;

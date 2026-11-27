@@ -227,7 +227,7 @@ def initialSymRegs (f : MirFunc) : SymRegList :=
 def rhsUsedVars : Rhs → List Nat
   | .copy s | .notBool s | .intCast _ s | .load s | .cvtaShared s | .loadTmemBase s _ => [s]
   | .binOp _ _ l r | .checkedOvf _ _ l r | .cmpOp _ l r | .ptrOffset l r => [l, r]
-  | .mbarTryWait _ sv => [sv]
+  | .mbarTryWait _ sv _ => [sv]
   | _ => []
 
 /-- SSA variables referenced inside a single `Stmt`. -/
@@ -237,7 +237,7 @@ def stmtUsedVars : Stmt → List Nat
   | .assertCond _ c => [c]
   | .barrierSlotCheck p | .tmemAlloc p _ | .smemDescRead p _ | .tmemAccess p _ _ _ => [p]
   | .clusterRankCheck r => [r]
-  | .mbarArrive _ sv | .mbarArriveExpectTx _ sv _ => [sv]
+  | .mbarArrive _ sv _ | .mbarArriveExpectTx _ sv _ => [sv]
   | .tmaCopyG2S p _ sv _ => [p, sv]
   | .syncThreads => []
 

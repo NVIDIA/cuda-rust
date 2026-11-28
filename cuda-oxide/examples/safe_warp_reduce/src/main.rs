@@ -110,6 +110,63 @@ mod kernels {
             *out_elem = block_sum;
         }
     }
+
+    /// Batched multi-read strided block reduction with a CTA-uniform early
+    /// `return` (`if blockIdx_x() >= active_blocks { return; }`) and a
+    /// loop-carried `bool` flag (`all_finite`), matching real inference
+    /// reduction kernels (`rms_norm` / `argmax_rows` control-flow shape).
+    #[launch_bounds(256)]
+    #[launch_contract(
+        domain = 1,
+        block = (256, 1, 1),
+        requires = (data.len() >= out.len()),
+    )]
+    #[verify(
+        no_oob_idx(data, out, WSUM),
+        no_data_race(WSUM),
+        disjoint_writes(out),
+        uniform_barriers
+    )]
+    #[kernel]
+    pub fn batched_strided_reduce(data: &[f32], active_blocks: u32, out: &mut [f32]) {
+        /// Shared-memory scratchpad holding one partial sum per warp (`8` floats).
+        static mut WSUM: SharedArray<f32, 8> = SharedArray::UNINIT;
+
+        let blk = thread::blockIdx_x();
+        if blk >= active_blocks {
+            return;
+        }
+        let tid = thread::threadIdx_x() as usize;
+        let k = data.len();
+        let mut acc = 0.0f32;
+        let mut all_finite = true;
+        let mut it = tid;
+        while it + 3 * 256 < k {
+            let v0 = data[it];
+            let v1 = data[it + 256];
+            let v2 = data[it + 2 * 256];
+            let v3 = data[it + 3 * 256];
+            all_finite &= v0.is_finite() && v1.is_finite() && v2.is_finite() && v3.is_finite();
+            acc += v0 + v1 + v2 + v3;
+            it += 4 * 256;
+        }
+        while it < k {
+            let v = data[it];
+            all_finite &= v.is_finite();
+            acc += v;
+            it += 256;
+        }
+        let part = warp::reduce_sum_f32(if all_finite { acc } else { 0.0 });
+        if warp::lane_id() == 0 {
+            WSUM[tid / 32] = part;
+        }
+        thread::sync_threads();
+        let total = WSUM[0] + WSUM[1] + WSUM[2] + WSUM[3] + WSUM[4] + WSUM[5] + WSUM[6] + WSUM[7];
+        let gid = (blk as usize) * 256 + tid;
+        if gid < out.len() {
+            out[gid] = total;
+        }
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -131,14 +188,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let prep_block = module.prepare_block_reduce_sum(config)?;
     module.block_reduce_sum(&stream, &prep_block, &d_data, &mut d_block_out)?;
+
+    let mut d_batched_out = DeviceBuffer::from_host(&stream, &vec![0.0f32; N])?;
+    let prep_batched = module.prepare_batched_strided_reduce(config)?;
+    module.batched_strided_reduce(
+        &stream,
+        &prep_batched,
+        &d_data,
+        NUM_BLOCKS - 1,
+        &mut d_batched_out,
+    )?;
     stream.synchronize()?;
 
     let warp_out = d_warp_out.to_host_vec(&stream)?;
     let block_out = d_block_out.to_host_vec(&stream)?;
+    let batched_out = d_batched_out.to_host_vec(&stream)?;
 
     // Sum of 1..=32 is 32 * 33 / 2 = 528.0 per warp, and 8 * 528.0 = 4224.0 per 256-thread block.
     let expected_warp_sum = 528.0f32;
     let expected_block_sum = (WARPS_PER_BLOCK as f32) * expected_warp_sum;
+    let expected_grid_sum = (NUM_BLOCKS as f32) * expected_block_sum;
 
     for (i, &got) in warp_out.iter().enumerate() {
         assert!(
@@ -150,6 +219,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         assert!(
             (got - expected_block_sum).abs() < 1e-4,
             "block_reduce_sum mismatch at {i}: got {got}, expected {expected_block_sum}"
+        );
+    }
+    let active_cutoff = ((NUM_BLOCKS - 1) * BLOCK_SIZE) as usize;
+    for (i, &got) in batched_out.iter().enumerate() {
+        let exp = if i < active_cutoff {
+            expected_grid_sum
+        } else {
+            0.0
+        };
+        assert!(
+            (got - exp).abs() < 1e-3,
+            "batched_strided_reduce mismatch at {i}: got {got}, expected {exp}"
         );
     }
 

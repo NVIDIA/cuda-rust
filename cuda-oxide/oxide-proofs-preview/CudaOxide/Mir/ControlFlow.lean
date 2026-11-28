@@ -571,33 +571,34 @@ def CtaState.subsumes (abs conc : CtaState) : Bool :=
   (!abs.relinquishedPermitCg2 || conc.relinquishedPermitCg2) &&
   natSubset conc.visitedPosBodies abs.visitedPosBodies
 
-/-- Wave-by-wave breadth-first search avoiding `avoid` (recursion depth ≤ `cfg.blocks.length`). -/
+/-- Wave-by-wave breadth-first search avoiding `avoid` (recursion depth ≤ `cfg.blocks.length`,
+    using non-dependent `List.contains` so `whnf` never constructs `DecidableEq` proof terms). -/
 def bfsWaveAvoiding (cfg : ControlFlowCfg) (avoid : List Nat) :
     Nat → List Nat → List Nat → List Nat
   | 0, _, visited => visited
   | _ + 1, [], visited => visited
   | fuel + 1, frontier, visited =>
       let valid := frontier.foldl (fun acc u =>
-        if u ∈ avoid || u ∈ visited || u ∈ acc || u ≥ cfg.blocks.length then acc else u :: acc) []
+        if avoid.contains u || visited.contains u || acc.contains u || u ≥ cfg.blocks.length then acc else u :: acc) []
       if valid.isEmpty then
         visited
       else
         let visited' := valid ++ visited
         let nextFrontier := valid.foldl (fun acc u =>
           ((cfg.blockAt u).succs.map Prod.snd).foldl (fun acc2 v =>
-            if v ∈ avoid || v ∈ visited' || v ∈ acc2 then acc2 else v :: acc2) acc) []
+            if avoid.contains v || visited'.contains v || acc2.contains v then acc2 else v :: acc2) acc) []
         bfsWaveAvoiding cfg avoid fuel nextFrontier visited'
 
 /-- Compute all reachable block indices from `src` without stepping on any block in `avoid`. -/
 def reachableNodesAvoiding (cfg : ControlFlowCfg) (src : Nat) (avoid : List Nat) : List Nat :=
-  if src ∈ avoid || src ≥ cfg.blocks.length then
+  if avoid.contains src || src ≥ cfg.blocks.length then
     []
   else
     bfsWaveAvoiding cfg avoid (cfg.blocks.length + 1) [src] []
 
 /-- Computable reachability check: can `src` reach `dst` without touching `avoid`? -/
 def canReachAvoiding (cfg : ControlFlowCfg) (src dst : Nat) (avoid : List Nat) : Bool :=
-  dst ∈ reachableNodesAvoiding cfg src avoid
+  (reachableNodesAvoiding cfg src avoid).contains dst
 
 /-- Computable dominance test: every path from entry `0` to `b` visits `dom`. -/
 def dominatesBool (cfg : ControlFlowCfg) (dom b : Nat) : Bool :=
@@ -625,7 +626,8 @@ def BranchCond.toGuardExpr (c : BranchCond) : GuardExpr :=
   | .always | .mbarReady _ _ _ | .mbarSpin _ | .posLoopExit _ | .uniform => .tr
 
 /-- Compute the active dominating `GuardExpr` at basic block `b` across all 2-way branches.
-    Any nested `.unknown` branch (`1..N` levels deep) attaches `.unknown` until reconvergence. -/
+    Any nested `.unknown` branch (`1..N` levels deep) attaches `.unknown` until reconvergence.
+    Pre-barrier loops (`!canReachAvoiding cfg b brBlk []`) reconverge at loop exit. -/
 def activeGuardAt (cfg : ControlFlowCfg) (b : Nat) : GuardExpr :=
   let reach0 := reachableNodesAvoiding cfg 0 []
   if !(b ∈ reach0) then .tr
@@ -642,8 +644,18 @@ def activeGuardAt (cfg : ControlFlowCfg) (b : Nat) : GuardExpr :=
               || canReachAvoiding cfg 0 b [brBlk] then
             acc
           else
-            let g0 := if !canReachAvoiding cfg d1 b [brBlk] then g0e else .tr
-            let g1 := if !canReachAvoiding cfg d0 b [brBlk] then g1e else .tr
+            let g0 :=
+              if canReachAvoiding cfg d1 b [brBlk] then .tr
+              else if (c0 == .unknown || c1 == .unknown)
+                  && !canReachAvoiding cfg b brBlk []
+                  && canReachAvoiding cfg d1 b [] then .tr
+              else g0e
+            let g1 :=
+              if canReachAvoiding cfg d0 b [brBlk] then .tr
+              else if (c0 == .unknown || c1 == .unknown)
+                  && !canReachAvoiding cfg b brBlk []
+                  && canReachAvoiding cfg d0 b [] then .tr
+              else g1e
             acc.conj (g0.conj g1)
       | _ => acc) .tr
 
@@ -1138,6 +1150,25 @@ def validReturnState (requireTmem : Bool) (st : CtaState) : Bool :=
 def returnBlocks (cfg : ControlFlowCfg) : List Nat :=
   (List.range cfg.blocks.length).filter fun b => (cfg.blockAt b).isReturn
 
+/-- True when every outgoing edge of block `u` is CTA-uniform (`.always`, `.uniform`, or `.posLoopExit`). -/
+def isCtaUniformSplit (cfg : ControlFlowCfg) (u : Nat) : Bool :=
+  ((cfg.blockAt u).succs).all fun (bc, _) =>
+    match bc with
+    | .always | .uniform | .posLoopExit _ => true
+    | _ => false
+
+/-- Build the reversed CFG (`v -> u` for every edge `u -> v` in `cfg`, `u, v < cfg.blocks.length`)
+    in a single `O(V + E)` pass for backward reachability walks. -/
+def reverseCfg (cfg : ControlFlowCfg) : ControlFlowCfg :=
+  let n := cfg.blocks.length
+  let revBlocks := (List.range n).foldl (fun acc u =>
+    ((cfg.blockAt u).succs).foldl (fun acc2 (_, v) =>
+      if v < n then
+        let cur := acc2.getD v {}
+        acc2.set v { cur with succs := (.always, u) :: cur.succs }
+      else acc2) acc) (List.replicate n {})
+  { cfg with blocks := revBlocks }
+
 /-- Indices of all basic blocks in `cfg` containing at least one `.syncThreads` or `.clusterSync` barrier. -/
 def syncBarrierBlocks (cfg : ControlFlowCfg) : List Nat :=
   (List.range cfg.blocks.length).filter fun b =>
@@ -1284,19 +1315,34 @@ def exposedSharedReadBlocks (cfg : ControlFlowCfg) (s : Nat) : List Nat :=
 /-- Non-`.unknown`-guarded blocks in `cfg` that initialize `SharedArray` `s`. -/
 def sharedWriterBlocks (cfg : ControlFlowCfg) (s : Nat) : List Nat :=
   (List.range cfg.blocks.length).filter fun b =>
-    !(activeGuardAt cfg b).hasUnknown &&
-    (cfg.blockAt b).ops.any fun
+    ((cfg.blockAt b).ops.any fun
       | .sharedWrite sid | .tmaCopyG2S sid _ _ _ | .clcTryCancel sid _ _ | .tmemAlloc sid _ _ => sid == s
+      | _ => false) &&
+    !(activeGuardAt cfg b).hasUnknown
+
+/-- True when an acyclic reachable `.uniform` split block `u` can reach `sb` via an arm avoiding
+    `writers` (meaning an entire CTA can reach `sb` without any thread in that CTA executing `writers`). -/
+def hasUniformBypassTo (cfg : ControlFlowCfg) (writers : List Nat) (sb : Nat) : Bool :=
+  if sb ∈ writers then false
+  else
+    let reach0 := reachableNodesAvoiding cfg 0 writers
+    reach0.any fun u =>
+      match (cfg.blockAt u).succs with
+      | [(.uniform, d0), (.uniform, d1)] =>
+          !isCyclicBlockBool cfg u &&
+          ((canReachAvoiding cfg d0 sb writers && writers.any (canReachAvoiding cfg d1 · [])) ||
+           (canReachAvoiding cfg d1 sb writers && writers.any (canReachAvoiding cfg d0 · [])))
       | _ => false
 
 /-- Blocks guaranteeing `SharedArray` `s` has been written before an upward-exposed `.sharedRead s`
-    (either a direct non-`.unknown` writer block, a CTA barrier reachable after a writer, or an
-    `.mbarReady` completion edge when `s` has a writer). -/
+    (either a direct non-`.unknown` writer block, a CTA barrier reachable after a writer with no
+    CTA-uniform bypass, or an `.mbarReady` completion edge when `s` has a writer). -/
 def sharedInitDominators (cfg : ControlFlowCfg) (s : Nat) : List Nat :=
   let writers := sharedWriterBlocks cfg s
   if writers.isEmpty then []
   else
     let syncsAfterWrite := (syncBarrierBlocks cfg).filter fun sb =>
+      !hasUniformBypassTo cfg writers sb &&
       writers.any fun w => canReachAvoiding cfg 0 w [] && canReachAvoiding cfg w sb []
     let sig := signaledBarrierIds cfg
     let readyBlks := cfg.blocks.flatMap fun blk =>

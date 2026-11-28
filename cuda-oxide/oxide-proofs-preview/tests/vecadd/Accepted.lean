@@ -212,6 +212,74 @@ theorem rowProduct2D_no_oob_x :
   mir_vc rowProduct2DMirFunc
 end RowProduct2D
 
+/-- Block-uniform early `return` (`if blockIdx_x >= m { return; }`) followed by a pre-barrier
+    strided `while` loop (`succs := [(.unknown, 3), (.unknown, 1)]`) and `sync_threads()`
+    satisfies `UniformBarriersCfg` (`rms_norm` / `ssmax_rows` control-flow shape). -/
+def uniformEarlyReturnCfg : ControlFlow.ControlFlowCfg :=
+  { blockDimX := 256, blockDimY := 1, numShared := 1, numBarriers := 0
+  , blocks := [
+      { succs := [(.uniform, 1), (.uniform, 2)] },
+      { succs := [(.unknown, 3), (.unknown, 1)] },
+      { isReturn := true },
+      { succs := [(.coord (.eq (.mod .tx 32) (.const 0)), 4),
+                  (.coord (.ne (.mod .tx 32) (.const 0)), 5)] },
+      { ops := [.sharedWrite 0], succs := [(.always, 5)] },
+      { ops := [.syncThreads], succs := [(.always, 6)] },
+      { ops := [.sharedRead 0], succs := [(.always, 2)] } ] }
+
+theorem uniform_early_return_before_sync : ControlFlow.UniformBarriersCfg uniformEarlyReturnCfg :=
+  CudaOxide.Proofs.ControlFlow.uniform_barriers_cfg_of_stateMap
+    (inv := CudaOxide.Proofs.ControlFlow.inferStateMap uniformEarlyReturnCfg) (by decide)
+
+namespace BoolAndStridedLoop
+/-- Multi-read 64-bit strided loop (`while it + 768 < x.len()`) carrying a `bool` (`width = 1`)
+    and a float-guarded `u32` accumulator (`width = 32` widened to `.unk`) proves `MirNoOobGlobal`. -/
+def stridedBoolLoopFunc : CudaOxide.Mir.Program.MirFunc :=
+  { domain := 1
+  , blockDimX := 256
+  , blockDimY := 1
+  , params := [(.slice false)]
+  , blocks := [
+      { args := [⟨0, 0⟩], stmts := [
+          (.assign 1 (.sreg .tidX)),
+          (.assign 2 (.intCast 64 1)),
+          (.assign 3 (.sliceLen 0)),
+          (.assign 4 (.constBool true)),
+          (.assign 5 (.constInt 32 0))
+        ], term := (.goto 1 [2, 4, 5]) },
+      { args := [⟨6, 64⟩, ⟨7, 1⟩, ⟨8, 32⟩], isLoopHeader := true, stmts := [
+          (.assign 9 (.constInt 64 768)),
+          (.assign 10 (.binOp .add 64 6 9)),
+          (.assign 11 (.cmpOp .lt 10 3)),
+          (.assign 12 (.notBool 11))
+        ], term := (.condBr 12 4 [] 2 []) },
+      { stmts := [
+          (.assign 13 (.slicePtr 0)),
+          (.assign 14 (.ptrOffset 13 6)),
+          (.assign 15 (.load 14)),
+          (.assign 16 (.constInt 64 768)),
+          (.assign 17 (.binOp .add 64 6 16)),
+          (.assign 18 (.ptrOffset 13 17)),
+          (.assign 19 (.load 18)),
+          (.assign 20 .opaqueVal)
+        ], term := (.condBr 20 3 [8] 3 [1]) },
+      { args := [⟨21, 32⟩], stmts := [
+          (.assign 22 (.constBool false)),
+          (.assign 23 (.constInt 64 1024)),
+          (.assign 24 (.binOp .add 64 6 23))
+        ], term := (.goto 1 [24, 22, 21]) },
+      { stmts := [], term := .ret } ] }
+
+mir_def_sym_table stridedBoolLoopFunc
+
+theorem strided_valid : CudaOxide.Proofs.Program.validSymFunc stridedBoolLoopFunc symTable = true := rfl
+theorem strided_events : CudaOxide.Proofs.Program.collectSymMemEvents stridedBoolLoopFunc symTable = symMemEvents := rfl
+
+theorem strided_bool_loop_no_oob : CudaOxide.Contracts.Program.MirNoOobGlobal stridedBoolLoopFunc 0 := by
+  apply CudaOxide.Proofs.Program.vcNoOobGlobal_of_table strided_valid strided_events (by mir_bind_events)
+  mir_vc stridedBoolLoopFunc
+end BoolAndStridedLoop
+
 #print axioms no_oob_idx_all
 #print axioms disjoint_writes_c
 #print axioms writes_all_elems_c
@@ -220,6 +288,8 @@ end RowProduct2D
 #print axioms quadGather_no_oob_x
 #print axioms quadGather_asserts_redundant
 #print axioms RowProduct2D.rowProduct2D_no_oob_x
+#print axioms uniform_early_return_before_sync
+#print axioms BoolAndStridedLoop.strided_bool_loop_no_oob
 #print axioms CudaOxide.Mir.Program.ReachableTrapFree.toReachable
 #print axioms CudaOxide.Mir.Program.EmitsTrapFreeEvent.toEmitsEvent
 #print axioms index_lt_of_guard

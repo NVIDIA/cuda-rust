@@ -1821,7 +1821,9 @@ pub(super) fn translate_mir_program(
                                     CfgBranchCond::Coord(g.clone()),
                                     CfgBranchCond::Coord(g.negate()),
                                 )
-                            } else if !divergent_vals.contains(&cond_v) && is_cyc {
+                            } else if !divergent_vals.contains(&cond_v)
+                                && (!spec.tmem_lifecycle || is_cyc)
+                            {
                                 (CfgBranchCond::Uniform, CfgBranchCond::Uniform)
                             } else if !lane_divergent_vals.contains(&cond_v) {
                                 (CfgBranchCond::WarpUniform, CfgBranchCond::WarpUniform)

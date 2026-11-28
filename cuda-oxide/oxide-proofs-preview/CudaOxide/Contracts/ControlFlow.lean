@@ -123,8 +123,11 @@ def UniformBarriersCfg (cfg : ControlFlowCfg) : Prop :=
       ¬ PathAvoiding cfg ((clusterSyncBlocks cfg).filter (· != dBlk)) dBlk ret) ∧
   (∀ s rBlk : Nat, (s, rBlk) ∈ sharedReadSites cfg →        --   (6) every upward-exposed `SharedArray` read is dominated
     ¬ PathAvoiding cfg (sharedInitDominators cfg s) 0 rBlk) ∧ --     from entry `0` by a guaranteed initializer/barrier, AND
-  validMbarArrivalCounts cfg = true ∧                       --   (7) 1-CTA `mbarrier` arrival sites match `mbarrier_init` counts, AND
-  (0 < cfg.numBarriers ∧ tmemAllocSites cfg = [] →          --   (8) when `Barrier`s are used (outside `tmem_lifecycle`),
+  (∀ wBlk : Nat, wBlk ∈ warpSyncBlocks cfg →                --   (7) every `warp::sync_mask` uses full `0xffff_ffff` mask
+    ((cfg.blockAt wBlk).ops.all fun | .syncWarp full => full | _ => true) = true ∧
+    (activeGuardAt cfg wBlk).isWarpConvergent cfg.blockDimX cfg.blockDimY = true) ∧ -- and warp-convergent control flow, AND
+  validMbarArrivalCounts cfg = true ∧                       --   (8) 1-CTA `mbarrier` arrival sites match `mbarrier_init` counts, AND
+  (0 < cfg.numBarriers ∧ tmemAllocSites cfg = [] →          --   (9) when `Barrier`s are used (outside `tmem_lifecycle`),
     SafeCtaExecution false cfg ∧ NoUnbackpressuredLoop cfg) --       `mbarrier` init/proxy/back-pressure hold on all paths.
 
 /-- Build the 1-to-1 structural `ControlFlowCfg` skeleton directly from `f.blocks`. -/

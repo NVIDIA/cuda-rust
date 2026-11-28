@@ -83,6 +83,9 @@ def MirNoSharedRace (f : MirFunc) (cfg : ControlFlowCfg) (sharedId : Nat) : Prop
     ev₁.space = .shared → ev₂.space = .shared →             -- AND both access CTA shared memory,
     ev₁.bufId = sharedId → ev₂.bufId = sharedId →           -- AND both target `SharedArray` `sharedId`,
     ev₁.phase = ev₂.phase →                                 -- AND both execute in the same `sync_threads()` phase,
+    ((t₁.ty * f.blockDimX + t₁.tx) / 32 =                   -- AND if both belong to the same 32-lane hardware warp,
+      (t₂.ty * f.blockDimX + t₂.tx) / 32 →                  --     they execute in the same `warp::sync_mask(u32::MAX)` phase,
+      ev₁.warpPhase = ev₂.warpPhase) →
     ¬ asyncOrdered f env ev₁ ev₂ →                          -- AND neither is ordered after the other by `mbarrier` wait,
     (ev₁.isWrite = true ∨ ev₂.isWrite = true) →             -- AND at least one access is a write,
     ev₁.index = ev₂.index →                                 -- AND both hit the exact same shared-memory slot,
@@ -109,25 +112,25 @@ def MirNoOobTmem (f : MirFunc) : Prop :=
     `Stmt.assertCond assertId cond` evaluates `cond` to `.bool true`, proving
     the runtime panic check can be safely erased before LLVM/PTX lowering. -/
 def MirAssertRedundant (f : MirFunc) (assertId : Nat) : Prop :=
-  ∀ env : InputEnv, ∀ t : ThreadCtx, ∀ b phase : Nat, ∀ regs : RegFile, -- Pick ANY reachable block entry `(b, regs, phase)`:
+  ∀ env : InputEnv, ∀ t : ThreadCtx, ∀ b : Nat, ∀ phases : Nat × Nat, ∀ regs : RegFile, -- Pick ANY reachable block entry `(b, regs, phases)`:
     f.validInput env →                                      -- IF `env` satisfies launch preconditions,
     f.validThread t →                                       -- AND `t` is a valid GPU thread,
-    Reachable f env t b regs phase →                        -- AND `(b, regs, phase)` is reachable,
+    Reachable f env t b regs phases →                       -- AND `(b, regs, phases)` is reachable,
     ∀ pfx sfx : List Stmt, ∀ cond : Nat,                    -- AND `Stmt.assertCond assertId cond` appears inside `b.stmts`,
       (f.blockAt b).stmts = pfx ++ (.assertCond assertId cond :: sfx) →
-      (execStmts f env t regs phase (f.blockAt b).term pfx).1 cond = .bool true -- THEN `cond` is guaranteed `.bool true` at that program point.
+      (execStmts f env t regs phases (f.blockAt b).term pfx).1 cond = .bool true -- THEN `cond` is guaranteed `.bool true` at that program point.
 
 /-- **Cluster DSMEM peer-rank safety (`map_shared_rank`)**: Every reachable
     `Stmt.clusterRankCheck rankVar` evaluates `rankVar` to an integer rank strictly
     below `f.clusterDimX` (guaranteeing valid Distributed Shared Memory addressing). -/
 def MirNoOobClusterRank (f : MirFunc) : Prop :=
-  ∀ env : InputEnv, ∀ t : ThreadCtx, ∀ b phase : Nat, ∀ regs : RegFile, -- Pick ANY reachable block entry `(b, regs, phase)`:
+  ∀ env : InputEnv, ∀ t : ThreadCtx, ∀ b : Nat, ∀ phases : Nat × Nat, ∀ regs : RegFile, -- Pick ANY reachable block entry `(b, regs, phases)`:
     f.validInput env →                                      -- IF `env` satisfies launch preconditions,
     f.validThread t →                                       -- AND `t` is a valid GPU thread,
-    Reachable f env t b regs phase →                        -- AND `(b, regs, phase)` is reachable,
+    Reachable f env t b regs phases →                       -- AND `(b, regs, phases)` is reachable,
     ∀ pfx sfx : List Stmt, ∀ rankVar r : Nat,               -- AND `Stmt.clusterRankCheck rankVar` appears inside `b.stmts`,
       (f.blockAt b).stmts = pfx ++ (.clusterRankCheck rankVar :: sfx) →
-      (execStmts f env t regs phase (f.blockAt b).term pfx).1 rankVar = .int r →
+      (execStmts f env t regs phases (f.blockAt b).term pfx).1 rankVar = .int r →
       r < f.clusterDimX                                     -- THEN `r` is a valid peer CTA rank `< f.clusterDimX`.
 
 /-- **`writes_all_elems(out)`**: Whenever the launched grid has at least one Y row

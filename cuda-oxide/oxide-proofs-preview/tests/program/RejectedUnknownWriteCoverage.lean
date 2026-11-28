@@ -34,6 +34,6 @@ example : MirWritesAllElems conditionalWrite 0 := by
   refine ⟨?_, hbxLt, hgyPos, ?_, rfl, rfl, rfl, rfl⟩          -- Split thread validity vs `EmitsTrapFreeEvent`
   · refine ⟨by decide, by decide, ?_, by decide, by simp [conditionalWrite], by simp [conditionalWrite]⟩
     omega                                                     -- `elemIdx < gridDimX <= 2^32`
-  · refine ⟨1, 0, _, .stepCondTrue (.entry (by decide)) rfl rfl rfl ?_ (by decide), rfl, ?_⟩
+  · refine ⟨1, (0, 0), _, .stepCondTrue (.entry (by decide)) rfl rfl rfl ?_ (by decide), rfl, ?_⟩
     · simp [conditionalWrite, MirFunc.blockAt, execStmts, evalRhs, RegFile.set] <;> omega -- `.unk = .bool true` fails
     · simp [conditionalWrite, MirFunc.blockAt, execStmts, evalRhs, RegFile.set]           -- Block 1 emits the store

@@ -132,6 +132,9 @@ def symEvalRhsRaw (f : MirFunc) (sregs : SymRegList) : Rhs → SymVal
   | .sreg .ctaidY => .int .ctaidY
   | .sreg .ntidX => .int (.const f.blockDimX)
   | .sreg .ntidY => .int (.const f.blockDimY)
+  | .sreg .nctaidX => .int (.nctaid 0)
+  | .sreg .nctaidY => .int (.nctaid 1)
+  | .sreg .nctaidZ => .int (.nctaid 2)
   | .sreg .laneId =>
       .int (.binOp .rem 0 (.binOp .add 0 (.binOp .mul 0 .tidY (.const f.blockDimX)) .tidX) (.const 32))
   | .sreg .clusterCtaidX => .int (.binOp .rem 0 .ctaidX (.const (max 1 f.clusterDimX)))
@@ -320,8 +323,10 @@ structure SymMemEvent where
   syncBar : Option (Nat × SymInt) := none
   /-- Path condition active at this access site. -/
   pathCond : SymBool
-  /-- Symbolic barrier phase active at this access site. -/
+  /-- Symbolic CTA barrier phase active at this access site. -/
   phaseSpec : PhaseSpec
+  /-- Symbolic intra-warp `sync_mask` phase active at this access site. -/
+  warpPhaseSpec : PhaseSpec := .any
   deriving Repr, DecidableEq, Lean.ToExpr
 
 /-- Evaluate an optional symbolic `(barId, slotSym)` handle to `Option (Nat × Nat)`. -/
@@ -357,42 +362,46 @@ structure SymTmemEvent where
   deriving Repr, DecidableEq, Lean.ToExpr
 
 /-- Resolve a pointer `SymVal` under `pCond` into a 1-element `SymMemEvent` (or `indexOpt := none` on failure). -/
-def symSinglePtrEvent (pCond : SymBool) (ps : PhaseSpec) (isWrite : Bool) (sv : SymVal) : SymMemEvent :=
+def symSinglePtrEvent (pCond : SymBool) (pss : PhaseSpec × PhaseSpec) (isWrite : Bool) (sv : SymVal) : SymMemEvent :=
   match sv with
   | .ptr sp bid off =>
-      { isWrite := isWrite, space := sp, bufId := bid, indexOpt := some off, pathCond := pCond, phaseSpec := ps }
+      { isWrite := isWrite, space := sp, bufId := bid, indexOpt := some off,
+        pathCond := pCond, phaseSpec := pss.1, warpPhaseSpec := pss.2 }
   | .condPtr g sp bid off =>
       if symImpliesVal pCond g true then
-        { isWrite := isWrite, space := sp, bufId := bid, indexOpt := some off, pathCond := pCond, phaseSpec := ps }
+        { isWrite := isWrite, space := sp, bufId := bid, indexOpt := some off,
+          pathCond := pCond, phaseSpec := pss.1, warpPhaseSpec := pss.2 }
       else
-        { isWrite := isWrite, space := .global, bufId := 0, indexOpt := none, pathCond := pCond, phaseSpec := ps }
+        { isWrite := isWrite, space := .global, bufId := 0, indexOpt := none,
+          pathCond := pCond, phaseSpec := pss.1, warpPhaseSpec := pss.2 }
   | _ =>
-      { isWrite := isWrite, space := .global, bufId := 0, indexOpt := none, pathCond := pCond, phaseSpec := ps }
+      { isWrite := isWrite, space := .global, bufId := 0, indexOpt := none,
+        pathCond := pCond, phaseSpec := pss.1, warpPhaseSpec := pss.2 }
 
-/-- Execute a block's statements symbolically from `(pCond, sregs, ps)`.
-    - **What it does**: Steps through a basic block's `List Stmt`, updating `sregs` and `ps`
+/-- Execute a block's statements symbolically from `(pCond, sregs, pss)`.
+    - **What it does**: Steps through a basic block's `List Stmt`, updating `sregs` and `pss`
       and recording every global/shared memory event (`SymMemEvent`), assertion (`SymAssertEvent`),
       and Blackwell `TMEM` event (`SymTmemEvent`).
     - **Fail-closed invariant**: Any memory or `TMEM` instruction on an unresolved handle emits
       `indexOpt := none` / `relAddrOpt := none`, causing `validSymFunc` to return `false`. -/
-def symExecStmts (f : MirFunc) (pCond : SymBool) (sregs : SymRegList) (ps : PhaseSpec) (term : Terminator) :
-    List Stmt → SymRegList × PhaseSpec × List SymMemEvent × List SymAssertEvent × List SymTmemEvent
-  | [] => (sregs, ps, [], [], [])
+def symExecStmts (f : MirFunc) (pCond : SymBool) (sregs : SymRegList) (pss : PhaseSpec × PhaseSpec) (term : Terminator) :
+    List Stmt → SymRegList × (PhaseSpec × PhaseSpec) × List SymMemEvent × List SymAssertEvent × List SymTmemEvent
+  | [] => (sregs, pss, [], [], [])
   | stmt :: rest =>
       match stmt with
       | .assign dst (.load ptr) =>
-          let mev := [symSinglePtrEvent pCond ps false (sregs.getVar ptr)]
-          let (r', ps', mevs, aevs, tevs) := symExecStmts f pCond (sregs.setVar dst .unk) ps term rest
-          (r', ps', mev ++ mevs, aevs, tevs)
+          let mev := [symSinglePtrEvent pCond pss false (sregs.getVar ptr)]
+          let (r', pss', mevs, aevs, tevs) := symExecStmts f pCond (sregs.setVar dst .unk) pss term rest
+          (r', pss', mev ++ mevs, aevs, tevs)
       | .assign dst (.loadTmemBase ptr cols) =>
-          let mev := [symSinglePtrEvent pCond ps false (sregs.getVar ptr)]
-          let (r', ps', mevs, aevs, tevs) := symExecStmts f pCond (sregs.setVar dst (.tmemPtr cols (.const 0))) ps term rest
-          (r', ps', mev ++ mevs, aevs, tevs)
+          let mev := [symSinglePtrEvent pCond pss false (sregs.getVar ptr)]
+          let (r', pss', mevs, aevs, tevs) := symExecStmts f pCond (sregs.setVar dst (.tmemPtr cols (.const 0))) pss term rest
+          (r', pss', mev ++ mevs, aevs, tevs)
       | .assign dst rhs =>
           let sv := symEvalRhs f sregs rhs
-          symExecStmts f pCond (sregs.setVar dst sv) ps term rest
+          symExecStmts f pCond (sregs.setVar dst sv) pss term rest
       | .store ptr _ =>
-          let baseEv := symSinglePtrEvent pCond ps true (sregs.getVar ptr)
+          let baseEv := symSinglePtrEvent pCond pss true (sregs.getVar ptr)
           let mev := match findTrailArrive f 8 term rest with
             | none => [baseEv]
             | some (b, sv) =>
@@ -401,50 +410,53 @@ def symExecStmts (f : MirFunc) (pCond : SymBool) (sregs : SymRegList) (ps : Phas
                     [{ baseEv with syncBar := if baseEv.space == .shared then some (b, sSym) else none }]
                 | _ =>
                     [{ baseEv with indexOpt := none }]
-          let (r', ps', mevs, aevs, tevs) := symExecStmts f pCond sregs ps term rest
-          (r', ps', mev ++ mevs, aevs, tevs)
+          let (r', pss', mevs, aevs, tevs) := symExecStmts f pCond sregs pss term rest
+          (r', pss', mev ++ mevs, aevs, tevs)
       | .barrierSlotCheck ptr =>
-          let mev := [symSinglePtrEvent pCond ps false (sregs.getVar ptr)]
-          let (r', ps', mevs, aevs, tevs) := symExecStmts f pCond sregs ps term rest
-          (r', ps', mev ++ mevs, aevs, tevs)
+          let mev := [symSinglePtrEvent pCond pss false (sregs.getVar ptr)]
+          let (r', pss', mevs, aevs, tevs) := symExecStmts f pCond sregs pss term rest
+          (r', pss', mev ++ mevs, aevs, tevs)
       | .assertCond aid cond =>
           let cOpt := match sregs.getVar cond with | .bool b => some b | _ => none
           let aev : SymAssertEvent := { assertId := aid, pathCond := pCond, condOpt := cOpt }
-          let (r', ps', mevs, aevs, tevs) := symExecStmts f pCond sregs ps term rest
-          (r', ps', mevs, aev :: aevs, tevs)
+          let (r', pss', mevs, aevs, tevs) := symExecStmts f pCond sregs pss term rest
+          (r', pss', mevs, aev :: aevs, tevs)
       | .clusterRankCheck _ | .mbarArrive _ _ _ | .mbarArriveExpectTx _ _ _ =>
-          symExecStmts f pCond sregs ps term rest
+          symExecStmts f pCond sregs pss term rest
       | .syncThreads =>
-          symExecStmts f pCond sregs ps.stepSync term rest
+          symExecStmts f pCond sregs (pss.1.stepSync, pss.2) term rest
+      | .syncWarp =>
+          symExecStmts f pCond sregs (pss.1, pss.2.stepSync) term rest
       | .tmaCopyG2S ptr barId slotVar spanElems =>
           let span := max 1 spanElems
           let mev := match sregs.getVar ptr, sregs.getVar slotVar with
             | .ptr sp bid off, .int sSym =>
                 [{ isWrite := true, space := sp, bufId := bid, indexOpt := some off,
-                   span := span, elemDiv := 1, syncBar := some (barId, sSym), pathCond := pCond, phaseSpec := ps }]
+                   span := span, elemDiv := 1, syncBar := some (barId, sSym),
+                   pathCond := pCond, phaseSpec := pss.1, warpPhaseSpec := pss.2 }]
             | _, _ =>
                 [{ isWrite := true, space := .shared, bufId := 0, indexOpt := none,
-                   span := span, elemDiv := 1, pathCond := pCond, phaseSpec := ps }]
-          let (r', ps', mevs, aevs, tevs) := symExecStmts f pCond sregs ps term rest
-          (r', ps', mev ++ mevs, aevs, tevs)
+                   span := span, elemDiv := 1, pathCond := pCond, phaseSpec := pss.1, warpPhaseSpec := pss.2 }]
+          let (r', pss', mevs, aevs, tevs) := symExecStmts f pCond sregs pss term rest
+          (r', pss', mev ++ mevs, aevs, tevs)
       | .tmemAlloc ptr _cols =>
           let lane0Cond : SymBool :=
             .and pCond (.cmp .eq (.binOp .rem 0 .tidX (.const 32)) (.const 0))
-          let mev := [symSinglePtrEvent lane0Cond ps true (sregs.getVar ptr)]
-          let (r', ps', mevs, aevs, tevs) := symExecStmts f pCond sregs ps term rest
-          (r', ps', mev ++ mevs, aevs, tevs)
+          let mev := [symSinglePtrEvent lane0Cond pss true (sregs.getVar ptr)]
+          let (r', pss', mevs, aevs, tevs) := symExecStmts f pCond sregs pss term rest
+          (r', pss', mev ++ mevs, aevs, tevs)
       | .smemDescRead descVar tileBytes =>
           let span := max 1 tileBytes
           let mev := match sregs.getVar descVar with
             | .smemDesc sid byteOff =>
                 let eb := max 1 (f.sharedDecls.getD sid { size := 0 }).elemBytes
                 [{ isWrite := false, space := .shared, bufId := sid, indexOpt := some byteOff,
-                   span := span, elemDiv := eb, pathCond := pCond, phaseSpec := ps }]
+                   span := span, elemDiv := eb, pathCond := pCond, phaseSpec := pss.1, warpPhaseSpec := pss.2 }]
             | _ =>
                 [{ isWrite := false, space := .shared, bufId := 0, indexOpt := none,
-                   span := span, elemDiv := 1, pathCond := pCond, phaseSpec := ps }]
-          let (r', ps', mevs, aevs, tevs) := symExecStmts f pCond sregs ps term rest
-          (r', ps', mev ++ mevs, aevs, tevs)
+                   span := span, elemDiv := 1, pathCond := pCond, phaseSpec := pss.1, warpPhaseSpec := pss.2 }]
+          let (r', pss', mevs, aevs, tevs) := symExecStmts f pCond sregs pss term rest
+          (r', pss', mev ++ mevs, aevs, tevs)
       | .tmemAccess tmemVar hl wc wr =>
           let tev := match sregs.getVar tmemVar with
             | .tmemPtr cols rel =>
@@ -453,30 +465,33 @@ def symExecStmts (f : MirFunc) (pCond : SymBool) (sregs : SymRegList) (ps : Phas
             | _ =>
                 [{ allocCols := 0, relAddrOpt := none, heightLanes := hl,
                    widthCols := wc, warpRestricted := wr, pathCond := pCond }]
-          let (r', ps', mevs, aevs, tevs) := symExecStmts f pCond sregs ps term rest
-          (r', ps', mevs, aevs, tev ++ tevs)
+          let (r', pss', mevs, aevs, tevs) := symExecStmts f pCond sregs pss term rest
+          (r', pss', mevs, aevs, tev ++ tevs)
 
 /-- Helper lemma discharging single-pointer `symSinglePtrEvent` correspondence in `symExecStmts_correct`. -/
 theorem symSinglePtrEvent_sound {env : InputEnv} {t : ThreadCtx} {havoc : Nat → Nat}
     {pCond : SymBool} (hpc : pCond.eval env t havoc = true)
-    {ps : PhaseSpec} {phase : Nat} (hps : ps.matchesPhase phase = true)
+    {pss : PhaseSpec × PhaseSpec} {phases : Nat × Nat} (hps : matchesPhasePair pss phases = true)
     {isW : Bool} {sv : SymVal} {v : Val} {ev : MemEvent}
     (hmatch : sv.matchesVal env t havoc v)
-    (hsome : (symSinglePtrEvent pCond ps isW sv).indexOpt.isSome = true)
-    (hmem : ev ∈ (match v with | .ptr sp bid off => [{ isWrite := isW, space := sp, bufId := bid, index := off, phase := phase : MemEvent }] | _ => [])) :
+    (hsome : (symSinglePtrEvent pCond pss isW sv).indexOpt.isSome = true)
+    (hmem : ev ∈ (match v with | .ptr sp bid off => [{ isWrite := isW, space := sp, bufId := bid, index := off, phase := phases.1, warpPhase := phases.2 : MemEvent }] | _ => [])) :
     ∃ idxSym : SymInt, ∃ k : Nat,
-      let sev := symSinglePtrEvent pCond ps isW sv
+      let sev := symSinglePtrEvent pCond pss isW sv
       k < sev.span ∧ 0 < sev.elemDiv ∧
       sev.isWrite = ev.isWrite ∧ sev.space = ev.space ∧ sev.bufId = ev.bufId ∧
       evalSyncBar env t havoc sev.syncBar = ev.syncBar ∧ sev.indexOpt = some idxSym ∧
       (idxSym.eval env t havoc + k) / sev.elemDiv = ev.index ∧
-      sev.pathCond.eval env t havoc = true ∧ sev.phaseSpec.matchesPhase ev.phase = true := by
+      sev.pathCond.eval env t havoc = true ∧
+      sev.phaseSpec.matchesPhase ev.phase = true ∧
+      sev.warpPhaseSpec.matchesPhase ev.warpPhase = true := by
+  rcases Bool.and_eq_true_iff.mp hps with ⟨hps1, hps2⟩
   cases sv with
   | ptr sp bid off =>
       dsimp only [symSinglePtrEvent]
       rw [SymVal.matchesVal] at hmatch; subst hmatch
       simp only [List.mem_singleton] at hmem; subst hmem
-      exact ⟨off, 0, Nat.zero_lt_one, Nat.zero_lt_one, rfl, rfl, rfl, rfl, rfl, by simp, hpc, hps⟩
+      exact ⟨off, 0, Nat.zero_lt_one, Nat.zero_lt_one, rfl, rfl, rfl, rfl, rfl, by simp, hpc, hps1, hps2⟩
   | condPtr g sp bid off =>
       dsimp only [symSinglePtrEvent] at hsome ⊢
       by_cases himp : symImpliesVal pCond g true = true
@@ -484,7 +499,7 @@ theorem symSinglePtrEvent_sound {env : InputEnv} {t : ThreadCtx} {havoc : Nat �
         rw [SymVal.matchesVal] at hmatch
         rw [hmatch (symImpliesVal_sound hpc g true himp)] at hmem
         simp only [List.mem_singleton] at hmem; subst hmem
-        exact ⟨off, 0, Nat.zero_lt_one, Nat.zero_lt_one, rfl, rfl, rfl, rfl, rfl, by simp, hpc, hps⟩
+        exact ⟨off, 0, Nat.zero_lt_one, Nat.zero_lt_one, rfl, rfl, rfl, rfl, rfl, by simp, hpc, hps1, hps2⟩
       · rw [if_neg himp] at hsome; simp at hsome
   | int _ | bool _ | smemOff _ _ | smemDesc _ _ | tmemPtr _ _ | unk =>
       dsimp only [symSinglePtrEvent] at hsome; simp at hsome
@@ -494,30 +509,32 @@ theorem symSinglePtrEvent_sound {env : InputEnv} {t : ThreadCtx} {havoc : Nat �
 theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
     (havoc : Nat → Nat) (pCond : SymBool) (hpc : pCond.eval env t havoc = true) (term : Terminator) :
     ∀ stmts : List Stmt, ∀ regs : RegFile, ∀ sregs : SymRegList,
-      ∀ phase : Nat, ∀ ps : PhaseSpec,
+      ∀ phases : Nat × Nat, ∀ pss : PhaseSpec × PhaseSpec,
       (∀ v, (sregs.getVar v).matchesVal env t havoc (regs v)) →
-      ps.matchesPhase phase = true →
-      ((symExecStmts f pCond sregs ps term stmts).2.2.1.all (fun m => m.indexOpt.isSome)) = true →
-      ((symExecStmts f pCond sregs ps term stmts).2.2.2.2.all (fun tm => tm.relAddrOpt.isSome)) = true →
-      (∀ v, ((symExecStmts f pCond sregs ps term stmts).1.getVar v).matchesVal env t havoc
-              ((execStmts f env t regs phase term stmts).1 v)) ∧
-      (symExecStmts f pCond sregs ps term stmts).2.1.matchesPhase
-        (execStmts f env t regs phase term stmts).2.1 = true ∧
-      (∀ ev ∈ (execStmts f env t regs phase term stmts).2.2.1,
-        ∃ sev ∈ (symExecStmts f pCond sregs ps term stmts).2.2.1, ∃ idxSym : SymInt, ∃ k : Nat,
+      matchesPhasePair pss phases = true →
+      ((symExecStmts f pCond sregs pss term stmts).2.2.1.all (fun m => m.indexOpt.isSome)) = true →
+      ((symExecStmts f pCond sregs pss term stmts).2.2.2.2.all (fun tm => tm.relAddrOpt.isSome)) = true →
+      (∀ v, ((symExecStmts f pCond sregs pss term stmts).1.getVar v).matchesVal env t havoc
+              ((execStmts f env t regs phases term stmts).1 v)) ∧
+      matchesPhasePair (symExecStmts f pCond sregs pss term stmts).2.1
+        (execStmts f env t regs phases term stmts).2.1 = true ∧
+      (∀ ev ∈ (execStmts f env t regs phases term stmts).2.2.1,
+        ∃ sev ∈ (symExecStmts f pCond sregs pss term stmts).2.2.1, ∃ idxSym : SymInt, ∃ k : Nat,
           k < sev.span ∧ 0 < sev.elemDiv ∧
           sev.isWrite = ev.isWrite ∧ sev.space = ev.space ∧ sev.bufId = ev.bufId ∧
           evalSyncBar env t havoc sev.syncBar = ev.syncBar ∧ sev.indexOpt = some idxSym ∧
           (idxSym.eval env t havoc + k) / sev.elemDiv = ev.index ∧
-          sev.pathCond.eval env t havoc = true ∧ sev.phaseSpec.matchesPhase ev.phase = true) ∧
+          sev.pathCond.eval env t havoc = true ∧
+          sev.phaseSpec.matchesPhase ev.phase = true ∧
+          sev.warpPhaseSpec.matchesPhase ev.warpPhase = true) ∧
       (∀ pfx sfx : List Stmt, ∀ aid cond : Nat,
         stmts = pfx ++ (.assertCond aid cond :: sfx) →
-        ∃ aev ∈ (symExecStmts f pCond sregs ps term stmts).2.2.2.1,
+        ∃ aev ∈ (symExecStmts f pCond sregs pss term stmts).2.2.2.1,
           aev.assertId = aid ∧ aev.pathCond = pCond ∧
           ∀ bSym : SymBool, aev.condOpt = some bSym →
-            (execStmts f env t regs phase term pfx).1 cond = .bool (bSym.eval env t havoc)) ∧
-      (∀ tev ∈ (execStmts f env t regs phase term stmts).2.2.2,
-        ∃ stev ∈ (symExecStmts f pCond sregs ps term stmts).2.2.2.2, ∃ relSym : SymInt,
+            (execStmts f env t regs phases term pfx).1 cond = .bool (bSym.eval env t havoc)) ∧
+      (∀ tev ∈ (execStmts f env t regs phases term stmts).2.2.2,
+        ∃ stev ∈ (symExecStmts f pCond sregs pss term stmts).2.2.2.2, ∃ relSym : SymInt,
           stev.allocCols = tev.allocCols ∧ stev.heightLanes = tev.heightLanes ∧
           stev.widthCols = tev.widthCols ∧ stev.warpRestricted = tev.warpRestricted ∧
           stev.relAddrOpt = some relSym ∧ relSym.eval env t havoc = tev.relAddr ∧
@@ -525,13 +542,14 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
   intro stmts
   induction stmts with                                    -- Structural induction on `stmts`
   | nil =>                                                -- Base case (`[]`): registers & phase match immediately
-      intro regs sregs phase ps hmatch hps _ _
+      intro regs sregs phases pss hmatch hps _ _
       refine ⟨hmatch, hps, ?_, ?_, ?_⟩
       · intro _ hmem; cases hmem
       · intro pfx _ _ _ heq; cases pfx <;> contradiction
       · intro _ hmem; cases hmem
   | cons stmt rest ih =>                                  -- Inductive step (`stmt :: rest`): case-split by MIR statement
-      intro regs sregs phase ps hmatch hps hallSome hallTmem
+      intro regs sregs phases pss hmatch hps hallSome hallTmem
+      rcases Bool.and_eq_true_iff.mp hps with ⟨hps1, hps2⟩
       cases stmt with
       | assign dst rhs =>                                 -- Case 1: `dst = rhs` register assignment
           have hnextGen : ∀ v, ((sregs.setVar dst (symEvalRhs f sregs rhs)).getVar v).matchesVal env t havoc
@@ -549,7 +567,7 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
                 by_cases hv : (v == dst) = true
                 · simp [hv, SymVal.matchesVal]
                 · simp [hv]; exact hmatch v
-              obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih (regs.set dst .unk) (sregs.setVar dst .unk) phase ps hnext hps hallSome.2 hallTmem
+              obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih (regs.set dst .unk) (sregs.setVar dst .unk) phases pss hnext hps hallSome.2 hallTmem
               simp only [execStmts, symExecStmts]
               refine ⟨hmR, hmP, ?_, ?_, hmT⟩
               · intro ev hev
@@ -575,7 +593,7 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
                 · simp [hv, SymVal.matchesVal, SymInt.eval]
                 · simp [hv]; exact hmatch v
               obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ :=
-                ih (regs.set dst (.tmemPtr cols 0)) (sregs.setVar dst (.tmemPtr cols (.const 0))) phase ps hnext hps hallSome.2 hallTmem
+                ih (regs.set dst (.tmemPtr cols 0)) (sregs.setVar dst (.tmemPtr cols (.const 0))) phases pss hnext hps hallSome.2 hallTmem
               simp only [execStmts, symExecStmts]
               refine ⟨hmR, hmP, ?_, ?_, hmT⟩
               · intro ev hev
@@ -594,7 +612,7 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
                     simpa [execStmts] using hmA tl sfx aid cond htl
           | _ =>                                          --   Subcase 1c: Pure arithmetic/pointer `Rhs` via `symEvalRhs_correct`
               simp only [execStmts, symExecStmts] at hallSome hallTmem ⊢
-              obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih _ _ phase ps hnextGen hps hallSome hallTmem
+              obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih _ _ phases pss hnextGen hps hallSome hallTmem
               refine ⟨hmR, hmP, hmE, ?_, hmT⟩
               intro pfx sfx aid cond heq
               cases pfx with
@@ -605,7 +623,7 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
                   simpa [execStmts] using hmA tl sfx aid cond htl
       | store ptr _ =>                                    -- Case 2: `mir.store(ptr, val)` emits 1 write `SymMemEvent` (+ optional `syncBar`)
           simp only [symExecStmts, List.all_append, Bool.and_eq_true] at hallSome hallTmem
-          obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs phase ps hmatch hps hallSome.2 hallTmem
+          obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs phases pss hmatch hps hallSome.2 hallTmem
           simp only [execStmts, symExecStmts]
           refine ⟨hmR, hmP, ?_, ?_, hmT⟩
           · intro ev hev
@@ -637,7 +655,7 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
                           rw [hsp, SymVal.matchesVal] at hp; rw [hp] at hhead
                           simp only [List.mem_singleton] at hhead; subst hhead
                           refine ⟨_, List.mem_append_left _ (List.Mem.head _),
-                                  off, 0, Nat.zero_lt_one, Nat.zero_lt_one, rfl, rfl, rfl, ?_, rfl, by simp, hpc, hps⟩
+                                  off, 0, Nat.zero_lt_one, Nat.zero_lt_one, rfl, rfl, rfl, ?_, rfl, by simp, hpc, hps1, hps2⟩
                           dsimp only [evalSyncBar]
                           cases sp <;> rfl
                       | condPtr g sp bid off =>
@@ -648,7 +666,7 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
                             rw [hp (symImpliesVal_sound hpc g true himp)] at hhead
                             simp only [List.mem_singleton] at hhead; subst hhead
                             refine ⟨_, List.mem_append_left _ (List.Mem.head _),
-                                    off, 0, Nat.zero_lt_one, Nat.zero_lt_one, rfl, rfl, rfl, ?_, rfl, by simp, hpc, hps⟩
+                                    off, 0, Nat.zero_lt_one, Nat.zero_lt_one, rfl, rfl, rfl, ?_, rfl, by simp, hpc, hps1, hps2⟩
                             dsimp only [evalSyncBar]
                             cases sp <;> rfl
                           · simp [symSinglePtrEvent, himp] at hallSome
@@ -666,7 +684,7 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
                 simpa [execStmts] using hmA tl sfx aid cond htl
       | barrierSlotCheck ptr =>                           -- Case 3: `SharedArray<Barrier, N>` slot bounds check
           simp only [symExecStmts, List.all_append, List.all_cons, List.all_nil, Bool.and_true, Bool.and_eq_true] at hallSome hallTmem
-          obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs phase ps hmatch hps hallSome.2 hallTmem
+          obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs phases pss hmatch hps hallSome.2 hallTmem
           simp only [execStmts, symExecStmts]
           refine ⟨hmR, hmP, ?_, ?_, hmT⟩
           · intro ev hev
@@ -685,7 +703,7 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
                 simpa [execStmts] using hmA tl sfx aid cond htl
       | assertCond aid0 cond0 =>                          -- Case 4: `mir.assert` records `SymAssertEvent` for `MirAssertRedundant`
           simp only [symExecStmts] at hallSome hallTmem
-          obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs phase ps hmatch hps hallSome hallTmem
+          obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs phases pss hmatch hps hallSome hallTmem
           simp only [execStmts, symExecStmts]
           refine ⟨hmR, hmP, hmE, ?_, hmT⟩
           intro pfx sfx aid cond heq
@@ -712,7 +730,7 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
               exact ⟨aev, List.Mem.tail _ haev, ha, hp, by simpa [execStmts] using hc⟩
       | clusterRankCheck _ =>                             -- Case 5: `map_shared_rank` peer-rank check (no register/phase change)
           simp only [execStmts, symExecStmts] at hallSome hallTmem ⊢
-          obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs phase ps hmatch hps hallSome hallTmem
+          obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs phases pss hmatch hps hallSome hallTmem
           refine ⟨hmR, hmP, hmE, ?_, hmT⟩
           intro pfx sfx aid cond heq
           cases pfx with
@@ -723,7 +741,7 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
               simpa [execStmts] using hmA tl sfx aid cond htl
       | mbarArrive _ _ _ =>                               -- Case 6: `mbarrier_arrive` (tracked in `ControlFlowCfg` & `findTrailArrive`)
           simp only [execStmts, symExecStmts] at hallSome hallTmem ⊢
-          obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs phase ps hmatch hps hallSome hallTmem
+          obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs phases pss hmatch hps hallSome hallTmem
           refine ⟨hmR, hmP, hmE, ?_, hmT⟩
           intro pfx sfx aid cond heq
           cases pfx with
@@ -734,7 +752,7 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
               simpa [execStmts] using hmA tl sfx aid cond htl
       | mbarArriveExpectTx _ _ _ =>                       -- Case 7: `mbarrier_arrive_expect_tx`
           simp only [execStmts, symExecStmts] at hallSome hallTmem ⊢
-          obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs phase ps hmatch hps hallSome hallTmem
+          obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs phases pss hmatch hps hallSome hallTmem
           refine ⟨hmR, hmP, hmE, ?_, hmT⟩
           intro pfx sfx aid cond heq
           cases pfx with
@@ -743,9 +761,20 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
               simp only [List.cons_append, List.cons.injEq] at heq
               rcases heq with ⟨rfl, htl⟩
               simpa [execStmts] using hmA tl sfx aid cond htl
-      | syncThreads =>                                    -- Case 8: `sync_threads()` increments `phase` and `ps.stepSync`
+      | syncThreads =>                                    -- Case 8a: `sync_threads()` increments CTA `phase`
           simp only [execStmts, symExecStmts] at hallSome hallTmem ⊢
-          obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs (phase + 1) ps.stepSync hmatch (phaseSpec_stepSync_sound hps) hallSome hallTmem
+          obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs (phases.1 + 1, phases.2) (pss.1.stepSync, pss.2) hmatch (matchesPhasePair_stepCta hps) hallSome hallTmem
+          refine ⟨hmR, hmP, hmE, ?_, hmT⟩
+          intro pfx sfx aid cond heq
+          cases pfx with
+          | nil => simp at heq
+          | cons hd tl =>
+              simp only [List.cons_append, List.cons.injEq] at heq
+              rcases heq with ⟨rfl, htl⟩
+              simpa [execStmts] using hmA tl sfx aid cond htl
+      | syncWarp =>                                       -- Case 8b: `sync_mask()` increments intra-warp `warpPhase`
+          simp only [execStmts, symExecStmts] at hallSome hallTmem ⊢
+          obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs (phases.1, phases.2 + 1) (pss.1, pss.2.stepSync) hmatch (matchesPhasePair_stepWarp hps) hallSome hallTmem
           refine ⟨hmR, hmP, hmE, ?_, hmT⟩
           intro pfx sfx aid cond heq
           cases pfx with
@@ -756,7 +785,7 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
               simpa [execStmts] using hmA tl sfx aid cond htl
       | tmaCopyG2S ptr barId slotVar spanElems =>         -- Case 9: 2D TMA `g2s` emits `spanElems`-wide write released on `BAR[slot]`
           simp only [symExecStmts, List.all_append, Bool.and_eq_true] at hallSome hallTmem
-          obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs phase ps hmatch hps hallSome.2 hallTmem
+          obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs phases pss hmatch hps hallSome.2 hallTmem
           simp only [execStmts, symExecStmts]
           refine ⟨hmR, hmP, ?_, ?_, hmT⟩
           · intro ev hev
@@ -774,10 +803,10 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
               subst hkEq
               exact ⟨{ isWrite := true, space := sp, bufId := bid, indexOpt := some off,
                        span := max 1 spanElems, elemDiv := 1, syncBar := some (barId, sSym),
-                       pathCond := pCond, phaseSpec := ps },
+                       pathCond := pCond, phaseSpec := pss.1, warpPhaseSpec := pss.2 },
                      List.mem_append_left _ (List.Mem.head _), off, k,
                      List.mem_range.mp hkRange, Nat.zero_lt_one, rfl, rfl, rfl, rfl, rfl,
-                     by simp, hpc, hps⟩
+                     by simp, hpc, hps1, hps2⟩
             · obtain ⟨sev, hsev, idxS, k, hrest⟩ := hmE ev htail
               exact ⟨sev, List.mem_append_right _ hsev, idxS, k, hrest⟩
           · intro pfx sfx aid cond heq
@@ -789,7 +818,7 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
                 simpa [execStmts] using hmA tl sfx aid cond htl
       | tmemAlloc ptr _cols =>                            -- Case 10: `tcgen05_alloc` writes `TMEM_ADDR` on warp lane `tx % 32 == 0`
           simp only [symExecStmts, List.all_append, List.all_cons, List.all_nil, Bool.and_true, Bool.and_eq_true] at hallSome hallTmem
-          obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs phase ps hmatch hps hallSome.2 hallTmem
+          obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs phases pss hmatch hps hallSome.2 hallTmem
           simp only [execStmts, symExecStmts]
           refine ⟨hmR, hmP, ?_, ?_, hmT⟩
           · intro ev hev
@@ -814,7 +843,7 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
                 simpa [execStmts] using hmA tl sfx aid cond htl
       | smemDescRead descVar tileBytes =>                 -- Case 11: `tcgen05.mma` SMEM descriptor read (`tileBytes` span)
           simp only [symExecStmts, List.all_append, Bool.and_eq_true] at hallSome hallTmem
-          obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs phase ps hmatch hps hallSome.2 hallTmem
+          obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs phases pss hmatch hps hallSome.2 hallTmem
           simp only [execStmts, symExecStmts]
           refine ⟨hmR, hmP, ?_, ?_, hmT⟩
           · intro ev hev
@@ -830,10 +859,10 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
                   let eb := max 1 (f.sharedDecls.getD sid { size := 0 }).elemBytes
                   have hebPos : 0 < eb := by dsimp only [eb]; omega
                   exact ⟨{ isWrite := false, space := .shared, bufId := sid, indexOpt := some byteOff,
-                           span := max 1 tileBytes, elemDiv := eb, pathCond := pCond, phaseSpec := ps },
+                           span := max 1 tileBytes, elemDiv := eb, pathCond := pCond, phaseSpec := pss.1, warpPhaseSpec := pss.2 },
                          List.mem_append_left _ (List.Mem.head _), byteOff, k,
                          List.mem_range.mp hkRange, hebPos, rfl, rfl, rfl, rfl, rfl,
-                         rfl, hpc, hps⟩
+                         rfl, hpc, hps1, hps2⟩
               | _ => rw [hsd] at hallSome; simp at hallSome
             · obtain ⟨sev, hsev, idxS, k, hrest⟩ := hmE ev htail
               exact ⟨sev, List.mem_append_right _ hsev, idxS, k, hrest⟩
@@ -846,7 +875,7 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
                 simpa [execStmts] using hmA tl sfx aid cond htl
       | tmemAccess tmemVar hl wc wr =>
           simp only [symExecStmts, List.all_append, Bool.and_eq_true] at hallSome hallTmem
-          obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs phase ps hmatch hps hallSome hallTmem.2
+          obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs phases pss hmatch hps hallSome hallTmem.2
           simp only [execStmts, symExecStmts]
           refine ⟨hmR, hmP, hmE, ?_, ?_⟩
           · intro pfx sfx aid cond heq

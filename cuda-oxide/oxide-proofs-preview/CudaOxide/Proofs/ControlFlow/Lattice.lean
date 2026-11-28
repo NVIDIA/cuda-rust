@@ -322,6 +322,13 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
         listSubsumes_map proxyStepSync_mono hbp⟩,
         listSubsumes_map mbarStepSync_mono hbs⟩, htp⟩, hcl⟩, hac⟩, hmh⟩, hmi⟩, hcb⟩, htcr⟩, htr⟩, hufw⟩,
         by simpa only [Bool.and_eq_true] using huflUpd⟩, hpl⟩, hcd⟩, hcs⟩, hrp⟩, hvp⟩
+  | syncWarp fullMask =>                                    -- Case 1b: Full-warp `sync_mask` checks full mask + warp convergence
+      dsimp only [stepOp] at hstep ⊢
+      by_cases hwok : (!fullMask || !blkGuard.isWarpConvergent cfg.blockDimX cfg.blockDimY) = true
+      · rw [if_pos hwok] at hstep; contradiction
+      · rw [if_neg hwok] at hstep ⊢
+        injection hstep with hstep; subst hstep
+        exact ⟨conc, rfl, hsub⟩
   | clusterSync =>                                        -- Case 2: 2-CTA `cluster_sync()` enables DSMEM & `_cg2` TMEM access/dealloc
       dsimp only [stepOp] at hstep ⊢
       by_cases hcdim : cfg.clusterDimX ≤ 1

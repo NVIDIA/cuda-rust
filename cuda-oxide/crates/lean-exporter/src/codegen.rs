@@ -166,6 +166,7 @@ fn format_cfg_branch_cond(cond: &CfgBranchCond) -> String {
 fn format_cfg_op(op: &CfgOpItem) -> String {
     match op {
         CfgOpItem::SyncThreads => ".syncThreads".to_string(),
+        CfgOpItem::SyncWarp { full_mask } => format!("(.syncWarp {full_mask})"),
         CfgOpItem::ClusterSync => ".clusterSync".to_string(),
         CfgOpItem::SharedRead { shared_id } => format!("(.sharedRead {shared_id})"),
         CfgOpItem::SharedWrite { shared_id } => format!("(.sharedWrite {shared_id})"),
@@ -368,6 +369,7 @@ fn render_mir_program_module(
                 MirStmt::Store(p, v) => format!("(.store {p} {v})"),
                 MirStmt::AssertCond(aid, c) => format!("(.assertCond {aid} {c})"),
                 MirStmt::SyncThreads => ".syncThreads".to_string(),
+                MirStmt::SyncWarp => ".syncWarp".to_string(),
                 MirStmt::BarrierSlotCheck(p) => format!("(.barrierSlotCheck {p})"),
                 MirStmt::ClusterRankCheck(r) => format!("(.clusterRankCheck {r})"),
                 MirStmt::MbarArrive(b, s, is_rel) => format!("(.mbarArrive {b} {s} {is_rel})"),

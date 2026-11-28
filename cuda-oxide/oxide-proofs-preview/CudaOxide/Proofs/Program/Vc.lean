@@ -501,8 +501,8 @@ theorem vcNoOobGlobal_of_table {f : MirFunc} {tbl : List SymBlockInv}
          symSpanInBounds sev ((sev.indexOpt.getD (.const 0)).eval env t havoc) (env.sliceLen paramId)) ∧ acc) True) :
     MirNoOobGlobal f paramId := by
   intro env t ev hIn hTh hemits hsp hbid                    -- Step 1: Pick any GPU thread `t` and global access `ev`
-  obtain ⟨havoc, sev, hsev, idxS, k, hks, hdiv, _, hssp, hsbid, _, hopt, hidxEv, hpc, _⟩ :=
-    emitsEvent_mem_collect hvalid hIn hemits                -- Step 2: Map concrete `ev` to its symbolic event `sev`
+  obtain ⟨havoc, sev, hsev, idxS, k, hks, hdiv, _, hssp, hsbid, _, hopt, hidxEv, hpc, _, _⟩ :=
+    emitsEvent_mem_collect hvalid hIn hTh hemits            -- Step 2: Map concrete `ev` to its symbolic event `sev`
   have hfMem : sev ∈ sevs := by                             -- Step 3: Show `sev` belongs to the filtered `paramId` slice list
     rw [← hevs]; apply mem_dedupEvents; rw [← hmem, List.mem_filter]; exact ⟨hsev, by simp [hssp, hsp, hsbid, hbid]⟩
   have hp := foldr_and_of_mem _ (foldr_holds_to_eval sevs (hvc env t havoc hIn hTh)) sev hfMem hpc -- Step 4: Extract `omega`'s VC proof for `sev`
@@ -523,8 +523,8 @@ theorem vcNoOobShared_of_table {f : MirFunc} {tbl : List SymBlockInv}
          symSpanInBounds sev ((sev.indexOpt.getD (.const 0)).eval env t havoc) cap) ∧ acc) True) :
     MirNoOobShared f sharedId := by
   intro env t ev hIn hTh hemits hsp hbid                    -- Step 1: Pick any CTA thread `t` and shared access `ev`
-  obtain ⟨havoc, sev, hsev, idxS, k, hks, hdiv, _, hssp, hsbid, _, hopt, hidxEv, hpc, _⟩ :=
-    emitsEvent_mem_collect hvalid hIn hemits                -- Step 2: Map concrete `ev` to its symbolic event `sev`
+  obtain ⟨havoc, sev, hsev, idxS, k, hks, hdiv, _, hssp, hsbid, _, hopt, hidxEv, hpc, _, _⟩ :=
+    emitsEvent_mem_collect hvalid hIn hTh hemits            -- Step 2: Map concrete `ev` to its symbolic event `sev`
   have hfMem : sev ∈ sevs := by                             -- Step 3: Show `sev` belongs to `SharedArray` `sharedId`'s list
     rw [← hevs]; apply mem_dedupEvents; rw [← hmem, List.mem_filter]; exact ⟨hsev, by simp [hssp, hsp, hsbid, hbid]⟩
   have hp := foldr_and_of_mem _ (foldr_holds_to_eval sevs (hvc env t havoc hIn hTh)) sev hfMem hpc -- Step 4: Extract `omega`'s VC proof for `sev`
@@ -551,10 +551,10 @@ theorem vcDisjointWrites_of_table {f : MirFunc} {tbl : List SymBlockInv}
            (t₁.bx = t₂.bx ∧ t₁.by_ = t₂.by_ ∧ t₁.tx = t₂.tx ∧ t₁.ty = t₂.ty)) ∧ acc) True) :
     MirDisjointWrites f paramId := by
   intro env t₁ t₂ ev₁ ev₂ hIn hT1 hT2 hem1 hem2 hsp1 hsp2 hb1 hb2 hw hidx -- Step 1: Pick two threads `t₁, t₂` colliding on `ev₁.index = ev₂.index`
-  obtain ⟨h₁, s1, hs1, i1, k1, hk1, hd1, hw1, hssp1, hsbid1, _, ho1, hi1, hpc1, _⟩ :=
-    emitsEvent_mem_collect hvalid hIn hem1                  -- Step 2a: Map `ev₁` to symbolic event `s1`
-  obtain ⟨h₂, s2, hs2, i2, k2, hk2, hd2, hw2, hssp2, hsbid2, _, ho2, hi2, hpc2, _⟩ :=
-    emitsEvent_mem_collect hvalid hIn hem2                  -- Step 2b: Map `ev₂` to symbolic event `s2`
+  obtain ⟨h₁, s1, hs1, i1, k1, hk1, hd1, hw1, hssp1, hsbid1, _, ho1, hi1, hpc1, _, _⟩ :=
+    emitsEvent_mem_collect hvalid hIn hT1 hem1              -- Step 2a: Map `ev₁` to symbolic event `s1`
+  obtain ⟨h₂, s2, hs2, i2, k2, hk2, hd2, hw2, hssp2, hsbid2, _, ho2, hi2, hpc2, _, _⟩ :=
+    emitsEvent_mem_collect hvalid hIn hT2 hem2              -- Step 2b: Map `ev₂` to symbolic event `s2`
   rw [hmem] at hs1 hs2
   have hm1 : s1 ∈ memEvs.filter (fun s => s.space == .global && s.bufId == paramId) := by
     rw [List.mem_filter]; exact ⟨hs1, by simp [hssp1, hsp1, hsbid1, hb1]⟩
@@ -799,7 +799,7 @@ theorem mem_upperTriPairs {α : Type} {x y : α} :
     and symmetric duplicate event pairs, reducing remaining conflicts on `sharedId` to `tx₁ = tx₂ ∧ ty₁ = ty₂`. -/
 theorem vcNoSharedRace_of_table {f : MirFunc} {cfg : ControlFlowCfg} {tbl : List SymBlockInv}
     {memEvs : List SymMemEvent} {sharedId : Nat}
-    {pairs : List (SymMemEvent × SymMemEvent × Option (SymInt × SymInt))}
+    {pairs : List (SymMemEvent × SymMemEvent × Bool × Option (SymInt × SymInt))}
     (hunif : UniformBarriers f cfg)
     (hvalid : validSymFunc f tbl = true)
     (hmem : collectSymMemEvents f tbl = memEvs)
@@ -809,25 +809,27 @@ theorem vcNoSharedRace_of_table {f : MirFunc} {cfg : ControlFlowCfg} {tbl : List
                  !(p.1.phaseSpec.disjoint p.2.phaseSpec) &&
                  !(symAsyncOrdered f p.1 p.2) &&
                  !(symPinsSameThread f p.1 p.2)).map fun p =>
-                   (p.1, p.2, extractAsyncSlotPair f p.1 p.2)) = pairs)
+                   (p.1, p.2, p.1.warpPhaseSpec.disjoint p.2.warpPhaseSpec, extractAsyncSlotPair f p.1 p.2)) = pairs)
     (hvc : ∀ env : InputEnv, ∀ t₁ t₂ : ThreadCtx, ∀ h₁ h₂ : Nat → Nat, -- For ANY two threads `t₁, t₂` in the same CTA:
       f.validInput env → f.validThread t₁ → f.validThread t₂ →
       t₁.bx = t₂.bx → t₁.by_ = t₂.by_ →
       pairs.foldr (fun p acc =>
         (p.1.pathCond.holds env t₁ h₁ →                                -- IF both events' path conditions hold
          p.2.1.pathCond.holds env t₂ h₂ →                              -- AND they are not ordered on the same `Barrier[slot]`,
-         symSlotGuardOpt p.2.2 env t₁ t₂ h₁ h₂
+         symSlotGuardOpt p.2.2.2 env t₁ t₂ h₁ h₂
            (symPairRaceOblig p.1 p.2.1
              ((p.1.indexOpt.getD (.const 0)).eval env t₁ h₁)
              ((p.2.1.indexOpt.getD (.const 0)).eval env t₂ h₂)
-             (t₁.tx = t₂.tx ∧ t₁.ty = t₂.ty))) ∧ acc) True) :
+             (match p.2.2.1 with
+              | true => (t₁.ty * f.blockDimX + t₁.tx) / 32 = (t₂.ty * f.blockDimX + t₂.tx) / 32
+              | false => t₁.tx = t₂.tx ∧ t₁.ty = t₂.ty))) ∧ acc) True) :
     MirNoSharedRace f cfg sharedId := by
   refine ⟨hunif, ?_⟩                                        -- Supply `UniformBarriers cfg` for phase alignment
-  intro env t₁ t₂ ev₁ ev₂ hIn hT1 hT2 hbx hby hem1 hem2 hsp1 hsp2 hb1 hb2 hph hnotOrd hw hidx
-  obtain ⟨h₁, s1, hs1, i1, k1, hk1, hd1, hw1, hssp1, hsbid1, hab1, ho1, hi1, hpc1, hps1⟩ :=
-    emitsEvent_mem_collect hvalid hIn hem1
-  obtain ⟨h₂, s2, hs2, i2, k2, hk2, hd2, hw2, hssp2, hsbid2, hab2, ho2, hi2, hpc2, hps2⟩ :=
-    emitsEvent_mem_collect hvalid hIn hem2
+  intro env t₁ t₂ ev₁ ev₂ hIn hT1 hT2 hbx hby hem1 hem2 hsp1 hsp2 hb1 hb2 hph hwp hnotOrd hw hidx
+  obtain ⟨h₁, s1, hs1, i1, k1, hk1, hd1, hw1, hssp1, hsbid1, hab1, ho1, hi1, hpc1, hps1, hwps1⟩ :=
+    emitsEvent_mem_collect hvalid hIn hT1 hem1
+  obtain ⟨h₂, s2, hs2, i2, k2, hk2, hd2, hw2, hssp2, hsbid2, hab2, ho2, hi2, hpc2, hps2, hwps2⟩ :=
+    emitsEvent_mem_collect hvalid hIn hT2 hem2
   by_cases hdisj : s1.phaseSpec.disjoint s2.phaseSpec = true
   · exact False.elim (phaseSpec_disjoint_sound hdisj hps1 hps2 hph)
   · by_cases haord : symAsyncOrdered f s1 s2 = true
@@ -848,18 +850,23 @@ theorem vcNoSharedRace_of_table {f : MirFunc} {cfg : ControlFlowCfg} {tbl : List
         have hnp : (!(symPinsSameThread f s1 s2)) = true := by
           cases hc : symPinsSameThread f s1 s2 <;> simp_all
         rcases mem_upperTriPairs hm1 hm2 with h12 | h21
-        · have hpair : (s1, s2, extractAsyncSlotPair f s1 s2) ∈ pairs := by
+        · have hpair : (s1, s2, s1.warpPhaseSpec.disjoint s2.warpPhaseSpec, extractAsyncSlotPair f s1 s2) ∈ pairs := by
             rw [← hpairs, List.mem_map]
             refine ⟨(s1, s2), List.mem_filter.mpr ⟨h12, ?_⟩, rfl⟩
             simp [hwOr, hnd, hna, hnp]
           have hp0 := foldr_and_of_mem _ (foldr_holds2_to_eval pairs (hvc env t₁ t₂ h₁ h₂ hIn hT1 hT2 hbx hby))
-            (s1, s2, extractAsyncSlotPair f s1 s2) hpair hpc1 hpc2
+            (s1, s2, s1.warpPhaseSpec.disjoint s2.warpPhaseSpec, extractAsyncSlotPair f s1 s2) hpair hpc1 hpc2
           have hp := symAsyncSlotGuard_sound hab1 hab2 hpc1 hpc2 hnotOrd hp0
           rw [ho1, ho2] at hp; dsimp only [Option.getD] at hp
           have heqIdx : (i1.eval env t₁ h₁ + k1) / s1.elemDiv = (i2.eval env t₂ h₂ + k2) / s2.elemDiv := by
             rw [hi1, hi2, hidx]
-          obtain ⟨htx, hty⟩ := symPairRaceOblig_sound hk1 hd1 hk2 hd2 hp heqIdx
-          cases t₁; cases t₂; simp_all
+          have hconc := symPairRaceOblig_sound hk1 hd1 hk2 hd2 hp heqIdx
+          cases hwdisj : s1.warpPhaseSpec.disjoint s2.warpPhaseSpec
+          · rw [hwdisj] at hconc
+            rcases hconc with ⟨htx, hty⟩
+            cases t₁; cases t₂; simp_all
+          · rw [hwdisj] at hconc
+            exact False.elim (phaseSpec_disjoint_sound hwdisj hwps1 hwps2 (hwp hconc))
         · have hnotOrd2 : ¬ asyncOrdered f env ev₂ ev₁ := fun ho => hnotOrd ho.symm
           by_cases hdisj2 : s2.phaseSpec.disjoint s1.phaseSpec = true
           · exact False.elim (phaseSpec_disjoint_sound hdisj2 hps2 hps1 hph.symm)
@@ -867,7 +874,7 @@ theorem vcNoSharedRace_of_table {f : MirFunc} {cfg : ControlFlowCfg} {tbl : List
             · exact False.elim (hnotOrd2 (symAsyncOrdered_sound haord2 hab2 hab1 hpc2 hpc1))
             · by_cases hpin2 : symPinsSameThread f s2 s1 = true
               · exact (symPinsSameThread_sound hT2 hT1 hbx.symm hby.symm hpin2 hpc2 hpc1).symm
-              · have hpair : (s2, s1, extractAsyncSlotPair f s2 s1) ∈ pairs := by
+              · have hpair : (s2, s1, s2.warpPhaseSpec.disjoint s1.warpPhaseSpec, extractAsyncSlotPair f s2 s1) ∈ pairs := by
                   rw [← hpairs, List.mem_map]
                   refine ⟨(s2, s1), List.mem_filter.mpr ⟨h21, ?_⟩, rfl⟩
                   have hwOr2 : (s2.isWrite || s1.isWrite) = true := by rw [Bool.or_comm]; exact hwOr
@@ -879,13 +886,18 @@ theorem vcNoSharedRace_of_table {f : MirFunc} {cfg : ControlFlowCfg} {tbl : List
                     cases hc : symPinsSameThread f s2 s1 <;> simp_all
                   simp [hwOr2, hnd2, hna2, hnp2]
                 have hp0 := foldr_and_of_mem _ (foldr_holds2_to_eval pairs (hvc env t₂ t₁ h₂ h₁ hIn hT2 hT1 hbx.symm hby.symm))
-                  (s2, s1, extractAsyncSlotPair f s2 s1) hpair hpc2 hpc1
+                  (s2, s1, s2.warpPhaseSpec.disjoint s1.warpPhaseSpec, extractAsyncSlotPair f s2 s1) hpair hpc2 hpc1
                 have hp := symAsyncSlotGuard_sound hab2 hab1 hpc2 hpc1 hnotOrd2 hp0
                 rw [ho2, ho1] at hp; dsimp only [Option.getD] at hp
                 have heqIdx : (i2.eval env t₂ h₂ + k2) / s2.elemDiv = (i1.eval env t₁ h₁ + k1) / s1.elemDiv := by
                   rw [hi2, hi1, hidx]
-                obtain ⟨htx, hty⟩ := symPairRaceOblig_sound hk2 hd2 hk1 hd1 hp heqIdx
-                cases t₁; cases t₂; simp_all
+                have hconc := symPairRaceOblig_sound hk2 hd2 hk1 hd1 hp heqIdx
+                cases hwdisj2 : s2.warpPhaseSpec.disjoint s1.warpPhaseSpec
+                · rw [hwdisj2] at hconc
+                  rcases hconc with ⟨htx, hty⟩
+                  cases t₁; cases t₂; simp_all
+                · rw [hwdisj2] at hconc
+                  exact False.elim (phaseSpec_disjoint_sound hwdisj2 hwps2 hwps1 (hwp hconc.symm).symm)
 
 /-- Soundness of `vcAssertRedundant` from pre-computed `assEvs = collectSymAssertEvents f tbl`. -/
 theorem vcAssertRedundant_of_table {f : MirFunc} {tbl : List SymBlockInv}
@@ -899,8 +911,8 @@ theorem vcAssertRedundant_of_table {f : MirFunc} {tbl : List SymBlockInv}
         (aev.pathCond.holds env t havoc →
          (aev.condOpt.getD (.lit false)).holds env t havoc) ∧ acc) True) :
     MirAssertRedundant f assertId := by
-  intro env t b phase regs hIn hTh hreach pfx sfx cond hstmts -- Step 1: Pick any reachable block `b` containing `assertCond assertId cond`
-  obtain ⟨hb, hr, havoc, hpc, hps, hm⟩ := symReachable_sound hvalid hIn hreach -- Step 2: Obtain block `b`'s symbolic invariant match
+  intro env t b phases regs hIn hTh hreach pfx sfx cond hstmts -- Step 1: Pick any reachable block `b` containing `assertCond assertId cond`
+  obtain ⟨hb, hr, havoc, hpc, hps, hm⟩ := symReachable_sound hvalid hIn hTh hreach -- Step 2: Obtain block `b`'s symbolic invariant match
   have hvf := hvalid
   unfold validSymFunc at hvf
   simp only [Bool.and_eq_true, decide_eq_true_eq] at hvf
@@ -908,7 +920,7 @@ theorem vcAssertRedundant_of_table {f : MirFunc} {tbl : List SymBlockInv}
   have hbOk := List.all_eq_true.mp hallB b (List.mem_range.mpr hb)
   rw [hr] at hbOk; simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte, Bool.and_eq_true] at hbOk
   obtain ⟨_, _, _, hmA, _⟩ := symExecStmts_correct f env t havoc (tbl.getD b {}).effCond hpc (f.blockAt b).term
-    (f.blockAt b).stmts regs (tbl.getD b {}).regs phase (tbl.getD b {}).phaseSpec hm hps hbOk.1.1.1 hbOk.1.2
+    (f.blockAt b).stmts regs (tbl.getD b {}).regs phases ((tbl.getD b {}).phaseSpec, (tbl.getD b {}).warpPhaseSpec) hm hps hbOk.1.1.1 hbOk.1.2
   obtain ⟨aev, haevMem, haid, hpce, hcondEval⟩ := hmA pfx sfx assertId cond hstmts -- Step 3: Map `assertCond` to symbolic `aev`
   have haevOk := List.all_eq_true.mp hbOk.1.1.2 aev haevMem
   cases hcOpt : aev.condOpt with                            -- Step 4: `validSymFunc` guarantees `aev.condOpt = some bSym`
@@ -955,7 +967,7 @@ theorem vcNoOobTmem_of_table {f : MirFunc} {tbl : List SymBlockInv}
     MirNoOobTmem f := by
   intro env t tev hIn hTh hemits                            -- Step 1: Pick any CTA thread `t` and `TMEM` access `tev`
   obtain ⟨havoc, stev, hstev, relS, hac, hhl, hwc, hwr, hro, hre, hpc⟩ :=
-    emitsTmemEvent_mem_collect hvalid hIn hemits            -- Step 2: Map `tev` to its symbolic `SymTmemEvent` `stev`
+    emitsTmemEvent_mem_collect hvalid hIn hTh hemits        -- Step 2: Map `tev` to its symbolic `SymTmemEvent` `stev`
   rw [htmem, hevs] at hstev
   have hp := foldr_and_of_mem _ (foldr_holds_to_eval tevs (hvc env t havoc hIn hTh)) stev hstev hpc -- Step 3: Extract `omega`'s VC proof
   rw [hro] at hp; dsimp only [Option.getD] at hp            -- Step 4: Unwrap `stev.relAddrOpt = some relS`
@@ -990,14 +1002,14 @@ def symRankEventsOfStmts (f : MirFunc) (pCond : SymBool) (sregs : SymRegList) :
 theorem symRankEventsOfStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
     (havoc : Nat → Nat) (pCond : SymBool) (term : Terminator) :
     ∀ stmts pfx sfx : List Stmt, ∀ regs : RegFile, ∀ sregs : SymRegList,
-      ∀ phase rv r : Nat,
+      ∀ phases : Nat × Nat, ∀ rv r : Nat,
       (∀ v, (sregs.getVar v).matchesVal env t havoc (regs v)) →
       stmts = pfx ++ (.clusterRankCheck rv :: sfx) →
-      (execStmts f env t regs phase term pfx).1 rv = .int r →
+      (execStmts f env t regs phases term pfx).1 rv = .int r →
       ∃ rev ∈ symRankEventsOfStmts f pCond sregs stmts,
         rev.pathCond = pCond ∧
         ∀ rSym : SymInt, rev.rankOpt = some rSym → rSym.eval env t havoc = r
-  | _, [], sfx, regs, sregs, phase, rv, r, hmatch, rfl, hr => by
+  | _, [], sfx, regs, sregs, phases, rv, r, hmatch, rfl, hr => by
       dsimp only [List.nil_append, execStmts] at hr ⊢
       refine ⟨{ rankOpt := match sregs.getVar rv with | .int e => some e | _ => none, pathCond := pCond },
               List.Mem.head _, rfl, ?_⟩
@@ -1008,7 +1020,7 @@ theorem symRankEventsOfStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadC
           rw [hsv] at hopt hm; injection hopt with heq; subst heq
           rw [hr] at hm; dsimp only [SymVal.matchesVal] at hm; injection hm with hmr; exact hmr.symm
       | _ => rw [hsv] at hopt; contradiction
-  | stmt :: rest, hd :: tl, sfx, regs, sregs, phase, rv, r, hmatch, heq, hr => by
+  | stmt :: rest, hd :: tl, sfx, regs, sregs, phases, rv, r, hmatch, heq, hr => by
       simp only [List.cons_append, List.cons.injEq] at heq
       rcases heq with ⟨rfl, htl⟩
       cases stmt with
@@ -1025,7 +1037,7 @@ theorem symRankEventsOfStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadC
                 intro v; unfold RegFile.set; rw [getVar_setVar]
                 by_cases hv : (v == dst) = true <;> simp [hv, SymVal.matchesVal]; exact hmatch v
               obtain ⟨rev, hmem, hp, hrEq⟩ := symRankEventsOfStmts_correct f env t havoc pCond term
-                rest tl sfx (regs.set dst .unk) (sregs.setVar dst .unk) phase rv r hnext htl (by simpa [execStmts] using hr)
+                rest tl sfx (regs.set dst .unk) (sregs.setVar dst .unk) phases rv r hnext htl (by simpa [execStmts] using hr)
               exact ⟨rev, hmem, hp, hrEq⟩
           | loadTmemBase ptr cols =>
               have hnext : ∀ v, ((sregs.setVar dst (.tmemPtr cols (.const 0))).getVar v).matchesVal env t havoc
@@ -1033,26 +1045,30 @@ theorem symRankEventsOfStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadC
                 intro v; unfold RegFile.set; rw [getVar_setVar]
                 by_cases hv : (v == dst) = true <;> simp [hv, SymVal.matchesVal, SymInt.eval]; exact hmatch v
               obtain ⟨rev, hmem, hp, hrEq⟩ := symRankEventsOfStmts_correct f env t havoc pCond term
-                rest tl sfx (regs.set dst (.tmemPtr cols 0)) (sregs.setVar dst (.tmemPtr cols (.const 0))) phase rv r hnext htl (by simpa [execStmts] using hr)
+                rest tl sfx (regs.set dst (.tmemPtr cols 0)) (sregs.setVar dst (.tmemPtr cols (.const 0))) phases rv r hnext htl (by simpa [execStmts] using hr)
               exact ⟨rev, hmem, hp, hrEq⟩
           | copy _ | constInt _ _ | constBool _ | sreg _ | index1D | coord2DU32 | paramScalar _ | slicePtr _
           | sliceLen _ | sharedBase _ | binOp _ _ _ _ | checkedOvf _ _ _ _ | cmpOp _ _ _ | notBool _ | intCast _ _
           | ptrOffset _ _ | mbarTryWait _ _ _ | cvtaShared _ | opaqueUint _ _ | ctaUint1 _ _ _ | ctaConst | ctaUnary _ | ctaBin _ _ | opaqueVal =>
               obtain ⟨rev, hmem, hp, hrEq⟩ := symRankEventsOfStmts_correct f env t havoc pCond term
-                rest tl sfx _ _ phase rv r hnextGen htl (by simpa [execStmts] using hr)
+                rest tl sfx _ _ phases rv r hnextGen htl (by simpa [execStmts] using hr)
               exact ⟨rev, hmem, hp, hrEq⟩
       | clusterRankCheck rv0 =>
           obtain ⟨rev, hmem, hp, hrEq⟩ := symRankEventsOfStmts_correct f env t havoc pCond term
-            rest tl sfx regs sregs phase rv r hmatch htl (by simpa [execStmts] using hr)
+            rest tl sfx regs sregs phases rv r hmatch htl (by simpa [execStmts] using hr)
           exact ⟨rev, List.Mem.tail _ hmem, hp, hrEq⟩
       | store _ _ | barrierSlotCheck _ | assertCond _ _ | mbarArrive _ _ _ | mbarArriveExpectTx _ _ _
       | tmaCopyG2S _ _ _ _ | tmemAlloc _ _ | smemDescRead _ _ | tmemAccess _ _ _ _ =>
           obtain ⟨rev, hmem, hp, hrEq⟩ := symRankEventsOfStmts_correct f env t havoc pCond term
-            rest tl sfx regs sregs phase rv r hmatch htl (by simpa [execStmts] using hr)
+            rest tl sfx regs sregs phases rv r hmatch htl (by simpa [execStmts] using hr)
           exact ⟨rev, hmem, hp, hrEq⟩
       | syncThreads =>
           obtain ⟨rev, hmem, hp, hrEq⟩ := symRankEventsOfStmts_correct f env t havoc pCond term
-            rest tl sfx regs sregs (phase + 1) rv r hmatch htl (by simpa [execStmts] using hr)
+            rest tl sfx regs sregs (phases.1 + 1, phases.2) rv r hmatch htl (by simpa [execStmts] using hr)
+          exact ⟨rev, hmem, hp, hrEq⟩
+      | syncWarp =>
+          obtain ⟨rev, hmem, hp, hrEq⟩ := symRankEventsOfStmts_correct f env t havoc pCond term
+            rest tl sfx regs sregs (phases.1, phases.2 + 1) rv r hmatch htl (by simpa [execStmts] using hr)
           exact ⟨rev, hmem, hp, hrEq⟩
 
 /-- Collect all `SymRankEvent`s across reachable blocks in `tbl`. -/
@@ -1081,10 +1097,10 @@ theorem vcNoOobClusterRank_of_table {f : MirFunc} {tbl : List SymBlockInv}
         (rev.pathCond.holds env t havoc →
          symRankInBounds rev env t havoc f.clusterDimX) ∧ acc) True) :
     MirNoOobClusterRank f := by
-  intro env t b phase regs hIn hTh hreach pfx sfx rankVar r hstmts hr -- Step 1: Pick any reachable `clusterRankCheck rankVar`
-  obtain ⟨hb, hrch, havoc, hpc, _, hm⟩ := symReachable_sound hvalid hIn hreach -- Step 2: Obtain block `b`'s symbolic invariant match
+  intro env t b phases regs hIn hTh hreach pfx sfx rankVar r hstmts hr -- Step 1: Pick any reachable `clusterRankCheck rankVar`
+  obtain ⟨hb, hrch, havoc, hpc, _, hm⟩ := symReachable_sound hvalid hIn hTh hreach -- Step 2: Obtain block `b`'s symbolic invariant match
   obtain ⟨rev, hrevMem, hpce, hrEq⟩ := symRankEventsOfStmts_correct f env t havoc
-    (tbl.getD b {}).effCond (f.blockAt b).term (f.blockAt b).stmts pfx sfx regs (tbl.getD b {}).regs phase rankVar r hm hstmts hr
+    (tbl.getD b {}).effCond (f.blockAt b).term (f.blockAt b).stmts pfx sfx regs (tbl.getD b {}).regs phases rankVar r hm hstmts hr
   have hfMem : rev ∈ revs := by                             -- Step 3: Show `rev` belongs to `symRankEvents`
     rw [← hevs, ← hranks]
     unfold collectSymRankEvents
@@ -1130,7 +1146,7 @@ def findBlockGlobalWrite (f : MirFunc) (paramId : Nat) (pCond : SymBool) (sregs 
         | _, _ => none
       (r', wOpt, curA)
   | .store ptr _ :: rest =>
-      let sev := symSinglePtrEvent pCond .any true (sregs.getVar ptr)
+      let sev := symSinglePtrEvent pCond (.any, .any) true (sregs.getVar ptr)
       let cur := if sev.space == .global && sev.bufId == paramId then sev.indexOpt else none
       let (r', later, aOpt) := findBlockGlobalWrite f paramId pCond sregs rest
       (r', cur.orElse (fun _ => later), aOpt)
@@ -1142,17 +1158,17 @@ def findBlockGlobalWrite (f : MirFunc) (paramId : Nat) (pCond : SymBool) (sregs 
     write `MemEvent` to `paramId` whenever `some idxSym` is returned. -/
 theorem findBlockGlobalWrite_sound (f : MirFunc) (paramId : Nat) (env : InputEnv) (t : ThreadCtx)
     (havoc : Nat → Nat) (pCond : SymBool) (hpc : pCond.eval env t havoc = true) (term : Terminator) :
-    ∀ stmts : List Stmt, ∀ regs : RegFile, ∀ sregs : SymRegList, ∀ phase : Nat,
+    ∀ stmts : List Stmt, ∀ regs : RegFile, ∀ sregs : SymRegList, ∀ phases : Nat × Nat,
       (∀ v, (sregs.getVar v).matchesVal env t havoc (regs v)) →
       (∀ v, ((findBlockGlobalWrite f paramId pCond sregs stmts).1.getVar v).matchesVal env t havoc
-              ((execStmts f env t regs phase term stmts).1 v)) ∧
+              ((execStmts f env t regs phases term stmts).1 v)) ∧
       (∀ aSym : SymBool, (findBlockGlobalWrite f paramId pCond sregs stmts).2.2 = some aSym →
-        aSym.eval env t havoc = true → stmtsNoTrap f env t regs phase term stmts = true) ∧
+        aSym.eval env t havoc = true → stmtsNoTrap f env t regs phases term stmts = true) ∧
       (∀ idxSym : SymInt, (findBlockGlobalWrite f paramId pCond sregs stmts).2.1 = some idxSym →
-        ∃ ev ∈ (execStmts f env t regs phase term stmts).2.2.1,
+        ∃ ev ∈ (execStmts f env t regs phases term stmts).2.2.1,
           ev.isWrite = true ∧ ev.space = .global ∧ ev.bufId = paramId ∧ ev.index = idxSym.eval env t havoc)
   | [], _, _, _, hmatch => ⟨hmatch, fun _ _ _ => rfl, fun _ h => by contradiction⟩ -- Base case: empty block
-  | stmt :: rest, regs, sregs, phase, hmatch => by
+  | stmt :: rest, regs, sregs, phases, hmatch => by
       cases stmt with                                         -- Step through the head statement `stmt`
       | assign dst rhs =>
           have hnextGen : ∀ v, ((sregs.setVar dst (symEvalRhs f sregs rhs)).getVar v).matchesVal env t havoc
@@ -1166,7 +1182,7 @@ theorem findBlockGlobalWrite_sound (f : MirFunc) (paramId : Nat) (env : InputEnv
               have hnext : ∀ v, ((sregs.setVar dst .unk).getVar v).matchesVal env t havoc ((regs.set dst .unk) v) := by
                 intro v; unfold RegFile.set; rw [getVar_setVar]
                 by_cases hv : (v == dst) = true <;> simp [hv, SymVal.matchesVal]; exact hmatch v
-              obtain ⟨hr, hnt, hw⟩ := findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest (regs.set dst .unk) (sregs.setVar dst .unk) phase hnext
+              obtain ⟨hr, hnt, hw⟩ := findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest (regs.set dst .unk) (sregs.setVar dst .unk) phases hnext
               exact ⟨hr, hnt, fun idxSym hs => by
                 obtain ⟨ev, hev, hprops⟩ := hw idxSym hs
                 exact ⟨ev, List.mem_append_right _ hev, hprops⟩⟩
@@ -1175,17 +1191,17 @@ theorem findBlockGlobalWrite_sound (f : MirFunc) (paramId : Nat) (env : InputEnv
                   ((regs.set dst (.tmemPtr cols 0)) v) := by
                 intro v; unfold RegFile.set; rw [getVar_setVar]
                 by_cases hv : (v == dst) = true <;> simp [hv, SymVal.matchesVal, SymInt.eval]; exact hmatch v
-              obtain ⟨hr, hnt, hw⟩ := findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest (regs.set dst (.tmemPtr cols 0)) (sregs.setVar dst (.tmemPtr cols (.const 0))) phase hnext
+              obtain ⟨hr, hnt, hw⟩ := findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest (regs.set dst (.tmemPtr cols 0)) (sregs.setVar dst (.tmemPtr cols (.const 0))) phases hnext
               exact ⟨hr, hnt, fun idxSym hs => by
                 obtain ⟨ev, hev, hprops⟩ := hw idxSym hs
                 exact ⟨ev, List.mem_append_right _ hev, hprops⟩⟩
           | copy _ | constInt _ _ | constBool _ | sreg _ | index1D | coord2DU32 | paramScalar _ | slicePtr _
           | sliceLen _ | sharedBase _ | binOp _ _ _ _ | checkedOvf _ _ _ _ | cmpOp _ _ _ | notBool _ | intCast _ _
           | ptrOffset _ _ | mbarTryWait _ _ _ | cvtaShared _ | opaqueUint _ _ | ctaUint1 _ _ _ | ctaConst | ctaUnary _ | ctaBin _ _ | opaqueVal =>
-              exact findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest _ _ phase hnextGen
+              exact findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest _ _ phases hnextGen
       | assertCond aid cond =>
           obtain ⟨hr, hnt, hw⟩ := findBlockGlobalWrite f paramId pCond sregs rest |> fun _ =>
-            findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest regs sregs phase hmatch
+            findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest regs sregs phases hmatch
           refine ⟨hr, fun aSym ha hev => ?_, hw⟩
           dsimp only [findBlockGlobalWrite] at ha
           have hmc := hmatch cond
@@ -1201,10 +1217,10 @@ theorem findBlockGlobalWrite_sound (f : MirFunc) (paramId : Nat) (env : InputEnv
           rw [hmc]
           simpa using hnt restSym hrestA hrestTrue
       | store ptr val =>
-          obtain ⟨hr, hnt, hw⟩ := findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest regs sregs phase hmatch
+          obtain ⟨hr, hnt, hw⟩ := findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest regs sregs phases hmatch
           refine ⟨hr, hnt, fun idxSym hs => ?_⟩
           dsimp only [findBlockGlobalWrite] at hs
-          let sev := symSinglePtrEvent pCond .any true (sregs.getVar ptr)
+          let sev := symSinglePtrEvent pCond (.any, .any) true (sregs.getVar ptr)
           cases hcur : (if sev.space == .global && sev.bufId == paramId then sev.indexOpt else none) with
           | none =>
               rw [hcur] at hs
@@ -1247,14 +1263,16 @@ theorem findBlockGlobalWrite_sound (f : MirFunc) (paramId : Nat) (env : InputEnv
                   simp only [sev, symSinglePtrEvent, hspv] at hcur
                   split at hcur <;> contradiction
       | syncThreads =>
-          exact findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest regs sregs (phase + 1) hmatch
+          exact findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest regs sregs (phases.1 + 1, phases.2) hmatch
+      | syncWarp =>
+          exact findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest regs sregs (phases.1, phases.2 + 1) hmatch
       | barrierSlotCheck _ | tmaCopyG2S _ _ _ _ | tmemAlloc _ _ | smemDescRead _ _ =>
-          obtain ⟨hr, hnt, hw⟩ := findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest regs sregs phase hmatch
+          obtain ⟨hr, hnt, hw⟩ := findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest regs sregs phases hmatch
           exact ⟨hr, hnt, fun idxSym hs => by
             obtain ⟨ev, hev, hprops⟩ := hw idxSym hs
             exact ⟨ev, List.mem_append_right _ hev, hprops⟩⟩
       | clusterRankCheck _ | mbarArrive _ _ _ | mbarArriveExpectTx _ _ _ | tmemAccess _ _ _ _ =>
-          exact findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest regs sregs phase hmatch
+          exact findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest regs sregs phases hmatch
 
 /-- Symbolic leaf collected from entry block `0` for `MirWritesAllElems`:
     `writeIdxOpt = some idxSym` when the path wrote `paramId` at `idxSym`, or `none` when it exited without writing. -/
@@ -1309,8 +1327,8 @@ def collectWriteLeaves (f : MirFunc) (paramId : Nat) :
     `leaf.assertsCond` holds) witnesses a trap-free `EmitsTrapFreeEvent` global write to `paramId`. -/
 theorem collectWriteLeaves_sound (f : MirFunc) (paramId : Nat) (env : InputEnv) (t : ThreadCtx)
     (havoc : Nat → Nat) :
-    ∀ (fuel b phase : Nat) (pCond aAcc : SymBool) (regs : RegFile) (sregs : SymRegList) (leaves : List SymWriteLeaf),
-      (aAcc.eval env t havoc = true → ReachableTrapFree f env t b regs phase) →
+    ∀ (fuel b : Nat) (phases : Nat × Nat) (pCond aAcc : SymBool) (regs : RegFile) (sregs : SymRegList) (leaves : List SymWriteLeaf),
+      (aAcc.eval env t havoc = true → ReachableTrapFree f env t b regs phases) →
       pCond.eval env t havoc = true →
       (∀ v, (sregs.getVar v).matchesVal env t havoc (regs v)) →
       collectWriteLeaves f paramId fuel b pCond aAcc sregs = some leaves →
@@ -1321,12 +1339,12 @@ theorem collectWriteLeaves_sound (f : MirFunc) (paramId : Nat) (env : InputEnv) 
             ∃ ev : MemEvent, EmitsTrapFreeEvent f env t ev ∧
               ev.isWrite = true ∧ ev.space = .global ∧ ev.bufId = paramId ∧ ev.index = idxSym.eval env t havoc)
   | 0, _, _, _, _, _, _, _, _, _, _, hcol => by contradiction  -- Exhausted fuel returns `none`, contradiction
-  | fuel + 1, b, phase, pCond, aAcc, regs, sregs, leaves, hreach, hpc, hmatch, hcol => by
+  | fuel + 1, b, phases, pCond, aAcc, regs, sregs, leaves, hreach, hpc, hmatch, hcol => by
       dsimp only [collectWriteLeaves] at hcol                 -- Unfold one step of `collectWriteLeaves`
       by_cases hge : b ≥ f.blocks.length
       · rw [if_pos hge] at hcol; contradiction                -- Out-of-range block index fails closed
       · rw [if_neg hge] at hcol
-        obtain ⟨hmOut, hntOut, hwOut⟩ := findBlockGlobalWrite_sound f paramId env t havoc pCond hpc (f.blockAt b).term (f.blockAt b).stmts regs sregs phase hmatch
+        obtain ⟨hmOut, hntOut, hwOut⟩ := findBlockGlobalWrite_sound f paramId env t havoc pCond hpc (f.blockAt b).term (f.blockAt b).stmts regs sregs phases hmatch
         cases ha : (findBlockGlobalWrite f paramId pCond sregs (f.blockAt b).stmts).2.2 with
         | none => rw [ha] at hcol; contradiction              -- Unresolved assert condition fails closed
         | some blkA =>
@@ -1339,7 +1357,7 @@ theorem collectWriteLeaves_sound (f : MirFunc) (paramId : Nat) (env : InputEnv) 
                 intro haAll i0 hi0; injection hi0 with hi; subst hi
                 obtain ⟨haAccT, hblkAT⟩ := symBool_conj_true_elim haAll
                 obtain ⟨ev, hev, hprops⟩ := hwOut idxSym hw
-                exact ⟨ev, ⟨b, phase, regs, hreach haAccT, hntOut blkA ha hblkAT, hev⟩, hprops⟩
+                exact ⟨ev, ⟨b, phases, regs, hreach haAccT, hntOut blkA ha hblkAT, hev⟩, hprops⟩
             | none =>                                         -- Case 2: Block `b` did not write; follow terminator
                 rw [hw] at hcol; dsimp only at hcol
                 cases hterm : (f.blockAt b).term with
@@ -1357,7 +1375,7 @@ theorem collectWriteLeaves_sound (f : MirFunc) (paramId : Nat) (env : InputEnv) 
                           by_cases hd : dst ≥ f.blocks.length
                           · rw [if_pos hd] at hcol; contradiction
                           · exact Nat.lt_of_not_ge hd
-                    cases hex : execStmts f env t regs phase (f.blockAt b).term (f.blockAt b).stmts with
+                    cases hex : execStmts f env t regs phases (f.blockAt b).term (f.blockAt b).stmts with
                     | mk outR restPair =>
                         rcases restPair with ⟨outP, evs, tevs⟩
                         have hmOut' : ∀ v, ((findBlockGlobalWrite f paramId pCond sregs (f.blockAt b).stmts).1.getVar v).matchesVal env t havoc (outR v) := by
@@ -1386,7 +1404,7 @@ theorem collectWriteLeaves_sound (f : MirFunc) (paramId : Nat) (env : InputEnv) 
                       rw [hl1, hl2] at hcol <;> try contradiction
                     rename_i l1 l2
                     injection hcol with hl; subst hl
-                    cases hex : execStmts f env t regs phase (f.blockAt b).term (f.blockAt b).stmts with
+                    cases hex : execStmts f env t regs phases (f.blockAt b).term (f.blockAt b).stmts with
                     | mk outR restPair =>
                         rcases restPair with ⟨outP, evs, tevs⟩
                         have hmOut' : ∀ v, ((findBlockGlobalWrite f paramId pCond sregs (f.blockAt b).stmts).1.getVar v).matchesVal env t havoc (outR v) := by
@@ -1508,7 +1526,7 @@ theorem vcWritesAllElems {f : MirFunc} {paramId : Nat} {leaves : List SymWriteLe
       · trivial
   have hinitM := initialSymRegs_correct f env wt (fun _ => 0) -- Match concrete `initialRegs` with `initialSymRegs`
   obtain ⟨lf, hlfMem, hlfPc, hlfEv⟩ := collectWriteLeaves_sound f paramId env wt (fun _ => 0)
-    f.blocks.length 0 0 (.lit true) (.lit true) (initialRegs f env) (initialSymRegs f) leaves
+    f.blocks.length 0 (0, 0) (.lit true) (.lit true) (initialRegs f env) (initialSymRegs f) leaves
     (fun _ => ReachableTrapFree.entry hblkPos) rfl hinitM hleaves -- Trace `wt` from block `0` to an active `lf ∈ leaves`
   have hp := foldr_and_of_mem _ (foldr_holds_to_eval leaves (hvcWt hwtValid rfl rfl hlinWt)) lf hlfMem hlfPc
   unfold symWriteLeafOblig at hp

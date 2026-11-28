@@ -68,7 +68,7 @@ def mirBindGoal (α : Type) [ToExpr α] : TacticM Unit := withMainContext do
 elab "mir_bind_nat"          : tactic => mirBindGoal Nat
 elab "mir_bind_events"       : tactic => mirBindGoal (List SymMemEvent)
 elab "mir_bind_pairs"        : tactic => mirBindGoal (List (SymMemEvent × SymMemEvent))
-elab "mir_bind_shared_pairs" : tactic => mirBindGoal (List (SymMemEvent × SymMemEvent × Option (SymInt × SymInt)))
+elab "mir_bind_shared_pairs" : tactic => mirBindGoal (List (SymMemEvent × SymMemEvent × Bool × Option (SymInt × SymInt)))
 elab "mir_bind_asserts"      : tactic => mirBindGoal (List SymAssertEvent)
 elab "mir_bind_tmem"         : tactic => mirBindGoal (List SymTmemEvent)
 elab "mir_bind_ranks"        : tactic => mirBindGoal (List SymRankEvent)
@@ -237,18 +237,23 @@ elab "mir_mul_mono" : tactic => withMainContext do
       if acc.any (fun (x, y) => x == a && y == b) then acc else acc.push (a, b)
   let collect (e : Expr) : MetaM Unit := do               -- Walk an expression tree recording unique `*`, `&`, `|`, `^` apps
     e.forEach fun sub => do
-      if sub.isAppOfArity ``HMul.hMul 6 then
-        let args := sub.getAppArgs
-        pushUniq mulRef args[4]! args[5]!
-      else if sub.isAppOfArity ``HAnd.hAnd 6 then
-        let args := sub.getAppArgs
-        pushUniq andRef args[4]! args[5]!
-      else if sub.isAppOfArity ``HOr.hOr 6 then
-        let args := sub.getAppArgs
-        pushUniq orRef args[4]! args[5]!
-      else if sub.isAppOfArity ``HXor.hXor 6 then
-        let args := sub.getAppArgs
-        pushUniq xorRef args[4]! args[5]!
+      if !sub.hasLooseBVars then
+        if sub.isAppOfArity ``HMul.hMul 6 then
+          let args := sub.getAppArgs
+          if !args[4]!.hasLooseBVars && !args[5]!.hasLooseBVars then
+            pushUniq mulRef args[4]! args[5]!
+        else if sub.isAppOfArity ``HAnd.hAnd 6 then
+          let args := sub.getAppArgs
+          if !args[4]!.hasLooseBVars && !args[5]!.hasLooseBVars then
+            pushUniq andRef args[4]! args[5]!
+        else if sub.isAppOfArity ``HOr.hOr 6 then
+          let args := sub.getAppArgs
+          if !args[4]!.hasLooseBVars && !args[5]!.hasLooseBVars then
+            pushUniq orRef args[4]! args[5]!
+        else if sub.isAppOfArity ``HXor.hXor 6 then
+          let args := sub.getAppArgs
+          if !args[4]!.hasLooseBVars && !args[5]!.hasLooseBVars then
+            pushUniq xorRef args[4]! args[5]!
   collect (← instantiateMVars (← getMainTarget))          -- Scan the target proposition
   for decl in (← getLCtx) do                              -- Scan all hypotheses in scope
     if !decl.isImplementationDetail then
@@ -260,11 +265,25 @@ elab "mir_mul_mono" : tactic => withMainContext do
   let proveByOmega (prop : Expr) : TacticM (Option Expr) := do -- Helper: speculatively try proving `prop` with `omega`
     try
       let sg ← mkFreshExprMVar prop
+      let mut mvid := sg.mvarId!
+      let mut dropIds : Array FVarId := #[]
+      for decl in (← mvid.getDecl).lctx do
+        if !decl.isImplementationDetail then
+          let dTy ← instantiateMVars decl.type
+          let mut heavy := dTy.isAppOfArity ``Eq 3 || dTy.isAppOfArity ``Or 2
+          if !heavy then
+            let r ← IO.mkRef false
+            dTy.forEach fun sub => do
+              if sub.isAppOfArity ``ite 5 then r.set true
+            heavy ← r.get
+          if heavy then
+            dropIds := dropIds.push decl.fvarId
+      mvid ← mvid.tryClearMany dropIds
       let saved ← getGoals
-      setGoals [sg.mvarId!]
+      setGoals [mvid]
       evalTactic (← `(tactic| omega))
       setGoals saved
-      pure (some sg)
+      pure (some (← instantiateMVars sg))
     catch _ => pure none
   let mut k := 0
   for i in [:andTerms.size] do                            -- Pass 1 (`a &&& b`): add `a &&& b ≤ a` and `a &&& b ≤ b`
@@ -386,6 +405,90 @@ elab "mir_mul_mono" : tactic => withMainContext do
             else if let some ple ← proveByOmega (← mkAppM ``LE.le #[b1, a2]) then
               k := k + 1; assertFact "hmul" k (← mkAppM ``mul_le_comm_left #[eqAB, ple])
 
+open Lean Elab Tactic Meta in
+/-- Rewrite innermost `% 2^32` / `% 2^64` subterms to identity when `a < 2^w` holds linearly. -/
+elab "mir_word_mod" : tactic => withMainContext do
+  let proveByOmega (prop : Expr) : TacticM (Option Expr) := do
+    try
+      let sg ← mkFreshExprMVar prop
+      let mut mvid := sg.mvarId!
+      let mut dropIds : Array FVarId := #[]
+      for decl in (← mvid.getDecl).lctx do
+        if !decl.isImplementationDetail then
+          let dTy ← instantiateMVars decl.type
+          let mut heavy := dTy.isAppOfArity ``Eq 3 || dTy.isAppOfArity ``Or 2
+          if !heavy then
+            let r ← IO.mkRef false
+            dTy.forEach fun sub => do
+              if sub.isAppOfArity ``ite 5 then r.set true
+            heavy ← r.get
+          if heavy then
+            dropIds := dropIds.push decl.fvarId
+      mvid ← mvid.tryClearMany dropIds
+      let saved ← getGoals
+      setGoals [mvid]
+      evalTactic (← `(tactic| omega))
+      setGoals saved
+      pure (some (← instantiateMVars sg))
+    catch _ => pure none
+  let mut k := 0
+  for _ in [:32] do
+    if (← getGoals).isEmpty then break
+    let modRef ← IO.mkRef (#[] : Array (Expr × Expr))
+    let pushMod (a m : Expr) : IO Unit :=
+      modRef.modify fun acc =>
+        if acc.any (fun (x, y) => x == a && y == m) then acc else acc.push (a, m)
+    let hasIte (root : Expr) : Bool :=
+      let rec go (e : Expr) : Bool :=
+        if e.isAppOfArity ``ite 5 then true
+        else match e with | .app f a => go f || go a | _ => false
+      go root
+    let scanExpr (root : Expr) : MetaM Unit := do
+      root.forEach fun sub => do
+        if !sub.hasLooseBVars && sub.isAppOfArity ``HMod.hMod 6 then
+          let args := sub.getAppArgs
+          let a := args[4]!
+          let m := args[5]!
+          if (m.nat? == some 4294967296 || m.nat? == some 18446744073709551616)
+              && !a.hasLooseBVars && !m.hasLooseBVars then
+            pushMod a m
+    withMainContext do
+      let tgt ← instantiateMVars (← getMainTarget)
+      if !hasIte tgt then scanExpr tgt
+      for decl in (← getLCtx) do
+        let nm := decl.userName.toString
+        if !decl.isImplementationDetail && !(nm.startsWith "hmod_") then
+          let dTy ← instantiateMVars decl.type
+          if !hasIte dTy then
+            scanExpr dTy
+    let cands := (← modRef.get).reverse
+    let mut foundPf : Option (Expr × Expr × Expr) := none
+    for (a, m) in cands do
+      if foundPf.isNone then
+        let pfOpt ← withMainContext do proveByOmega (← mkAppM ``LT.lt #[a, m])
+        if let some pfLt := pfOpt then
+          foundPf := some (a, m, pfLt)
+    if let some (a, m, pfLt) := foundPf then
+      k := k + 1
+      let hName := Name.mkSimple s!"hmod_{k}"
+      let hId := mkIdent hName
+      let g'' ← withMainContext do
+        let pf ← mkAppOptM ``Nat.mod_eq_of_lt #[some a, some m, some pfLt]
+        let g' ← (← getMainGoal).assert hName (← inferType pf) pf
+        let (_, g'') ← g'.intro1P
+        pure g''
+      replaceMainGoal [g'']
+      try evalTactic (← `(tactic| simp (config := { failIfUnchanged := false }) only [$hId:ident])) catch _ => pure ()
+      let decls ← withMainContext do pure (← getLCtx).decls.toList
+      for dOpt in decls do
+        if let some d := dOpt then
+          let nm := d.userName.toString
+          if !d.isImplementationDetail && d.userName != hName && !(nm.startsWith "hmod_") then
+            let dId := mkIdent d.userName
+            try evalTactic (← `(tactic| simp (config := { failIfUnchanged := false }) only [$hId:ident] at $dId:ident)) catch _ => pure ()
+    else
+      break
+
 /-- Classical double-negation elimination as an unconditional equality for `simp only` (`0` typeclass search). -/
 theorem prop_not_not (p : Prop) : (¬¬p) = p := propext Classical.not_not
 
@@ -424,6 +527,7 @@ partial def solveVcGoals (fuel iteFuel : Nat) : TacticM Unit := do
                CudaOxide.Mir.Program.ReqExpr.eval, SymInt.eval, SymBool.holds,
                SymBool.normDisc, extractIteOneCond, SymBool.holdsRaw,
                SymBool.eval, symSpanInBounds, symRankInBounds, symWriteLeafOblig, symPairRaceOblig, symSlotGuardOpt,
+               Nat.reduceLT,
                evalCmpOp_eq_true, evalCmpOp_eq_false, evalCmpProp,
                CudaOxide.Mir.Program.evalBinOp, CudaOxide.Mir.Program.wordMod, Option.getD,
                ↓reduceIte, eq_self, ne_eq, Nat.not_lt_zero,
@@ -450,7 +554,28 @@ partial def solveVcGoals (fuel iteFuel : Nat) : TacticM Unit := do
   catch _ => pure ()
   if (← getGoals).isEmpty then return
   withMainContext do
-    if (← try evalTactic (← `(tactic| omega)); pure true catch _ => pure false) then return -- Step 5: Fast-path linear `omega`
+    let tgtSimp ← instantiateMVars (← getMainTarget)
+    if tgtSimp.isAppOfArity ``And 2 then
+      solveVcGoals (fuel - 1) iteFuel
+      return
+    let hasDeepWordMod (root : Expr) : MetaM Bool := do
+      let cnt ← IO.mkRef (0 : Nat)
+      let has64 ← IO.mkRef false
+      root.forEach fun sub => do
+        if !sub.hasLooseBVars && sub.isAppOfArity ``HMod.hMod 6 then
+          let m := sub.getAppArgs[5]!.nat?
+          if m == some 4294967296 then cnt.modify (· + 1)
+          else if m == some 18446744073709551616 then has64.set true
+      pure ((← has64.get) && (← cnt.get) ≥ 3)
+    let mut needsMod ← hasDeepWordMod tgtSimp
+    if !needsMod then
+      for decl in (← getLCtx) do
+        if !decl.isImplementationDetail && !needsMod then
+          let dTy ← instantiateMVars decl.type
+          if dTy.isAppOfArity ``Eq 3 then
+            needsMod ← hasDeepWordMod dTy
+    if !needsMod then
+      if (← try evalTactic (← `(tactic| omega)); pure true catch _ => pure false) then return -- Step 5: Fast-path linear `omega` before `And` splitting
     for d in (← getLCtx) do                               -- Step 6: Split any `P ∧ Q` hypothesis into separate facts
       if !d.isImplementationDetail then
         let dTy ← whnfR (← instantiateMVars d.type)
@@ -461,51 +586,79 @@ partial def solveVcGoals (fuel iteFuel : Nat) : TacticM Unit := do
             solveVcGoals (fuel - 1) iteFuel
           setGoals []
           return
-    if iteFuel > 0 then                                   -- Step 7: Case-split innermost `if cond then a else b` subterm
-      let findInnerIte (root : Expr) : Option Expr :=
-        let rec go (e : Expr) : Option Expr :=
-          if e.isAppOfArity ``ite 5 then
-            let args := e.getAppArgs
-            (go args[1]!).orElse fun _ =>
-            (go args[3]!).orElse fun _ =>
-            (go args[4]!).orElse fun _ => some args[1]!
+    let findInnerIte (root : Expr) : Option Expr :=
+      let rec go (e : Expr) : Option Expr :=
+        if e.isAppOfArity ``ite 5 then
+          let args := e.getAppArgs
+          (go args[1]!).orElse fun _ =>
+          (go args[3]!).orElse fun _ =>
+          (go args[4]!).orElse fun _ => some args[1]!
+        else
+          match e with
+          | .app f a => (go f).orElse fun _ => go a
+          | _ => none
+      go root
+    let splitIteCond (condExpr : Expr) : TacticM Unit := do
+      let hName := Name.mkSimple s!"hite_{fuel}_{iteFuel}"
+      let hIte := mkIdent hName
+      let (sPos, sNeg) ← (← getMainGoal).byCases condExpr hName
+      let simpExcept (thmStx : TSyntax `Lean.Parser.Tactic.simpLemma) : TacticM Unit := do
+        if (← getGoals).isEmpty then return
+        let decls ← withMainContext do pure (← getLCtx).decls.toList
+        let mut locIds : Array Ident := #[]
+        for dOpt in decls do
+          if let some d := dOpt then
+            if !d.isImplementationDetail && d.userName != hName then
+              locIds := locIds.push (mkIdent d.userName)
+        try
+          if locIds.isEmpty then
+            evalTactic (← `(tactic| simp only [$thmStx, ↓reduceIte, eq_self, Nat.not_lt_zero, and_false, false_and, or_false, false_or, and_true, true_and, or_true, true_or]))
           else
-            match e with
-            | .app f a => (go f).orElse fun _ => go a
-            | _ => none
-        go root
-      let mut iteCondOpt := findInnerIte (← instantiateMVars (← getMainTarget))
-      if iteCondOpt.isNone then
-        for decl in (← getLCtx) do
-          if !decl.isImplementationDetail && iteCondOpt.isNone then
-            iteCondOpt := findInnerIte (← instantiateMVars decl.type)
-      if let some condExpr := iteCondOpt then
-        let hName := Name.mkSimple s!"hite_{fuel}_{iteFuel}"
-        let hIte := mkIdent hName
-        let (sPos, sNeg) ← (← getMainGoal).byCases condExpr hName
-        let simpExcept (thmStx : TSyntax `Lean.Parser.Tactic.simpLemma) : TacticM Unit := do
-          if (← getGoals).isEmpty then return
-          let decls ← withMainContext do pure (← getLCtx).decls.toList
-          let mut locIds : Array Ident := #[]
-          for dOpt in decls do
-            if let some d := dOpt then
-              if !d.isImplementationDetail && d.userName != hName then
-                locIds := locIds.push (mkIdent d.userName)
-          try
-            if locIds.isEmpty then
-              evalTactic (← `(tactic| simp only [$thmStx, ↓reduceIte, eq_self, Nat.not_lt_zero, and_false, false_and, or_false, false_or, and_true, true_and, or_true, true_or]))
-            else
-              evalTactic (← `(tactic| simp only [$thmStx, ↓reduceIte, eq_self, Nat.not_lt_zero, and_false, false_and, or_false, false_or, and_true, true_and, or_true, true_or] at $locIds* ⊢))
-          catch _ => pure ()
-        setGoals [sPos.mvarId]
-        simpExcept (← `(Lean.Parser.Tactic.simpLemma| eq_true $hIte:ident))
-        solveVcGoals (fuel - 1) (iteFuel - 1)
-        setGoals [sNeg.mvarId]
-        simpExcept (← `(Lean.Parser.Tactic.simpLemma| eq_false $hIte:ident))
-        solveVcGoals (fuel - 1) (iteFuel - 1)
-        setGoals []
+            evalTactic (← `(tactic| simp only [$thmStx, ↓reduceIte, eq_self, Nat.not_lt_zero, and_false, false_and, or_false, false_or, and_true, true_and, or_true, true_or] at $locIds* ⊢))
+        catch _ => pure ()
+      setGoals [sPos.mvarId]
+      simpExcept (← `(Lean.Parser.Tactic.simpLemma| eq_true $hIte:ident))
+      solveVcGoals (fuel - 1) (iteFuel - 1)
+      setGoals [sNeg.mvarId]
+      simpExcept (← `(Lean.Parser.Tactic.simpLemma| eq_false $hIte:ident))
+      solveVcGoals (fuel - 1) (iteFuel - 1)
+      setGoals []
+    if iteFuel > 0 then                                   -- Step 7: Split `ite` in target first before running `mir_mul_mono`
+      if let some condExpr := findInnerIte (← instantiateMVars (← getMainTarget)) then
+        splitIteCond condExpr
         return
-    for d in (← getLCtx) do                               -- Step 8: Case-split any `P ∨ Q` disjunction hypothesis
+    if needsMod then                                      -- Step 8: Fast modulo-rewrite path (avoids splitting context `ite`s)
+      let tryPrunedMulOmega : TacticM Bool := do
+        let saved ← saveState
+        try
+          let mut g ← getMainGoal
+          let mut dropIds : Array FVarId := #[]
+          for decl in (← g.getDecl).lctx do
+            if !decl.isImplementationDetail then
+              let dTy ← instantiateMVars decl.type
+              let hasIteRef ← IO.mkRef (dTy.isAppOfArity ``Or 2)
+              dTy.forEach fun sub => do
+                if sub.isAppOfArity ``ite 5 then hasIteRef.set true
+              if (← hasIteRef.get) then
+                dropIds := dropIds.push decl.fvarId
+          if !dropIds.isEmpty then
+            g ← g.tryClearMany dropIds
+            replaceMainGoal [g]
+          evalTactic (← `(tactic| (mir_word_mod; mir_mul_mono; omega)))
+          pure true
+        catch _ =>
+          restoreState saved
+          pure false
+      if (← tryPrunedMulOmega) then return
+    if iteFuel > 0 then                                   -- Step 9: Case-split `ite` in hypotheses when needed
+      let mut iteCondOpt : Option Expr := none
+      for decl in (← getLCtx) do
+        if !decl.isImplementationDetail && iteCondOpt.isNone then
+          iteCondOpt := findInnerIte (← instantiateMVars decl.type)
+      if let some condExpr := iteCondOpt then
+        splitIteCond condExpr
+        return
+    for d in (← getLCtx) do                               -- Step 10: Fallback `P ∨ Q` disjunction split
       if !d.isImplementationDetail then
         let dTy ← whnfR (← instantiateMVars d.type)
         if dTy.isAppOfArity ``Or 2 then
@@ -515,8 +668,8 @@ partial def solveVcGoals (fuel iteFuel : Nat) : TacticM Unit := do
             solveVcGoals (fuel - 1) iteFuel
           setGoals []
           return
-    if (← try evalTactic (← `(tactic| (mir_mul_mono; omega))); pure true catch _ => pure false) then return -- Step 9: Nonlinear bounds + `omega`
-    evalTactic (← `(tactic| omega))                       -- Final step: run `omega` directly so any failure prints a clean counterexample
+    if (← try evalTactic (← `(tactic| (mir_mul_mono; omega))); pure true catch _ => pure false) then return
+    evalTactic (← `(tactic| (mir_word_mod; mir_mul_mono; omega)))
 
 /-- Invoke `solveVcGoals` with structural fuel `512` and `ite` case-split fuel `16`. -/
 elab "mir_solve_vc" : tactic => solveVcGoals 512 16
@@ -528,7 +681,7 @@ elab "mir_solve_vc" : tactic => solveVcGoals 512 16
 macro "mir_vc" f:ident : tactic =>
   `(tactic| (
       unfold CudaOxide.Mir.Program.MirFunc.validInput CudaOxide.Mir.Program.MirFunc.validThread
-      dsimp only [$f:ident, CudaOxide.Mir.Program.reqRelsHold, CudaOxide.Mir.Program.ReqRel.holds, CudaOxide.Mir.Program.ReqExpr.checkedOk, CudaOxide.Mir.Program.ReqExpr.eval, List.foldr, List.all, Option.isNone, buildWriteWitnessSym, symSlotGuardOpt, symPairRaceOblig, Option.getD]
+      dsimp only [$f:ident, CudaOxide.Mir.Program.reqRelsHold, CudaOxide.Mir.Program.ReqRel.holds, CudaOxide.Mir.Program.ReqExpr.checkedOk, CudaOxide.Mir.Program.ReqExpr.eval, List.foldr, List.all, Option.isNone, buildWriteWitnessSym, symSlotGuardOpt, symPairRaceOblig, Option.getD, eq_self, Bool.false_eq_true, ↓reduceIte]
       mir_solve_vc))
 
 end CudaOxide.Proofs.Program

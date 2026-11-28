@@ -169,8 +169,10 @@ def GuardExpr.hasSubwarpDivergence (g : GuardExpr) : Bool :=
   | .tr | .warpDiv => false
   | .lt .tx (.const k) | .ge .tx (.const k) => k % 32 != 0
   | .eq (.div .tx 32) (.const _) | .eq (.const _) (.div .tx 32) => false
+  | .ne (.div .tx 32) (.const _) | .ne (.const _) (.div .tx 32) => false
   | .lt (.div .tx 32) (.const _) | .ge (.div .tx 32) (.const _) => false
   | .eq .clusterCtaidX (.const _) | .eq (.const _) .clusterCtaidX => false
+  | .ne .clusterCtaidX (.const _) | .ne (.const _) .clusterCtaidX => false
   | .and p q => p.hasSubwarpDivergence || q.hasSubwarpDivergence
   | _ => true
 
@@ -279,6 +281,8 @@ inductive BranchCond where
 inductive CfgOp where
   /-- CTA-wide `thread::sync_threads()` (`nvvm.barrier0`). -/
   | syncThreads
+  /-- Intra-warp `warp::sync_mask(mask)` (`nvvm.bar_warp_sync`, `fullMask` = `mask == 0xffff_ffff`). -/
+  | syncWarp (fullMask : Bool := true)
   /-- Cluster-wide `cluster::cluster_sync()` (`nvvm.cluster_sync` / `nvvm.cluster_barrier`). -/
   | clusterSync
   /-- Generic-proxy shared-memory load on `sharedId`. -/
@@ -718,6 +722,11 @@ def stepOp (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr) (inCycle
             | other => other
           unFencedTmemLoad := if cleanDone then false else st.unFencedTmemLoad
           syncedSinceTmemUse := cleanDone }
+  | .syncWarp fullMask =>
+      if !fullMask || !blkGuard.isWarpConvergent cfg.blockDimX cfg.blockDimY then
+        none
+      else
+        some st
   | .clusterSync =>
       if cfg.clusterDimX ≤ 1 then
         none
@@ -1143,6 +1152,11 @@ def syncBarrierBlocks (cfg : ControlFlowCfg) : List Nat :=
   (List.range cfg.blocks.length).filter fun b =>
     (cfg.blockAt b).ops.any fun op => op == .syncThreads || op == .clusterSync
 
+/-- Indices of all basic blocks in `cfg` containing at least one `.syncWarp` barrier. -/
+def warpSyncBlocks (cfg : ControlFlowCfg) : List Nat :=
+  (List.range cfg.blocks.length).filter fun b =>
+    (cfg.blockAt b).ops.any fun | .syncWarp _ => true | _ => false
+
 /-- Indices of all basic blocks in `cfg` containing `.clusterSync`. -/
 def clusterSyncBlocks (cfg : ControlFlowCfg) : List Nat :=
   (List.range cfg.blocks.length).filter fun b =>
@@ -1186,10 +1200,12 @@ def signaledMbarReadyBlocks (cfg : ControlFlowCfg) : List Nat :=
       | _ => none
   raw.filter fun dst => activeGuardAt cfg dst == .tr
 
-/-- Total number of `sync_threads()` / `cluster_sync()` operations plus signaled `mbarrier` wait edges in `cfg`. -/
+/-- Total number of `sync_threads()` / `cluster_sync()` / `sync_mask()` operations plus signaled `mbarrier` wait edges in `cfg`. -/
 def countEffectiveBarriers (cfg : ControlFlowCfg) : Nat :=
   let syncCount := (cfg.blocks.map fun blk =>
-    (blk.ops.filter fun op => op == .syncThreads || op == .clusterSync).length).sum
+    (blk.ops.filter fun
+      | .syncThreads | .clusterSync | .syncWarp _ => true
+      | _ => false).length).sum
   let sig := signaledBarrierIds cfg
   let mbarCount := (cfg.blocks.flatMap fun blk =>
     blk.succs.filterMap fun
@@ -1284,17 +1300,26 @@ def exposedSharedReadBlocks (cfg : ControlFlowCfg) (s : Nat) : List Nat :=
 /-- Non-`.unknown`-guarded blocks in `cfg` that initialize `SharedArray` `s`. -/
 def sharedWriterBlocks (cfg : ControlFlowCfg) (s : Nat) : List Nat :=
   (List.range cfg.blocks.length).filter fun b =>
-    !(activeGuardAt cfg b).hasUnknown &&
-    (cfg.blockAt b).ops.any fun
+    ((cfg.blockAt b).ops.any fun
       | .sharedWrite sid | .tmaCopyG2S sid _ _ _ | .clcTryCancel sid _ _ | .tmemAlloc sid _ _ => sid == s
-      | _ => false
+      | _ => false) &&
+    !(activeGuardAt cfg b).hasUnknown
+
+/-- Warp-convergent blocks (`isWarpConvergent`) in `cfg` that directly write `SharedArray` `s`. -/
+def warpDirectWriterBlocks (cfg : ControlFlowCfg) (s : Nat) : List Nat :=
+  (List.range cfg.blocks.length).filter fun b =>
+    ((cfg.blockAt b).ops.any fun
+      | .sharedWrite sid | .tmaCopyG2S sid _ _ _ | .clcTryCancel sid _ _ | .tmemAlloc sid _ _ => sid == s
+      | _ => false) &&
+    (activeGuardAt cfg b).isWarpConvergent cfg.blockDimX cfg.blockDimY
 
 /-- Blocks guaranteeing `SharedArray` `s` has been written before an upward-exposed `.sharedRead s`
-    (either a direct non-`.unknown` writer block, a CTA barrier reachable after a writer, or an
-    `.mbarReady` completion edge when `s` has a writer). -/
+    (either a direct warp-convergent writer block strictly dominating the read, or for unconditional
+    CTA writers, a subsequent CTA barrier or `.mbarReady` completion edge). -/
 def sharedInitDominators (cfg : ControlFlowCfg) (s : Nat) : List Nat :=
   let writers := sharedWriterBlocks cfg s
-  if writers.isEmpty then []
+  let directWriters := warpDirectWriterBlocks cfg s
+  if writers.isEmpty then directWriters
   else
     let syncsAfterWrite := (syncBarrierBlocks cfg).filter fun sb =>
       writers.any fun w => canReachAvoiding cfg 0 w [] && canReachAvoiding cfg w sb []
@@ -1303,7 +1328,7 @@ def sharedInitDominators (cfg : ControlFlowCfg) (s : Nat) : List Nat :=
       blk.succs.filterMap fun
         | (.mbarReady bid _ wk, dst) => if bid ∈ sig && wk != .clusterRelaxed then some dst else none
         | _ => none
-    writers ++ syncsAfterWrite ++ readyBlks
+    directWriters ++ writers ++ syncsAfterWrite ++ readyBlks
 
 /-- Pairs `(s, rBlk)` where `rBlk` has an upward-exposed `.sharedRead s`. -/
 def sharedReadSites (cfg : ControlFlowCfg) : List (Nat × Nat) :=

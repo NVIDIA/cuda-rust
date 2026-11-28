@@ -3,6 +3,7 @@
 
 /// 16-byte aligned 4-word (`128`-bit) register packet used by the epilogue to emit
 /// a single vectorized `st.global.v4.b32` (`STG.E.128`) store of 8 packed `bf16` values.
+#[derive(Clone, Copy)]
 #[repr(C, align(16))]
 struct U32x4(
     /// First pair of `bf16` output elements (`cols + 0..1`).
@@ -94,6 +95,39 @@ const TILE_KIND_N192: u32 = 1;
 /// Tile kind tag (`2`) for a wave-tail `M256 × N224` cooperative output tile (`112` N-columns per CTA).
 /// Used at `8192³` and `16384³` where converting `7 × 256` heptets into `8 × 224` tiles fills all `74` CTA pairs.
 const TILE_KIND_N224: u32 = 2;
+
+/// Number of B200 Streaming Multiprocessors (`148` SMs = `2 × 74`).
+/// Drives 1-CTA wave-tail tile balancing in `gemm_sol_short_k_m128n256` (`592 = 4 × 148` work items).
+const B200_SMS: u32 = 148;
+
+/// Number of shared-memory TMA pipeline stages (`4`) in `gemm_sol_short_k_m128n256`.
+/// Reserves `4 × 48 KiB = 192 KiB` (`16 KiB A + 32 KiB B`), leaving `36 KiB` free for `18 KiB` `SMEM_EPI`.
+const SHORT_SMEM_STAGES: usize = 4;
+
+/// Per-stage `B` tile size (`256 × 64 × 2 = 32,768` bytes = `32 KiB`) in `gemm_sol_short_k_m128n256`.
+/// Holds up to `4 × 64` (`N256`) or `3 × 64` (`N192`) `SWIZZLE_128B` `f16` columns per `K = 64` stage.
+const SHORT_B_STAGE_BYTES: usize = 256 * 64 * 2;
+
+/// Byte offset (`4 × 16,384 = 65,536`) where the 4-stage `B` ring begins inside `gemm_sol_short_k_m128n256`.
+/// Follows immediately after the `4 × 16 KiB` `A` stages.
+const SHORT_B_SMEM_OFFSET: usize = SHORT_SMEM_STAGES * SMEM_STAGE_BYTES;
+
+/// Total TMA shared-memory ring size (`65,536 + 131,072 = 196,608` bytes = `192 KiB`) in `gemm_sol_short_k_m128n256`.
+/// Combined with `18 KiB` `SMEM_EPI` (`210 KiB` total), fits cleanly inside `228 KiB` per B200 SM.
+const SHORT_SMEM_TOTAL_BYTES: usize =
+    SHORT_B_SMEM_OFFSET + SHORT_SMEM_STAGES * SHORT_B_STAGE_BYTES;
+
+/// Padded row stride in `U32x4` (`16`-byte) packets (`9` packets = `8` data + `1` skew = `64` BF16s).
+/// Shifts each row by `4` SMEM banks (`16` bytes) so `STS.128` and `LDS.128` have `0` bank conflicts.
+const EPI_ROW_PKTS: usize = 9;
+
+/// Per-warp buffer size in `U32x4` packets (`32` rows x `9` packets = `288` packets = `4,608` bytes).
+/// Gives each of `Warps 0..3` a disjoint `4.5 KiB` bank-conflict-free `64`-column staging slice.
+const EPI_WARP_PKTS: usize = 32 * EPI_ROW_PKTS;
+
+/// Total `U32x4` capacity (`4 x 288 = 1,152` packets = `18,432` bytes = `18 KiB`) of `SMEM_EPI`.
+/// Converts `32x32b.x64` zero-shuffle register tiles into `128`-byte (`1` full L2 cache line/row) coalesced bursts.
+const EPI_TOTAL_PKTS: usize = 4 * EPI_WARP_PKTS;
 
 /// Device kernel module containing the `M256×N256` (`4096³`/`8192³`) and `M512×N256` (`16384³`)
 /// Blackwell speed-of-light (`sm_100a`) GEMM entries.
@@ -1408,6 +1442,454 @@ mod kernels {
                 tcgen05_dealloc_cg2(tmem_addr, 512);
             }
             cluster::cluster_sync();
+        }
+    }
+
+    /// Persistent 1-CTA (`cta_group::1`) Blackwell GEMM kernel specialized for epilogue-bound
+    /// short-`K` shapes (`M128xN256` + `M128xN192` wave-tail balancing, `K <= 512`, `grid = 148` CTAs).
+    ///
+    /// Eliminates cross-SM `cluster_sync()`, `CLC` GigaThread round-trips, and `16x256b` warp butterfly
+    /// shuffles by combining a `4`-stage TMA ring (`192 KiB`), a `2`-stage `TMEM` ring (`2 x 256` cols),
+    /// zero-shuffle `tcgen05_ld_32x32b_x64_raw` loads, and per-warp `18 KiB` `SMEM_EPI` (`32 x 9` `U32x4`)
+    /// into `128`-byte (`1` full L2 cache line per row) coalesced global `STG.E.128` bursts:
+    ///
+    /// ```text
+    /// [148 Persistent CTAs] ──► [4-Stage TMA (192 KiB)] ──► [2-Stage TMEM (2x256)] ──► [32x32b.x64 -> SMEM_EPI -> 128B STG.E.128]
+    /// ```
+    ///
+    /// # Safety
+    ///
+    /// Requires `sm_100a` (`grid = (148, 1, 1)`, `block = (192, 1, 1)`), `128B`-swizzled TMA descriptors
+    /// (`A`: `64x128`, `B`: `64x64`), `output` sized to `M * N / 2` `u32` words, and `M >= 256`, `N >= 256`,
+    /// `K >= 64` aligned to `(256, 256, 64)`.
+    #[kernel(unchecked_indexing)]
+    #[cuda_device::launch_bounds(192)]
+    pub unsafe fn gemm_sol_short_k_m128n256(
+        a_tma: *const TmaDescriptor,
+        b_tma: *const TmaDescriptor,
+        output: &mut [u32],
+        n: i32,
+        k: i32,
+        tiles_m: u32,
+        tiles_n: u32,
+    ) {
+        /// Contiguous `192 KiB` (`4 x 48 KiB`), 128-byte-aligned shared-memory TMA ring (`A[0..4]` + `B[0..4]`).
+        /// Leaves `36 KiB` of the `228 KiB` SMEM budget free for `18 KiB` `SMEM_EPI`.
+        static mut SMEM_BUF: SharedArray<u8, SHORT_SMEM_TOTAL_BYTES, 128> = SharedArray::UNINIT;
+
+        /// Per-warp `18 KiB` (`4 x 32 x 9` `U32x4` packets) bank-conflict-free epilogue staging buffer.
+        /// Synchronized intra-warp via `warp::sync_mask(u32::MAX)` to emit `128B` coalesced `STG.E.128`.
+        static mut SMEM_EPI: SharedArray<U32x4, EPI_TOTAL_PKTS, 16> = SharedArray::UNINIT;
+
+        /// Single-word shared-memory slot holding the `512`-column `TMEM` base handle (`2 x 256` cols).
+        /// Written by `Warp 0` before `sync_threads()` and read by `MMA_WARP` and `Warps 0..3`.
+        static mut TMEM_ADDR: SharedArray<u32, 1, 4> = SharedArray::UNINIT;
+
+        /// Per-stage TMA completion `mbarrier` array (`4` stages).
+        /// Signaled when `A + B` (`49,152`B for `N256`, `40,960`B for `N192`) arrive in `SMEM_BUF`.
+        static mut TMA_BAR: SharedArray<Barrier, SHORT_SMEM_STAGES, 8> = SharedArray::UNINIT;
+
+        /// Per-stage UMMA consumption `mbarrier` array (`4` stages).
+        /// Signaled by `tcgen05_commit_shared_cluster` when a stage can be refilled.
+        static mut MMA_BAR: SharedArray<Barrier, SHORT_SMEM_STAGES, 8> = SharedArray::UNINIT;
+
+        /// 2-stage `256`-column `TMEM` accumulator completion `mbarrier` ring (`0, 256`).
+        /// Signaled by `MMA_WARP` and awaited intra-CTA by `Warps 0..3`.
+        static mut ACCUM_FULL: SharedArray<Barrier, 2, 8> = SharedArray::UNINIT;
+
+        /// 2-stage `256`-column `TMEM` accumulator release `mbarrier` ring (`4` epilogue warp leaders).
+        /// Signaled once `Warps 0..3` finish unloading `TMEM` into registers.
+        static mut ACCUM_EMPTY: SharedArray<Barrier, 2, 8> = SharedArray::UNINIT;
+
+        unsafe {
+            let tid = thread::threadIdx_x();
+            let warp_id = tid / 32;
+            let lane_id = tid % 32;
+
+            if tid == 0 {
+                let mut s = 0usize;
+                #[unroll]
+                while s < SHORT_SMEM_STAGES {
+                    mbarrier_init(&raw mut TMA_BAR[s], 1);
+                    mbarrier_init(&raw mut MMA_BAR[s], 1);
+                    s += 1;
+                }
+                let mut a = 0usize;
+                #[unroll]
+                while a < 2 {
+                    mbarrier_init(&raw mut ACCUM_FULL[a], 1);
+                    mbarrier_init(&raw mut ACCUM_EMPTY[a], 4);
+                    a += 1;
+                }
+                fence_proxy_async_shared_cta();
+            }
+            thread::sync_threads();
+            if warp_id == 0 {
+                tcgen05_alloc(&raw mut TMEM_ADDR[0], 512);
+                tcgen05_relinquish_alloc_permit();
+            }
+            thread::sync_threads();
+
+            let tmem_addr = TMEM_ADDR[0];
+            let k_iters = (k / 64) as u32;
+            let tiles_m128 = tiles_m << 1;
+            let wide_tiles_n = tiles_n >> 1;
+            let wide_total = tiles_m128 * wide_tiles_n;
+            #[expect(
+                clippy::manual_div_ceil,
+                reason = "keep branchless wave division across all warps"
+            )]
+            let num_waves = (wide_total + (B200_SMS - 1)) / B200_SMS;
+            let work_total = num_waves * B200_SMS;
+            let num_convert = work_total - wide_total;
+            let use_tail_n192 = num_convert > 0 && wide_tiles_n >= 9;
+            let (head_cols, full_tiles, total_work) = if use_tail_n192 {
+                (wide_tiles_n - 9, wide_total - 3 * num_convert, work_total)
+            } else {
+                (wide_tiles_n, wide_total, wide_total)
+            };
+            let head_tiles = tiles_m128 * head_cols;
+            let cta_id = thread::blockIdx_x();
+            let grid_ctas = thread::gridDim_x();
+            let group_tiles = tiles_m128 << 2;
+
+            if warp_id == TMA_WARP {
+                if lane_id == 0 {
+                    let mut stage: usize = 0;
+                    let mut mma_parity: u32 = 1;
+                    let mut raw_tile_idx = cta_id;
+                    while raw_tile_idx < total_work {
+                        let (tm, col_bf16_base, is_n192) = if raw_tile_idx < head_tiles {
+                            let (group, in_group) = if tiles_m128 == 32 {
+                                (raw_tile_idx >> 7, raw_tile_idx & 127)
+                            } else {
+                                let g = raw_tile_idx / group_tiles;
+                                (g, raw_tile_idx - g * group_tiles)
+                            };
+                            let n_start = group << 2;
+                            let rem_n = head_cols - n_start;
+                            let (raw_m, in_band) = if rem_n >= 4 {
+                                (in_group >> 2, in_group & 3)
+                            } else {
+                                (in_group / rem_n, in_group % rem_n)
+                            };
+                            let m_idx = if (group & 1) != 0 {
+                                tiles_m128 - 1 - raw_m
+                            } else {
+                                raw_m
+                            };
+                            (m_idx, (n_start + in_band) * 256, false)
+                        } else if raw_tile_idx < full_tiles {
+                            let rem = raw_tile_idx - head_tiles;
+                            let t = rem / 3;
+                            let sub = rem - t * 3;
+                            let (band, m_idx) = if tiles_m128 == 32 {
+                                (t >> 5, t & 31)
+                            } else {
+                                let b = t / tiles_m128;
+                                (b, t - b * tiles_m128)
+                            };
+                            (m_idx, (head_cols + band * 3 + sub) * 256, false)
+                        } else {
+                            let tail = raw_tile_idx - full_tiles;
+                            let t = (full_tiles - head_tiles) / 3 + (tail >> 2);
+                            let sub = tail & 3;
+                            let (band, m_idx) = if tiles_m128 == 32 {
+                                (t >> 5, t & 31)
+                            } else {
+                                let b = t / tiles_m128;
+                                (b, t - b * tiles_m128)
+                            };
+                            (m_idx, (head_cols + band * 3) * 256 + sub * 192, true)
+                        };
+
+                        let m_offset = (tm * 128) as i32;
+                        let n_offset = col_bf16_base as i32;
+                        let tx_bytes: u32 = if is_n192 { 16_384 + 24_576 } else { 16_384 + 32_768 };
+
+                        let mut k_idx: u32 = 0;
+                        #[unroll(3)]
+                        while k_idx < k_iters {
+                            let smem_a_ptr = &raw mut SMEM_BUF[stage * SMEM_STAGE_BYTES];
+                            let smem_b_ptr = &raw mut SMEM_BUF
+                                [SHORT_B_SMEM_OFFSET + stage * SHORT_B_STAGE_BYTES];
+                            let tma_bar_const = &raw const TMA_BAR[stage];
+                            let tma_bar_mut = &raw mut TMA_BAR[stage];
+                            let mma_bar_const = &raw const MMA_BAR[stage];
+
+                            while !mbarrier_try_wait_parity(mma_bar_const, mma_parity) {}
+
+                            mbarrier_arrive_expect_tx(tma_bar_const, 1, tx_bytes);
+                            let k_base = (k_idx * 64) as i32;
+                            cp_async_bulk_tensor_2d_g2s_cta(
+                                smem_a_ptr,
+                                a_tma,
+                                k_base,
+                                m_offset,
+                                tma_bar_mut,
+                            );
+                            cp_async_bulk_tensor_2d_g2s_cta(
+                                smem_b_ptr,
+                                b_tma,
+                                k_base,
+                                n_offset,
+                                tma_bar_mut,
+                            );
+                            cp_async_bulk_tensor_2d_g2s_cta(
+                                smem_b_ptr.add(8_192),
+                                b_tma,
+                                k_base,
+                                n_offset + 64,
+                                tma_bar_mut,
+                            );
+                            cp_async_bulk_tensor_2d_g2s_cta(
+                                smem_b_ptr.add(16_384),
+                                b_tma,
+                                k_base,
+                                n_offset + 128,
+                                tma_bar_mut,
+                            );
+                            if !is_n192 {
+                                cp_async_bulk_tensor_2d_g2s_cta(
+                                    smem_b_ptr.add(24_576),
+                                    b_tma,
+                                    k_base,
+                                    n_offset + 192,
+                                    tma_bar_mut,
+                                );
+                            }
+
+                            stage += 1;
+                            if stage == SHORT_SMEM_STAGES {
+                                stage = 0;
+                                mma_parity ^= 1;
+                            }
+                            k_idx += 1;
+                        }
+                        raw_tile_idx += grid_ctas;
+                    }
+                }
+            } else if warp_id == MMA_WARP {
+                if lane_id == 0 {
+                    let idesc_256 = Tcgen05InstructionDescriptor::builder()
+                        .shape(Tcgen05MmaShape::M128_N256)
+                        .element_type(Tcgen05ElementType::F16)
+                        .accumulator_type(Tcgen05AccumulatorType::F32)
+                        .build()
+                        .raw();
+                    let idesc_192 = Tcgen05InstructionDescriptor::builder()
+                        .shape(Tcgen05MmaShape { m: 128, n: 192 })
+                        .element_type(Tcgen05ElementType::F16)
+                        .accumulator_type(Tcgen05AccumulatorType::F32)
+                        .build()
+                        .raw();
+
+                    let mut tile_iter: u32 = 0;
+                    let mut stage: usize = 0;
+                    let mut tma_parity: u32 = 0;
+                    let smem_a_base0 = cvta_generic_to_shared_offset(&raw const SMEM_BUF[0]);
+                    let smem_b_base0 = smem_a_base0 + SHORT_B_SMEM_OFFSET as u64;
+                    let a_desc0 =
+                        build_smem_descriptor(smem_a_base0, LBO_BYTES, SBO_BYTES, SWIZZLE_128B);
+                    let b_desc0 =
+                        build_smem_descriptor(smem_b_base0, LBO_BYTES, SBO_BYTES, SWIZZLE_128B);
+
+                    let mut raw_tile_idx = cta_id;
+                    while raw_tile_idx < total_work {
+                        let idesc = if raw_tile_idx < full_tiles {
+                            idesc_256
+                        } else {
+                            idesc_192
+                        };
+                        let accum_stage = (tile_iter & 1) as usize;
+                        let tmem_stage_offset = (accum_stage as u32) * 256;
+
+                        if tile_iter >= 2 {
+                            let empty_parity = ((tile_iter - 2) >> 1) & 1;
+                            while !mbarrier_try_wait_parity(
+                                &raw const ACCUM_EMPTY[accum_stage],
+                                empty_parity,
+                            ) {}
+                            tcgen05_fence_after_thread_sync();
+                        }
+
+                        let mut k_idx: u32 = 0;
+                        #[unroll(3)]
+                        while k_idx < k_iters {
+                            let a_desc_s = a_desc0 + ((stage as u64) << 10);
+                            let b_desc_s = b_desc0 + ((stage as u64) << 11);
+                            let tma_bar_const = &raw const TMA_BAR[stage];
+                            let mma_bar_mut = &raw mut MMA_BAR[stage];
+
+                            while !mbarrier_try_wait_parity(tma_bar_const, tma_parity) {}
+                            tcgen05_fence_after_thread_sync();
+
+                            let mut j: u64 = 0;
+                            #[unroll]
+                            while j < 4 {
+                                let k_desc_offset = j * 2;
+                                let enable_accum = k_idx > 0 || j > 0;
+                                tcgen05_mma_f16(
+                                    tmem_addr + tmem_stage_offset,
+                                    a_desc_s + k_desc_offset,
+                                    b_desc_s + k_desc_offset,
+                                    idesc,
+                                    enable_accum,
+                                );
+                                j += 1;
+                            }
+
+                            tcgen05_commit_shared_cluster(mma_bar_mut.cast::<u64>());
+
+                            stage += 1;
+                            if stage == SHORT_SMEM_STAGES {
+                                stage = 0;
+                                tma_parity ^= 1;
+                            }
+                            k_idx += 1;
+                        }
+
+                        tcgen05_commit_shared_cluster(
+                            (&raw mut ACCUM_FULL[accum_stage]).cast::<u64>(),
+                        );
+                        tile_iter += 1;
+                        raw_tile_idx += grid_ctas;
+                    }
+                }
+            } else {
+                let mut epi_tile_iter: u32 = 0;
+                let w_base = (warp_id as usize) * EPI_WARP_PKTS;
+                let l_base = (tid as usize) * EPI_ROW_PKTS;
+                let sub_r = (lane_id >> 3) as usize;
+                let sub_c = (lane_id & 7) as usize;
+                let sub_c_words = sub_c * 4;
+                let t_row = warp_id * 32;
+                let n_u32 = (n / 2) as usize;
+                let out_ptr = output.as_mut_ptr();
+
+                let mut raw_tile_idx = cta_id;
+                while raw_tile_idx < total_work {
+                    let (tm, col_bf16_base, chunks) = if raw_tile_idx < head_tiles {
+                        let (group, in_group) = if tiles_m128 == 32 {
+                            (raw_tile_idx >> 7, raw_tile_idx & 127)
+                        } else {
+                            let g = raw_tile_idx / group_tiles;
+                            (g, raw_tile_idx - g * group_tiles)
+                        };
+                        let n_start = group << 2;
+                        let rem_n = head_cols - n_start;
+                        let (raw_m, in_band) = if rem_n >= 4 {
+                            (in_group >> 2, in_group & 3)
+                        } else {
+                            (in_group / rem_n, in_group % rem_n)
+                        };
+                        let m_idx = if (group & 1) != 0 {
+                            tiles_m128 - 1 - raw_m
+                        } else {
+                            raw_m
+                        };
+                        (m_idx, (n_start + in_band) * 256, 4usize)
+                    } else if raw_tile_idx < full_tiles {
+                        let rem = raw_tile_idx - head_tiles;
+                        let t = rem / 3;
+                        let sub = rem - t * 3;
+                        let (band, m_idx) = if tiles_m128 == 32 {
+                            (t >> 5, t & 31)
+                        } else {
+                            let b = t / tiles_m128;
+                            (b, t - b * tiles_m128)
+                        };
+                        (m_idx, (head_cols + band * 3 + sub) * 256, 4usize)
+                    } else {
+                        let tail = raw_tile_idx - full_tiles;
+                        let t = (full_tiles - head_tiles) / 3 + (tail >> 2);
+                        let sub = tail & 3;
+                        let (band, m_idx) = if tiles_m128 == 32 {
+                            (t >> 5, t & 31)
+                        } else {
+                            let b = t / tiles_m128;
+                            (b, t - b * tiles_m128)
+                        };
+                        (m_idx, (head_cols + band * 3) * 256 + sub * 192, 3usize)
+                    };
+
+                    let accum_stage = (epi_tile_iter & 1) as usize;
+                    let tmem_stage_offset = (accum_stage as u32) * 256;
+                    let full_parity = (epi_tile_iter >> 1) & 1;
+                    while !mbarrier_try_wait_parity(&raw const ACCUM_FULL[accum_stage], full_parity)
+                    {}
+                    tcgen05_fence_after_thread_sync();
+
+                    let base_row = (tm * 128 + t_row) as usize;
+                    let tile_col_u32 = (col_bf16_base / 2) as usize;
+                    let tmem_base = tmem_addr + tmem_stage_offset + (t_row << 16);
+
+                    let mut chunk = 0usize;
+                    #[unroll]
+                    while chunk < 4 {
+                        if chunk < chunks {
+                            let raw = tcgen05_ld_32x32b_x64_raw(tmem_base + (chunk as u32) * 64);
+                            tcgen05_load_wait();
+                            if chunk + 1 == chunks {
+                                tcgen05_fence_before_thread_sync();
+                                if lane_id == 0 {
+                                    mbarrier_arrive(&raw const ACCUM_EMPTY[accum_stage]);
+                                }
+                            }
+
+                            let mut p = 0usize;
+                            #[unroll]
+                            while p < 8 {
+                                let b = p * 8;
+                                SMEM_EPI[l_base + p] = U32x4(
+                                    cvt_bf16x2_f32(
+                                        f32::from_bits(raw[b]),
+                                        f32::from_bits(raw[b + 1]),
+                                    ),
+                                    cvt_bf16x2_f32(
+                                        f32::from_bits(raw[b + 2]),
+                                        f32::from_bits(raw[b + 3]),
+                                    ),
+                                    cvt_bf16x2_f32(
+                                        f32::from_bits(raw[b + 4]),
+                                        f32::from_bits(raw[b + 5]),
+                                    ),
+                                    cvt_bf16x2_f32(
+                                        f32::from_bits(raw[b + 6]),
+                                        f32::from_bits(raw[b + 7]),
+                                    ),
+                                );
+                                p += 1;
+                            }
+
+                            warp::sync_mask(u32::MAX);
+
+                            let col_u32_base = tile_col_u32 + chunk * 32 + sub_c_words;
+                            let mut r_step = 0usize;
+                            #[unroll]
+                            while r_step < 8 {
+                                let r = r_step * 4 + sub_r;
+                                let pkt = SMEM_EPI[w_base + r * EPI_ROW_PKTS + sub_c];
+                                *out_ptr
+                                    .add((base_row + r) * n_u32 + col_u32_base)
+                                    .cast::<U32x4>() = pkt;
+                                r_step += 1;
+                            }
+
+                            warp::sync_mask(u32::MAX);
+                        }
+                        chunk += 1;
+                    }
+
+                    epi_tile_iter += 1;
+                    raw_tile_idx += grid_ctas;
+                }
+            }
+
+            thread::sync_threads();
+            if warp_id == 0 {
+                tcgen05_dealloc(tmem_addr, 512);
+            }
         }
     }
 }

@@ -54,3 +54,10 @@ serde_json = "1"          # must match workspace
 
 [package.metadata.rust-analyzer]
 rustc_private = true
+
+# Outside Windows, `cargo oxide` builds this backend in the dev profile. The
+# CUTLASS backend verifies the ~207 MB compiler library's SHA-256 on every
+# build; optimize only SHA-256 so that check stays inexpensive, as the
+# cuda-oxide workspace does.
+[profile.dev.package.sha2]
+opt-level = 3

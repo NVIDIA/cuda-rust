@@ -308,6 +308,9 @@ def checkUniformBarriersWith (cfg : ControlFlowCfg) (inv : StateMap) : Bool :=
     (returnBlocks cfg).all fun ret => certifyUnreachable cfg postSyncs dBlk ret) &&
   ((sharedReadSites cfg).all fun (s, rBlk) =>
     certifyUnreachable cfg (sharedInitDominators cfg s) 0 rBlk) &&
+  ((warpSyncBlocks cfg).all fun wBlk =>
+    ((cfg.blockAt wBlk).ops.all fun | .syncWarp full => full | _ => true) &&
+    (activeGuardAt cfg wBlk).isWarpConvergent cfg.blockDimX cfg.blockDimY) &&
   validMbarArrivalCounts cfg &&
   (!(decide (0 < cfg.numBarriers) && decide (tmemAllocSites cfg = [])) ||
     (validStateMap false cfg inv && checkLoopBackpressure cfg))
@@ -317,15 +320,16 @@ theorem uniform_barriers_cfg_of_stateMap {cfg : ControlFlowCfg} {inv : StateMap}
     (hcheck : checkUniformBarriersWith cfg inv = true) :
     UniformBarriersCfg cfg := by
   unfold checkUniformBarriersWith at hcheck
-  rcases Bool.and_eq_true_iff.mp hcheck with ⟨h0123456, hasync⟩
-  rcases Bool.and_eq_true_iff.mp h0123456 with ⟨h012345, hmbarCnt⟩
+  rcases Bool.and_eq_true_iff.mp hcheck with ⟨h01234567, hasync⟩
+  rcases Bool.and_eq_true_iff.mp h01234567 with ⟨h0123456, hmbarCnt⟩
+  rcases Bool.and_eq_true_iff.mp h0123456 with ⟨h012345, hwsync⟩
   rcases Bool.and_eq_true_iff.mp h012345 with ⟨h01234, hsinit⟩
   rcases Bool.and_eq_true_iff.mp h01234 with ⟨h0123, hdsmem⟩
   rcases Bool.and_eq_true_iff.mp h0123 with ⟨h012, hmbar⟩
   rcases Bool.and_eq_true_iff.mp h012 with ⟨h01, hcyc⟩
   rcases Bool.and_eq_true_iff.mp h01 with ⟨hcnt, hsync⟩
   rcases Bool.and_eq_true_iff.mp hcyc with ⟨hhasHdr, hloops⟩
-  refine ⟨of_decide_eq_true hcnt, ?_, ⟨?_, ?_⟩, ?_, ?_, ?_, hmbarCnt, ?_⟩
+  refine ⟨of_decide_eq_true hcnt, ?_, ⟨?_, ?_⟩, ?_, ?_, ?_, ?_, hmbarCnt, ?_⟩
   · intro b hb
     have hb_ok := List.all_eq_true.mp hsync b hb
     rcases Bool.and_eq_true_iff.mp hb_ok with ⟨htr, hacyc⟩
@@ -354,6 +358,8 @@ theorem uniform_barriers_cfg_of_stateMap {cfg : ControlFlowCfg} {inv : StateMap}
     exact not_pathAvoiding_of_certify (List.all_eq_true.mp hd ret hret)
   · intro s rBlk hsite
     exact not_pathAvoiding_of_certify (List.all_eq_true.mp hsinit (s, rBlk) hsite)
+  · intro wBlk hwBlk
+    exact Bool.and_eq_true_iff.mp (List.all_eq_true.mp hwsync wBlk hwBlk)
   · intro ⟨hbars, hnotmem⟩
     have hcond : (decide (0 < cfg.numBarriers) && decide (tmemAllocSites cfg = [])) = true := by
       simp [hbars, hnotmem]

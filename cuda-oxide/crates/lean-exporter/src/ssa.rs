@@ -160,6 +160,11 @@ pub enum CfgBranchCond {
 pub enum CfgOpItem {
     /// Block-wide `thread::sync_threads()` (`nvvm.barrier0`).
     SyncThreads,
+    /// Intra-warp `warp::sync_mask(mask)` (`nvvm.bar_warp_sync`).
+    SyncWarp {
+        /// True when `mask` is the full 32-lane mask (`0xffff_ffff`).
+        full_mask: bool,
+    },
     /// Cluster-wide `cluster::cluster_sync()` (`nvvm.cluster_sync` / `nvvm.cluster_barrier`).
     ClusterSync,
     /// Generic-proxy shared-memory load on `shared_id`.

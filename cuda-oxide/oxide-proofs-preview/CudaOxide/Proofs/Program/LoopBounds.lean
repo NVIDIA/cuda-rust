@@ -67,7 +67,7 @@ theorem hypImpliesLt_sound {env : InputEnv} {t : ThreadCtx} {havoc : Nat → Nat
           exact hypImpliesLt_sound hlt hhyp.2
   | .lit _, _, _, hlt, _ | .mbarReady _ _, _, _, hlt, _
   | .cmp .lt _ .tidX, _, _, hlt, _ | .cmp .lt _ .tidY, _, _, hlt, _
-  | .cmp .lt _ .ctaidX, _, _, hlt, _ | .cmp .lt _ .ctaidY, _, _, hlt, _
+  | .cmp .lt _ .ctaidX, _, _, hlt, _ | .cmp .lt _ .ctaidY, _, _, hlt, _ | .cmp .lt _ (.nctaid _), _, _, hlt, _
   | .cmp .lt _ (.index1D _), _, _, hlt, _ | .cmp .lt _ (.paramScalar _), _, _, hlt, _
   | .cmp .lt _ (.sliceLen _), _, _, hlt, _ | .cmp .lt _ (.havoc _ _), _, _, hlt, _
   | .cmp .lt _ (.opaqueUint _ _), _, _, hlt, _ | .cmp .lt _ (.binOp _ _ _ _), _, _, hlt, _
@@ -278,7 +278,7 @@ theorem symIntBoundedUnder_sound {env : InputEnv} {t : ThreadCtx} {havoc : Nat �
         · intro hmA; contradiction
         · intro hmA; rw [asConstInt_eq hc]
           exact Nat.lt_of_le_of_lt Nat.and_le_left (of_decide_eq_true hmA)
-  | .tidX, lim, hb | .tidY, lim, hb | .ctaidX, lim, hb | .ctaidY, lim, hb
+  | .tidX, lim, hb | .tidY, lim, hb | .ctaidX, lim, hb | .ctaidY, lim, hb | .nctaid _, lim, hb
   | .index1D _, lim, hb | .paramScalar _, lim, hb | .sliceLen _, lim, hb
   | .havoc _ _, lim, hb | .opaqueUint _ _, lim, hb | .intCast _ _, lim, hb => by -- Case: leaf bounded directly by `hypImpliesLt`
       unfold symIntBoundedUnder at hb
@@ -304,6 +304,9 @@ def suggestRingBound : SymInt → Option Nat
     (covering wrapping arithmetic, quotient/remainder/shift/bitwise ops, and `.ite` joins). -/
 def symIntFitsWidth (f : MirFunc) (w : Nat) : SymInt → Bool
   | .const c => decide (0 < w) && (wordMod w c == c)
+  | .tidX => decide (32 ≤ w) && decide (f.blockDimX ≤ 4294967296)
+  | .tidY => decide (32 ≤ w) && decide (f.blockDimY ≤ 4294967296)
+  | .ctaidX | .ctaidY | .nctaid _ => decide (32 ≤ w)
   | .paramScalar p => decide (0 < w) && (f.params[p]? == some (.scalar w))
   | .havoc _ hw | .opaqueUint _ hw => decide (0 < w) && (hw == w)
   | .binOp .add bw _ _ | .binOp .sub bw _ _ | .binOp .mul bw _ _ | .binOp .shl bw _ _ =>
@@ -351,11 +354,33 @@ theorem scalarBounds_get {env : InputEnv} :
 
 /-- Helper: every `SymInt` accepted by `symIntFitsWidth` has `0 < w` and `< 2 ^ w`. -/
 theorem symIntFitsWidth_lt {f : MirFunc} (env : InputEnv) (t : ThreadCtx) (havoc : Nat → Nat)
-    (hvalidIn : f.validInput env) {w : Nat} :
+    (hvalidIn : f.validInput env) (hTh : f.validThread t) {w : Nat} :
     ∀ e : SymInt, symIntFitsWidth f w e = true → 0 < w ∧ e.eval env t havoc < 2 ^ w
   | .const c, hfits => by
       simp only [symIntFitsWidth, Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq] at hfits
       exact ⟨hfits.1, (wordMod_eq_iff_lt hfits.1).mp hfits.2⟩
+  | .tidX, hfits => by
+      simp only [symIntFitsWidth, Bool.and_eq_true, decide_eq_true_eq] at hfits
+      have hpow : (4294967296 : Nat) ≤ 2 ^ w := Nat.le_trans (by decide : 4294967296 ≤ 2 ^ 32) (Nat.pow_le_pow_right (by omega) hfits.1)
+      exact ⟨by omega, Nat.lt_of_lt_of_le (Nat.lt_of_lt_of_le hTh.1 hfits.2) hpow⟩
+  | .tidY, hfits => by
+      simp only [symIntFitsWidth, Bool.and_eq_true, decide_eq_true_eq] at hfits
+      have hpow : (4294967296 : Nat) ≤ 2 ^ w := Nat.le_trans (by decide : 4294967296 ≤ 2 ^ 32) (Nat.pow_le_pow_right (by omega) hfits.1)
+      exact ⟨by omega, Nat.lt_of_lt_of_le (Nat.lt_of_lt_of_le hTh.2.1 hfits.2) hpow⟩
+  | .ctaidX, hfits => by
+      simp only [symIntFitsWidth, decide_eq_true_eq] at hfits
+      have hpow : (4294967296 : Nat) ≤ 2 ^ w := Nat.le_trans (by decide : 4294967296 ≤ 2 ^ 32) (Nat.pow_le_pow_right (by omega) hfits)
+      exact ⟨by omega, Nat.lt_of_lt_of_le hTh.2.2.1 hpow⟩
+  | .ctaidY, hfits => by
+      simp only [symIntFitsWidth, decide_eq_true_eq] at hfits
+      have hpow : (4294967296 : Nat) ≤ 2 ^ w := Nat.le_trans (by decide : 4294967296 ≤ 2 ^ 32) (Nat.pow_le_pow_right (by omega) hfits)
+      exact ⟨by omega, Nat.lt_of_lt_of_le hTh.2.2.2.1 hpow⟩
+  | .nctaid d, hfits => by
+      simp only [symIntFitsWidth, decide_eq_true_eq] at hfits
+      have hpow : (4294967296 : Nat) ≤ 2 ^ w := Nat.le_trans (by decide : 4294967296 ≤ 2 ^ 32) (Nat.pow_le_pow_right (by omega) hfits)
+      have hmod : wordMod 32 (env.nctaid d) < 4294967296 := by
+        unfold wordMod; exact Nat.mod_lt _ (by decide)
+      exact ⟨by omega, Nat.lt_of_lt_of_le hmod hpow⟩
   | .paramScalar p, hfits => by
       simp only [symIntFitsWidth, Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq] at hfits
       exact ⟨hfits.1, by simpa [SymInt.eval] using scalarBounds_get f.params 0 p w hvalidIn.1 hfits.2 hfits.1⟩
@@ -373,8 +398,8 @@ theorem symIntFitsWidth_lt {f : MirFunc} (env : InputEnv) (t : ThreadCtx) (havoc
       exact ⟨hfits.1, (wordMod_eq_iff_lt hfits.1).mp (wordMod_idem w _)⟩
   | .ite c tv fv, hfits => by
       simp only [symIntFitsWidth, Bool.and_eq_true] at hfits
-      have ⟨hw, htv⟩ := symIntFitsWidth_lt env t havoc hvalidIn tv hfits.1
-      have ⟨_, hfv⟩ := symIntFitsWidth_lt env t havoc hvalidIn fv hfits.2
+      have ⟨hw, htv⟩ := symIntFitsWidth_lt env t havoc hvalidIn hTh tv hfits.1
+      have ⟨_, hfv⟩ := symIntFitsWidth_lt env t havoc hvalidIn hTh fv hfits.2
       refine ⟨hw, ?_⟩
       simp only [SymInt.eval]
       split
@@ -401,12 +426,12 @@ theorem symIntFitsWidth_lt {f : MirFunc} (env : InputEnv) (t : ThreadCtx) (havoc
           exact ⟨hfits.1, (wordMod_eq_iff_lt hfits.1).mp (wordMod_idem w _)⟩
       | div =>
           simp only [symIntFitsWidth] at hfits
-          have ⟨hw, ha⟩ := symIntFitsWidth_lt env t havoc hvalidIn a hfits
+          have ⟨hw, ha⟩ := symIntFitsWidth_lt env t havoc hvalidIn hTh a hfits
           exact ⟨hw, Nat.lt_of_le_of_lt (Nat.div_le_self _ _) ha⟩
       | rem =>
           simp only [symIntFitsWidth] at hfits
           rcases Bool.or_eq_true_iff.mp hfits with haF | hmF
-          · have ⟨hw, ha⟩ := symIntFitsWidth_lt env t havoc hvalidIn a haF
+          · have ⟨hw, ha⟩ := symIntFitsWidth_lt env t havoc hvalidIn hTh a haF
             exact ⟨hw, Nat.lt_of_le_of_lt (Nat.mod_le _ _) ha⟩
           · revert hmF
             cases hc : asConstInt b
@@ -421,35 +446,34 @@ theorem symIntFitsWidth_lt {f : MirFunc} (env : InputEnv) (t : ThreadCtx) (havoc
               exact ⟨hw, by omega⟩
       | shr =>
           simp only [symIntFitsWidth] at hfits
-          have ⟨hw, ha⟩ := symIntFitsWidth_lt env t havoc hvalidIn a hfits
+          have ⟨hw, ha⟩ := symIntFitsWidth_lt env t havoc hvalidIn hTh a hfits
           exact ⟨hw, Nat.lt_of_le_of_lt (Nat.div_le_self _ _) ha⟩
       | bitAnd =>
           simp only [symIntFitsWidth] at hfits
           rcases Bool.or_eq_true_iff.mp hfits with haF | hbF
-          · have ⟨hw, ha⟩ := symIntFitsWidth_lt env t havoc hvalidIn a haF
+          · have ⟨hw, ha⟩ := symIntFitsWidth_lt env t havoc hvalidIn hTh a haF
             exact ⟨hw, Nat.lt_of_le_of_lt Nat.and_le_left ha⟩
-          · have ⟨hw, hb⟩ := symIntFitsWidth_lt env t havoc hvalidIn b hbF
+          · have ⟨hw, hb⟩ := symIntFitsWidth_lt env t havoc hvalidIn hTh b hbF
             exact ⟨hw, Nat.lt_of_le_of_lt Nat.and_le_right hb⟩
       | bitOr =>
           simp only [symIntFitsWidth, Bool.and_eq_true] at hfits
-          have ⟨hw, ha⟩ := symIntFitsWidth_lt env t havoc hvalidIn a hfits.1
-          have ⟨_, hb⟩ := symIntFitsWidth_lt env t havoc hvalidIn b hfits.2
+          have ⟨hw, ha⟩ := symIntFitsWidth_lt env t havoc hvalidIn hTh a hfits.1
+          have ⟨_, hb⟩ := symIntFitsWidth_lt env t havoc hvalidIn hTh b hfits.2
           exact ⟨hw, Nat.or_lt_two_pow ha hb⟩
       | bitXor =>
           simp only [symIntFitsWidth, Bool.and_eq_true] at hfits
-          have ⟨hw, ha⟩ := symIntFitsWidth_lt env t havoc hvalidIn a hfits.1
-          have ⟨_, hb⟩ := symIntFitsWidth_lt env t havoc hvalidIn b hfits.2
+          have ⟨hw, ha⟩ := symIntFitsWidth_lt env t havoc hvalidIn hTh a hfits.1
+          have ⟨_, hb⟩ := symIntFitsWidth_lt env t havoc hvalidIn hTh b hfits.2
           exact ⟨hw, Nat.xor_lt_two_pow ha hb⟩
-  | .tidX, hfits | .tidY, hfits | .ctaidX, hfits | .ctaidY, hfits
   | .index1D _, hfits | .sliceLen _, hfits => by
       simp [symIntFitsWidth] at hfits
 
 /-- Soundness of `symIntFitsWidth`: any matching `SymInt` is fixed by `wordMod w`. -/
 theorem symIntFitsWidth_sound {f : MirFunc} {env : InputEnv} {t : ThreadCtx} {havoc : Nat → Nat}
-    (hvalidIn : f.validInput env) {w : Nat} {e : SymInt}
+    (hvalidIn : f.validInput env) (hTh : f.validThread t) {w : Nat} {e : SymInt}
     (hfits : symIntFitsWidth f w e = true) :
     wordMod w (e.eval env t havoc) = e.eval env t havoc := by
-  have ⟨hw, hlt⟩ := symIntFitsWidth_lt env t havoc hvalidIn e hfits
+  have ⟨hw, hlt⟩ := symIntFitsWidth_lt env t havoc hvalidIn hTh e hfits
   exact (wordMod_eq_iff_lt hw).mpr hlt
 
 

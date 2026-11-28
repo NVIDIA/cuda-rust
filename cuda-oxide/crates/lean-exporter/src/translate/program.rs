@@ -122,6 +122,8 @@ pub enum MirStmt {
     AssertCond(usize, usize),
     /// CTA-wide `thread::sync_threads()` (`nvvm.barrier0`).
     SyncThreads,
+    /// Full-warp `warp::sync_mask(u32::MAX)` (`nvvm.bar_warp_sync` with `0xffff_ffff`).
+    SyncWarp,
     /// Bounds-checked slot reference on a `SharedArray<Barrier, N>` pointer `ptr_var`.
     BarrierSlotCheck(usize),
     /// Bounds-checked peer CTA rank (`rank < clusterDimX`) on `cluster::map_shared_rank*`.
@@ -627,6 +629,9 @@ pub(super) fn translate_mir_program(
                         | "nvvm.read_ptx_sreg_ctaid_y"
                         | "nvvm.read_ptx_sreg_ntid_x"
                         | "nvvm.read_ptx_sreg_ntid_y"
+                        | "nvvm.read_ptx_sreg_nctaid_x"
+                        | "nvvm.read_ptx_sreg_nctaid_y"
+                        | "nvvm.read_ptx_sreg_nctaid_z"
                         | "nvvm.read_ptx_sreg_cluster_ctaid_x"
                         | "nvvm.read_ptx_sreg_cluster_nctaid_x"
                         | "nvvm.clc_query_is_canceled"
@@ -764,6 +769,9 @@ pub(super) fn translate_mir_program(
                         | "nvvm.read_ptx_sreg_ctaid_y"
                         | "nvvm.read_ptx_sreg_ntid_x"
                         | "nvvm.read_ptx_sreg_ntid_y"
+                        | "nvvm.read_ptx_sreg_nctaid_x"
+                        | "nvvm.read_ptx_sreg_nctaid_y"
+                        | "nvvm.read_ptx_sreg_nctaid_z"
                         | "nvvm.read_ptx_sreg_cluster_ctaid_x"
                         | "nvvm.read_ptx_sreg_cluster_nctaid_x"
                         | "nvvm.clc_query_is_canceled"
@@ -1064,7 +1072,18 @@ pub(super) fn translate_mir_program(
                         }
                     } else if cstr.contains("IntToInt") {
                         if let Some(&c) = const_u128_vals.get(&op.get_operand(0)) {
-                            let dw = mir_uint_width(ctx, op.get_result(0).get_type(ctx));
+                            let dw = {
+                                let w = mir_uint_width(ctx, op.get_result(0).get_type(ctx));
+                                if w > 0 {
+                                    w
+                                } else {
+                                    op.get_result(0)
+                                        .get_type(ctx)
+                                        .deref(ctx)
+                                        .downcast_ref::<IntegerType>()
+                                        .map_or(0, IntegerType::width)
+                                }
+                            };
                             if dw > 1 {
                                 let masked = if dw >= 128 {
                                     c
@@ -1736,7 +1755,20 @@ pub(super) fn translate_mir_program(
 
             match opid.as_str() {
                 "mir.storage_live" | "mir.storage_dead" | "mir.dbg_value" | "mir.dbg_declare"
-                | "mir.nop" | "mir.unroll_hint" | "mir.nounroll_hint" | "nvvm.bar_warp_sync" => {}
+                | "mir.nop" | "mir.unroll_hint" | "mir.nounroll_hint" => {}
+                "nvvm.bar_warp_sync" => {
+                    let full_mask = op
+                        .operands()
+                        .next()
+                        .and_then(|v| const_u128_vals.get(&v))
+                        .is_some_and(|&m| (m as u32) == u32::MAX);
+                    cfg_blocks[new_b]
+                        .ops
+                        .push(CfgOpItem::SyncWarp { full_mask });
+                    if full_mask {
+                        stmts.push(MirStmt::SyncWarp);
+                    }
+                }
                 "mir.return" => {
                     term = MirTerminator::Ret;
                     cfg_blocks[new_b].is_return = true;
@@ -2222,28 +2254,52 @@ pub(super) fn translate_mir_program(
                     let is_multicast = opid.contains("multicast");
                     let bar_dests = tma_dests_per_bar.get(&bar_id);
                     let total_sites = bar_dests.map_or(1, Vec::len);
-                    let sub_panel_step = ptr_const_offset
-                        .get(&smem_v)
-                        .filter(|&&(parent_v, off)| {
-                            off > 0 && bar_dests.is_some_and(|ds| ds.contains(&parent_v))
-                        })
-                        .and_then(|&(parent_v, _)| {
-                            bar_dests?
-                                .iter()
-                                .filter_map(|dv| {
-                                    ptr_const_offset
-                                        .get(dv)
-                                        .filter(|&&(pv, o)| pv == parent_v && o > 0)
-                                        .map(|&(_, o)| o)
-                                })
-                                .min()
-                        });
+                    let sub_step_for = |dv: Value| -> Option<u64> {
+                        let ds = bar_dests?;
+                        let root_v = if let Some(&(pv, off)) = ptr_const_offset.get(&dv)
+                            && off > 0
+                            && ds.contains(&pv)
+                        {
+                            pv
+                        } else if ds.iter().any(|other| {
+                            ptr_const_offset
+                                .get(other)
+                                .is_some_and(|&(pv, o)| pv == dv && o > 0)
+                        }) {
+                            dv
+                        } else {
+                            return None;
+                        };
+                        ds.iter()
+                            .filter_map(|other| {
+                                ptr_const_offset
+                                    .get(other)
+                                    .filter(|&&(pv, o)| pv == root_v && o > 0)
+                                    .map(|&(_, o)| o)
+                            })
+                            .min()
+                    };
+                    let sub_panel_step = sub_step_for(smem_v);
+                    let (sub_total_bytes, non_sub_sites) = bar_dests.map_or((0u64, 1u64), |ds| {
+                        let mut sub_bytes = 0u64;
+                        let mut non_sub = 0u64;
+                        for &dv in ds {
+                            if let Some(st) = sub_step_for(dv) {
+                                sub_bytes = sub_bytes.saturating_add(st * elem_bytes);
+                            } else {
+                                non_sub += 1;
+                            }
+                        }
+                        (sub_bytes, non_sub.max(1))
+                    });
                     let span_elems = arrived_tx_bytes_per_bar
                         .get(&bar_id)
                         .map_or(sz, |&tx| {
                             let per_cta_tx = if is_cg2 { tx / 2 } else { tx };
                             let per_call_tx = if let Some(step_elems) = sub_panel_step {
                                 step_elems * elem_bytes
+                            } else if sub_total_bytes > 0 && sub_total_bytes < per_cta_tx {
+                                (per_cta_tx - sub_total_bytes) / non_sub_sites
                             } else if is_cg2 && total_sites >= 2 {
                                 per_cta_tx / 2
                             } else {
@@ -2979,6 +3035,9 @@ pub(super) fn translate_mir_program(
                 | "nvvm.read_ptx_sreg_ctaid_y"
                 | "nvvm.read_ptx_sreg_ntid_x"
                 | "nvvm.read_ptx_sreg_ntid_y"
+                | "nvvm.read_ptx_sreg_nctaid_x"
+                | "nvvm.read_ptx_sreg_nctaid_y"
+                | "nvvm.read_ptx_sreg_nctaid_z"
                 | "nvvm.read_ptx_sreg_laneid"
                 | "nvvm.read_ptx_sreg_cluster_ctaid_x"
                     if op.get_num_results() == 1 =>
@@ -2997,6 +3056,9 @@ pub(super) fn translate_mir_program(
                         "nvvm.read_ptx_sreg_ctaid_y" => "ctaidY",
                         "nvvm.read_ptx_sreg_ntid_x" => "ntidX",
                         "nvvm.read_ptx_sreg_ntid_y" => "ntidY",
+                        "nvvm.read_ptx_sreg_nctaid_x" => "nctaidX",
+                        "nvvm.read_ptx_sreg_nctaid_y" => "nctaidY",
+                        "nvvm.read_ptx_sreg_nctaid_z" => "nctaidZ",
                         "nvvm.read_ptx_sreg_cluster_ctaid_x" => {
                             coord_exprs.insert(res, IdxExpr::ClusterCtaidX);
                             "clusterCtaidX"
@@ -4269,7 +4331,7 @@ fn push_stmt_read_regs(stmt: &MirStmt, out: &mut Vec<usize>) {
             out.push(*p);
             out.push(*s);
         }
-        MirStmt::SyncThreads => {}
+        MirStmt::SyncThreads | MirStmt::SyncWarp => {}
     }
 }
 

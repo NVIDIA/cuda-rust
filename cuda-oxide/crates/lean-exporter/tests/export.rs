@@ -3222,7 +3222,7 @@ fn mir_stmt_read_regs(stmt: &lean_exporter::translate::program::MirStmt) -> Vec<
         | MirStmt::TmemAlloc(r, _)
         | MirStmt::SmemDescRead(r, _)
         | MirStmt::TmemAccess(r, _, _, _) => vec![*r],
-        MirStmt::SyncThreads => Vec::new(),
+        MirStmt::SyncThreads | MirStmt::SyncWarp => Vec::new(),
     }
 }
 
@@ -3893,5 +3893,84 @@ mir.func @scale_quad: builtin.function <(mir.slice <builtin.fp32 ,mutable:false,
         let inc_lean = export_named_source(&inc_mir, "scale_quad").expect("exports inc_mir");
         lean_exporter::runner::check_generated_lean(&inc_lean, &lean_dir)
             .expect_err("Lean 4 must reject inclusive `idx <= n` under `out.len() >= n`");
+    }
+}
+
+#[test]
+fn warp_sync_mask_and_nctaid_export_and_reject_races_in_lean() {
+    let valid_mir = r#"
+builtin.module @warp_sync_stage {
+  ^entry():
+    mir.func @warp_sync_transpose_k: builtin.function <(builtin.integer ui32) -> ()>
+      [gpu_kernel: builtin.string "true", launch_contract_domain: builtin.integer <1: ui32>, launch_contract_u32_coords: builtin.string "true", reqntid_x: builtin.integer <64: ui32>, reqntid_y: builtin.integer <1: ui32>, reqntid_z: builtin.integer <1: ui32>, verify_no_data_race: builtin.string "0", verify_no_oob_shared: builtin.string "0", verify_uniform_barriers: builtin.string "true"]
+    {
+      ^entry(_n: builtin.integer ui32):
+        tid = nvvm.read_ptx_sreg_tid_x () [] []: <() -> (builtin.integer ui32)>;
+        gdim = nvvm.read_ptx_sreg_nctaid_x () [] []: <() -> (builtin.integer ui32)>;
+        c32 = mir.constant () [] [value: builtin.integer <32: ui32>]: <() -> (builtin.integer ui32)>;
+        c1 = mir.constant () [] [value: builtin.integer <1: ui32>]: <() -> (builtin.integer ui32)>;
+        full_mask = mir.constant () [] [value: builtin.integer <4294967295: ui32>]: <() -> (builtin.integer ui32)>;
+        w = mir.div (tid, c32) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;
+        lane = mir.rem (tid, c32) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;
+        lane_next = mir.add (lane, c1) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;
+        xor_lane = mir.rem (lane_next, c32) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;
+        w_base = mir.mul (w, c32) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;
+        peer_slot32 = mir.add (w_base, xor_lane) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;
+        tid64 = mir.cast (tid) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+        peer64 = mir.cast (peer_slot32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+        s_raw = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui32, size: builtin.integer <64: i64>, alloc_key: builtin.string "SMEM_EPI", source_name: builtin.string "warp_sync_transpose_k::SMEM_EPI"]: <() -> (mir.ptr <builtin.integer ui32, mutable:true, addrspace:3, kind:Erased>)>;
+        wptr = mir.ptr_offset (s_raw, tid64) [] []: <(mir.ptr <builtin.integer ui32, mutable:true, addrspace:3, kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.integer ui32, mutable:true, addrspace:3, kind:Erased>)>;
+        mir.store (wptr, gdim) [] []: <(mir.ptr <builtin.integer ui32, mutable:true, addrspace:3, kind:Erased>, builtin.integer ui32) -> ()>;
+        mir.goto () [^sync] []: <() -> ()>
+
+      ^sync():
+        nvvm.bar_warp_sync (full_mask) [] []: <(builtin.integer ui32) -> ()>;
+        mir.goto () [^read] []: <() -> ()>
+
+      ^read():
+        rptr = mir.ptr_offset (s_raw, peer64) [] []: <(mir.ptr <builtin.integer ui32, mutable:true, addrspace:3, kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.integer ui32, mutable:true, addrspace:3, kind:Erased>)>;
+        _v = mir.load (rptr) [] []: <(mir.ptr <builtin.integer ui32, mutable:true, addrspace:3, kind:Erased>) -> (builtin.integer ui32)>;
+        mir.return () [] []: <() -> ()>
+    }
+}
+"#;
+
+    let valid_lean =
+        export_named_source(valid_mir, "warp_sync_transpose_k").expect("exports valid warp sync");
+    assert!(valid_lean.contains(".sreg .nctaidX"));
+    assert!(valid_lean.contains(".syncWarp"));
+    assert!(valid_lean.contains("(.syncWarp true)"));
+
+    if let Some(lean_dir) = lean_package_dir_if_available() {
+        lean_exporter::runner::check_generated_lean(&valid_lean, &lean_dir)
+            .expect("valid intra-warp sync_mask staging must prove race-free in Lean 4");
+
+        // Negative 1: dropping `nvvm.bar_warp_sync` creates an intra-warp race on `lane ^ 1`.
+        let no_sync_mir = valid_mir.replace(
+            "        nvvm.bar_warp_sync (full_mask) [] []: <(builtin.integer ui32) -> ()>;\n",
+            "",
+        );
+        let no_sync_lean = export_named_source(&no_sync_mir, "warp_sync_transpose_k")
+            .expect("exports missing warp sync");
+        lean_exporter::runner::check_generated_lean(&no_sync_lean, &lean_dir)
+            .expect_err("intra-warp peer read without nvvm.bar_warp_sync must fail in Lean 4");
+
+        // Negative 2: partial mask `0x0000_ffff` (`65535`) emits `(.syncWarp false)` and fails `UniformBarriers`.
+        let partial_mask_mir = valid_mir.replace("<4294967295: ui32>", "<65535: ui32>");
+        let partial_mask_lean = export_named_source(&partial_mask_mir, "warp_sync_transpose_k")
+            .expect("exports partial warp sync mask");
+        assert!(partial_mask_lean.contains("(.syncWarp false)"));
+        lean_exporter::runner::check_generated_lean(&partial_mask_lean, &lean_dir)
+            .expect_err("partial-mask nvvm.bar_warp_sync must fail UniformBarriers in Lean 4");
+
+        // Negative 3: cross-warp `(tid + 32) % 64` read across `nvvm.bar_warp_sync` alone fails `MirNoSharedRace`.
+        let cross_warp_mir = valid_mir.replace(
+            "peer_slot32 = mir.add (w_base, xor_lane)",
+            "c64 = mir.constant () [] [value: builtin.integer <64: ui32>]: <() -> (builtin.integer ui32)>;\n        t_plus32 = mir.add (tid, c32) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;\n        peer_slot32 = mir.rem (t_plus32, c64)",
+        );
+        let cross_warp_lean = export_named_source(&cross_warp_mir, "warp_sync_transpose_k")
+            .expect("exports cross-warp read");
+        lean_exporter::runner::check_generated_lean(&cross_warp_lean, &lean_dir)
+            .expect_err("cross-warp shared read across nvvm.bar_warp_sync must fail in Lean 4");
     }
 }

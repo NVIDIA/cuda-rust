@@ -29,13 +29,16 @@ use cuda_device::{
     shared::{SharedArray, cvta_generic_to_shared_offset},
     tcgen05::{
         Tcgen05AccumulatorType, Tcgen05ElementType, Tcgen05InstructionDescriptor, Tcgen05MmaShape,
-        tcgen05_alloc_cg2, tcgen05_commit_multicast_cg2, tcgen05_dealloc_cg2,
+        tcgen05_alloc, tcgen05_alloc_cg2, tcgen05_commit_multicast_cg2,
+        tcgen05_commit_shared_cluster, tcgen05_dealloc, tcgen05_dealloc_cg2,
         tcgen05_fence_after_thread_sync, tcgen05_fence_before_thread_sync,
-        tcgen05_ld_16x256b_x8_pure, tcgen05_load_wait, tcgen05_mma_f16_cg2,
-        tcgen05_relinquish_alloc_permit_cg2,
+        tcgen05_ld_16x256b_x8_pure, tcgen05_ld_32x32b_x64_raw, tcgen05_load_wait, tcgen05_mma_f16,
+        tcgen05_mma_f16_cg2, tcgen05_relinquish_alloc_permit, tcgen05_relinquish_alloc_permit_cg2,
     },
     thread,
-    tma::{TmaDescriptor, cp_async_bulk_tensor_2d_g2s_multicast_cg2},
+    tma::{
+        TmaDescriptor, cp_async_bulk_tensor_2d_g2s_cta, cp_async_bulk_tensor_2d_g2s_multicast_cg2,
+    },
     verify, warp,
 };
 use half::{bf16, f16};
@@ -237,13 +240,16 @@ fn verify_tcgen05_ptx_contract(ptx: &str) -> Result<(), String> {
     if !has_target {
         return Err("missing a supported datacenter tcgen05 target".to_string());
     }
-    if !document
-        .callables_named("gemm_sol_clc_multicast_4_stage_pipeline")
-        .any(|callable| callable.kind() == ptx_parse::CallableKind::Entry)
-    {
-        return Err(
-            "missing expected kernel entry `gemm_sol_clc_multicast_4_stage_pipeline`".to_string(),
-        );
+    for entry in [
+        "gemm_sol_clc_multicast_4_stage_pipeline",
+        "gemm_sol_short_k_m128n256",
+    ] {
+        if !document
+            .callables_named(entry)
+            .any(|callable| callable.kind() == ptx_parse::CallableKind::Entry)
+        {
+            return Err(format!("missing expected kernel entry `{entry}`"));
+        }
     }
     Ok(())
 }
@@ -407,6 +413,53 @@ fn validate_4096_short_k_walsh(
 
     let tiles_m = (M / 256) as u32;
     let tiles_n = (M / 128) as u32;
+
+    // 1. Validate `gemm_sol_short_k_m128n256` (`M128xN256`, 1-CTA persistent + `N192` wave tail).
+    let b_tma_short = encode_tma_2d_f16_swizzled(&dev_b, k as u64, M as u64, 64, 64)?;
+    let mut dev_out_short = DeviceBuffer::<u32>::zeroed(stream, M * M / 2)?;
+    let short_grid = B200_SMS.min((tiles_m * 2) * (tiles_n / 2));
+    let prep_short =
+        module.prepare_gemm_sol_short_k_m128n256(LaunchConfig1D::new(short_grid, 192, 0))?;
+    // SAFETY: `a_tma`, `b_tma_short`, and `dev_out_short` match `M x M x k` on `stream`.
+    unsafe {
+        module.gemm_sol_short_k_m128n256(
+            stream,
+            &prep_short,
+            a_tma,
+            b_tma_short,
+            &mut dev_out_short,
+            M as u32,
+            k as u32,
+            tiles_m,
+            tiles_n,
+        )?;
+    }
+    stream.synchronize()?;
+    let host_out_short = dev_out_short.to_host_vec(stream)?;
+    for row in 0..M {
+        for col in 0..M {
+            let word = host_out_short[(row * M + col) / 2];
+            let got_bits = if col % 2 == 0 {
+                (word & 0xFFFF) as u16
+            } else {
+                (word >> 16) as u16
+            };
+            let exp_bits = expected_by_xor[(r_code(row) ^ c_code(col)) as usize];
+            if got_bits != exp_bits {
+                return Err(format!(
+                    "short_k_m128n256 mismatch at C[{row},{col}] (K={k}): got {} vs expected {}",
+                    bf16_to_f32(got_bits),
+                    bf16_to_f32(exp_bits)
+                )
+                .into());
+            }
+        }
+    }
+    println!(
+        "PASSED: Lean-verified gemm_sol_short_k_m128n256 4096x4096x{k} (all 16,777,216 BF16 elements exact!)"
+    );
+
+    // 2. Validate `gemm_sol_clc_multicast_4_stage_pipeline` (`M256xN256`, 2-CTA cluster).
     let wide_total = tiles_m * (tiles_n / 2);
     let total_tiles = wide_total.div_ceil(B200_CLUSTER_PAIRS) * B200_CLUSTER_PAIRS;
 
@@ -571,6 +624,114 @@ fn run_benchmark_clc_multicast_4_stage_pipeline(
     Ok(tflops)
 }
 
+/// Benchmark the Lean-verified `gemm_sol_short_k_m128n256` (`M128xN256`, 1-CTA persistent) entry
+/// at `m x n x k` using `2,000` warmup launches followed by the median of `5 x 301` CUDA-event batches.
+fn run_benchmark_short_k_m128n256(
+    stream: &CudaStream,
+    module: &kernels::LoadedModule,
+    m: usize,
+    n: usize,
+    k: usize,
+) -> Result<f64, Box<dyn std::error::Error>> {
+    let warmup = benchmark_count("GEMM_SOL_WARMUP", 2000)?;
+    let iters = benchmark_count("GEMM_SOL_ITERS", 301)?;
+    let repeats = benchmark_count("GEMM_SOL_REPEATS", 5)?;
+    if repeats.is_multiple_of(2) {
+        return Err("GEMM_SOL_REPEATS must be odd for the median".into());
+    }
+
+    let dev_a = DeviceBuffer::<u16>::zeroed(stream, m * k)?;
+    let dev_b = DeviceBuffer::<u16>::zeroed(stream, n * k)?;
+    let a_tma = encode_tma_2d_f16_swizzled(&dev_a, k as u64, m as u64, 64, 128)?;
+    let b_tma = encode_tma_2d_f16_swizzled(&dev_b, k as u64, n as u64, 64, 64)?;
+
+    let tiles_m = (m / 256) as u32;
+    let tiles_n = (n / 128) as u32;
+    let grid_ctas = B200_SMS.min((tiles_m * 2) * (tiles_n / 2));
+    let cfg = LaunchConfig1D::new(grid_ctas, 192, 0);
+    let prep = module.prepare_gemm_sol_short_k_m128n256(cfg)?;
+
+    let output_u32_count = m * n / 2;
+    let mut dev_out = DeviceBuffer::<u32>::zeroed(stream, output_u32_count)?;
+    let n_arg = n as u32;
+    let k_arg = k as u32;
+
+    for _ in 0..warmup {
+        // SAFETY: `a_tma`, `b_tma`, and `dev_out` match the validated `m x n x k` allocations on `stream`.
+        unsafe {
+            module.gemm_sol_short_k_m128n256(
+                stream,
+                &prep,
+                a_tma,
+                b_tma,
+                &mut dev_out,
+                n_arg,
+                k_arg,
+                tiles_m,
+                tiles_n,
+            )?;
+        }
+    }
+    stream.synchronize()?;
+
+    let mut samples_us = Vec::with_capacity(repeats);
+    for _ in 0..repeats {
+        let start_event =
+            stream.record_event(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+        for _ in 0..iters {
+            // SAFETY: `a_tma`, `b_tma`, and `dev_out` remain valid across the timed batch.
+            unsafe {
+                module.gemm_sol_short_k_m128n256(
+                    stream,
+                    &prep,
+                    a_tma,
+                    b_tma,
+                    &mut dev_out,
+                    n_arg,
+                    k_arg,
+                    tiles_m,
+                    tiles_n,
+                )?;
+            }
+        }
+        let end_event =
+            stream.record_event(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+        let elapsed_ms = start_event.elapsed_ms(&end_event)?;
+        samples_us.push(elapsed_ms as f64 * 1000.0 / iters as f64);
+    }
+
+    let mut ordered = samples_us.clone();
+    ordered.sort_by(f64::total_cmp);
+    let avg_us = ordered[repeats / 2];
+    let avg_ms = avg_us / 1000.0;
+    let flops = 2.0 * m as f64 * n as f64 * k as f64;
+    let tflops = (flops / (avg_ms / 1000.0)) / 1e12;
+
+    println!("=======================================================");
+    println!(
+        "  BENCHMARK: gemm_sol_short_k_m128n256 (M128xN256, cg1, Lean-verified) {m}x{n}x{k} f16 -> bf16"
+    );
+    println!("=======================================================");
+    println!("  Grid:        {grid_ctas} CTAs (1D persistent, cluster=1, cg1)");
+    println!("  K-loop:      {} outer iters (BK=64, 4 MMAs each)", k / 64);
+    println!(
+        "  Pipeline:    cta_group::1 + 4-stage SMEM (192 KiB) + 2-stage TMEM + 18 KiB SMEM_EPI"
+    );
+    println!("  Iterations:  {iters} x {repeats} batches (after {warmup} warmup)");
+    println!("  Statistic:   median batch mean");
+    println!("  Samples us:  {samples_us:?}");
+    println!("  Average:     {avg_us:.3} us / kernel");
+    println!("  FLOPS/kern:  {flops:.3e}");
+    println!("  Throughput:  {tflops:.3} TFLOPS");
+    println!(
+        "RESULT {{\"implementation\":\"cuda-oxide-verified\",\"m\":{m},\"n\":{n},\"k\":{k},\"warmup\":{warmup},\"iters\":{iters},\"repeats\":{repeats},\"samples_us\":{samples_us:?},\"median_us\":{avg_us:.9},\"tflops\":{tflops:.9},\"variant\":\"M128xN256\",\"input\":\"fp16\",\"output\":\"bf16\",\"compute\":\"fp32\"}}"
+    );
+    print_cublas_comparison(tflops, m, n, k);
+    println!("=======================================================\n");
+
+    Ok(tflops)
+}
+
 /// Print a compact throughput summary table for all benchmarked `(M, N, K, TFLOPS)` problem sizes.
 /// Matches the summary banner printed by `examples/gemm_sol_final`.
 fn print_benchmark_summary(measurements: &[(usize, usize, usize, f64)]) {
@@ -644,7 +805,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ];
         let mut measurements = Vec::with_capacity(sizes.len());
         for (m, n, k) in sizes {
-            let tflops = run_benchmark_clc_multicast_4_stage_pipeline(&stream, &module, m, n, k)?;
+            let tflops = if k <= 512 {
+                run_benchmark_short_k_m128n256(&stream, &module, m, n, k)?
+            } else {
+                run_benchmark_clc_multicast_4_stage_pipeline(&stream, &module, m, n, k)?
+            };
             measurements.push((m, n, k, tflops));
         }
         print_benchmark_summary(&measurements);

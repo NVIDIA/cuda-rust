@@ -27,10 +27,13 @@ REJECTED = (
     ("tests/program/RejectedUnknownGuard.lean", "branch pruned on an untracked guard"),
     ("tests/program/RejectedUnknownWriteCoverage.lean", "write coverage claimed across an untracked guard"),
     ("tests/program/RejectedDivergentLoopUniformity.lean", "barrier loop bounded by a split-thread join"),
+    ("tests/program/RejectedCrossWarpSyncMaskRace.lean", "cross-warp shared-memory race across sync_mask alone"),
+    ("tests/program/Rejected2DNon32RowSyncMaskRace.lean", "2D non-multiple-of-32 row cross-warp sync_mask race"),
 )
 # Refused by the CTA state machine: `decide` evaluates `checkUniformBarriersWith` to `false`.
 REJECTED_BARRIERS = (
     ("RejectedTmaReadAfterSync.lean", "TMA destination read after sync_threads without an mbarrier wait"),
+    ("RejectedSubwarpSyncMask.lean", "sub-warp divergent warp::sync_mask"),
 )
 
 

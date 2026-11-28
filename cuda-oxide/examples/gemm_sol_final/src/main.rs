@@ -34,11 +34,15 @@ use cuda_device::convert::{bf16_to_f32, cvt_bf16x2_f32};
 use cuda_device::shared::{SharedArray, cvta_generic_to_shared_offset};
 use cuda_device::tcgen05::{
     Tcgen05AccumulatorType, Tcgen05ElementType, Tcgen05InstructionDescriptor, Tcgen05MmaShape,
-    tcgen05_alloc_cg2, tcgen05_commit_multicast_cg2, tcgen05_dealloc_cg2,
-    tcgen05_fence_after_thread_sync, tcgen05_fence_before_thread_sync, tcgen05_ld_16x256b_x8_pure,
-    tcgen05_load_wait, tcgen05_mma_f16_cg2, tcgen05_relinquish_alloc_permit_cg2,
+    tcgen05_alloc, tcgen05_alloc_cg2, tcgen05_commit_multicast_cg2, tcgen05_commit_shared_cluster,
+    tcgen05_dealloc, tcgen05_dealloc_cg2, tcgen05_fence_after_thread_sync,
+    tcgen05_fence_before_thread_sync, tcgen05_ld_16x256b_x8_pure, tcgen05_ld_32x32b_x64_raw,
+    tcgen05_load_wait, tcgen05_mma_f16, tcgen05_mma_f16_cg2, tcgen05_relinquish_alloc_permit,
+    tcgen05_relinquish_alloc_permit_cg2,
 };
-use cuda_device::tma::{TmaDescriptor, cp_async_bulk_tensor_2d_g2s_multicast_cg2};
+use cuda_device::tma::{
+    TmaDescriptor, cp_async_bulk_tensor_2d_g2s_cta, cp_async_bulk_tensor_2d_g2s_multicast_cg2,
+};
 use cuda_device::{DisjointSlice, cluster_launch, kernel, thread, warp};
 use cuda_host::{
     KernelFamily, KernelFamilyBuildError, KernelFamilyId, KernelProblem, KernelSelector,
@@ -311,9 +315,11 @@ type GemmKernelLauncher = unsafe fn(
 /// Stable identifier for each compiled variant in the `gemm_sol_final/output_tile@1` family.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GemmVariantId {
-    /// `256 × 256` macro tile per 2-CTA cluster, selected for `4096³` and `8192³`.
+    /// Persistent 1-CTA `128 × 256` macro tile (`4 × 148` wave-balanced + zero-shuffle `32x32b`), selected for `K <= 512`.
+    M128xN256,
+    /// Persistent `256 × 256` macro tile per 2-CTA cluster, selected for `4096³` and `8192³`.
     M256xN256,
-    /// `512 × 256` macro tile per 2-CTA cluster, selected for `16384³` (`tiles_m >= 64`).
+    /// Persistent `512 × 256` macro tile per 2-CTA cluster, selected for `16384³` (`tiles_m >= 64`).
     M512xN256,
 }
 
@@ -322,31 +328,46 @@ enum GemmVariantId {
 struct GemmVariantMetadata {
     /// PTX entry symbol name in the compiled device module.
     kernel_name: &'static str,
-    /// Human-readable macro-tile label (`"M256xN256"` or `"M512xN256"`).
+    /// Human-readable macro-tile label (`"M256xN128"`, `"M256xN256"`, or `"M512xN256"`).
     output_tile: &'static str,
     /// Required `M` divisibility and minimum `M` dimension for this variant.
     m_tile: usize,
     /// Required `N` divisibility and minimum `N` dimension for this variant.
     n_tile: usize,
-    /// Required `K` divisibility and minimum `K` dimension (`256` = 4 outer K-iterations of 64).
+    /// Required `K` divisibility and minimum `K` dimension (`64` = 1 outer K-iteration of 64).
     k_tile_multiple: usize,
+    /// Maximum `K` for which the automatic selector prefers this short-`K` variant (`usize::MAX` otherwise).
+    preferred_up_to_k: usize,
     /// Minimum `tiles_m = M / 256` at which the automatic selector prefers this variant.
     preferred_from_tiles_m: usize,
 }
 
-/// Two-variant `KernelFamily` table for `gemm_sol_final/output_tile@1`.
-type GemmKernelFamily = KernelFamily<GemmVariantId, GemmKernelLauncher, GemmVariantMetadata, 2>;
+/// Three-variant `KernelFamily` table for `gemm_sol_final/output_tile@1`.
+type GemmKernelFamily = KernelFamily<GemmVariantId, GemmKernelLauncher, GemmVariantMetadata, 3>;
 
 /// Single entry in [`GemmKernelFamily`] pairing a [`GemmVariantId`], launcher, and [`GemmVariantMetadata`].
 type GemmVariant = KernelVariant<GemmVariantId, GemmKernelLauncher, GemmVariantMetadata>;
 
-/// Construct the two-entry `gemm_sol_final/output_tile@1` kernel family.
-/// Registers `M256xN256` (`preferred_from_tiles_m = 0`) and `M512xN256` (`preferred_from_tiles_m = 64`).
+/// Construct the three-entry `gemm_sol_final/output_tile@1` kernel family.
+/// Registers `M256xN128` (`K <= 512`), `M256xN256` (`K > 512`, `tiles_m < 64`), and `M512xN256` (`tiles_m >= 64`).
 fn gemm_kernel_family() -> Result<GemmKernelFamily, KernelFamilyBuildError> {
     KernelFamily::try_new(
         "gemm_sol_final/output_tile",
         1,
         [
+            KernelVariant::new(
+                GemmVariantId::M128xN256,
+                kernels::LoadedModule::gemm_sol_short_k_m128n256 as GemmKernelLauncher,
+                GemmVariantMetadata {
+                    kernel_name: "gemm_sol_short_k_m128n256",
+                    output_tile: "M128xN256",
+                    m_tile: 256,
+                    n_tile: 256,
+                    k_tile_multiple: 64,
+                    preferred_up_to_k: 512,
+                    preferred_from_tiles_m: 0,
+                },
+            ),
             KernelVariant::new(
                 GemmVariantId::M256xN256,
                 kernels::LoadedModule::gemm_sol_clc_multicast_4_stage_pipeline
@@ -357,6 +378,7 @@ fn gemm_kernel_family() -> Result<GemmKernelFamily, KernelFamilyBuildError> {
                     m_tile: 256,
                     n_tile: 256,
                     k_tile_multiple: 64,
+                    preferred_up_to_k: usize::MAX,
                     preferred_from_tiles_m: 0,
                 },
             ),
@@ -370,6 +392,7 @@ fn gemm_kernel_family() -> Result<GemmKernelFamily, KernelFamilyBuildError> {
                     m_tile: 512,
                     n_tile: 256,
                     k_tile_multiple: 64,
+                    preferred_up_to_k: usize::MAX,
                     preferred_from_tiles_m: 64,
                 },
             ),
@@ -520,21 +543,30 @@ impl KernelSelector<GemmProblem, GemmVariant, GemmVariantId> for GemmSelector {
         let preferred = eligible
             .iter()
             .copied()
-            .filter(|variant| variant.metadata().preferred_from_tiles_m <= problem.tiles_m)
-            .max_by_key(|variant| variant.metadata().preferred_from_tiles_m)
+            .filter(|variant| {
+                problem.k <= variant.metadata().preferred_up_to_k
+                    && variant.metadata().preferred_from_tiles_m <= problem.tiles_m
+            })
+            .min_by_key(|variant| {
+                (
+                    variant.metadata().preferred_up_to_k,
+                    usize::MAX - variant.metadata().preferred_from_tiles_m,
+                )
+            })
             .unwrap_or(eligible[0]);
         Ok(*preferred.id())
     }
 }
 
-/// Parse a `GEMM_SOL_VARIANT` string (`"auto"`, `"m256xn256"`, or `"m512xn256"`) into a [`SelectionMode`].
+/// Parse a `GEMM_SOL_VARIANT` string (`"auto"`, `"m128xn256"`, `"m256xn256"`, or `"m512xn256"`) into a [`SelectionMode`].
 fn gemm_selection_mode(value: Option<&str>) -> Result<SelectionMode<GemmVariantId>, String> {
     match value.unwrap_or("auto") {
         "auto" => Ok(SelectionMode::Auto),
+        "m128xn256" => Ok(SelectionMode::Force(GemmVariantId::M128xN256)),
         "m256xn256" => Ok(SelectionMode::Force(GemmVariantId::M256xN256)),
         "m512xn256" => Ok(SelectionMode::Force(GemmVariantId::M512xN256)),
         other => Err(format!(
-            "invalid GEMM_SOL_VARIANT={other:?}; expected auto, m256xn256, or m512xn256"
+            "invalid GEMM_SOL_VARIANT={other:?}; expected auto, m128xn256, m256xn256, or m512xn256"
         )),
     }
 }
@@ -610,7 +642,8 @@ fn verify_tcgen05_ptx_contract(ptx: &str) -> Result<(), String> {
     const TARGETS: [&str; 8] = [
         "sm_100a", "sm_101a", "sm_103a", "sm_110a", "sm_100f", "sm_101f", "sm_103f", "sm_110f",
     ];
-    const ENTRIES: [&str; 2] = [
+    const ENTRIES: [&str; 3] = [
+        "gemm_sol_short_k_m128n256",
         "gemm_sol_clc_multicast_4_stage_pipeline",
         "gemm_sol_clc_multicast_4_stage_pipeline_large",
     ];
@@ -680,12 +713,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             run_short_k_correctness_test(
                 &stream,
                 &module,
+                kernels::LoadedModule::gemm_sol_short_k_m128n256,
+                "gemm_sol_short_k_m128n256",
+                "M128xN256",
+                4096,
+                4096,
+                short_k,
+                64,
+                B200_CLUSTER_PAIRS,
+            )?;
+            run_short_k_correctness_test(
+                &stream,
+                &module,
                 kernels::LoadedModule::gemm_sol_clc_multicast_4_stage_pipeline,
                 "gemm_sol_clc_multicast_4_stage_pipeline",
                 "M256xN256",
                 4096,
                 4096,
                 short_k,
+                32,
+                0,
             )?;
         }
         run_correctness_test_clc_multicast_4_stage_pipeline(
@@ -986,6 +1033,8 @@ fn run_short_k_correctness_test(
     m: usize,
     n: usize,
     k: usize,
+    b_box_mn: u32,
+    fixed_clusters: u32,
 ) -> Result<(), Box<dyn std::error::Error>> {
     assert!(
         m == 4096 && n == 4096 && k >= 64 && k.is_multiple_of(64),
@@ -1013,14 +1062,18 @@ fn run_short_k_correctness_test(
     let dev_a = DeviceBuffer::from_host(stream, &host_a)?;
     let dev_b = DeviceBuffer::from_host(stream, &host_b)?;
     let a_tma = encode_tma_2d_f16_swizzled(&dev_a, k as u64, m as u64, 64, 128)?;
-    let b_tma = encode_tma_2d_f16_swizzled(&dev_b, k as u64, n as u64, 64, 32)?;
+    let b_tma = encode_tma_2d_f16_swizzled(&dev_b, k as u64, n as u64, 64, b_box_mn)?;
     let dev_a_tma = DeviceBuffer::from_host(stream, &a_tma.opaque)?;
     let dev_b_tma = DeviceBuffer::from_host(stream, &b_tma.opaque)?;
 
     let tiles_m = (m / 256) as u32;
     let tiles_n = (n / 128) as u32;
-    let wide_total = tiles_m * (tiles_n / 2);
-    let total_tiles = wide_total.div_ceil(B200_CLUSTER_PAIRS) * B200_CLUSTER_PAIRS;
+    let total_tiles = if fixed_clusters > 0 {
+        fixed_clusters
+    } else {
+        let wide_total = tiles_m * (tiles_n / 2);
+        wide_total.div_ceil(B200_CLUSTER_PAIRS) * B200_CLUSTER_PAIRS
+    };
     let cfg = LaunchConfig {
         grid_dim: (total_tiles * 2, 1, 1),
         block_dim: (192, 1, 1),
@@ -1099,14 +1152,16 @@ fn run_benchmark_clc_multicast_4_stage_pipeline(
     let dev_a = DeviceBuffer::<u16>::zeroed(stream, m * k)?;
     let dev_b = DeviceBuffer::<u16>::zeroed(stream, n * k)?;
 
+    let selected_id = *selected.variant().id();
+    let b_box_mn = if selected_id == GemmVariantId::M128xN256 {
+        64
+    } else if m == 4096 {
+        32
+    } else {
+        128
+    };
     let a_tma = encode_tma_2d_f16_swizzled(&dev_a, k as u64, m as u64, 64, 128)?;
-    let b_tma = encode_tma_2d_f16_swizzled(
-        &dev_b,
-        k as u64,
-        n as u64,
-        64,
-        if m == 4096 { 32 } else { 128 },
-    )?;
+    let b_tma = encode_tma_2d_f16_swizzled(&dev_b, k as u64, n as u64, 64, b_box_mn)?;
 
     let dev_a_tma = DeviceBuffer::from_host(stream, &a_tma.opaque)?;
     let dev_b_tma = DeviceBuffer::from_host(stream, &b_tma.opaque)?;
@@ -1117,8 +1172,12 @@ fn run_benchmark_clc_multicast_4_stage_pipeline(
 
     let tiles_m = (m / 256) as u32;
     let tiles_n = (n / 128) as u32;
-    let wide_total = tiles_m * (tiles_n / 2);
-    let total_tiles = wide_total.div_ceil(B200_CLUSTER_PAIRS) * B200_CLUSTER_PAIRS;
+    let total_tiles = if selected_id == GemmVariantId::M128xN256 {
+        B200_CLUSTER_PAIRS
+    } else {
+        let wide_total = tiles_m * (tiles_n / 2);
+        wide_total.div_ceil(B200_CLUSTER_PAIRS) * B200_CLUSTER_PAIRS
+    };
 
     let cfg = LaunchConfig {
         grid_dim: (total_tiles * 2, 1, 1),
@@ -1295,20 +1354,30 @@ mod kernel_family_tests {
     }
 
     #[test]
-    fn ptx_only_pass_requires_target_and_both_kernel_entries() {
+    fn ptx_only_pass_requires_target_and_all_kernel_entries() {
         let target = ".target sm_100a";
+        let short = ".visible .entry gemm_sol_short_k_m128n256(";
         let small = ".visible .entry gemm_sol_clc_multicast_4_stage_pipeline(";
         let large = ".visible .entry gemm_sol_clc_multicast_4_stage_pipeline_large(";
 
-        assert!(verify_tcgen05_ptx_contract(&format!("{target}\n{small}\n{large}")).is_ok());
-        assert!(verify_tcgen05_ptx_contract(&format!("{target}, debug\n{small}\n{large}")).is_ok());
-        assert!(verify_tcgen05_ptx_contract("").is_err());
-        assert!(verify_tcgen05_ptx_contract(&format!("{target}\n{small}")).is_err());
         assert!(
-            verify_tcgen05_ptx_contract(&format!(".target sm_120a\n{small}\n{large}")).is_err()
+            verify_tcgen05_ptx_contract(&format!("{target}\n{short}\n{small}\n{large}")).is_ok()
         );
         assert!(
-            verify_tcgen05_ptx_contract(&format!("// {target}\n// {small}\n// {large}")).is_err()
+            verify_tcgen05_ptx_contract(&format!("{target}, debug\n{short}\n{small}\n{large}"))
+                .is_ok()
+        );
+        assert!(verify_tcgen05_ptx_contract("").is_err());
+        assert!(verify_tcgen05_ptx_contract(&format!("{target}\n{small}\n{large}")).is_err());
+        assert!(
+            verify_tcgen05_ptx_contract(&format!(".target sm_120a\n{short}\n{small}\n{large}"))
+                .is_err()
+        );
+        assert!(
+            verify_tcgen05_ptx_contract(&format!(
+                "// {target}\n// {short}\n// {small}\n// {large}"
+            ))
+            .is_err()
         );
     }
 
@@ -1375,14 +1444,18 @@ mod kernel_family_tests {
     #[test]
     fn family_accepts_short_k_multiples_of_64_and_rejects_unaligned_k() {
         let family = gemm_kernel_family().unwrap();
-        for valid_k in [64, 128, 192, 256, 512, 4224] {
-            let problem = GemmProblem::new(4096, 4096, valid_k);
+        for short_k in [64, 128, 192, 256, 512] {
+            let problem = GemmProblem::new(4096, 4096, short_k);
             let selected = select_gemm_variant(&family, &problem, SelectionMode::Auto).unwrap();
-            assert_eq!(*selected.variant().id(), GemmVariantId::M256xN256);
+            assert_eq!(*selected.variant().id(), GemmVariantId::M128xN256);
         }
+        let problem_large_k = GemmProblem::new(4096, 4096, 4224);
+        let selected_large_k =
+            select_gemm_variant(&family, &problem_large_k, SelectionMode::Auto).unwrap();
+        assert_eq!(*selected_large_k.variant().id(), GemmVariantId::M256xN256);
         for problem in [
             GemmProblem::new(0, 0, 0),
-            GemmProblem::new(4096, 4224, 4096),
+            GemmProblem::new(4096, 4160, 4096),
             GemmProblem::new(4096, 4096, 32),
             GemmProblem::new(4096, 4096, 96),
             GemmProblem::new(4096, 4096, 4128),

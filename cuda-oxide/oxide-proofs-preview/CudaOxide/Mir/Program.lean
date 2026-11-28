@@ -79,6 +79,12 @@ inductive Sreg where
   | ntidX
   /-- `blockDim.y` (`nvvm.read_ptx_sreg_ntid_y`). -/
   | ntidY
+  /-- `gridDim.x` (`nvvm.read_ptx_sreg_nctaid_x`). -/
+  | nctaidX
+  /-- `gridDim.y` (`nvvm.read_ptx_sreg_nctaid_y`). -/
+  | nctaidY
+  /-- `gridDim.z` (`nvvm.read_ptx_sreg_nctaid_z`). -/
+  | nctaidZ
   /-- Warp lane index `(threadIdx.y * blockDim.x + threadIdx.x) % 32` (`nvvm.read_ptx_sreg_laneid`). -/
   | laneId
   /-- CTA cluster X rank `blockIdx.x % clusterDimX` (`nvvm.read_ptx_sreg_cluster_ctaid_x`). -/
@@ -199,6 +205,8 @@ inductive Stmt where
   | assertCond (assertId cond : Nat)
   /-- CTA-wide barrier `thread::sync_threads()` (`nvvm.barrier0`). -/
   | syncThreads
+  /-- Full-warp barrier `warp::sync_mask(u32::MAX)` (`nvvm.bar_warp_sync` with `0xffff_ffff`). -/
+  | syncWarp
   /-- Bounds-checked slot reference on a `SharedArray<Barrier, N>` pointer `ptr`. -/
   | barrierSlotCheck (ptr : Nat)
   /-- Bounds-checked peer CTA rank (`rank < clusterDimX`) on `cluster::map_shared_rank*`. -/
@@ -360,6 +368,8 @@ structure InputEnv where
   mbarFlag : Nat → Nat → Bool := fun _ _ => false
   /-- Arbitrary runtime unsigned value returned by an opaque operation `id` on thread `t`. -/
   opaqueUint : ThreadCtx → Nat → Nat := fun _ _ => 0
+  /-- CTA-uniform 32-bit grid dimension `gridDim.{x, y, z}` (`dim = 0, 1, 2`). -/
+  nctaid : Nat → Nat := fun _ => 1
 
 /-- Conjunction of bit-width bounds `env.scalar i < 2 ^ w` and `env.sliceLen i < 2 ^ 64` over `params`. -/
 def paramBoundsProp (env : InputEnv) : Nat → List ParamKind → Prop
@@ -497,6 +507,9 @@ def evalRhs (f : MirFunc) (env : InputEnv) (t : ThreadCtx) (regs : RegFile) : Rh
   | .sreg .ctaidY => .int t.by_
   | .sreg .ntidX => .int f.blockDimX
   | .sreg .ntidY => .int f.blockDimY
+  | .sreg .nctaidX => .int (wordMod 32 (env.nctaid 0))
+  | .sreg .nctaidY => .int (wordMod 32 (env.nctaid 1))
+  | .sreg .nctaidZ => .int (wordMod 32 (env.nctaid 2))
   | .sreg .laneId => .int ((t.ty * f.blockDimX + t.tx) % 32)
   | .sreg .clusterCtaidX => .int (t.bx % max 1 f.clusterDimX)
   | .index1D => .int (wordMod 64 (t.bx * f.blockDimX + t.tx))
@@ -579,6 +592,8 @@ structure MemEvent where
   index : Nat
   /-- Monotonic CTA barrier phase (`syncThreads` count executed prior to this event). -/
   phase : Nat
+  /-- Monotonic intra-warp barrier phase (`syncWarp` count executed prior to this event). -/
+  warpPhase : Nat := 0
   /-- `some (barId, slot)` when released by an `mbarrier` arrival or TMA transfer on `BAR[slot]`. -/
   syncBar : Option (Nat × Nat) := none
   deriving Repr, DecidableEq
@@ -629,27 +644,32 @@ def findTrailArrive (f : MirFunc) : Nat → Terminator → List Stmt → Option 
                 else none
             | _, _ => none
 
-/-- Execute a list of statements sequentially from `(regs, phase)`, accumulating `MemEvent`s and `TmemEvent`s. -/
+/-- Execute a list of statements sequentially from `(regs, phases)`, accumulating `MemEvent`s and `TmemEvent`s. -/
 def execStmts (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
-    (regs : RegFile) (phase : Nat) (term : Terminator) : List Stmt → RegFile × Nat × List MemEvent × List TmemEvent
-  | [] => (regs, phase, [], [])
+    (regs : RegFile) (phases : Nat × Nat) (term : Terminator) :
+    List Stmt → RegFile × (Nat × Nat) × List MemEvent × List TmemEvent
+  | [] => (regs, phases, [], [])
   | stmt :: rest =>
       match stmt with
       | .assign dst (.load ptr) =>
           let ev := match regs ptr with
-            | .ptr sp bid off => [{ isWrite := false, space := sp, bufId := bid, index := off, phase := phase }]
+            | .ptr sp bid off =>
+                [{ isWrite := false, space := sp, bufId := bid, index := off,
+                   phase := phases.1, warpPhase := phases.2 }]
             | _ => []
-          let (r', p', evs, tevs) := execStmts f env t (regs.set dst .unk) phase term rest
+          let (r', p', evs, tevs) := execStmts f env t (regs.set dst .unk) phases term rest
           (r', p', ev ++ evs, tevs)
       | .assign dst (.loadTmemBase ptr cols) =>
           let ev := match regs ptr with
-            | .ptr sp bid off => [{ isWrite := false, space := sp, bufId := bid, index := off, phase := phase }]
+            | .ptr sp bid off =>
+                [{ isWrite := false, space := sp, bufId := bid, index := off,
+                   phase := phases.1, warpPhase := phases.2 }]
             | _ => []
-          let (r', p', evs, tevs) := execStmts f env t (regs.set dst (.tmemPtr cols 0)) phase term rest
+          let (r', p', evs, tevs) := execStmts f env t (regs.set dst (.tmemPtr cols 0)) phases term rest
           (r', p', ev ++ evs, tevs)
       | .assign dst rhs =>
           let v := evalRhs f env t regs rhs
-          execStmts f env t (regs.set dst v) phase term rest
+          execStmts f env t (regs.set dst v) phases term rest
       | .store ptr _val =>
           let sbar := match findTrailArrive f 8 term rest with
             | some (b, sv) => match regs sv with | .int sVal => some (b, sVal) | _ => none
@@ -657,38 +677,44 @@ def execStmts (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
           let ev := match regs ptr with
             | .ptr sp bid off =>
                 [{ isWrite := true, space := sp, bufId := bid, index := off,
-                   phase := phase, syncBar := if sp == .shared then sbar else none }]
+                   phase := phases.1, warpPhase := phases.2, syncBar := if sp == .shared then sbar else none }]
             | _ => []
-          let (r', p', evs, tevs) := execStmts f env t regs phase term rest
+          let (r', p', evs, tevs) := execStmts f env t regs phases term rest
           (r', p', ev ++ evs, tevs)
       | .barrierSlotCheck ptr =>
           let ev := match regs ptr with
-            | .ptr sp bid off => [{ isWrite := false, space := sp, bufId := bid, index := off, phase := phase }]
+            | .ptr sp bid off =>
+                [{ isWrite := false, space := sp, bufId := bid, index := off,
+                   phase := phases.1, warpPhase := phases.2 }]
             | _ => []
-          let (r', p', evs, tevs) := execStmts f env t regs phase term rest
+          let (r', p', evs, tevs) := execStmts f env t regs phases term rest
           (r', p', ev ++ evs, tevs)
       | .assertCond _ _ | .clusterRankCheck _ | .mbarArrive _ _ _ | .mbarArriveExpectTx _ _ _ =>
-          execStmts f env t regs phase term rest
+          execStmts f env t regs phases term rest
       | .syncThreads =>
-          execStmts f env t regs (phase + 1) term rest
+          execStmts f env t regs (phases.1 + 1, phases.2) term rest
+      | .syncWarp =>
+          execStmts f env t regs (phases.1, phases.2 + 1) term rest
       | .tmaCopyG2S ptr barId slotVar spanElems =>
           let span := max 1 spanElems
           let ev := match regs ptr, regs slotVar with
             | .ptr sp bid off, .int sVal =>
                 (List.range span).map fun k =>
                   { isWrite := true, space := sp, bufId := bid, index := off + k,
-                    phase := phase, syncBar := some (barId, sVal) }
+                    phase := phases.1, warpPhase := phases.2, syncBar := some (barId, sVal) }
             | _, _ => []
-          let (r', p', evs, tevs) := execStmts f env t regs phase term rest
+          let (r', p', evs, tevs) := execStmts f env t regs phases term rest
           (r', p', ev ++ evs, tevs)
       | .tmemAlloc ptr _cols =>
           let ev :=
             if t.tx % 32 == 0 then
               match regs ptr with
-              | .ptr sp bid off => [{ isWrite := true, space := sp, bufId := bid, index := off, phase := phase }]
+              | .ptr sp bid off =>
+                  [{ isWrite := true, space := sp, bufId := bid, index := off,
+                     phase := phases.1, warpPhase := phases.2 }]
               | _ => []
             else []
-          let (r', p', evs, tevs) := execStmts f env t regs phase term rest
+          let (r', p', evs, tevs) := execStmts f env t regs phases term rest
           (r', p', ev ++ evs, tevs)
       | .smemDescRead descVar tileBytes =>
           let span := max 1 tileBytes
@@ -697,9 +723,9 @@ def execStmts (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
                 let eb := max 1 (f.sharedDecls.getD sid { size := 0 }).elemBytes
                 (List.range span).map fun k =>
                   { isWrite := false, space := .shared, bufId := sid,
-                    index := (byteOff + k) / eb, phase := phase }
+                    index := (byteOff + k) / eb, phase := phases.1, warpPhase := phases.2 }
             | _ => []
-          let (r', p', evs, tevs) := execStmts f env t regs phase term rest
+          let (r', p', evs, tevs) := execStmts f env t regs phases term rest
           (r', p', ev ++ evs, tevs)
       | .tmemAccess tmemVar hl wc wr =>
           let tev := match regs tmemVar with
@@ -707,7 +733,7 @@ def execStmts (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
                 [{ allocCols := cols, relAddr := rel, heightLanes := hl,
                    widthCols := wc, warpRestricted := wr }]
             | _ => []
-          let (r', p', evs, tevs) := execStmts f env t regs phase term rest
+          let (r', p', evs, tevs) := execStmts f env t regs phases term rest
           (r', p', evs, tev ++ tevs)
 
 /-- Initial register file at kernel entry (`block 0`). -/
@@ -718,115 +744,117 @@ def initialRegs (f : MirFunc) (env : InputEnv) : RegFile :=
     | some (.scalar _) => acc.set ba.varId (.int (env.scalar idx))
     | _ => acc.set ba.varId .unk) (fun _ => .unk)
 
-/-- Inductive small-step reachability of `(blockIdx, entryRegs, entryPhase)` for thread `t`
+/-- Inductive small-step reachability of `(blockIdx, entryRegs, entryPhases)` for thread `t`
     executing `f` on `env` across arbitrary branches and loop iterations. -/
 inductive Reachable (f : MirFunc) (env : InputEnv) (t : ThreadCtx) :
-    Nat → RegFile → Nat → Prop where
-  /-- Kernel starts at `block 0` in phase `0` with `initialRegs f env`. -/
+    Nat → RegFile → (Nat × Nat) → Prop where
+  /-- Kernel starts at `block 0` in phases `(0, 0)` with `initialRegs f env`. -/
   | entry (hpos : 0 < f.blocks.length) :
-      Reachable f env t 0 (initialRegs f env) 0
+      Reachable f env t 0 (initialRegs f env) (0, 0)
   /-- Unconditional `mir.goto target args` transition. -/
-  | stepGoto {b target phase outPhase : Nat} {regs outRegs : RegFile}
+  | stepGoto {b target : Nat} {phases outPhases : Nat × Nat} {regs outRegs : RegFile}
       {evs : List MemEvent} {tevs : List TmemEvent} {args : List Nat}
-      (hreach : Reachable f env t b regs phase)
-      (hexec : execStmts f env t regs phase (f.blockAt b).term (f.blockAt b).stmts = (outRegs, outPhase, evs, tevs))
+      (hreach : Reachable f env t b regs phases)
+      (hexec : execStmts f env t regs phases (f.blockAt b).term (f.blockAt b).stmts = (outRegs, outPhases, evs, tevs))
       (hterm : (f.blockAt b).term = .goto target args)
       (hdst : target < f.blocks.length) :
-      Reachable f env t target (bindBlockArgs outRegs outRegs (f.blockAt target).args args) outPhase
+      Reachable f env t target (bindBlockArgs outRegs outRegs (f.blockAt target).args args) outPhases
   /-- Conditional `mir.cond_br` taking `thenBlk` unless `outRegs cond = .bool false`.
       A `.unk` condition, such as a comparison on a loaded value, may take either arm. -/
-  | stepCondTrue {b tBlk fBlk cond phase outPhase : Nat} {regs outRegs : RegFile}
+  | stepCondTrue {b tBlk fBlk cond : Nat} {phases outPhases : Nat × Nat} {regs outRegs : RegFile}
       {evs : List MemEvent} {tevs : List TmemEvent} {tArgs fArgs : List Nat}
-      (hreach : Reachable f env t b regs phase)
-      (hexec : execStmts f env t regs phase (f.blockAt b).term (f.blockAt b).stmts = (outRegs, outPhase, evs, tevs))
+      (hreach : Reachable f env t b regs phases)
+      (hexec : execStmts f env t regs phases (f.blockAt b).term (f.blockAt b).stmts = (outRegs, outPhases, evs, tevs))
       (hterm : (f.blockAt b).term = .condBr cond tBlk tArgs fBlk fArgs)
       (hcond : outRegs cond ≠ .bool false)
       (hdst : tBlk < f.blocks.length) :
-      Reachable f env t tBlk (bindBlockArgs outRegs outRegs (f.blockAt tBlk).args tArgs) outPhase
+      Reachable f env t tBlk (bindBlockArgs outRegs outRegs (f.blockAt tBlk).args tArgs) outPhases
   /-- Conditional `mir.cond_br` taking `elseBlk` unless `outRegs cond = .bool true`.
       A `.unk` condition may take either arm. -/
-  | stepCondFalse {b tBlk fBlk cond phase outPhase : Nat} {regs outRegs : RegFile}
+  | stepCondFalse {b tBlk fBlk cond : Nat} {phases outPhases : Nat × Nat} {regs outRegs : RegFile}
       {evs : List MemEvent} {tevs : List TmemEvent} {tArgs fArgs : List Nat}
-      (hreach : Reachable f env t b regs phase)
-      (hexec : execStmts f env t regs phase (f.blockAt b).term (f.blockAt b).stmts = (outRegs, outPhase, evs, tevs))
+      (hreach : Reachable f env t b regs phases)
+      (hexec : execStmts f env t regs phases (f.blockAt b).term (f.blockAt b).stmts = (outRegs, outPhases, evs, tevs))
       (hterm : (f.blockAt b).term = .condBr cond tBlk tArgs fBlk fArgs)
       (hcond : outRegs cond ≠ .bool true)
       (hdst : fBlk < f.blocks.length) :
-      Reachable f env t fBlk (bindBlockArgs outRegs outRegs (f.blockAt fBlk).args fArgs) outPhase
+      Reachable f env t fBlk (bindBlockArgs outRegs outRegs (f.blockAt fBlk).args fArgs) outPhases
 
 /-- Shorthand: `MemEvent` `ev` is emitted during some reachable execution step of `(f, env, t)`. -/
 def EmitsEvent (f : MirFunc) (env : InputEnv) (t : ThreadCtx) (ev : MemEvent) : Prop :=
-  ∃ b phase : Nat, ∃ regs : RegFile,
-    Reachable f env t b regs phase ∧
-    ev ∈ (execStmts f env t regs phase (f.blockAt b).term (f.blockAt b).stmts).2.2.1
+  ∃ b : Nat, ∃ phases : Nat × Nat, ∃ regs : RegFile,
+    Reachable f env t b regs phases ∧
+    ev ∈ (execStmts f env t regs phases (f.blockAt b).term (f.blockAt b).stmts).2.2.1
 
 /-- Shorthand: `TmemEvent` `tev` is emitted during some reachable execution step of `(f, env, t)`. -/
 def EmitsTmemEvent (f : MirFunc) (env : InputEnv) (t : ThreadCtx) (tev : TmemEvent) : Prop :=
-  ∃ b phase : Nat, ∃ regs : RegFile,
-    Reachable f env t b regs phase ∧
-    tev ∈ (execStmts f env t regs phase (f.blockAt b).term (f.blockAt b).stmts).2.2.2
+  ∃ b : Nat, ∃ phases : Nat × Nat, ∃ regs : RegFile,
+    Reachable f env t b regs phases ∧
+    tev ∈ (execStmts f env t regs phases (f.blockAt b).term (f.blockAt b).stmts).2.2.2
 
 /-- True when every `Stmt.assertCond _ cond` in `stmts` evaluates `cond` to `.bool true`
     (meaning no retained runtime `mir.assert` check traps while executing `stmts`). -/
 def stmtsNoTrap (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
-    (regs : RegFile) (phase : Nat) (term : Terminator) : List Stmt → Bool
+    (regs : RegFile) (phases : Nat × Nat) (term : Terminator) : List Stmt → Bool
   | [] => true
   | stmt :: rest =>
       match stmt with
       | .assertCond _ cond =>
-          (regs cond == .bool true) && stmtsNoTrap f env t regs phase term rest
+          (regs cond == .bool true) && stmtsNoTrap f env t regs phases term rest
       | .assign dst (.load _) =>
-          stmtsNoTrap f env t (regs.set dst .unk) phase term rest
+          stmtsNoTrap f env t (regs.set dst .unk) phases term rest
       | .assign dst (.loadTmemBase _ cols) =>
-          stmtsNoTrap f env t (regs.set dst (.tmemPtr cols 0)) phase term rest
+          stmtsNoTrap f env t (regs.set dst (.tmemPtr cols 0)) phases term rest
       | .assign dst rhs =>
-          stmtsNoTrap f env t (regs.set dst (evalRhs f env t regs rhs)) phase term rest
+          stmtsNoTrap f env t (regs.set dst (evalRhs f env t regs rhs)) phases term rest
       | .syncThreads =>
-          stmtsNoTrap f env t regs (phase + 1) term rest
+          stmtsNoTrap f env t regs (phases.1 + 1, phases.2) term rest
+      | .syncWarp =>
+          stmtsNoTrap f env t regs (phases.1, phases.2 + 1) term rest
       | _ =>
-          stmtsNoTrap f env t regs phase term rest
+          stmtsNoTrap f env t regs phases term rest
 
-/-- Inductive small-step reachability of `(blockIdx, entryRegs, entryPhase)` where every
+/-- Inductive small-step reachability of `(blockIdx, entryRegs, entryPhases)` where every
     `Stmt.assertCond` executed along predecessor blocks evaluated to `.bool true`. -/
 inductive ReachableTrapFree (f : MirFunc) (env : InputEnv) (t : ThreadCtx) :
-    Nat → RegFile → Nat → Prop where
-  /-- Kernel starts at `block 0` in phase `0` with `initialRegs f env`. -/
+    Nat → RegFile → (Nat × Nat) → Prop where
+  /-- Kernel starts at `block 0` in phases `(0, 0)` with `initialRegs f env`. -/
   | entry (hpos : 0 < f.blocks.length) :
-      ReachableTrapFree f env t 0 (initialRegs f env) 0
+      ReachableTrapFree f env t 0 (initialRegs f env) (0, 0)
   /-- Trap-free unconditional `mir.goto target args` transition. -/
-  | stepGoto {b target phase outPhase : Nat} {regs outRegs : RegFile}
+  | stepGoto {b target : Nat} {phases outPhases : Nat × Nat} {regs outRegs : RegFile}
       {evs : List MemEvent} {tevs : List TmemEvent} {args : List Nat}
-      (hreach : ReachableTrapFree f env t b regs phase)
-      (hnotrap : stmtsNoTrap f env t regs phase (f.blockAt b).term (f.blockAt b).stmts = true)
-      (hexec : execStmts f env t regs phase (f.blockAt b).term (f.blockAt b).stmts = (outRegs, outPhase, evs, tevs))
+      (hreach : ReachableTrapFree f env t b regs phases)
+      (hnotrap : stmtsNoTrap f env t regs phases (f.blockAt b).term (f.blockAt b).stmts = true)
+      (hexec : execStmts f env t regs phases (f.blockAt b).term (f.blockAt b).stmts = (outRegs, outPhases, evs, tevs))
       (hterm : (f.blockAt b).term = .goto target args)
       (hdst : target < f.blocks.length) :
-      ReachableTrapFree f env t target (bindBlockArgs outRegs outRegs (f.blockAt target).args args) outPhase
+      ReachableTrapFree f env t target (bindBlockArgs outRegs outRegs (f.blockAt target).args args) outPhases
   /-- Trap-free conditional `mir.cond_br` taking `thenBlk` when `outRegs cond = .bool true`. -/
-  | stepCondTrue {b tBlk fBlk cond phase outPhase : Nat} {regs outRegs : RegFile}
+  | stepCondTrue {b tBlk fBlk cond : Nat} {phases outPhases : Nat × Nat} {regs outRegs : RegFile}
       {evs : List MemEvent} {tevs : List TmemEvent} {tArgs fArgs : List Nat}
-      (hreach : ReachableTrapFree f env t b regs phase)
-      (hnotrap : stmtsNoTrap f env t regs phase (f.blockAt b).term (f.blockAt b).stmts = true)
-      (hexec : execStmts f env t regs phase (f.blockAt b).term (f.blockAt b).stmts = (outRegs, outPhase, evs, tevs))
+      (hreach : ReachableTrapFree f env t b regs phases)
+      (hnotrap : stmtsNoTrap f env t regs phases (f.blockAt b).term (f.blockAt b).stmts = true)
+      (hexec : execStmts f env t regs phases (f.blockAt b).term (f.blockAt b).stmts = (outRegs, outPhases, evs, tevs))
       (hterm : (f.blockAt b).term = .condBr cond tBlk tArgs fBlk fArgs)
       (hcond : outRegs cond = .bool true)
       (hdst : tBlk < f.blocks.length) :
-      ReachableTrapFree f env t tBlk (bindBlockArgs outRegs outRegs (f.blockAt tBlk).args tArgs) outPhase
+      ReachableTrapFree f env t tBlk (bindBlockArgs outRegs outRegs (f.blockAt tBlk).args tArgs) outPhases
   /-- Trap-free conditional `mir.cond_br` taking `elseBlk` when `outRegs cond = .bool false`. -/
-  | stepCondFalse {b tBlk fBlk cond phase outPhase : Nat} {regs outRegs : RegFile}
+  | stepCondFalse {b tBlk fBlk cond : Nat} {phases outPhases : Nat × Nat} {regs outRegs : RegFile}
       {evs : List MemEvent} {tevs : List TmemEvent} {tArgs fArgs : List Nat}
-      (hreach : ReachableTrapFree f env t b regs phase)
-      (hnotrap : stmtsNoTrap f env t regs phase (f.blockAt b).term (f.blockAt b).stmts = true)
-      (hexec : execStmts f env t regs phase (f.blockAt b).term (f.blockAt b).stmts = (outRegs, outPhase, evs, tevs))
+      (hreach : ReachableTrapFree f env t b regs phases)
+      (hnotrap : stmtsNoTrap f env t regs phases (f.blockAt b).term (f.blockAt b).stmts = true)
+      (hexec : execStmts f env t regs phases (f.blockAt b).term (f.blockAt b).stmts = (outRegs, outPhases, evs, tevs))
       (hterm : (f.blockAt b).term = .condBr cond tBlk tArgs fBlk fArgs)
       (hcond : outRegs cond = .bool false)
       (hdst : fBlk < f.blocks.length) :
-      ReachableTrapFree f env t fBlk (bindBlockArgs outRegs outRegs (f.blockAt fBlk).args fArgs) outPhase
+      ReachableTrapFree f env t fBlk (bindBlockArgs outRegs outRegs (f.blockAt fBlk).args fArgs) outPhases
 
 /-- Trap-free reachability implies general `Reachable`. -/
 theorem ReachableTrapFree.toReachable {f : MirFunc} {env : InputEnv} {t : ThreadCtx}
-    {b phase : Nat} {regs : RegFile} (h : ReachableTrapFree f env t b regs phase) :
-    Reachable f env t b regs phase := by
+    {b : Nat} {phases : Nat × Nat} {regs : RegFile} (h : ReachableTrapFree f env t b regs phases) :
+    Reachable f env t b regs phases := by
   induction h with
   | entry hpos => exact Reachable.entry hpos                 -- Base entry block `0`
   | stepGoto _ _ hex hterm hdst ih => exact Reachable.stepGoto ih hex hterm hdst
@@ -838,15 +866,15 @@ theorem ReachableTrapFree.toReachable {f : MirFunc} {env : InputEnv} {t : Thread
 /-- `MemEvent` `ev` is emitted on a trap-free execution path (every `Stmt.assertCond`
     along predecessor blocks and inside the emitting block evaluates to `.bool true`). -/
 def EmitsTrapFreeEvent (f : MirFunc) (env : InputEnv) (t : ThreadCtx) (ev : MemEvent) : Prop :=
-  ∃ b phase : Nat, ∃ regs : RegFile,
-    ReachableTrapFree f env t b regs phase ∧
-    stmtsNoTrap f env t regs phase (f.blockAt b).term (f.blockAt b).stmts = true ∧
-    ev ∈ (execStmts f env t regs phase (f.blockAt b).term (f.blockAt b).stmts).2.2.1
+  ∃ b : Nat, ∃ phases : Nat × Nat, ∃ regs : RegFile,
+    ReachableTrapFree f env t b regs phases ∧
+    stmtsNoTrap f env t regs phases (f.blockAt b).term (f.blockAt b).stmts = true ∧
+    ev ∈ (execStmts f env t regs phases (f.blockAt b).term (f.blockAt b).stmts).2.2.1
 
 /-- Every `EmitsTrapFreeEvent` is also a reachable `EmitsEvent`. -/
 theorem EmitsTrapFreeEvent.toEmitsEvent {f : MirFunc} {env : InputEnv} {t : ThreadCtx} {ev : MemEvent} :
     EmitsTrapFreeEvent f env t ev → EmitsEvent f env t ev
-  | ⟨b, phase, regs, hr, _, hmem⟩ => ⟨b, phase, regs, hr.toReachable, hmem⟩
+  | ⟨b, phases, regs, hr, _, hmem⟩ => ⟨b, phases, regs, hr.toReachable, hmem⟩
 
 /-- True when `rhs` produces a CTA-uniform value given uniform variable predicate `isUni`
     and race-free `SharedArray` pointer predicate `isRfPtr`. -/
@@ -855,7 +883,7 @@ def Rhs.isCtaUni (_f : MirFunc) (isUni isRfPtr : Nat → Bool) : Rhs → Bool
   | .constInt _ _ | .constBool _ | .paramScalar _ | .slicePtr _ | .sliceLen _ | .sharedBase _ | .ctaConst => true
   | .sreg r =>
       match r with
-      | .ctaidX | .ctaidY | .ntidX | .ntidY | .clusterCtaidX => true
+      | .ctaidX | .ctaidY | .ntidX | .ntidY | .nctaidX | .nctaidY | .nctaidZ | .clusterCtaidX => true
       | .tidX | .tidY | .laneId => false
   | .binOp _ _ l r | .checkedOvf _ _ l r | .cmpOp _ l r | .ptrOffset l r | .ctaBin l r => isUni l && isUni r
   | .load ptr => isRfPtr ptr && isUni ptr

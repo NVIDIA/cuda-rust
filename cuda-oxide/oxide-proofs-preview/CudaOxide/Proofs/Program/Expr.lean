@@ -26,6 +26,8 @@ inductive SymInt where
   | ctaidX
   /-- Hardware `blockIdx.y`. -/
   | ctaidY
+  /-- Hardware 32-bit `gridDim.{x, y, z}` (`dim = 0, 1, 2`). -/
+  | nctaid (dim : Nat)
   /-- 64-bit 1D global thread index `(bx * blockDimX + tx) % 2^64`. -/
   | index1D (blockDimX : Nat)
   /-- Scalar kernel parameter `param`. -/
@@ -68,7 +70,7 @@ mutual
 def SymInt.beq : SymInt → SymInt → Bool
   | .const a, .const b => a == b
   | .tidX, .tidX | .tidY, .tidY | .ctaidX, .ctaidX | .ctaidY, .ctaidY => true
-  | .index1D a, .index1D b | .paramScalar a, .paramScalar b | .sliceLen a, .sliceLen b => a == b
+  | .nctaid a, .nctaid b | .index1D a, .index1D b | .paramScalar a, .paramScalar b | .sliceLen a, .sliceLen b => a == b
   | .havoc v1 w1, .havoc v2 w2 | .opaqueUint v1 w1, .opaqueUint v2 w2 => v1 == v2 && w1 == w2
   | .binOp o1 w1 l1 r1, .binOp o2 w2 l2 r2 =>
       o1 == o2 && w1 == w2 && SymInt.beq l1 l2 && SymInt.beq r1 r2
@@ -97,7 +99,7 @@ mutual
 theorem symInt_beq_refl : ∀ a : SymInt, SymInt.beq a a = true
   | .const _ => by simp [SymInt.beq]
   | .tidX | .tidY | .ctaidX | .ctaidY => rfl
-  | .index1D _ | .paramScalar _ | .sliceLen _ => by simp [SymInt.beq]
+  | .nctaid _ | .index1D _ | .paramScalar _ | .sliceLen _ => by simp [SymInt.beq]
   | .havoc _ _ | .opaqueUint _ _ => by simp [SymInt.beq]
   | .binOp _ _ l r => by simp [SymInt.beq, symInt_beq_refl l, symInt_beq_refl r]
   | .intCast _ s => by simp [SymInt.beq, symInt_beq_refl s]
@@ -119,6 +121,7 @@ theorem symInt_eq_of_beq : (a b : SymInt) → SymInt.beq a b = true → a = b
   | .tidY, b, h => by cases b <;> simp [SymInt.beq] at h; rfl
   | .ctaidX, b, h => by cases b <;> simp [SymInt.beq] at h; rfl
   | .ctaidY, b, h => by cases b <;> simp [SymInt.beq] at h; rfl
+  | .nctaid _, b, h => by cases b <;> simp [SymInt.beq] at h; exact congrArg _ h
   | .index1D _, b, h => by cases b <;> simp [SymInt.beq] at h; exact congrArg _ h
   | .paramScalar _, b, h => by cases b <;> simp [SymInt.beq] at h; exact congrArg _ h
   | .sliceLen _, b, h => by cases b <;> simp [SymInt.beq] at h; exact congrArg _ h
@@ -181,6 +184,7 @@ def SymInt.eval (env : InputEnv) (t : ThreadCtx) (havoc : Nat → Nat) : SymInt 
   | .tidY => t.ty
   | .ctaidX => t.bx
   | .ctaidY => t.by_
+  | .nctaid d => wordMod 32 (env.nctaid d)
   | .index1D bdx => wordMod 64 (t.bx * bdx + t.tx)
   | .paramScalar p => env.scalar p
   | .sliceLen p => env.sliceLen p
@@ -204,7 +208,7 @@ end
 mutual
 /-- True when `SymInt` references no `.havoc` variable in `keys`. -/
 def SymInt.disjointHavoc (keys : List Nat) : SymInt → Bool
-  | .const _ | .tidX | .tidY | .ctaidX | .ctaidY | .index1D _ | .paramScalar _ | .sliceLen _ | .opaqueUint _ _ => true
+  | .const _ | .tidX | .tidY | .ctaidX | .ctaidY | .nctaid _ | .index1D _ | .paramScalar _ | .sliceLen _ | .opaqueUint _ _ => true
   | .havoc vid _ => !(keys.contains vid)
   | .binOp _ _ a b => a.disjointHavoc keys && b.disjointHavoc keys
   | .intCast _ s => s.disjointHavoc keys
@@ -225,7 +229,7 @@ mutual
 theorem symInt_eval_congr {keys : List Nat} {env : InputEnv} {t : ThreadCtx}
     {h₁ h₂ : Nat → Nat} (hagree : ∀ k, k ∉ keys → h₁ k = h₂ k) :
     ∀ e : SymInt, e.disjointHavoc keys = true → e.eval env t h₁ = e.eval env t h₂
-  | .const _, _ | .tidX, _ | .tidY, _ | .ctaidX, _ | .ctaidY, _
+  | .const _, _ | .tidX, _ | .tidY, _ | .ctaidX, _ | .ctaidY, _ | .nctaid _, _
   | .index1D _, _ | .paramScalar _, _ | .sliceLen _, _ | .opaqueUint _ _, _ => rfl
   | .havoc vid _, hd => by
       simp only [SymInt.disjointHavoc, Bool.not_eq_true', List.contains_eq_mem,
@@ -663,7 +667,7 @@ theorem symIntEquivUnder_sound {env : InputEnv} {t : ThreadCtx} {havoc : Nat →
           simp [SymInt.eval, hc, symIntEquivUnder_sound hhyp tv act htv]
         · have hc := symImpliesVal_sound hhyp c false hcf
           simp [SymInt.eval, hc, symIntEquivUnder_sound hhyp fv act hfv]
-  | .const _, _, heq | .tidX, _, heq | .tidY, _, heq | .ctaidX, _, heq | .ctaidY, _, heq
+  | .const _, _, heq | .tidX, _, heq | .tidY, _, heq | .ctaidX, _, heq | .ctaidY, _, heq | .nctaid _, _, heq
   | .index1D _, _, heq | .paramScalar _, _, heq | .sliceLen _, _, heq | .havoc _ _, _, heq
   | .opaqueUint _ _, _, heq | .binOp _ _ _ _, _, heq | .intCast _ _, _, heq => by
       unfold symIntEquivUnder at heq
@@ -917,6 +921,36 @@ theorem phaseSpec_disjoint_sound {ps1 ps2 : PhaseSpec} {p1 p2 : Nat}
     · subst hm2; exact hne hm1.2
   · rw [← hdisj.1.2] at hm2                               -- `.modGe` vs `.modGe` with equal modulus `m` and distinct residues `r1 != r2`
     exact hdisj.2 (hm1.2.symm.trans hm2.2)
+
+/-- Pairwise `(phaseSpec, warpPhaseSpec)` match against `(phase, warpPhase)`. -/
+def matchesPhasePair (pss : PhaseSpec × PhaseSpec) (phases : Nat × Nat) : Bool :=
+  pss.1.matchesPhase phases.1 && pss.2.matchesPhase phases.2
+
+/-- Soundness of stepping CTA `phase + 1` in `matchesPhasePair`. -/
+theorem matchesPhasePair_stepCta {pss : PhaseSpec × PhaseSpec} {phases : Nat × Nat}
+    (hm : matchesPhasePair pss phases = true) :
+    matchesPhasePair (pss.1.stepSync, pss.2) (phases.1 + 1, phases.2) = true := by
+  unfold matchesPhasePair at hm ⊢
+  rcases Bool.and_eq_true_iff.mp hm with ⟨hm1, hm2⟩
+  exact Bool.and_eq_true_iff.mpr ⟨phaseSpec_stepSync_sound hm1, hm2⟩
+
+/-- Soundness of stepping intra-warp `warpPhase + 1` in `matchesPhasePair`. -/
+theorem matchesPhasePair_stepWarp {pss : PhaseSpec × PhaseSpec} {phases : Nat × Nat}
+    (hm : matchesPhasePair pss phases = true) :
+    matchesPhasePair (pss.1, pss.2.stepSync) (phases.1, phases.2 + 1) = true := by
+  unfold matchesPhasePair at hm ⊢
+  rcases Bool.and_eq_true_iff.mp hm with ⟨hm1, hm2⟩
+  exact Bool.and_eq_true_iff.mpr ⟨hm1, phaseSpec_stepSync_sound hm2⟩
+
+/-- Soundness of pairwise subsumption on `(PhaseSpec × PhaseSpec)`. -/
+theorem matchesPhasePair_subsumes {dst src : PhaseSpec × PhaseSpec} {phases : Nat × Nat}
+    (h1 : dst.1.subsumes src.1 = true)
+    (h2 : dst.2.subsumes src.2 = true)
+    (hm : matchesPhasePair src phases = true) :
+    matchesPhasePair dst phases = true := by
+  unfold matchesPhasePair at hm ⊢
+  rcases Bool.and_eq_true_iff.mp hm with ⟨hm1, hm2⟩
+  exact Bool.and_eq_true_iff.mpr ⟨phaseSpec_subsumes_sound h1 hm1, phaseSpec_subsumes_sound h2 hm2⟩
 
 
 end CudaOxide.Proofs.Program

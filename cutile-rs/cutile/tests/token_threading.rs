@@ -13,9 +13,13 @@
 
 use cutile_compiler::compile_api::KernelCompiler;
 use cutile_compiler::compiler::utils::CompileOptions;
-use cutile_ir::bytecode::BytecodeVersion;
+use cutile_ir::bytecode::{BytecodeVersion, Opcode};
+use cutile_ir::ir::Type;
 
 mod common;
+mod ir_inspection;
+
+use crate::ir_inspection::ModuleInspectionExt;
 
 #[cutile::module]
 mod token_module {
@@ -266,6 +270,13 @@ mod token_module {
 use token_module::__module_ast_self as token_module_ast;
 
 fn compile(entry: &str, args: &[(&str, &[i32])]) -> String {
+    compile_artifacts(entry, args).ir_text()
+}
+
+fn compile_artifacts(
+    entry: &str,
+    args: &[(&str, &[i32])],
+) -> cutile_compiler::compile_api::CompileArtifacts {
     KernelCompiler::new(token_module_ast, "token_module", entry)
         .target("sm_120")
         .bytecode_version(BytecodeVersion::V13_4)
@@ -273,7 +284,6 @@ fn compile(entry: &str, args: &[(&str, &[i32])]) -> String {
         .options(CompileOptions::default())
         .compile()
         .unwrap_or_else(|e| panic!("compile {entry}: {e:?}"))
-        .ir_text()
 }
 
 /// Lines of `ir` containing `op`, in order.
@@ -318,10 +328,22 @@ fn second_store_consumes_the_first_stores_token() {
     });
 }
 
+/// `Tensor::store`'s result and `Tensor::token` are the same value, *and*
+/// that value is the store's completion token.
+///
+/// SSA identity alone would be a weak claim: it holds for any value both
+/// spellings happen to read, the view included. `Tensor::store` reaches
+/// `store_view_tko_mut` through `store_tile_*`, which discards the call's
+/// result and installs `get_partition_token_mut(&view)` on the tensor
+/// instead, so both spellings read the view's threaded token and the
+/// identity holds no matter what the op's handler evaluates to. The producer
+/// and type assertions below are what pins the shared value to the store.
 #[test]
 fn token_method_reads_the_stores_token() {
     common::with_test_stack(|| {
-        let ir = compile("store_token_is_tensor_token", &[("z", &[1]), ("x", &[1])]);
+        let artifacts =
+            compile_artifacts("store_token_is_tensor_token", &[("z", &[1]), ("x", &[1])]);
+        let ir = artifacts.ir_text();
         let store = result_of(lines_with(&ir, "store_view_tko")[0]);
         let signals = lines_with(&ir, "gdc_launch_dependents_tko");
         assert_eq!(signals.len(), 2, "IR:\n{ir}");
@@ -330,6 +352,26 @@ fn token_method_reads_the_stores_token() {
                 token_operand(signal),
                 store,
                 "both spellings must yield the store's token.\nIR:\n{ir}"
+            );
+        }
+
+        // Producer and type, off `cutile_ir::Module`: the value both
+        // spellings agree on must be a `Token` produced by the store.
+        let module = artifacts.module();
+        let signals = module
+            .inspect()
+            .ops_with_opcode(Opcode::GdcLaunchDependentsTko);
+        assert_eq!(signals.len(), 2, "IR:\n{ir}");
+        for signal in signals {
+            let token = *module
+                .op(signal)
+                .operands
+                .first()
+                .expect("the signal has a token operand");
+            assert_eq!(
+                module.inspect().producer_and_type(token),
+                (Some(Opcode::StoreViewTko), Type::Token),
+                "both spellings must yield the store's completion token.\nIR:\n{ir}"
             );
         }
     });

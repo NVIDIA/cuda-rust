@@ -1122,6 +1122,13 @@ pub fn generate_device_code<'tcx>(
         .map(|func| crate::collector::device_mono_reachability(tcx, func.instance))
         .collect();
 
+    // Hold the cross-process pipeline lock across both `run_pipeline` and
+    // `read_compilation_artifact` so parallel `rustc` invocations for the same
+    // crate name (e.g. `--lib` and `--test` in `cargo oxide test`) cannot
+    // delete or overwrite `<output_name>.ll` / `.ptx` before readback finishes.
+    let _output_lock = mir_importer::pipeline::lock_pipeline_output(&output_dir, &output_name)
+        .map_err(|e| DeviceCodegenError::PtxGeneration(format!("{e}")))?;
+
     let result = rustc_internal::run(tcx, || {
         let mut debug_global_variables = BTreeMap::new();
         for owned in &static_debug_identities {

@@ -428,6 +428,7 @@ jobs:
             "safe_vecadd:sm_90a" \
             "safe_gemm_views:sm_90a" \
             "safe_warp_reduce:sm_90a" \
+            "safe_atomics:sm_90a" \
             "safe_subwarp_stage:sm_90a" \
             "safe_async_copy:sm_90a" \
             "safe_warp_ring:sm_90a" \

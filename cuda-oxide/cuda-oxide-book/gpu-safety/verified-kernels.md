@@ -724,3 +724,16 @@ Build and benchmark on B200 with:
 $ cargo oxide build safe_gemm_sol_final --arch sm_100a
 $ cargo oxide run safe_gemm_sol_final --arch sm_100a
 ```
+
+---
+
+### Example 10: Scoped Atomics & Warp Votes (`safe_atomics`)
+
+Histograms, stream compaction, and sticky fault words intentionally let multiple threads update the same slot through hardware atomics while voting across 32-lane warps:
+- **Warp convergence**: Lean 4 checks that full-warp collectives (`warp::ballot`, `redux`, `match`) execute with all 32 warp lanes converged, rejecting votes hidden inside lane-divergent branches (`if lane == 0`).
+- **Scope-aware `no_data_race`**: `BlockAtomic*` serializes threads inside one block (accepted on `SharedArray` or per-block global partitions, rejected when shared across blocks), while `DeviceAtomic*` and `SystemAtomic*` serialize across the entire grid. Mixing an atomic with a plain read or write in the same step is rejected.
+
+```console
+$ cargo oxide lean-export safe_atomics --function two_level_histogram
+$ cargo oxide run safe_atomics
+```

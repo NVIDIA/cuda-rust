@@ -93,15 +93,20 @@ struct Allocation {
 
 impl Drop for Allocation {
     fn drop(&mut self) {
-        if self.ptr == 0 || matches!(self.owner, Owner::Borrowed | Owner::Foreign(_)) {
+        if self.ptr == 0 {
             return;
         }
         let ptr = self.ptr;
-        let context = self.context.clone();
         let allocation_stream = match &self.owner {
-            Owner::StreamOrdered(s) => Some(s.clone()),
-            _ => None,
+            Owner::Synchronous => {
+                // Batch these frees and synchronize once per context.
+                crate::completion::defer_sync_free(ptr, self.context.clone());
+                return;
+            }
+            Owner::StreamOrdered(stream) => stream.clone(),
+            Owner::Borrowed | Owner::Foreign(_) => return,
         };
+        let context = self.context.clone();
         // All safe users hold an independent access lease until completion.
         // Driver teardown is retired on a worker, never on the dropping thread.
         crate::completion::defer(move || {
@@ -110,14 +115,9 @@ impl Drop for Allocation {
                 std::mem::forget((context, allocation_stream));
                 return;
             }
-            let result = if let Some(stream) = &allocation_stream {
-                // SAFETY: the allocation is no longer accessed and the retained
-                // stream is the one on which its allocation became valid.
-                unsafe { crate::memory::free_async(ptr, stream.cu_stream()) }
-            } else {
-                // SAFETY: ownership of this synchronous allocation is unique.
-                unsafe { crate::memory::free_sync(ptr) }
-            };
+            // SAFETY: the allocation is no longer accessed and the retained
+            // stream is the one on which its allocation became valid.
+            let result = unsafe { crate::memory::free_async(ptr, allocation_stream.cu_stream()) };
             if let Err(error) = result {
                 context.record_err(Err::<(), _>(error));
                 std::mem::forget((context, allocation_stream));

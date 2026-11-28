@@ -520,6 +520,7 @@ impl Context {
             cu_stream: std::ptr::null_mut(),
             context: self.clone(),
             owned: false,
+            pool_eligible: false,
             _keep_alive: KeepAlive::none(),
         })
     }
@@ -542,6 +543,7 @@ impl Context {
             cu_stream: stream,
             context: self.clone(),
             owned: true,
+            pool_eligible: false,
             _keep_alive: KeepAlive::none(),
         }))
     }

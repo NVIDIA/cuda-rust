@@ -7,7 +7,10 @@
 
 use crate::{Context, DriverError, Stream};
 use cuda_bindings::CUdeviceptr;
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{Arc, Mutex},
+};
 
 /// A foreign allocation whose owner keeps both its memory and CUDA context alive.
 ///
@@ -26,52 +29,172 @@ pub unsafe trait DeviceAllocation: Send + Sync + 'static {
 }
 
 struct Access {
-    id: u64,
     stream: usize,
     write: bool,
     recording: bool,
     completion: Option<Arc<crate::Event>>,
+    ref_count: usize,
 }
 
 #[derive(Default)]
 struct Accesses {
     next_id: u64,
-    active: Vec<Access>,
+    active: HashMap<u64, Access>,
+    streams: HashMap<usize, StreamAccesses>,
+    readers: usize,
+    writers: usize,
+}
+
+#[derive(Default)]
+struct StreamAccesses {
+    readers: HashSet<u64>,
+    writers: HashSet<u64>,
+}
+
+impl StreamAccesses {
+    fn is_empty(&self) -> bool {
+        self.readers.is_empty() && self.writers.is_empty()
+    }
 }
 
 impl Accesses {
+    fn conflicts(&self, stream: usize, write: bool) -> bool {
+        let current = self.streams.get(&stream);
+        let readers = current.map_or(0, |accesses| accesses.readers.len());
+        let writers = current.map_or(0, |accesses| accesses.writers.len());
+        if write {
+            self.readers > readers || self.writers > writers
+        } else {
+            self.writers > writers
+        }
+    }
+
+    fn retire_completed_conflicts(&mut self, stream: usize, write: bool) {
+        // A synchronous wait can complete a retired operation before the
+        // worker drops its lease. Probe only when another stream would conflict.
+        let completed: Vec<_> = self
+            .streams
+            .iter()
+            .filter(|(active_stream, accesses)| {
+                **active_stream != stream
+                    && (!accesses.writers.is_empty() || (write && !accesses.readers.is_empty()))
+            })
+            .flat_map(|(_, accesses)| accesses.readers.iter().chain(&accesses.writers))
+            .filter_map(|id| {
+                self.active
+                    .get(id)
+                    .filter(|access| {
+                        matches!(
+                            access.completion.as_ref().map(|event| event.query()),
+                            Some(Ok(true))
+                        )
+                    })
+                    .map(|_| *id)
+            })
+            .collect();
+        for id in completed {
+            self.release(id);
+        }
+    }
+
+    fn release(&mut self, id: u64) {
+        let Some(access) = self.active.get_mut(&id) else {
+            return;
+        };
+
+        if access.recording {
+            self.active.remove(&id);
+            return;
+        }
+
+        if access.ref_count > 1 {
+            access.ref_count -= 1;
+            return;
+        }
+
+        let access = self.active.remove(&id).unwrap();
+        let stream_accesses = self
+            .streams
+            .get_mut(&access.stream)
+            .expect("tracked access has stream counters");
+        if access.write {
+            self.writers -= 1;
+            stream_accesses.writers.remove(&id);
+        } else {
+            self.readers -= 1;
+            stream_accesses.readers.remove(&id);
+        }
+        if stream_accesses.is_empty() {
+            self.streams.remove(&access.stream);
+        }
+    }
+
     fn register(
         &mut self,
         stream: usize,
         write: bool,
         recording: bool,
     ) -> Result<u64, DriverError> {
-        // A synchronous wait on another thread may have completed a retired
-        // operation before the worker got to its lease. Do not report a stale
-        // conflict in that case. Errors leave the exclusion intact.
-        self.active
-            .retain(|a| !matches!(a.completion.as_ref().map(|e| e.query()), Some(Ok(true))));
-        if !recording
-            && self
-                .active
-                .iter()
-                .any(|a| !a.recording && a.stream != stream && (write || a.write))
-        {
+        if !recording && self.conflicts(stream, write) {
+            self.retire_completed_conflicts(stream, write);
+        }
+        if !recording && self.conflicts(stream, write) {
             return Err(DriverError(
                 cuda_bindings::cudaError_enum_CUDA_ERROR_NOT_READY,
             ));
         }
+
+        if !recording {
+            if let Some(accesses) = self.streams.get_mut(&stream) {
+                let existing_id = accesses
+                    .writers
+                    .iter()
+                    .next()
+                    .or_else(|| accesses.readers.iter().next());
+
+                if let Some(&id) = existing_id {
+                    let access = self.active.get_mut(&id).unwrap();
+
+                    access.ref_count += 1;
+
+                    if access.write || !write {
+                        return Ok(id);
+                    } else {
+                        access.write = true;
+                        self.readers -= 1;
+                        self.writers += 1;
+                        accesses.readers.remove(&id);
+                        accesses.writers.insert(id);
+                        return Ok(id);
+                    }
+                }
+            }
+        }
+
         let id = self.next_id.checked_add(1).ok_or(DriverError(
             cuda_bindings::cudaError_enum_CUDA_ERROR_INVALID_VALUE,
         ))?;
         self.next_id = id;
-        self.active.push(Access {
+        self.active.insert(
             id,
-            stream,
-            write,
-            recording,
-            completion: None,
-        });
+            Access {
+                stream,
+                write,
+                recording,
+                completion: None,
+                ref_count: 1,
+            },
+        );
+        if !recording {
+            let accesses = self.streams.entry(stream).or_default();
+            if write {
+                self.writers += 1;
+                accesses.writers.insert(id);
+            } else {
+                self.readers += 1;
+                accesses.readers.insert(id);
+            }
+        }
         Ok(id)
     }
 }
@@ -343,9 +466,7 @@ impl Drop for AllocationLease {
             .accesses
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        if let Some(pos) = accesses.active.iter().position(|a| a.id == self.id) {
-            accesses.active.swap_remove(pos);
-        }
+        accesses.release(self.id);
     }
 }
 
@@ -365,7 +486,7 @@ impl AllocationLease {
                 .accesses
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
-            if let Some(access) = accesses.active.iter_mut().find(|a| a.id == self.id) {
+            if let Some(access) = accesses.active.get_mut(&self.id) {
                 access.completion = Some(event.clone());
             }
         }
@@ -432,5 +553,25 @@ mod tests {
             stop.store(true, Ordering::Relaxed);
         });
         assert_eq!(false_negatives, 0);
+    }
+
+    #[test]
+    fn access_counts_preserve_same_stream_and_cross_stream_exclusion() {
+        let mut accesses = Accesses::default();
+        let read = accesses.register(1, false, false).unwrap();
+        let write = accesses.register(1, true, false).unwrap();
+        let recording = accesses.register(2, true, true).unwrap();
+
+        assert!(accesses.register(2, true, false).is_err());
+        accesses.release(read);
+        assert!(accesses.register(2, false, false).is_err());
+        accesses.release(write);
+        let other_stream = accesses.register(2, true, false).unwrap();
+        accesses.release(recording);
+        accesses.release(other_stream);
+
+        assert!(accesses.active.is_empty());
+        assert!(accesses.streams.is_empty());
+        assert_eq!((accesses.readers, accesses.writers), (0, 0));
     }
 }

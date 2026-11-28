@@ -11,6 +11,9 @@ pub enum Error {
     #[error("bytecode write error: {0}")]
     BytecodeWrite(String),
 
+    #[error("bytecode read error: {0}")]
+    BytecodeRead(String),
+
     #[error("IR verification error: {0}")]
     Verification(String),
 

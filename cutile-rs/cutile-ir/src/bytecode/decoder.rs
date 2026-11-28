@@ -11,10 +11,10 @@
 //!
 //! Ported from `BytecodeReader.cpp` in the `cuda-tile` submodule.
 
-use super::enums::{
-    BytecodeVersion, FunctionFlag, Section, TypeTag, ALIGNMENT_BYTE, MAGIC, NUM_SECTIONS,
-};
-use crate::ir::DYNAMIC;
+use crate::bytecode::encoding::EncodingReader;
+use crate::bytecode::enums::{BytecodeVersion, FunctionFlag, Section};
+use crate::bytecode::reader::parse_string_section;
+use crate::ir::Type;
 use crate::{Error, Result};
 use std::fmt::Write;
 
@@ -24,7 +24,7 @@ use std::fmt::Write;
 
 /// Decode a bytecode buffer into a human-readable string.
 pub fn decode_bytecode(data: &[u8]) -> Result<String> {
-    let mut r = Reader::new(data);
+    let mut r = EncodingReader::new(data);
     let mut out = String::new();
 
     // Header
@@ -38,14 +38,14 @@ pub fn decode_bytecode(data: &[u8]) -> Result<String> {
     writeln!(out).unwrap();
 
     // Collect raw sections first, then parse in dependency order.
-    let mut sections = RawSections::default();
+    let mut sections = super::reader::SectionTable::new();
     loop {
-        let sh = r.read_section_header()?;
-        if sh.id == Section::EndOfBytecode as u8 {
+        let (id, len, _aligned) = r.read_section_header()?;
+        if id == Section::EndOfBytecode as u8 {
             break;
         }
-        let payload = r.read_bytes(sh.data_len)?;
-        sections.insert(sh.id, payload);
+        let payload = r.read_bytes(len)?;
+        sections.insert(id, payload);
     }
 
     // Parse string table first (other sections reference strings).
@@ -60,7 +60,7 @@ pub fn decode_bytecode(data: &[u8]) -> Result<String> {
 
     // Parse type table.
     if let Some(payload) = sections.get(Section::Producer as u8) {
-        let mut producer = Reader::new(payload);
+        let mut producer = EncodingReader::new(payload);
         let index = producer.read_varint()? as usize;
         let name = strings
             .get(index)
@@ -68,17 +68,17 @@ pub fn decode_bytecode(data: &[u8]) -> Result<String> {
         writeln!(out, "=== Producer ===\n  {name:?}\n").unwrap();
     }
 
-    let types = parse_type_section(sections.get(Section::Type as u8), version)?;
+    let types = super::reader::parse_type_section(sections.get(Section::Type as u8), version)?;
     if !types.is_empty() {
         writeln!(out, "=== Types ({}) ===", types.len()).unwrap();
         for (i, t) in types.iter().enumerate() {
-            writeln!(out, "  [{i}] {t}").unwrap();
+            writeln!(out, "  [{i}] {}", crate::ir::fmt::format_type(t)).unwrap();
         }
         writeln!(out).unwrap();
     }
 
     // Constant section.
-    let constants = parse_constant_section(sections.get(Section::Constant as u8))?;
+    let constants = super::reader::parse_constant_section(sections.get(Section::Constant as u8))?;
     if !constants.is_empty() {
         writeln!(out, "=== Constants ({}) ===", constants.len()).unwrap();
         for (i, c) in constants.iter().enumerate() {
@@ -101,7 +101,7 @@ pub fn decode_bytecode(data: &[u8]) -> Result<String> {
 
     // Function section.
     if let Some(payload) = sections.get(Section::Func as u8) {
-        let funcs = parse_func_section(payload, &strings, &types, version)?;
+        let funcs = parse_func_section(payload, &strings, &types, &constants, version)?;
         writeln!(out, "=== Functions ({}) ===", funcs.len()).unwrap();
         for f in &funcs {
             writeln!(out, "{f}").unwrap();
@@ -124,175 +124,7 @@ pub fn decode_bytecode_file(path: &str) -> Result<String> {
 }
 
 // =========================================================================
-// Raw section collector
-// =========================================================================
-
-#[derive(Default)]
-struct RawSections<'a> {
-    data: [Option<&'a [u8]>; NUM_SECTIONS as usize],
-}
-
-impl<'a> RawSections<'a> {
-    fn insert(&mut self, id: u8, payload: &'a [u8]) {
-        if (id as usize) < self.data.len() {
-            self.data[id as usize] = Some(payload);
-        }
-    }
-    fn get(&self, id: u8) -> Option<&'a [u8]> {
-        self.data.get(id as usize).copied().flatten()
-    }
-}
-
-// =========================================================================
-// Section header
-// =========================================================================
-
-struct SectionHeader {
-    id: u8,
-    data_len: usize,
-}
-
-// =========================================================================
-// Low-level reader
-// =========================================================================
-
-/// Low-level bytecode reader (mirror of EncodingWriter).
-#[allow(dead_code)]
-struct Reader<'a> {
-    data: &'a [u8],
-    pos: usize,
-}
-
-#[allow(dead_code)]
-impl<'a> Reader<'a> {
-    fn new(data: &'a [u8]) -> Self {
-        Self { data, pos: 0 }
-    }
-
-    fn remaining(&self) -> usize {
-        self.data.len() - self.pos
-    }
-
-    fn read_byte(&mut self) -> Result<u8> {
-        if self.pos >= self.data.len() {
-            return Err(err("unexpected end of data"));
-        }
-        let b = self.data[self.pos];
-        self.pos += 1;
-        Ok(b)
-    }
-
-    fn read_bytes(&mut self, n: usize) -> Result<&'a [u8]> {
-        if n > self.remaining() {
-            return Err(err("unexpected end of data"));
-        }
-        let slice = &self.data[self.pos..self.pos + n];
-        self.pos += n;
-        Ok(slice)
-    }
-
-    fn read_varint(&mut self) -> Result<u64> {
-        let mut result: u64 = 0;
-        let mut shift: u32 = 0;
-        loop {
-            let b = self.read_byte()?;
-            // The tenth byte can contribute only bit 63 and cannot continue.
-            if shift == 63 && b > 1 {
-                return Err(err("varint overflow"));
-            }
-            result |= ((b & 0x7F) as u64) << shift;
-            if b & 0x80 == 0 {
-                break;
-            }
-            shift += 7;
-            if shift > 63 {
-                return Err(err("varint overflow"));
-            }
-        }
-        Ok(result)
-    }
-
-    fn read_signed_varint(&mut self) -> Result<i64> {
-        let v = self.read_varint()?;
-        // zigzag decode
-        Ok(((v >> 1) as i64) ^ (-((v & 1) as i64)))
-    }
-
-    fn read_le_u8(&mut self) -> Result<u8> {
-        self.read_byte()
-    }
-
-    fn read_le_u16(&mut self) -> Result<u16> {
-        let bytes = self.read_bytes(2)?;
-        Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
-    }
-
-    fn read_le_u32(&mut self) -> Result<u32> {
-        let bytes = self.read_bytes(4)?;
-        Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
-    }
-
-    fn read_le_i64(&mut self) -> Result<i64> {
-        let bytes = self.read_bytes(8)?;
-        Ok(i64::from_le_bytes(bytes.try_into().unwrap()))
-    }
-
-    fn read_le_i32(&mut self) -> Result<i32> {
-        let bytes = self.read_bytes(4)?;
-        Ok(i32::from_le_bytes(bytes.try_into().unwrap()))
-    }
-
-    fn skip_padding(&mut self, alignment: u64) -> Result<()> {
-        if alignment < 2 {
-            return Ok(());
-        }
-        let padding = (alignment - (self.pos as u64 % alignment)) % alignment;
-        for _ in 0..padding {
-            let b = self.read_byte()?;
-            if b != ALIGNMENT_BYTE {
-                return Err(err(&format!(
-                    "expected padding byte 0x{ALIGNMENT_BYTE:02X}, got 0x{b:02X}"
-                )));
-            }
-        }
-        Ok(())
-    }
-
-    fn read_header(&mut self) -> Result<BytecodeVersion> {
-        let magic = self.read_bytes(8)?;
-        if magic != MAGIC {
-            return Err(err("invalid magic number"));
-        }
-        let major = self.read_le_u8()?;
-        let minor = self.read_le_u8()?;
-        let tag = self.read_le_u16()?;
-        Ok(BytecodeVersion { major, minor, tag })
-    }
-
-    fn read_section_header(&mut self) -> Result<SectionHeader> {
-        let id_and_align = self.read_byte()?;
-        let id = id_and_align & 0x7F;
-        let has_alignment = id_and_align & 0x80 != 0;
-
-        if id == Section::EndOfBytecode as u8 {
-            return Ok(SectionHeader { id, data_len: 0 });
-        }
-
-        let length = self.read_varint()? as usize;
-        if has_alignment {
-            let alignment = self.read_varint()?;
-            self.skip_padding(alignment)?;
-        }
-
-        Ok(SectionHeader {
-            id,
-            data_len: length,
-        })
-    }
-}
-
-// =========================================================================
-// String section parser
+// Debug section parser
 // =========================================================================
 
 /// Parses and pretty-prints the Debug section: per-function attribute-id
@@ -306,7 +138,7 @@ fn parse_debug_section(
 ) -> Result<()> {
     use super::enums::DebugTag;
 
-    let mut r = Reader::new(payload);
+    let mut r = EncodingReader::new(payload);
     // Counts come from attacker-controllable varints: cap pre-allocation by
     // what the payload could physically hold, so a huge count fails at the
     // read below instead of aborting on allocation.
@@ -350,7 +182,7 @@ fn parse_debug_section(
         if start >= end || end > attr_data.len() {
             return Err(err("debug attribute offsets out of range"));
         }
-        let mut a = Reader::new(&attr_data[start..end]);
+        let mut a = EncodingReader::new(&attr_data[start..end]);
         let tag = a.read_byte()?;
         write!(out, "  di[{}] = ", i + 1).unwrap();
         match tag {
@@ -428,345 +260,6 @@ fn parse_debug_section(
     }
     Ok(())
 }
-
-fn parse_string_section(payload: Option<&[u8]>) -> Result<Vec<String>> {
-    let Some(data) = payload else {
-        return Ok(Vec::new());
-    };
-    let mut r = Reader::new(data);
-    let count = r.read_varint()? as usize;
-    if count == 0 {
-        return Ok(Vec::new());
-    }
-    r.skip_padding(4)?;
-
-    // Read offset table.
-    let mut offsets = Vec::with_capacity(count);
-    for _ in 0..count {
-        offsets.push(r.read_le_u32()? as usize);
-    }
-
-    // Remaining bytes are concatenated string data.
-    let string_data = r.read_bytes(r.remaining())?;
-
-    let mut strings = Vec::with_capacity(count);
-    for i in 0..count {
-        let start = offsets[i];
-        let end = if i + 1 < count {
-            offsets[i + 1]
-        } else {
-            string_data.len()
-        };
-        let s = std::str::from_utf8(&string_data[start..end])
-            .unwrap_or("<invalid utf8>")
-            .to_owned();
-        strings.push(s);
-    }
-    Ok(strings)
-}
-
-// =========================================================================
-// Type section parser
-// =========================================================================
-
-fn parse_type_section(payload: Option<&[u8]>, version: BytecodeVersion) -> Result<Vec<String>> {
-    let Some(data) = payload else {
-        return Ok(Vec::new());
-    };
-    let mut r = Reader::new(data);
-    let count = r.read_varint()? as usize;
-    if count == 0 {
-        return Ok(Vec::new());
-    }
-    r.skip_padding(4)?;
-
-    let mut offsets = Vec::with_capacity(count);
-    for _ in 0..count {
-        offsets.push(r.read_le_u32()? as usize);
-    }
-
-    let type_data = r.read_bytes(r.remaining())?;
-    let mut types = Vec::with_capacity(count);
-    for i in 0..count {
-        let start = offsets[i];
-        let end = if i + 1 < count {
-            offsets[i + 1]
-        } else {
-            type_data.len()
-        };
-        let desc = decode_type_entry(&type_data[start..end], &types, version);
-        types.push(desc);
-    }
-    Ok(types)
-}
-
-fn decode_type_entry(data: &[u8], prev_types: &[String], version: BytecodeVersion) -> String {
-    let mut r = Reader::new(data);
-    let Ok(tag_val) = r.read_varint() else {
-        return "<read error>".into();
-    };
-    let tag = tag_val as u8;
-    match tag {
-        t if t == TypeTag::I1 as u8 => "i1".into(),
-        t if t == TypeTag::I4 as u8 => "i4".into(),
-        t if t == TypeTag::I8 as u8 => "i8".into(),
-        t if t == TypeTag::I16 as u8 => "i16".into(),
-        t if t == TypeTag::I32 as u8 => "i32".into(),
-        t if t == TypeTag::I64 as u8 => "i64".into(),
-        t if t == TypeTag::F16 as u8 => "f16".into(),
-        t if t == TypeTag::BF16 as u8 => "bf16".into(),
-        t if t == TypeTag::F32 as u8 => "f32".into(),
-        t if t == TypeTag::TF32 as u8 => "tf32".into(),
-        t if t == TypeTag::F64 as u8 => "f64".into(),
-        t if t == TypeTag::F8E4M3FN as u8 => "f8e4m3fn".into(),
-        t if t == TypeTag::F8E5M2 as u8 => "f8e5m2".into(),
-        t if t == TypeTag::F8E8M0FNU as u8 => "f8e8m0fnu".into(),
-        t if t == TypeTag::F4E2M1FN as u8 => "f4e2m1fn".into(),
-        t if t == TypeTag::F8E5M3FNU as u8 => "f8e5m3fnu".into(),
-        t if t == TypeTag::Token as u8 => "token".into(),
-        t if t == TypeTag::Pointer as u8 => {
-            let flags = if version >= BytecodeVersion::V13_4 {
-                r.read_varint().unwrap_or(0)
-            } else {
-                0
-            };
-            let elem = r.read_varint().unwrap_or(0) as usize;
-            let elem_name = prev_types.get(elem).cloned().unwrap_or("?".into());
-            if flags & 1 != 0 {
-                let attr = r.read_byte().unwrap_or(0);
-                format!("ptr<{elem_name}, ptr_attr={attr}>")
-            } else {
-                format!("ptr<{elem_name}>")
-            }
-        }
-        t if t == TypeTag::Tile as u8 => {
-            let elem = r.read_varint().unwrap_or(0) as usize;
-            let elem_name = prev_types.get(elem).cloned().unwrap_or("?".into());
-            let rank = r.read_varint().unwrap_or(0) as usize;
-            let mut dims = Vec::with_capacity(rank);
-            for _ in 0..rank {
-                dims.push(r.read_le_i64().unwrap_or(0));
-            }
-            let shape_str = dims
-                .iter()
-                .map(|d| d.to_string())
-                .collect::<Vec<_>>()
-                .join("x");
-            if shape_str.is_empty() {
-                format!("tile<{elem_name}>")
-            } else {
-                format!("tile<{shape_str}x{elem_name}>")
-            }
-        }
-        t if t == TypeTag::TensorView as u8 => {
-            let flags = if version >= BytecodeVersion::V13_4 {
-                r.read_varint().unwrap_or(0)
-            } else {
-                0
-            };
-            let elem = r.read_varint().unwrap_or(0) as usize;
-            let elem_name = prev_types.get(elem).cloned().unwrap_or("?".into());
-            let rank = r.read_varint().unwrap_or(0) as usize;
-            let mut shape = Vec::with_capacity(rank);
-            for _ in 0..rank {
-                shape.push(r.read_le_i64().unwrap_or(0));
-            }
-            let stride_count = r.read_varint().unwrap_or(0) as usize;
-            let mut strides = Vec::with_capacity(stride_count);
-            for _ in 0..stride_count {
-                strides.push(r.read_le_i64().unwrap_or(0));
-            }
-            let shape_str = shape
-                .iter()
-                .map(|d| {
-                    if *d == DYNAMIC {
-                        "?".into()
-                    } else {
-                        d.to_string()
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("x");
-            let stride_str = strides
-                .iter()
-                .map(|d| {
-                    if *d == DYNAMIC {
-                        "?".into()
-                    } else {
-                        d.to_string()
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(",");
-            let ptr_attr = if flags & 1 != 0 {
-                format!(", ptr_attr={}", r.read_byte().unwrap_or(0))
-            } else {
-                String::new()
-            };
-            format!("tensor_view<{shape_str}x{elem_name}, strides=[{stride_str}]{ptr_attr}>")
-        }
-        t if t == TypeTag::PartitionView as u8 => {
-            let mut padding_flag_from_bitfield = None;
-            if version >= BytecodeVersion::V13_3 {
-                let flags = r.read_varint().unwrap_or(0);
-                padding_flag_from_bitfield = Some(flags & 1 != 0);
-            }
-            let tile_rank = r.read_varint().unwrap_or(0) as usize;
-            let mut tile_shape = Vec::with_capacity(tile_rank);
-            for _ in 0..tile_rank {
-                tile_shape.push(r.read_le_i32().unwrap_or(0));
-            }
-            let tv_idx = r.read_varint().unwrap_or(0) as usize;
-            let tv_name = prev_types.get(tv_idx).cloned().unwrap_or("?".into());
-            let dim_map_size = r.read_varint().unwrap_or(0) as usize;
-            let mut dim_map = Vec::with_capacity(dim_map_size);
-            for _ in 0..dim_map_size {
-                dim_map.push(r.read_le_i32().unwrap_or(0));
-            }
-            let has_padding =
-                padding_flag_from_bitfield.unwrap_or_else(|| r.read_byte().unwrap_or(0) != 0);
-            let padding = if has_padding {
-                let p = if version >= BytecodeVersion::V13_3 {
-                    r.read_byte().unwrap_or(0) as u64
-                } else {
-                    r.read_varint().unwrap_or(0)
-                };
-                format!(", padding={p}")
-            } else {
-                String::new()
-            };
-            let ts = tile_shape
-                .iter()
-                .map(|d| d.to_string())
-                .collect::<Vec<_>>()
-                .join("x");
-            format!("partition_view<tile=({ts}), tv={tv_name}{padding}>")
-        }
-        t if t == TypeTag::GatherScatterView as u8 => {
-            let flags = r.read_varint().unwrap_or(0);
-            let tile_rank = r.read_varint().unwrap_or(0) as usize;
-            let mut tile_shape = Vec::with_capacity(tile_rank);
-            for _ in 0..tile_rank {
-                tile_shape.push(r.read_le_i32().unwrap_or(0));
-            }
-            let tv_idx = r.read_varint().unwrap_or(0) as usize;
-            let tv_name = prev_types.get(tv_idx).cloned().unwrap_or("?".into());
-            let sparse_dim = r.read_varint().unwrap_or(0);
-            let padding = if flags & 1 != 0 {
-                let p = r.read_byte().unwrap_or(0);
-                format!(", padding={p}")
-            } else {
-                String::new()
-            };
-            let ts = tile_shape
-                .iter()
-                .map(|d| d.to_string())
-                .collect::<Vec<_>>()
-                .join("x");
-            format!(
-                "gather_scatter_view<tile=({ts}), tv={tv_name}, sparse_dim={sparse_dim}{padding}>"
-            )
-        }
-        t if t == TypeTag::StridedView as u8 => {
-            let flags = r.read_varint().unwrap_or(0);
-            let tile_rank = r.read_varint().unwrap_or(0) as usize;
-            let mut tile_shape = Vec::with_capacity(tile_rank);
-            for _ in 0..tile_rank {
-                tile_shape.push(r.read_le_i32().unwrap_or(0));
-            }
-            let stride_rank = r.read_varint().unwrap_or(0) as usize;
-            let mut traversal_strides = Vec::with_capacity(stride_rank);
-            for _ in 0..stride_rank {
-                traversal_strides.push(r.read_le_i32().unwrap_or(0));
-            }
-            let tv_idx = r.read_varint().unwrap_or(0) as usize;
-            let tv_name = prev_types.get(tv_idx).cloned().unwrap_or("?".into());
-            let dim_map_size = r.read_varint().unwrap_or(0) as usize;
-            let mut dim_map = Vec::with_capacity(dim_map_size);
-            for _ in 0..dim_map_size {
-                dim_map.push(r.read_le_i32().unwrap_or(0));
-            }
-            let padding = if flags & 1 != 0 {
-                let p = r.read_byte().unwrap_or(0);
-                format!(", padding={p}")
-            } else {
-                String::new()
-            };
-            let ts = tile_shape
-                .iter()
-                .map(|d| d.to_string())
-                .collect::<Vec<_>>()
-                .join("x");
-            let strides = traversal_strides
-                .iter()
-                .map(|d| d.to_string())
-                .collect::<Vec<_>>()
-                .join(",");
-            let dim_map_str = dim_map
-                .iter()
-                .map(|d| d.to_string())
-                .collect::<Vec<_>>()
-                .join(",");
-            format!(
-                "strided_view<tile=({ts}), traversal_strides=[{strides}], tv={tv_name}, dim_map=[{dim_map_str}]{padding}>"
-            )
-        }
-        t if t == TypeTag::Func as u8 => {
-            let num_inputs = r.read_varint().unwrap_or(0) as usize;
-            let mut inputs = Vec::with_capacity(num_inputs);
-            for _ in 0..num_inputs {
-                let idx = r.read_varint().unwrap_or(0) as usize;
-                inputs.push(prev_types.get(idx).cloned().unwrap_or("?".into()));
-            }
-            let num_results = r.read_varint().unwrap_or(0) as usize;
-            let mut results = Vec::with_capacity(num_results);
-            for _ in 0..num_results {
-                let idx = r.read_varint().unwrap_or(0) as usize;
-                results.push(prev_types.get(idx).cloned().unwrap_or("?".into()));
-            }
-            format!("({}) -> ({})", inputs.join(", "), results.join(", "))
-        }
-        _ => format!("<unknown type tag {tag}>"),
-    }
-}
-
-// =========================================================================
-// Constant section parser
-// =========================================================================
-
-fn parse_constant_section(payload: Option<&[u8]>) -> Result<Vec<Vec<u8>>> {
-    let Some(data) = payload else {
-        return Ok(Vec::new());
-    };
-    let mut r = Reader::new(data);
-    let count = r.read_varint()? as usize;
-    if count == 0 {
-        return Ok(Vec::new());
-    }
-    r.skip_padding(8)?;
-
-    let mut offsets = Vec::with_capacity(count);
-    for _ in 0..count {
-        // Offsets are u64 LE (raw array), not varints.
-        let bytes = r.read_bytes(8)?;
-        let v = u64::from_le_bytes(bytes.try_into().unwrap());
-        offsets.push(v as usize);
-    }
-
-    let const_data = r.read_bytes(r.remaining())?;
-    let mut constants = Vec::with_capacity(count);
-    for i in 0..count {
-        let start = offsets[i];
-        let end = if i + 1 < count {
-            offsets[i + 1]
-        } else {
-            const_data.len()
-        };
-        constants.push(const_data[start..end].to_vec());
-    }
-    Ok(constants)
-}
-
 // =========================================================================
 // Global section parser
 // =========================================================================
@@ -774,10 +267,10 @@ fn parse_constant_section(payload: Option<&[u8]>) -> Result<Vec<Vec<u8>>> {
 fn parse_global_section(
     data: &[u8],
     strings: &[String],
-    types: &[String],
+    types: &[Type],
     version: BytecodeVersion,
 ) -> Result<Vec<String>> {
-    let mut r = Reader::new(data);
+    let mut r = EncodingReader::new(data);
     let count = r.read_varint()? as usize;
     let mut globals = Vec::with_capacity(count);
     for _ in 0..count {
@@ -796,7 +289,10 @@ fn parse_global_section(
             constant = Some(r.read_varint()? != 0);
         }
         let name = strings.get(name_idx).cloned().unwrap_or("?".into());
-        let ty = types.get(type_idx).cloned().unwrap_or("?".into());
+        let ty = types
+            .get(type_idx)
+            .map(crate::ir::fmt::format_type)
+            .unwrap_or("?".into());
         let suffix = match (visibility, constant) {
             (Some(vis), Some(is_constant)) => format!(", {vis}, constant={is_constant}"),
             _ => String::new(),
@@ -815,12 +311,13 @@ fn parse_global_section(
 fn parse_func_section(
     data: &[u8],
     strings: &[String],
-    types: &[String],
+    types: &[Type],
+    constants: &[Vec<u8>],
     version: BytecodeVersion,
 ) -> Result<Vec<String>> {
-    let mut r = Reader::new(data);
+    let mut r = EncodingReader::new(data);
     let count = r.read_varint()? as usize;
-    let mut funcs = Vec::with_capacity(count.min(data.len()));
+    let mut funcs = Vec::with_capacity(count);
 
     for _ in 0..count {
         let name_idx = r.read_varint()? as usize;
@@ -829,9 +326,14 @@ fn parse_func_section(
         let _loc_idx = r.read_varint()?;
 
         let name = strings.get(name_idx).cloned().unwrap_or("?".into());
-        let sig = types.get(sig_idx).cloned().unwrap_or("?".into());
+        let sig = types
+            .get(sig_idx)
+            .map(crate::ir::fmt::format_type)
+            .unwrap_or("?".into());
 
         let is_kernel = flags_byte & FunctionFlag::KindKernel as u8 != 0;
+        // 13.5 drops the hints flag (a kernel always carries the attribute)
+        // and adds argument attributes as a positional field.
         let has_hints = if version >= BytecodeVersion::V13_5 {
             is_kernel
         } else {
@@ -839,13 +341,20 @@ fn parse_func_section(
         };
         let kind = if is_kernel { "entry" } else { "func" };
 
-        // Optimization hints and argument attributes are self-contained
-        // attributes; they are skipped, not displayed.
-        if has_hints {
-            skip_attribute(&mut r, types, 0)?;
-        }
+        // Decode the optimization hints (self-contained attribute) if
+        // present. Consuming the attribute keeps the stream in sync with
+        // the function body that follows.
+        let hints = if has_hints {
+            Some(
+                super::reader::read_self_contained_attribute(&mut r, strings, types, constants)
+                    .map_err(|e| err(&format!("optimization hints: {e}")))?,
+            )
+        } else {
+            None
+        };
         if version >= BytecodeVersion::V13_5 {
-            skip_attribute(&mut r, types, 0)?;
+            super::reader::read_self_contained_attribute(&mut r, strings, types, constants)
+                .map_err(|e| err(&format!("argument attributes: {e}")))?;
         }
 
         let body_len = r.read_varint()? as usize;
@@ -855,81 +364,17 @@ fn parse_func_section(
         let mut out = String::new();
         writeln!(out, "  {kind} @{name} : {sig}").unwrap();
         writeln!(out, "    body: {body_len} bytes, ~{op_count} ops").unwrap();
-        if has_hints {
-            writeln!(out, "    [has optimization_hints]").unwrap();
+        if let Some(h) = hints {
+            writeln!(
+                out,
+                "    optimization_hints = {}",
+                crate::ir::fmt::format_attr(&h)
+            )
+            .unwrap();
         }
         funcs.push(out);
     }
     Ok(funcs)
-}
-
-/// Consume function metadata without mistaking its bytes for a body length.
-fn skip_attribute(r: &mut Reader<'_>, types: &[String], depth: usize) -> Result<()> {
-    if depth > 64 {
-        return Err(err("attribute nesting exceeds 64 levels"));
-    }
-    match r.read_varint()? {
-        1 | 7 => {
-            r.read_varint()?;
-            r.read_varint()?;
-        }
-        2 => {
-            let ty = r.read_varint()? as usize;
-            let size = match types.get(ty).map(String::as_str) {
-                Some("f16" | "bf16") => 2,
-                Some("f32" | "tf32") => 4,
-                Some("f64") => 8,
-                _ => return Err(err("unsupported float attribute type")),
-            };
-            r.read_bytes(size)?;
-        }
-        3 => {
-            r.read_byte()?;
-        }
-        4 | 5 => {
-            r.read_varint()?;
-        }
-        6 => {
-            let count = r.read_varint()?;
-            for _ in 0..count {
-                skip_attribute(r, types, depth + 1)?;
-            }
-        }
-        8 => {
-            r.read_varint()?;
-            let flags = r.read_byte()?;
-            for bit in [1, 2] {
-                if flags & bit != 0 {
-                    r.read_varint()?;
-                }
-            }
-        }
-        9 => {
-            let count = r.read_varint()? as usize;
-            r.read_bytes(
-                count
-                    .checked_mul(8)
-                    .ok_or_else(|| err("attribute length overflow"))?,
-            )?;
-        }
-        10 | 11 => {
-            let count = r.read_varint()?;
-            for _ in 0..count {
-                r.read_varint()?;
-                skip_attribute(r, types, depth + 1)?;
-            }
-        }
-        12 => {
-            let flags = r.read_byte()?;
-            for bit in [1, 2] {
-                if flags & bit != 0 {
-                    r.read_varint()?;
-                }
-            }
-        }
-        _ => return Err(err("unknown function metadata attribute tag")),
-    }
-    Ok(())
 }
 
 /// Quick heuristic: count opcodes in a function body by scanning varints.
@@ -988,7 +433,7 @@ mod tests {
         for value in [0, 127, 128, 1 << 63, u64::MAX] {
             let mut writer = EncodingWriter::new();
             writer.write_varint(value);
-            let mut reader = Reader::new(writer.as_bytes());
+            let mut reader = EncodingReader::new(writer.as_bytes());
             assert_eq!(reader.read_varint().unwrap(), value);
             assert_eq!(reader.remaining(), 0);
         }

@@ -15,8 +15,10 @@ pub mod encoding;
 mod enums;
 mod op_writer;
 mod opcode;
+pub mod reader;
 mod writer;
 
 pub use enums::*;
 pub use opcode::*;
+pub use reader::{read_bytecode, read_bytecode_versioned};
 pub use writer::*;

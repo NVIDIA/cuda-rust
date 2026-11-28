@@ -13,7 +13,7 @@
 /// Public operations occupy the range `0x000 ..= 0xFFF` and public-preview
 /// operations the range `0x4000 ..= 0x4FFF`. Each variant's discriminant is
 /// the on-wire opcode value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, num_derive::FromPrimitive)]
 #[repr(u16)]
 pub enum Opcode {
     AbsF = 0x00,
@@ -262,6 +262,12 @@ impl Opcode {
         self as u16
     }
 
+    /// Construct an opcode from its raw u16 value (inverse of [`as_u16`](Self::as_u16)).
+    /// Derived from the `#[repr(u16)]` discriminants.
+    pub fn from_u16(value: u16) -> Option<Self> {
+        <Self as num_traits::FromPrimitive>::from_u16(value)
+    }
+
     /// Return the fixed result count if this op uses a fixed count in the
     /// bytecode format, or `None` if the op writes a varint result count.
     ///
@@ -383,6 +389,27 @@ impl Opcode {
             Alloca => Some(1),
             // Entry has 0 results but is function-like (handled in func section, not here)
             Entry => Some(0),
+        }
+    }
+}
+
+#[cfg(test)]
+mod opcode_from_u16_tests {
+    use super::Opcode;
+
+    #[test]
+    fn from_u16_is_the_exact_inverse_of_as_u16() {
+        let mut decoded = 0;
+        for v in 0..=u16::MAX {
+            if let Some(op) = Opcode::from_u16(v) {
+                assert_eq!(op.as_u16(), v, "from_u16({v:#x}) -> {op:?}");
+                decoded += 1;
+            }
+        }
+        // Bump deliberately when an opcode is added.
+        assert_eq!(decoded, 109, "expected 109 opcodes to decode");
+        for gap in [0x19u16, 0x24, 0x34, 0x39, 0x7E, 0x1000, 0x4001, 0x4003] {
+            assert!(Opcode::from_u16(gap).is_none(), "{gap:#x} should be a gap");
         }
     }
 }

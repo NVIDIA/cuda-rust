@@ -15,6 +15,7 @@
 
 use std::collections::HashMap;
 
+use super::encoding::EncodingWriter;
 use super::enums::DebugTag;
 use super::writer::StringManager;
 
@@ -27,18 +28,6 @@ pub(super) struct DebugAttrTable {
     map: HashMap<Vec<u8>, u64>,
     /// Encoded entries in id order (`entries[0]` is id 1).
     entries: Vec<Vec<u8>>,
-}
-
-fn push_varint(buf: &mut Vec<u8>, mut v: u64) {
-    loop {
-        let byte = (v & 0x7f) as u8;
-        v >>= 7;
-        if v == 0 {
-            buf.push(byte);
-            return;
-        }
-        buf.push(byte | 0x80);
-    }
 }
 
 impl DebugAttrTable {
@@ -62,16 +51,18 @@ impl DebugAttrTable {
     }
 
     pub fn file(&mut self, strings: &mut StringManager, name: &str, directory: &str) -> u64 {
-        let mut buf = vec![DebugTag::DIFile as u8];
-        push_varint(&mut buf, strings.get_or_insert(name));
-        push_varint(&mut buf, strings.get_or_insert(directory));
-        self.intern(buf)
+        let mut w = EncodingWriter::new();
+        w.write_byte(DebugTag::DIFile as u8);
+        w.write_varint(strings.get_or_insert(name));
+        w.write_varint(strings.get_or_insert(directory));
+        self.intern(w.into_bytes())
     }
 
     pub fn compile_unit(&mut self, file: u64) -> u64 {
-        let mut buf = vec![DebugTag::DICompileUnit as u8];
-        push_varint(&mut buf, file);
-        self.intern(buf)
+        let mut w = EncodingWriter::new();
+        w.write_byte(DebugTag::DICompileUnit as u8);
+        w.write_varint(file);
+        self.intern(w.into_bytes())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -86,25 +77,27 @@ impl DebugAttrTable {
         scope_line: u64,
         is_declaration: bool,
     ) -> u64 {
-        let mut buf = vec![DebugTag::DISubprogram as u8];
-        push_varint(&mut buf, file);
-        push_varint(&mut buf, line);
-        push_varint(&mut buf, strings.get_or_insert(name));
-        push_varint(&mut buf, strings.get_or_insert(linkage_name));
-        push_varint(&mut buf, compile_unit);
-        push_varint(&mut buf, scope_line);
+        let mut w = EncodingWriter::new();
+        w.write_byte(DebugTag::DISubprogram as u8);
+        w.write_varint(file);
+        w.write_varint(line);
+        w.write_varint(strings.get_or_insert(name));
+        w.write_varint(strings.get_or_insert(linkage_name));
+        w.write_varint(compile_unit);
+        w.write_varint(scope_line);
         // Canonical interning uses the 13.5 flags field; older writers omit it.
-        push_varint(&mut buf, u64::from(is_declaration));
-        self.intern(buf)
+        w.write_varint(u64::from(is_declaration));
+        self.intern(w.into_bytes())
     }
 
     pub fn lexical_block(&mut self, parent_scope: u64, file: u64, line: u64, column: u64) -> u64 {
-        let mut buf = vec![DebugTag::DILexicalBlock as u8];
-        push_varint(&mut buf, parent_scope);
-        push_varint(&mut buf, file);
-        push_varint(&mut buf, line);
-        push_varint(&mut buf, column);
-        self.intern(buf)
+        let mut w = EncodingWriter::new();
+        w.write_byte(DebugTag::DILexicalBlock as u8);
+        w.write_varint(parent_scope);
+        w.write_varint(file);
+        w.write_varint(line);
+        w.write_varint(column);
+        self.intern(w.into_bytes())
     }
 
     pub fn loc(
@@ -115,19 +108,21 @@ impl DebugAttrTable {
         line: u64,
         column: u64,
     ) -> u64 {
-        let mut buf = vec![DebugTag::DILoc as u8];
-        push_varint(&mut buf, scope);
-        push_varint(&mut buf, strings.get_or_insert(filename));
-        push_varint(&mut buf, line);
-        push_varint(&mut buf, column);
-        self.intern(buf)
+        let mut w = EncodingWriter::new();
+        w.write_byte(DebugTag::DILoc as u8);
+        w.write_varint(scope);
+        w.write_varint(strings.get_or_insert(filename));
+        w.write_varint(line);
+        w.write_varint(column);
+        self.intern(w.into_bytes())
     }
 
     pub fn call_site(&mut self, callee: u64, caller: u64) -> u64 {
-        let mut buf = vec![DebugTag::CallSite as u8];
-        push_varint(&mut buf, callee);
-        push_varint(&mut buf, caller);
-        self.intern(buf)
+        let mut w = EncodingWriter::new();
+        w.write_byte(DebugTag::CallSite as u8);
+        w.write_varint(callee);
+        w.write_varint(caller);
+        self.intern(w.into_bytes())
     }
 
     /// The decoder in the consuming toolchain fails on an empty table; the
@@ -138,5 +133,13 @@ impl DebugAttrTable {
             let id = self.intern(vec![DebugTag::Unknown as u8]);
             debug_assert_eq!(id, 1);
         }
+    }
+}
+
+/// Splits a path into (directory, basename) for DIFile encoding.
+pub fn split_file_path(path: &str) -> (&str, &str) {
+    match path.rfind('/') {
+        Some(i) => (&path[..i], &path[i + 1..]),
+        None => ("", path),
     }
 }

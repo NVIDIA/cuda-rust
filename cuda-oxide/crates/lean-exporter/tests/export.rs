@@ -2272,9 +2272,13 @@ fn proof_cache_records_valid_proofs_and_invalidates_on_mutation() {
     );
 
     let broken_lean = valid_lean.replacen(
-        "requiresLenGe := [(0, 2), (1, 2)]",
-        "requiresLenGe := []",
+        "requires := [{ cmp := .ge, lhs := (.sliceLen 0), rhs := (.sliceLen 2) }, { cmp := .ge, lhs := (.sliceLen 1), rhs := (.sliceLen 2) }]",
+        "requires := []",
         1,
+    );
+    assert_ne!(
+        broken_lean, valid_lean,
+        "requires mutation must modify Lean source"
     );
     lean_exporter::runner::check_generated_lean_in_cache(&broken_lean, &lean_dir, Some(&cache_dir))
         .expect_err("mutated Lean source must miss cache and fail proof check");
@@ -3764,4 +3768,130 @@ fn all_mir_program_fixtures_preserve_cross_block_register_disjointness() {
     }
     let scalar_lean = export(FIXTURE);
     assert!(scalar_lean.contains("CudaOxide.Mir.Scalar.Expr"));
+}
+
+#[test]
+fn verifies_requires_arith_and_nvvm_scalar_arithmetic_and_rejects_insufficient_or_malformed() {
+    // 1. Fail-closed `spec.rs` validation on invalid parameter kinds and syntax in `contract_requires`:
+    for (bad_attr, expected_msg) in [
+        (
+            "s2>=1",
+            "parameter 2 in `s2>=1` is not a slice or DisjointSlice",
+        ),
+        (
+            "p0>=1",
+            "parameter 0 in `p0>=1` is not an unsigned integer scalar",
+        ),
+        (
+            "p3>=1",
+            "parameter 3 in `p3>=1` is not an unsigned integer scalar",
+        ),
+        ("s0>=p9", "parameter index 9 in `s0>=p9` out of range"),
+        ("s0>=4*", "unexpected end of expression"),
+    ] {
+        let bad_mir = format!(
+            r#"
+mir.func @bad_req: builtin.function <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>, mir.slice <builtin.fp32 ,mutable:true,kind:UniqueRef>, builtin.integer ui32, builtin.fp32) -> ()>
+  [contract_requires: builtin.string "{bad_attr}", gpu_kernel: builtin.string "true", launch_contract_domain: builtin.integer <1: ui32>, reqntid_x: builtin.integer <256: ui32>, reqntid_y: builtin.integer <1: ui32>, reqntid_z: builtin.integer <1: ui32>, verify_disjoint_writes: builtin.string "1", verify_no_oob_idx: builtin.string "0,1"]
+{{
+  ^entry(_x: mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>, _y: mir.slice <builtin.fp32 ,mutable:true,kind:UniqueRef>, _n: builtin.integer ui32, _s: builtin.fp32):
+    mir.return () [] []: <() -> ()>
+}}
+"#
+        );
+        let err = export_named_source(&bad_mir, "bad_req")
+            .expect_err(&format!("expected `{bad_attr}` to be rejected"));
+        assert!(
+            err.to_string().contains(expected_msg),
+            "expected `{expected_msg}` for `{bad_attr}`, got: {err}"
+        );
+    }
+
+    // 2. Positive & negative end-to-end Lean 4 checks on scalar/scaled/2D `requires` + `nvvm.scalar_arithmetic` / `nvvm.scalar_math`:
+    let scale_quad_mir = r#"
+mir.func @scale_quad: builtin.function <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>, mir.slice <builtin.fp32 ,mutable:true,kind:UniqueRef>, builtin.integer ui32, builtin.fp32) -> ()>
+  [contract_requires: builtin.string "s0>=4*s1,s1>=p2,p2!=0", gpu_kernel: builtin.string "true", launch_contract_domain: builtin.integer <1: ui32>, reqntid_x: builtin.integer <256: ui32>, reqntid_y: builtin.integer <1: ui32>, reqntid_z: builtin.integer <1: ui32>, verify_disjoint_writes: builtin.string "1", verify_no_oob_idx: builtin.string "0,1"]
+{
+  ^entry(x: mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>, out: mir.slice <builtin.fp32 ,mutable:true,kind:UniqueRef>, n: builtin.integer ui32, scale: builtin.fp32):
+    bx32 = nvvm.read_ptx_sreg_ctaid_x () [] []: <() -> (builtin.integer ui32)>;
+    bd32 = nvvm.read_ptx_sreg_ntid_x () [] []: <() -> (builtin.integer ui32)>;
+    tx32 = nvvm.read_ptx_sreg_tid_x () [] []: <() -> (builtin.integer ui32)>;
+    bx = mir.cast (bx32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+    bd = mir.cast (bd32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+    tx = mir.cast (tx32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+    base = mir.mul (bx, bd) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+    idx = mir.add (base, tx) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+    n64 = mir.cast (n) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+    in_n = mir.lt (idx, n64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+    mir.cond_br (in_n) [^active, ^exit] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+  ^active():
+    c4 = mir.constant () [] [value: builtin.integer <4: ui64>]: <() -> (builtin.integer ui64)>;
+    c3 = mir.constant () [] [value: builtin.integer <3: ui64>]: <() -> (builtin.integer ui64)>;
+    idx4_pair = mir.checked_mul (c4, idx) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (mir.tuple <[builtin.integer ui64, builtin.integer i1], [], [], 16, 8>)>;
+    idx4 = mir.extract_field (idx4_pair) [] [index: mir.field_index 0]: <(mir.tuple <[builtin.integer ui64, builtin.integer i1], [], [], 16, 8>) -> (builtin.integer ui64)>;
+    idx4_ovf = mir.extract_field (idx4_pair) [] [index: mir.field_index 1]: <(mir.tuple <[builtin.integer ui64, builtin.integer i1], [], [], 16, 8>) -> (builtin.integer i1)>;
+    idx4_ok = mir.not (idx4_ovf) [] []: <(builtin.integer i1) -> (builtin.integer i1)>;
+    mir.assert (idx4_ok) [] []: <(builtin.integer i1) -> ()>;
+    src_pair = mir.checked_add (idx4, c3) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (mir.tuple <[builtin.integer ui64, builtin.integer i1], [], [], 16, 8>)>;
+    src_idx = mir.extract_field (src_pair) [] [index: mir.field_index 0]: <(mir.tuple <[builtin.integer ui64, builtin.integer i1], [], [], 16, 8>) -> (builtin.integer ui64)>;
+    src_ovf = mir.extract_field (src_pair) [] [index: mir.field_index 1]: <(mir.tuple <[builtin.integer ui64, builtin.integer i1], [], [], 16, 8>) -> (builtin.integer i1)>;
+    src_ok = mir.not (src_ovf) [] []: <(builtin.integer i1) -> (builtin.integer i1)>;
+    mir.assert (src_ok) [] []: <(builtin.integer i1) -> ()>;
+    x_len = mir.extract_field (x) [] [index: mir.field_index 1]: <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>) -> (builtin.integer ui64)>;
+    x_ok = mir.lt (src_idx, x_len) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+    mir.assert (x_ok) [] []: <(builtin.integer i1) -> ()>;
+    x_ptr = mir.extract_field (x) [] [index: mir.field_index 0]: <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>)>;
+    x_elem = mir.ptr_offset (x_ptr, src_idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>)>;
+    v = mir.load (x_elem) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>) -> (builtin.fp32)>;
+    mul_rn = nvvm.scalar_arithmetic (v, scale) [] [nvvm_scalar_arithmetic_format: nvvm.scalar_arithmetic_format F32, nvvm_scalar_arithmetic_operation: nvvm.scalar_arithmetic_operation Mul, nvvm_scalar_arithmetic_rounding: nvvm.scalar_arithmetic_rounding Rn, nvvm_scalar_arithmetic_saturation: nvvm.scalar_arithmetic_saturation None, nvvm_scalar_arithmetic_subnormal: nvvm.scalar_arithmetic_subnormal Preserve]: <(builtin.fp32, builtin.fp32) -> (builtin.fp32)>;
+    soft = nvvm.scalar_math (mul_rn) [] [nvvm_scalar_math_format: nvvm.scalar_math_format F32, nvvm_scalar_math_operation: nvvm.scalar_math_operation Tanh, nvvm_scalar_math_precision: nvvm.scalar_math_precision Approx, nvvm_scalar_math_subnormal: nvvm.scalar_math_subnormal Preserve]: <(builtin.fp32) -> (builtin.fp32)>;
+    out_ptr = mir.extract_field (out) [] [index: mir.field_index 0]: <(mir.slice <builtin.fp32 ,mutable:true,kind:UniqueRef>) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>)>;
+    out_elem = mir.ptr_offset (out_ptr, idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>)>;
+    mir.store (out_elem, soft) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>, builtin.fp32) -> ()>;
+    mir.goto () [^exit] []: <() -> ()>
+
+  ^exit():
+    mir.return () [] []: <() -> ()>
+}
+"#;
+    let valid_lean =
+        export_named_source(scale_quad_mir, "scale_quad").expect("exports scale_quad cleanly");
+
+    // Negative: unmodeled warp vote / atomic ops still fail closed:
+    let vote_mir = scale_quad_mir.replacen(
+        "    mir.goto () [^exit] []: <() -> ()>",
+        "    m32 = mir.constant () [] [value: builtin.integer <4294967295: ui32>]: <() -> (builtin.integer ui32)>;\n    _bal = nvvm.vote_sync_ballot (m32, in_n) [] []: <(builtin.integer ui32, builtin.integer i1) -> (builtin.integer ui32)>;\n    mir.goto () [^exit] []: <() -> ()>",
+        1,
+    );
+    let vote_err = export_named_source(&vote_mir, "scale_quad")
+        .expect_err("unmodeled vote_sync_ballot must fail closed");
+    assert!(
+        vote_err.to_string().contains("nvvm.vote_sync_ballot"),
+        "unexpected error: {vote_err}"
+    );
+
+    if let Some(lean_dir) = lean_package_dir_if_available() {
+        lean_exporter::runner::check_generated_lean(&valid_lean, &lean_dir).expect(
+            "Lean 4 must accept `s0>=4*s1, s1>=p2` + `nvvm.scalar_arithmetic` / `nvvm.scalar_math`",
+        );
+
+        // Negative Lean check 1: off-by-one `4 * idx + 4` under `s0 >= 4 * s1` must fail:
+        let oob_mir = scale_quad_mir.replacen(
+            "c3 = mir.constant () [] [value: builtin.integer <3: ui64>]",
+            "c3 = mir.constant () [] [value: builtin.integer <4: ui64>]",
+            1,
+        );
+        let oob_lean = export_named_source(&oob_mir, "scale_quad").expect("exports oob_mir");
+        lean_exporter::runner::check_generated_lean(&oob_lean, &lean_dir).expect_err(
+            "Lean 4 must reject off-by-one `4 * idx + 4` under `x.len() >= 4 * out.len()`",
+        );
+
+        // Negative Lean check 2: inclusive `idx <= n` under `out.len() >= n` must fail:
+        let inc_mir =
+            scale_quad_mir.replacen("in_n = mir.lt (idx, n64)", "in_n = mir.le (idx, n64)", 1);
+        let inc_lean = export_named_source(&inc_mir, "scale_quad").expect("exports inc_mir");
+        lean_exporter::runner::check_generated_lean(&inc_lean, &lean_dir)
+            .expect_err("Lean 4 must reject inclusive `idx <= n` under `out.len() >= n`");
+    }
 }

@@ -22,6 +22,7 @@ REJECTED = (
     ("RejectedTmemWarpSlice.lean", "TMEM warpgroup lane-slice violation"),
     ("RejectedMutSliceRace.lean", "cross-thread &mut [T] read-write race"),
     ("RejectedTrappingWrite.lean", "trapping mir.assert before writes_all_elems store"),
+    ("RejectedInsufficientRequiresScale.lean", "insufficient scaled requires precondition"),
     ("RejectedDivergentSharedRace.lean", "shared-memory race masked by divergent sync_threads"),
     ("tests/program/RejectedUnknownGuard.lean", "branch pruned on an untracked guard"),
     ("tests/program/RejectedUnknownWriteCoverage.lean", "write coverage claimed across an untracked guard"),

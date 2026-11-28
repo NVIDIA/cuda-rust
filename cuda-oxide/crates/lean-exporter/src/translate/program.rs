@@ -185,7 +185,7 @@ pub struct MirProgramData {
     pub has_cluster_rank_checks: bool,
 }
 
-/// Return the unsigned integer bit width (`8`, `16`, `32`, `64`) of `ty`, `1` for `i1`, or `0` otherwise.
+/// Return true when `ty` is an unsigned integer type (`8`, `16`, `32`, `64`), `1` for `i1`, or `0` otherwise.
 fn mir_uint_width(ctx: &Context, ty: TypeHandle) -> u32 {
     let ty_ref = ty.deref(ctx);
     let Some(int_ty) = ty_ref.downcast_ref::<IntegerType>() else {
@@ -198,6 +198,63 @@ fn mir_uint_width(ctx: &Context, ty: TypeHandle) -> u32 {
     } else {
         0
     }
+}
+
+/// Return true when `opid` is a pure, total, per-lane NVVM scalar or packed ALU,
+/// math, conversion, dot-product, or byte-permute operation with zero memory,
+/// barrier, pointer, or warp-convergence side effects.
+fn is_pure_nvvm_value_op(opid: &str) -> bool {
+    opid.starts_with("nvvm.cvt_")
+        || matches!(
+            opid,
+            "nvvm.scalar_arithmetic"
+                | "nvvm.scalar_math"
+                | "nvvm.scalar_conversion"
+                | "nvvm.extended_minmax"
+                | "nvvm.prmt"
+                | "nvvm.dp2a_s32"
+                | "nvvm.dp2a_u32"
+                | "nvvm.dp4a_s32"
+                | "nvvm.dp4a_u32"
+                | "nvvm.max_relu_s16x2"
+                | "nvvm.max_relu_s32"
+                | "nvvm.max_s16x2"
+                | "nvvm.max_u16x2"
+                | "nvvm.min_relu_s16x2"
+                | "nvvm.min_relu_s32"
+                | "nvvm.min_s16x2"
+                | "nvvm.min_u16x2"
+                | "nvvm.abs_bf16x2"
+                | "nvvm.abs_f16x2"
+                | "nvvm.neg_bf16x2"
+                | "nvvm.neg_f16x2"
+                | "nvvm.add_bf16x2"
+                | "nvvm.add_f16x2"
+                | "nvvm.add_f32x2"
+                | "nvvm.add_ftz_f32x2"
+                | "nvvm.sub_bf16x2"
+                | "nvvm.sub_f16x2"
+                | "nvvm.sub_f32x2"
+                | "nvvm.sub_ftz_f32x2"
+                | "nvvm.mul_bf16x2"
+                | "nvvm.mul_f16x2"
+                | "nvvm.mul_f32x2"
+                | "nvvm.mul_ftz_f32x2"
+                | "nvvm.max_bf16x2"
+                | "nvvm.max_f16x2"
+                | "nvvm.min_bf16x2"
+                | "nvvm.min_f16x2"
+                | "nvvm.fma_bf16x2"
+                | "nvvm.fma_f16x2"
+                | "nvvm.fma_f32x2"
+                | "nvvm.fma_ftz_f16x2"
+                | "nvvm.fma_ftz_f32x2"
+                | "nvvm.fma_ftz_relu_f16x2"
+                | "nvvm.fma_ftz_sat_f16x2"
+                | "nvvm.fma_relu_bf16x2"
+                | "nvvm.fma_relu_f16x2"
+                | "nvvm.fma_sat_f16x2"
+        )
 }
 
 /// Minimal syntactic provenance tag tracked solely to expand `extract_field` on slice
@@ -417,7 +474,7 @@ pub(super) fn translate_mir_program(
             || spec.disjoint_writes.contains(&p)
             || spec.writes_all_elems.contains(&p)
             || spec.mutable_slice_params.contains(&p)
-            || spec.requires_len_ge.iter().any(|&(l, r)| l == p || r == p)
+            || spec.requires.iter().any(|r| r.mentions_slice(p))
     };
     // Parameters a `#[verify]` clause makes an access or coverage claim about.
     let is_claimed_param = |p: usize| -> bool {
@@ -577,7 +634,7 @@ pub(super) fn translate_mir_program(
                         | "nvvm.clc_query_get_first_ctaid_y"
                         | "nvvm.clc_query_get_first_ctaid_z"
                 );
-                let is_pure_comb = on.starts_with("mir.")
+                let is_pure_comb = (on.starts_with("mir.")
                     && !matches!(
                         on.as_str(),
                         "mir.load"
@@ -585,7 +642,11 @@ pub(super) fn translate_mir_program(
                             | "mir.alloca"
                             | "mir.shared_alloc"
                             | "mir.ptr_offset"
-                    );
+                    ))
+                    || (is_pure_nvvm_value_op(&on)
+                        && op.get_num_operands() <= 2
+                        && (mir_uint_width(ctx, op.get_result(0).get_type(ctx)) <= 1
+                            || op.get_num_operands() == 1));
                 let is_div = if is_pure_uni_source
                     || (on == "mir.shared_alloc"
                         && race_free_shared_ptrs.contains(&op.get_result(0)))
@@ -717,7 +778,7 @@ pub(super) fn translate_mir_program(
                         (on == "mir.div" && c >= 32 && c.is_power_of_two())
                             || (on == "mir.shr" && (5..=16).contains(&c))
                     });
-                let is_pure_comb = on.starts_with("mir.")
+                let is_pure_comb = (on.starts_with("mir.")
                     && !matches!(
                         on.as_str(),
                         "mir.load"
@@ -725,7 +786,11 @@ pub(super) fn translate_mir_program(
                             | "mir.alloca"
                             | "mir.shared_alloc"
                             | "mir.ptr_offset"
-                    );
+                    ))
+                    || (is_pure_nvvm_value_op(&on)
+                        && op.get_num_operands() <= 2
+                        && (mir_uint_width(ctx, res.get_type(ctx)) <= 1
+                            || op.get_num_operands() == 1));
                 let is_div = if is_pure_uni_source
                     || is_warp_div_32
                     || (on == "mir.shared_alloc" && race_free_shared_ptrs.contains(&res))
@@ -3932,13 +3997,123 @@ pub(super) fn translate_mir_program(
                         stmts.push(MirStmt::Assign(val_ids[&res], MirRhs::OpaqueVal));
                     }
                 }
-                _ if (opid.starts_with("nvvm.shfl_sync") || opid.starts_with("nvvm.cvt_"))
-                    && op.get_num_results() == 1 =>
-                {
-                    stmts.push(MirStmt::Assign(
-                        val_ids[&op.get_result(0)],
-                        MirRhs::OpaqueVal,
-                    ));
+                _ if opid.starts_with("nvvm.shfl_sync") && op.get_num_results() == 1 => {
+                    for arg_v in op.operands() {
+                        if let Some(tag) = tags.get(&arg_v) {
+                            match tag {
+                                LocalTag::SliceParam(p, true) | LocalTag::GlobalPtr(p)
+                                    if is_claimed_param(*p) =>
+                                {
+                                    return Err(reject(
+                                        &opid,
+                                        format!(
+                                            "verified slice parameter {p} cannot escape into `{opid}`"
+                                        ),
+                                    ));
+                                }
+                                LocalTag::SharedPtr(sid, _) | LocalTag::DsmemSharedPtr(sid, _)
+                                    if spec.no_oob_shared.contains(sid)
+                                        || spec.no_data_race.contains(sid) =>
+                                {
+                                    return Err(reject(
+                                        &opid,
+                                        format!(
+                                            "verified shared-memory pointer cannot escape into `{opid}`"
+                                        ),
+                                    ));
+                                }
+                                LocalTag::BarrierPtr { .. }
+                                | LocalTag::ClusterBarrierAddr { .. }
+                                | LocalTag::ConflictingPtr => {
+                                    return Err(reject(
+                                        &opid,
+                                        format!(
+                                            "verified mbarrier pointer cannot escape into `{opid}`"
+                                        ),
+                                    ));
+                                }
+                                LocalTag::TmemAddr(_) if spec.tmem_lifecycle => {
+                                    return Err(reject(
+                                        &opid,
+                                        format!(
+                                            "verified TMEM address cannot escape into `{opid}`"
+                                        ),
+                                    ));
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    let res = op.get_result(0);
+                    stmts.push(MirStmt::Assign(val_ids[&res], fallback_rhs_for(res)));
+                }
+                _ if is_pure_nvvm_value_op(&opid) && op.get_num_results() == 1 => {
+                    for arg_v in op.operands() {
+                        if let Some(tag) = tags.get(&arg_v) {
+                            match tag {
+                                LocalTag::SliceParam(p, true) | LocalTag::GlobalPtr(p)
+                                    if is_claimed_param(*p) =>
+                                {
+                                    return Err(reject(
+                                        &opid,
+                                        format!(
+                                            "verified slice parameter {p} cannot escape into `{opid}`"
+                                        ),
+                                    ));
+                                }
+                                LocalTag::SharedPtr(sid, _) | LocalTag::DsmemSharedPtr(sid, _)
+                                    if spec.no_oob_shared.contains(sid)
+                                        || spec.no_data_race.contains(sid) =>
+                                {
+                                    return Err(reject(
+                                        &opid,
+                                        format!(
+                                            "verified shared-memory pointer cannot escape into `{opid}`"
+                                        ),
+                                    ));
+                                }
+                                LocalTag::BarrierPtr { .. }
+                                | LocalTag::ClusterBarrierAddr { .. }
+                                | LocalTag::ConflictingPtr => {
+                                    return Err(reject(
+                                        &opid,
+                                        format!(
+                                            "verified mbarrier pointer cannot escape into `{opid}`"
+                                        ),
+                                    ));
+                                }
+                                LocalTag::TmemAddr(_) if spec.tmem_lifecycle => {
+                                    return Err(reject(
+                                        &opid,
+                                        format!(
+                                            "verified TMEM address cannot escape into `{opid}`"
+                                        ),
+                                    ));
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    let res = op.get_result(0);
+                    let w = mir_uint_width(ctx, res.get_type(ctx));
+                    let rhs = if w > 1 {
+                        if op.get_num_operands() == 1 {
+                            MirRhs::CtaUint1(opaque_ids[&res], w, val_ids[&op.get_operand(0)])
+                        } else {
+                            MirRhs::OpaqueUint(opaque_ids[&res], w)
+                        }
+                    } else {
+                        match op.get_num_operands() {
+                            0 => MirRhs::CtaConst,
+                            1 => MirRhs::CtaUnary(val_ids[&op.get_operand(0)]),
+                            2 => MirRhs::CtaBin(
+                                val_ids[&op.get_operand(0)],
+                                val_ids[&op.get_operand(1)],
+                            ),
+                            _ => MirRhs::OpaqueVal,
+                        }
+                    };
+                    stmts.push(MirStmt::Assign(val_ids[&res], rhs));
                 }
                 _ => {
                     return Err(reject(

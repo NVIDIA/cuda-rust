@@ -20,7 +20,7 @@ def trappingMirFunc : CudaOxide.Mir.Program.MirFunc :=
   , blockDimX := 256
   , blockDimY := 1
   , params := [(.slice false), (.slice true)]
-  , requiresLenGe := []
+  , requires := []
   , blocks := [
       { args := [⟨0, 0⟩, ⟨1, 0⟩], stmts := [
           (.assign 2 .index1D),

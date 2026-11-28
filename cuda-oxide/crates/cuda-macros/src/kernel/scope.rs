@@ -598,7 +598,7 @@ pub(crate) fn is_kernel_configuration_marker(statement: &Stmt) -> bool {
         (module == "thread"
             && (marker == "__launch_bounds_config"
                 || marker == "__launch_contract_block_config"
-                || marker == "__launch_contract_requires_len_ge_config"
+                || marker == "__launch_contract_requires_step_config"
                 || marker == "__verify_no_oob_idx_config"
                 || marker == "__verify_disjoint_writes_config"
                 || marker == "__verify_writes_all_elems_config"

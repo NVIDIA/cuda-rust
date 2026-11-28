@@ -7,7 +7,7 @@
 //! `#[verify(...)]` formal-verification attribute.
 
 use crate::common::attr_path_ends_with;
-use crate::cuda_module::model::{CudaModuleParam, CudaModuleParamMarshal};
+use crate::cuda_module::model::{CudaModuleParam, CudaModuleParamMarshal, ScalarIntClass};
 use crate::launch_attrs::{requires_params_from_inputs, standalone_requires_params};
 use proc_macro::TokenStream;
 use quote::quote;
@@ -19,59 +19,127 @@ use syn::{
     visit_mut::{self, VisitMut},
 };
 
-/// Extract `(lhs_param_index, rhs_param_index)` pairs for `requires` relations
-/// comparing two slice lengths (`>=`, `>`, `<=`, `<`, or `==`).
-///
-/// The Lean verifier tracks non-strict length lower bounds (`lhs.len() >= rhs.len()`):
-/// - `lhs.len() == rhs.len()` emits both `(lhs, rhs)` and `(rhs, lhs)`.
-/// - `lhs.len() > rhs.len()` and `lhs.len() < rhs.len()` weaken soundly to
-///   `lhs.len() >= rhs.len()` and `rhs.len() >= lhs.len()`.
-/// - `!=` implies no directional lower bound and is ignored.
-pub(crate) fn extract_requires_len_ge_pairs(
-    relations: &[Expr],
-    params: &[CudaModuleParam],
-) -> Vec<(usize, usize)> {
-    let mut pairs = Vec::new();
-    let mut push_unique = |lhs: usize, rhs: usize| {
-        if lhs != rhs && !pairs.contains(&(lhs, rhs)) {
-            pairs.push((lhs, rhs));
-        }
-    };
-    for relation in relations {
-        let Expr::Binary(binary) = relation else {
-            continue;
-        };
-        let (Some(left_idx), Some(right_idx)) = (
-            slice_len_param_index(&binary.left, params),
-            slice_len_param_index(&binary.right, params),
-        ) else {
-            continue;
-        };
-        match binary.op {
-            syn::BinOp::Ge(_) | syn::BinOp::Gt(_) => push_unique(left_idx, right_idx),
-            syn::BinOp::Le(_) | syn::BinOp::Lt(_) => push_unique(right_idx, left_idx),
-            syn::BinOp::Eq(_) => {
-                push_unique(left_idx, right_idx);
-                push_unique(right_idx, left_idx);
-            }
-            _ => {}
+/// Postfix step tag pushing a `u64` literal onto the `requires` expression stack.
+pub(crate) const REQ_STEP_CONST: u8 = 0;
+/// Postfix step tag pushing unsigned scalar parameter `VAL` onto the `requires` stack.
+pub(crate) const REQ_STEP_SCALAR: u8 = 1;
+/// Postfix step tag pushing `param[VAL].len()` onto the `requires` stack.
+pub(crate) const REQ_STEP_SLICE_LEN: u8 = 2;
+/// Postfix step tag applying binary arithmetic (`0 = +`, `1 = -`, `2 = *`).
+pub(crate) const REQ_STEP_BINOP: u8 = 3;
+/// Postfix step tag emitting a comparison (`0 = >=`, `1 = >`, `2 = <=`, `3 = <`, `4 = ==`, `5 = !=`).
+pub(crate) const REQ_STEP_CMP: u8 = 4;
+
+/// Peel outer parentheses and transparent macro [`Expr::Group`] wrappers on a `requires` node.
+fn peel_requires_expr(mut expr: &Expr) -> &Expr {
+    loop {
+        match expr {
+            Expr::Paren(paren) => expr = &paren.expr,
+            Expr::Group(group) => expr = &group.expr,
+            _ => return expr,
         }
     }
-    pairs
 }
 
-fn slice_len_param_index(expr: &Expr, params: &[CudaModuleParam]) -> Option<usize> {
-    let Expr::MethodCall(call) = expr else {
-        return None;
-    };
-    if call.method != "len" || !call.args.is_empty() {
-        return None;
+/// Encode one validated `requires` arithmetic subexpression into postfix `(TAG, VAL)` steps.
+fn encode_requires_operand(
+    expr: &Expr,
+    params: &[CudaModuleParam],
+    out: &mut Vec<(u8, u64)>,
+) -> Option<()> {
+    match peel_requires_expr(expr) {
+        Expr::Lit(literal) => {
+            let syn::Lit::Int(int) = &literal.lit else {
+                return None;
+            };
+            let val = int.base10_parse::<u64>().ok()?;
+            out.push((REQ_STEP_CONST, val));
+            Some(())
+        }
+        Expr::Path(path) => {
+            let ident = path.path.get_ident()?;
+            let (idx, param) = params
+                .iter()
+                .enumerate()
+                .find(|(_, param)| param.name == *ident)?;
+            if matches!(param.marshal, CudaModuleParamMarshal::Scalar)
+                && param.scalar_int == ScalarIntClass::Unsigned
+            {
+                out.push((REQ_STEP_SCALAR, idx as u64));
+                Some(())
+            } else {
+                None
+            }
+        }
+        Expr::MethodCall(call) => {
+            if call.method != "len" || !call.args.is_empty() || call.turbofish.is_some() {
+                return None;
+            }
+            let Expr::Path(path) = peel_requires_expr(&call.receiver) else {
+                return None;
+            };
+            let ident = path.path.get_ident()?;
+            let (idx, param) = params
+                .iter()
+                .enumerate()
+                .find(|(_, param)| param.name == *ident)?;
+            match param.marshal {
+                CudaModuleParamMarshal::ReadOnlyDeviceBuffer { .. }
+                | CudaModuleParamMarshal::WritableDeviceBuffer { .. }
+                | CudaModuleParamMarshal::RowWidthDeviceBuffer { .. } => {
+                    out.push((REQ_STEP_SLICE_LEN, idx as u64));
+                    Some(())
+                }
+                CudaModuleParamMarshal::Scalar => None,
+            }
+        }
+        Expr::Binary(binary) => {
+            let op_code = match binary.op {
+                syn::BinOp::Add(_) => 0,
+                syn::BinOp::Sub(_) => 1,
+                syn::BinOp::Mul(_) => 2,
+                _ => return None,
+            };
+            encode_requires_operand(&binary.left, params, out)?;
+            encode_requires_operand(&binary.right, params, out)?;
+            out.push((REQ_STEP_BINOP, op_code));
+            Some(())
+        }
+        _ => None,
     }
-    let Expr::Path(path) = &*call.receiver else {
-        return None;
-    };
-    let ident = path.path.get_ident()?;
-    params.iter().position(|param| param.name == *ident)
+}
+
+/// Encode validated `#[launch_contract(requires = (...))]` relations into deduplicated
+/// postfix `(TAG, VAL)` steps for `__launch_contract_requires_step_config`.
+pub(crate) fn encode_requires_step_markers(
+    relations: &[Expr],
+    params: &[CudaModuleParam],
+) -> Vec<(u8, u64)> {
+    let mut encoded_rels: Vec<Vec<(u8, u64)>> = Vec::new();
+    for relation in relations {
+        let Expr::Binary(binary) = peel_requires_expr(relation) else {
+            continue;
+        };
+        let cmp_code = match binary.op {
+            syn::BinOp::Ge(_) => 0,
+            syn::BinOp::Gt(_) => 1,
+            syn::BinOp::Le(_) => 2,
+            syn::BinOp::Lt(_) => 3,
+            syn::BinOp::Eq(_) => 4,
+            syn::BinOp::Ne(_) => 5,
+            _ => continue,
+        };
+        let mut steps = Vec::new();
+        if encode_requires_operand(&binary.left, params, &mut steps).is_some()
+            && encode_requires_operand(&binary.right, params, &mut steps).is_some()
+        {
+            steps.push((REQ_STEP_CMP, cmp_code));
+            if !encoded_rels.contains(&steps) {
+                encoded_rels.push(steps);
+            }
+        }
+    }
+    encoded_rels.into_iter().flatten().collect()
 }
 
 /// Parsed clauses of `#[verify(...)]`.
@@ -1082,9 +1150,9 @@ mod tests {
     }
 
     #[test]
-    fn extract_requires_len_ge_pairs_handles_eq_gt_lt_and_rejects_ne() {
+    fn encode_requires_step_markers_handles_scalars_slices_arith_and_all_cmps() {
         let func: ItemFn = parse_quote! {
-            pub fn k(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>, n: u32) {}
+            pub fn k(a: &[f32], b: &[f32], mut c: DisjointSlice<f32>, n: u32, m: Uniform<u32>) {}
         };
         let params = standalone_requires_params(&func).expect("params");
         let parse_rels = |src: &str| -> Vec<Expr> {
@@ -1093,27 +1161,61 @@ mod tests {
             args.requires
         };
 
-        // Positive: `==` emits both directions, `>` and `<` weaken to `>=` / `<=`.
-        let eq_pairs = extract_requires_len_ge_pairs(
-            &parse_rels("a.len() == c.len(), b.len() > c.len()"),
+        // Slice-length & scalar relations: `a.len() == c.len()` and `b.len() >= n`.
+        let steps = encode_requires_step_markers(
+            &parse_rels("a.len() == c.len(), (b.len()) >= (n)"),
             &params,
         );
-        assert_eq!(eq_pairs, vec![(0, 2), (2, 0), (1, 2)]);
+        assert_eq!(
+            steps,
+            vec![
+                (REQ_STEP_SLICE_LEN, 0),
+                (REQ_STEP_SLICE_LEN, 2),
+                (REQ_STEP_CMP, 4),
+                (REQ_STEP_SLICE_LEN, 1),
+                (REQ_STEP_SCALAR, 3),
+                (REQ_STEP_CMP, 0),
+            ]
+        );
 
-        let lt_le_pairs = extract_requires_len_ge_pairs(
-            &parse_rels("c.len() < a.len(), c.len() <= b.len()"),
+        // Linear & product expressions (`c.len() >= 4 * a.len()`, `a.len() >= (n - 1) * m + 2`, `n != 0`).
+        let arith_steps = encode_requires_step_markers(
+            &parse_rels("c.len() >= 4 * a.len(), a.len() >= (n - 1) * m + 2, n != 0"),
             &params,
         );
-        assert_eq!(lt_le_pairs, vec![(0, 2), (1, 2)]);
+        assert_eq!(
+            arith_steps,
+            vec![
+                (REQ_STEP_SLICE_LEN, 2),
+                (REQ_STEP_CONST, 4),
+                (REQ_STEP_SLICE_LEN, 0),
+                (REQ_STEP_BINOP, 2),
+                (REQ_STEP_CMP, 0),
+                (REQ_STEP_SLICE_LEN, 0),
+                (REQ_STEP_SCALAR, 3),
+                (REQ_STEP_CONST, 1),
+                (REQ_STEP_BINOP, 1),
+                (REQ_STEP_SCALAR, 4),
+                (REQ_STEP_BINOP, 2),
+                (REQ_STEP_CONST, 2),
+                (REQ_STEP_BINOP, 0),
+                (REQ_STEP_CMP, 0),
+                (REQ_STEP_SCALAR, 3),
+                (REQ_STEP_CONST, 0),
+                (REQ_STEP_CMP, 5),
+            ]
+        );
 
-        // Negative: `!=`, self-comparisons (`a.len() == a.len()`), and scalar bounds emit no pairs.
-        let ignored_pairs = extract_requires_len_ge_pairs(
-            &parse_rels("a.len() != c.len(), a.len() == a.len(), a.len() >= n"),
-            &params,
-        );
-        assert!(
-            ignored_pairs.is_empty(),
-            "non-implying or non-pair relations must not emit requires_len_ge: {ignored_pairs:?}"
+        // Duplicate relations are deduplicated.
+        let dedup =
+            encode_requires_step_markers(&parse_rels("a.len() >= n, a.len() >= n"), &params);
+        assert_eq!(
+            dedup,
+            vec![
+                (REQ_STEP_SLICE_LEN, 0),
+                (REQ_STEP_SCALAR, 3),
+                (REQ_STEP_CMP, 0),
+            ]
         );
     }
 }

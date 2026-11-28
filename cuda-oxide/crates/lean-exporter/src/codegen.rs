@@ -16,7 +16,7 @@
 
 use crate::{
     ExportError,
-    spec::KernelVerificationSpec,
+    spec::{KernelVerificationSpec, ReqExpr, ReqRel},
     ssa::{
         CfgBranchCond, CfgMbarWaitKind, CfgOpItem, GuardExpr, IdxExpr, TranscribedCfgBlock,
         TranscribedControlFlowCfg,
@@ -304,6 +304,28 @@ fn format_mir_rhs(rhs: &MirRhs) -> String {
     }
 }
 
+/// Format a [`ReqExpr`] into its `CudaOxide.Mir.Program.ReqExpr` Lean constructor tree.
+fn format_req_expr(expr: &ReqExpr) -> String {
+    match expr {
+        ReqExpr::Const(v) => format!("(.const {v})"),
+        ReqExpr::Scalar(p) => format!("(.scalar {p})"),
+        ReqExpr::SliceLen(p) => format!("(.sliceLen {p})"),
+        ReqExpr::Add(l, r) => format!("(.add {} {})", format_req_expr(l), format_req_expr(r)),
+        ReqExpr::Sub(l, r) => format!("(.sub {} {})", format_req_expr(l), format_req_expr(r)),
+        ReqExpr::Mul(l, r) => format!("(.mul {} {})", format_req_expr(l), format_req_expr(r)),
+    }
+}
+
+/// Format a [`ReqRel`] into a `CudaOxide.Mir.Program.ReqRel` Lean record literal.
+fn format_req_rel(rel: &ReqRel) -> String {
+    format!(
+        "{{ cmp := {}, lhs := {}, rhs := {} }}",
+        rel.cmp.lean_ctor(),
+        format_req_expr(&rel.lhs),
+        format_req_expr(&rel.rhs),
+    )
+}
+
 /// Render a line-by-line [`MirProgramData`] (`CudaOxide.Mir.Program.MirFunc`) and its
 /// declarative safety obligations (`MirNoOobGlobal`, `MirNoOobShared`, `MirDisjointWrites`,
 /// `MirNoSharedRace`, `MirAssertRedundant`, `MirNoOobTmem`, `UniformBarriers`, `TmemLifecycle`,
@@ -324,11 +346,7 @@ fn render_mir_program_module(
             MirParamKind::DisjointSlice => ".disjointSlice".to_string(),
         })
         .collect();
-    let req_strs: Vec<String> = spec
-        .requires_len_ge
-        .iter()
-        .map(|&(l, r)| format!("({l}, {r})"))
-        .collect();
+    let req_strs: Vec<String> = spec.requires.iter().map(format_req_rel).collect();
     let shared_strs: Vec<String> = program
         .shared_decls
         .iter()
@@ -588,7 +606,7 @@ fn render_mir_program_module(
          , clusterDimX := {cdx}\n  \
          , u32Coords := {}\n  \
          , params := [{}]\n  \
-         , requiresLenGe := [{}]\n  \
+         , requires := [{}]\n  \
          , sharedDecls := [{}]\n\
          {rf_shared_line}  , blocks := [\n{}\n    ]\n  }}\n\n\
          {cfg_section}\

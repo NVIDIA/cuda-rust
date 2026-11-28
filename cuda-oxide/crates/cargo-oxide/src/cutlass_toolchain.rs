@@ -54,7 +54,7 @@ const OFFICIAL_AARCH64: InstallSpec = InstallSpec {
     platform: "aarch64-cu13",
     archive_name: "cutlass-install-aarch64-cu13-4.8.1.tar.gz",
     archive_url: "https://github.com/NVIDIA/cutlass/releases/download/v4.8.1/cutlass-install-aarch64-cu13-4.8.1.tar.gz",
-    archive_sha256: "f49a346f32deda4612f0c328f0e0cd14663060a335c2e34ec3bc3633d1f9cf",
+    archive_sha256: "f49a346f32deda4612f2f0c328f0e0cd14663060a335c2e34ec3bc3633d1f9cf",
     compiler_library_sha256: "2b5585de761ee91d1b170d2b7f6b98da573e2165c46dfc7232ae339467120b1f",
 };
 
@@ -1052,6 +1052,22 @@ mod tests {
             "aarch64-cu13"
         );
         assert!(official_spec_for("macos", "aarch64").is_none());
+    }
+
+    #[test]
+    fn pinned_digests_are_64_lowercase_hex_characters() {
+        for spec in [OFFICIAL_X86_64, OFFICIAL_AARCH64] {
+            for digest in [spec.archive_sha256, spec.compiler_library_sha256] {
+                assert_eq!(digest.len(), 64, "{}: {digest}", spec.platform);
+                assert!(
+                    digest
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+                    "{}: {digest}",
+                    spec.platform
+                );
+            }
+        }
     }
 
     #[test]

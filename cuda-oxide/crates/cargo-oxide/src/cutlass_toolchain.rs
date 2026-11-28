@@ -148,7 +148,7 @@ pub fn install_official() -> Result<InstallOutcome, String> {
     eprintln!(
         "NVIDIA's CUTLASS compiler bundle is proprietary software governed by the NVIDIA EULA:"
     );
-    eprintln!("  https://docs.nvidia.com/cutlass/media/docs/pythonDSL/license.html");
+    eprintln!("  https://docs.nvidia.com/cutlass/latest/media/docs/pythonDSL/license.html");
     eprintln!(
         "Downloading NVIDIA CUTLASS compiler {} ({})...",
         spec.version, spec.platform

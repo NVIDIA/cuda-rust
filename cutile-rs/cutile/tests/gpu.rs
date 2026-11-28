@@ -126,6 +126,9 @@ mod audit_signedness;
 #[path = "gpu/audit_int_division.rs"]
 mod audit_int_division;
 
+#[path = "gpu/integer_bitwise_values.rs"]
+mod integer_bitwise_values;
+
 #[path = "gpu/audit_short_circuit.rs"]
 mod audit_short_circuit;
 

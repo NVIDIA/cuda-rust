@@ -88,6 +88,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   that names a default library again, or names a library through another
   path, used to compile the kernel a second time and load a second module,
   with its own copy of every `Global` (#1749).
+- A kernel that imports from `cutile` while `cutile::core` is missing from the
+  module registry fails with an error that names the cause, instead of a later
+  "unable to resolve generic type" error. On `x86_64-pc-windows-gnu`, GNU ld's
+  `--gc-sections` drops the registry entries (#1605).
 
 ## [0.5.0] - 2026-11-04
 

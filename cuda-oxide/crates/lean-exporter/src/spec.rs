@@ -203,6 +203,8 @@ pub struct KernelVerificationSpec {
     pub no_oob_shared: Vec<usize>,
     /// Static `SharedArray` indices requested in `#[verify(no_data_race(...))]`.
     pub no_data_race: Vec<usize>,
+    /// Global slice parameter indices requested in `#[verify(no_data_race(...))]`.
+    pub no_global_race: Vec<usize>,
     /// Whether `#[verify(uniform_barriers)]` was requested.
     pub uniform_barriers: bool,
     /// Whether `#[verify(tmem_lifecycle)]` was requested for Blackwell `tcgen05` / `TMEM`.
@@ -220,6 +222,7 @@ pub fn has_verification_attributes(ctx: &Context, function: Ptr<Operation>) -> b
                 | "verify_writes_all_elems"
                 | "verify_no_oob_shared"
                 | "verify_no_data_race"
+                | "verify_no_global_race"
                 | "verify_uniform_barriers"
                 | "verify_tmem_lifecycle"
         )
@@ -722,6 +725,10 @@ pub(crate) fn parse_kernel_verification_spec(
         Some(raw) => parse_param_list(&raw, 64, "verify_no_data_race")?,
         None => Vec::new(),
     };
+    let no_global_race = match get_string_attr(attrs, "verify_no_global_race") {
+        Some(raw) => parse_param_list(&raw, arity, "verify_no_global_race")?,
+        None => Vec::new(),
+    };
     let uniform_barriers =
         get_string_attr(attrs, "verify_uniform_barriers").as_deref() == Some("true");
     let tmem_lifecycle = get_string_attr(attrs, "verify_tmem_lifecycle").as_deref() == Some("true");
@@ -736,19 +743,24 @@ pub(crate) fn parse_kernel_verification_spec(
 
     let u32_coordinates =
         get_string_attr(attrs, "launch_contract_u32_coords").as_deref() == Some("true");
-    let is_phased_shared =
-        !no_oob_shared.is_empty() || !no_data_race.is_empty() || uniform_barriers || tmem_lifecycle;
+    let is_phased_shared = !no_oob_shared.is_empty()
+        || !no_data_race.is_empty()
+        || !no_global_race.is_empty()
+        || uniform_barriers
+        || tmem_lifecycle;
     let mut writable_params = BTreeSet::new();
     let mut mutable_slice_params = BTreeSet::new();
     for (idx, ty) in inputs.iter().enumerate() {
         let ty_ref = ty.deref(ctx);
         if let Some(slice) = ty_ref.downcast_ref::<MirSliceType>() {
             if slice.is_mutable() {
-                if !no_oob_idx.contains(&idx) || !disjoint_writes.contains(&idx) {
+                if !no_oob_idx.contains(&idx)
+                    || (!disjoint_writes.contains(&idx) && !no_global_race.contains(&idx))
+                {
                     return Err(reject(
                         "kernel contract",
                         format!(
-                            "mutable slice parameter {idx} (`&mut [T]`) requires both `no_oob_idx` and `disjoint_writes`"
+                            "mutable slice parameter {idx} (`&mut [T]`) requires both `no_oob_idx` and `disjoint_writes` (or `no_data_race`)"
                         ),
                     ));
                 }
@@ -766,7 +778,11 @@ pub(crate) fn parse_kernel_verification_spec(
         }
     }
 
-    for &param in disjoint_writes.iter().chain(writes_all_elems.iter()) {
+    for &param in disjoint_writes
+        .iter()
+        .chain(writes_all_elems.iter())
+        .chain(no_global_race.iter())
+    {
         if !writable_params.contains(&param) {
             return Err(reject(
                 "kernel contract",
@@ -790,6 +806,7 @@ pub(crate) fn parse_kernel_verification_spec(
             writes_all_elems,
             no_oob_shared,
             no_data_race,
+            no_global_race,
             uniform_barriers,
             tmem_lifecycle,
         },

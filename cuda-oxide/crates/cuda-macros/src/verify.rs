@@ -575,6 +575,43 @@ impl VisitMut for VerifiedSharedArrayRewriter {
                 };
                 return;
             }
+            if let Expr::MethodCall(mc) = expr
+                && self.is_verified_shared_index(&mc.receiver)
+                && (matches!(
+                    mc.method.to_string().as_str(),
+                    "load" | "store" | "swap" | "compare_exchange" | "compare_exchange_weak"
+                ) || mc.method.to_string().starts_with("fetch_"))
+                && let Expr::Index(idx) = peel_group_mut(&mut mc.receiver)
+            {
+                self.visit_expr_mut(&mut idx.index);
+                for arg in &mut mc.args {
+                    self.visit_expr_mut(arg);
+                }
+                let arr = idx.expr.clone();
+                let index_expr = idx.index.clone();
+                let method = mc.method.clone();
+                let turbofish = mc.turbofish.clone();
+                let mut arg_bindings: Vec<Stmt> = Vec::with_capacity(mc.args.len());
+                let mut arg_idents: Vec<Ident> = Vec::with_capacity(mc.args.len());
+                for (i, arg_expr) in mc.args.iter().enumerate() {
+                    let arg_id = Ident::new(
+                        &format!("__cuda_verify_arg_{i}"),
+                        proc_macro2::Span::call_site(),
+                    );
+                    arg_bindings.push(parse_quote! {
+                        let #arg_id = #arg_expr;
+                    });
+                    arg_idents.push(arg_id);
+                }
+                *expr = parse_quote! {
+                    {
+                        let __cuda_verify_idx = #index_expr;
+                        #(#arg_bindings)*
+                        (unsafe { &#arr[__cuda_verify_idx] }).#method #turbofish (#(#arg_idents),*)
+                    }
+                };
+                return;
+            }
             if self.is_verified_shared_index(expr)
                 && let Expr::Index(idx) = peel_group_mut(expr)
             {
@@ -895,7 +932,7 @@ fn build_verify_marker_stmts(
         } else {
             let index = resolve_verify_slice_param(ident, params, true, "no_data_race")?;
             stmts.push(parse_quote! {
-                ::cuda_device::thread::__verify_disjoint_writes_config::<#index>();
+                ::cuda_device::thread::__verify_no_global_race_config::<#index>();
             });
         }
     }

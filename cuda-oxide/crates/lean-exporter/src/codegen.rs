@@ -85,6 +85,12 @@ pub fn proved_obligation_descriptions(spec: &KernelVerificationSpec) -> Vec<Stri
             fmt_ids("shared", &spec.no_oob_shared)
         ));
     }
+    if !spec.no_global_race.is_empty() {
+        items.push(format!(
+            "no_data_race({}) -> CudaOxide.Contracts.Program.MirNoGlobalRace",
+            fmt_ids("param", &spec.no_global_race)
+        ));
+    }
     if !spec.no_data_race.is_empty() {
         items.push(format!(
             "no_data_race({}) -> CudaOxide.Contracts.Program.MirNoSharedRace",
@@ -224,6 +230,7 @@ fn format_cfg_op(op: &CfgOpItem) -> String {
         CfgOpItem::TmemStoreWait => ".tmemStoreWait".to_string(),
         CfgOpItem::TmemFenceBeforeSync => ".tmemFenceBeforeSync".to_string(),
         CfgOpItem::TmemFenceAfterSync => ".tmemFenceAfterSync".to_string(),
+        CfgOpItem::WarpSyncFull => ".warpSyncFull".to_string(),
     }
 }
 
@@ -295,6 +302,9 @@ fn format_mir_rhs(rhs: &MirRhs) -> String {
         MirRhs::MbarTryWait(b, s, is_acq) => format!("(.mbarTryWait {b} {s} {is_acq})"),
         MirRhs::CvtaShared(p) => format!("(.cvtaShared {p})"),
         MirRhs::LoadTmemBase(p, cols) => format!("(.loadTmemBase {p} {cols})"),
+        MirRhs::AtomicOp(is_w, sc, p, id, w) => {
+            format!("(.atomicOp {is_w} .{} {p} {id} {w})", sc.lean_name())
+        }
         MirRhs::OpaqueUint(id, w) => format!("(.opaqueUint {id} {w})"),
         MirRhs::CtaUint1(id, w, s) => format!("(.ctaUint1 {id} {w} {s})"),
         MirRhs::CtaConst => ".ctaConst".to_string(),
@@ -366,6 +376,9 @@ fn render_mir_program_module(
             .map(|s| match s {
                 MirStmt::Assign(dst, rhs) => format!("(.assign {dst} {})", format_mir_rhs(rhs)),
                 MirStmt::Store(p, v) => format!("(.store {p} {v})"),
+                MirStmt::AtomicStore(sc, p, v) => {
+                    format!("(.atomicStore .{} {p} {v})", sc.lean_name())
+                }
                 MirStmt::AssertCond(aid, c) => format!("(.assertCond {aid} {c})"),
                 MirStmt::SyncThreads => ".syncThreads".to_string(),
                 MirStmt::BarrierSlotCheck(p) => format!("(.barrierSlotCheck {p})"),
@@ -487,6 +500,16 @@ fn render_mir_program_module(
             "theorem {thm} :\n    \
              CudaOxide.Contracts.Program.MirDisjointWrites mirFunc {p} := by\n  \
              apply vcDisjointWrites_of_table mirFunc_valid mirEvents_eq (by mir_bind_pairs)\n  \
+             mir_vc mirFunc"
+        ));
+        axiom_prints.push(format!("#print axioms {thm}"));
+    }
+    for &p in &spec.no_global_race {
+        let thm = format!("verify_no_data_race_param{p}");
+        theorems.push(format!(
+            "theorem {thm} :\n    \
+             CudaOxide.Contracts.Program.MirNoGlobalRace mirFunc {p} := by\n  \
+             apply vcNoGlobalRace_of_table mirFunc_valid mirEvents_eq (by mir_bind_pairs)\n  \
              mir_vc mirFunc"
         ));
         axiom_prints.push(format!("#print axioms {thm}"));

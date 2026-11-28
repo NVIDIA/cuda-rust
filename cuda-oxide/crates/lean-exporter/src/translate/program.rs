@@ -16,6 +16,10 @@ use dialect_mir::types::{
     MirArrayType, MirDisjointSliceType, MirEnumType, MirPtrType, MirSliceType, MirStructType,
     MirTupleType,
 };
+use dialect_nvvm::ops::atomic::{
+    AtomicScope as NvvmAtomicScope, NvvmAtomicCmpxchgOp, NvvmAtomicLoadOp, NvvmAtomicOpInterface,
+    NvvmAtomicRmwOp, NvvmAtomicStoreOp,
+};
 use pliron::{
     basic_block::BasicBlock,
     builtin::types::IntegerType,
@@ -54,6 +58,37 @@ pub enum MirParamKind {
     Slice(bool),
     /// Host-partitioned `DisjointSlice<T>` parameter.
     DisjointSlice,
+}
+
+/// Hardware PTX synchronization scope transcribed 1-to-1 into `CudaOxide.Mir.Program.AtomicScope`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MirAtomicScope {
+    /// Intra-CTA scope (`.cta` / `BlockAtomic*`).
+    Block,
+    /// Device-wide GPU scope (`.gpu` / `DeviceAtomic*`).
+    Device,
+    /// System-wide GPU + host scope (`.sys` / `SystemAtomic*` / `core::sync::atomic::*`).
+    System,
+}
+
+impl MirAtomicScope {
+    /// Convert a `dialect-nvvm` [`NvvmAtomicScope`] attribute into [`MirAtomicScope`].
+    fn from_nvvm(sc: &NvvmAtomicScope) -> Self {
+        match sc {
+            NvvmAtomicScope::Block => Self::Block,
+            NvvmAtomicScope::Device => Self::Device,
+            NvvmAtomicScope::System => Self::System,
+        }
+    }
+
+    /// Return the Lean constructor name (`block`, `device`, or `system`).
+    pub fn lean_name(self) -> &'static str {
+        match self {
+            Self::Block => "block",
+            Self::Device => "device",
+            Self::System => "system",
+        }
+    }
 }
 
 /// Transcribed `Rhs` of a `Stmt.assign` in `CudaOxide.Mir.Program`.
@@ -97,6 +132,8 @@ pub enum MirRhs {
     CvtaShared(usize),
     /// Load base `TMEM` handle of `cols` columns from shared-memory slot `ptr_var`.
     LoadTmemBase(usize, u64),
+    /// Result-producing atomic memory access `(is_write, scope, ptr_var, opaque_id, uint_width)`.
+    AtomicOp(bool, MirAtomicScope, usize, usize, u32),
     /// Arbitrary `width`-bit unsigned integer produced by an opaque operation `(var_id, width)`.
     OpaqueUint(usize, u32),
     /// `width`-bit unsigned integer whose CTA-uniformity follows `src` (`(var_id, width, src)`).
@@ -118,6 +155,8 @@ pub enum MirStmt {
     Assign(usize, MirRhs),
     /// Memory store `*ptr = val`.
     Store(usize, usize),
+    /// Atomic memory store `(scope, ptr_var, val_var)`.
+    AtomicStore(MirAtomicScope, usize, usize),
     /// Assertion `mir.assert(cond)` with deterministic `assert_id`.
     AssertCond(usize, usize),
     /// CTA-wide `thread::sync_threads()` (`nvvm.barrier0`).
@@ -1736,7 +1775,29 @@ pub(super) fn translate_mir_program(
 
             match opid.as_str() {
                 "mir.storage_live" | "mir.storage_dead" | "mir.dbg_value" | "mir.dbg_declare"
-                | "mir.nop" | "mir.unroll_hint" | "mir.nounroll_hint" | "nvvm.bar_warp_sync" => {}
+                | "mir.nop" | "mir.unroll_hint" | "mir.nounroll_hint" | "nvvm.atomic_fence" => {}
+                "nvvm.bar_warp_sync" if op.get_num_operands() == 1 && op.get_num_results() == 0 => {
+                    let mask_v = op.get_operand(0);
+                    if matches!(
+                        tags.get(&mask_v),
+                        Some(
+                            LocalTag::SliceParam(_, true)
+                                | LocalTag::GlobalPtr(_)
+                                | LocalTag::SharedPtr(_, _)
+                                | LocalTag::DsmemSharedPtr(_, _)
+                                | LocalTag::BarrierPtr { .. }
+                                | LocalTag::ClusterBarrierAddr { .. }
+                        )
+                    ) {
+                        return Err(reject(
+                            &opid,
+                            "pointer handle cannot be passed to `nvvm.bar_warp_sync`",
+                        ));
+                    }
+                    if const_u64_vals.get(&mask_v) == Some(&0xFFFF_FFFF) {
+                        cfg_blocks[new_b].ops.push(CfgOpItem::WarpSyncFull);
+                    }
+                }
                 "mir.return" => {
                     term = MirTerminator::Ret;
                     cfg_blocks[new_b].is_return = true;
@@ -1821,7 +1882,9 @@ pub(super) fn translate_mir_program(
                                     CfgBranchCond::Coord(g.clone()),
                                     CfgBranchCond::Coord(g.negate()),
                                 )
-                            } else if !divergent_vals.contains(&cond_v) && is_cyc {
+                            } else if !divergent_vals.contains(&cond_v)
+                                && (!spec.tmem_lifecycle || is_cyc)
+                            {
                                 (CfgBranchCond::Uniform, CfgBranchCond::Uniform)
                             } else if !lane_divergent_vals.contains(&cond_v) {
                                 (CfgBranchCond::WarpUniform, CfgBranchCond::WarpUniform)
@@ -3997,7 +4060,232 @@ pub(super) fn translate_mir_program(
                         stmts.push(MirStmt::Assign(val_ids[&res], MirRhs::OpaqueVal));
                     }
                 }
-                _ if opid.starts_with("nvvm.shfl_sync") && op.get_num_results() == 1 => {
+                "nvvm.atomic_load"
+                | "nvvm.atomic_store"
+                | "nvvm.atomic_rmw"
+                | "nvvm.atomic_cmpxchg"
+                | "nvvm.packed_atomic_add" => {
+                    let (is_write, also_reads, scope, ptr_v, val_opds, res_opt, elem_bytes_req) =
+                        match opid.as_str() {
+                            "nvvm.atomic_load"
+                                if op.get_num_operands() == 1 && op.get_num_results() == 1 =>
+                            {
+                                let aop = NvvmAtomicLoadOp::new(op_ptr);
+                                (
+                                    false,
+                                    true,
+                                    MirAtomicScope::from_nvvm(&aop.scope(ctx)),
+                                    aop.ptr_operand(ctx),
+                                    vec![],
+                                    Some(op.get_result(0)),
+                                    None,
+                                )
+                            }
+                            "nvvm.atomic_store"
+                                if op.get_num_operands() == 2 && op.get_num_results() == 0 =>
+                            {
+                                let aop = NvvmAtomicStoreOp::new(op_ptr);
+                                (
+                                    true,
+                                    false,
+                                    MirAtomicScope::from_nvvm(&aop.scope(ctx)),
+                                    aop.address_opd(ctx),
+                                    vec![aop.value_opd(ctx)],
+                                    None,
+                                    None,
+                                )
+                            }
+                            "nvvm.atomic_rmw"
+                                if op.get_num_operands() == 2 && op.get_num_results() == 1 =>
+                            {
+                                let aop = NvvmAtomicRmwOp::new(op_ptr);
+                                (
+                                    true,
+                                    true,
+                                    MirAtomicScope::from_nvvm(&aop.scope(ctx)),
+                                    aop.ptr_opd(ctx),
+                                    vec![aop.val_opd(ctx)],
+                                    Some(op.get_result(0)),
+                                    None,
+                                )
+                            }
+                            "nvvm.atomic_cmpxchg"
+                                if op.get_num_operands() == 3 && op.get_num_results() == 1 =>
+                            {
+                                let aop = NvvmAtomicCmpxchgOp::new(op_ptr);
+                                let Some(sc_attr) = aop.get_attr_nvvm_cas_scope(ctx) else {
+                                    return Err(reject(
+                                        &opid,
+                                        "missing `nvvm_cas_scope` attribute",
+                                    ));
+                                };
+                                (
+                                    true,
+                                    true,
+                                    MirAtomicScope::from_nvvm(&sc_attr),
+                                    aop.ptr_opd(ctx),
+                                    vec![aop.cmp_opd(ctx), aop.new_opd(ctx)],
+                                    Some(op.get_result(0)),
+                                    None,
+                                )
+                            }
+                            "nvvm.packed_atomic_add"
+                                if op.get_num_operands() == 2 && op.get_num_results() == 1 =>
+                            {
+                                (
+                                    true,
+                                    true,
+                                    MirAtomicScope::Device,
+                                    op.get_operand(0),
+                                    vec![op.get_operand(1)],
+                                    Some(op.get_result(0)),
+                                    Some(4u64),
+                                )
+                            }
+                            _ => {
+                                return Err(reject(
+                                    &opid,
+                                    format!("malformed atomic operation `{opid}`"),
+                                ));
+                            }
+                        };
+                    let is_tracked_ptr = |v: Value| {
+                        matches!(
+                            tags.get(&v),
+                            Some(
+                                LocalTag::SliceParam(_, true)
+                                    | LocalTag::GlobalPtr(_)
+                                    | LocalTag::SharedPtr(_, _)
+                                    | LocalTag::DsmemSharedPtr(_, _)
+                                    | LocalTag::BarrierPtr { .. }
+                                    | LocalTag::ClusterBarrierAddr { .. }
+                                    | LocalTag::ConflictingPtr
+                                    | LocalTag::TmemAddr(_)
+                            )
+                        ) || v
+                            .get_type(ctx)
+                            .deref(ctx)
+                            .downcast_ref::<MirPtrType>()
+                            .is_some()
+                    };
+                    for &vv in &val_opds {
+                        if is_tracked_ptr(vv) {
+                            return Err(reject(
+                                &opid,
+                                "pointer values (`AtomicPtr`) cannot escape through atomic memory operations",
+                            ));
+                        }
+                    }
+                    if let Some(rv) = res_opt
+                        && rv
+                            .get_type(ctx)
+                            .deref(ctx)
+                            .downcast_ref::<MirPtrType>()
+                            .is_some()
+                    {
+                        return Err(reject(
+                            &opid,
+                            "`AtomicPtr` loads/RMWs are unsupported in verified kernels",
+                        ));
+                    }
+                    let actual_eb = elem_bytes_req
+                        .unwrap_or_else(|| ptr_pointee_elem_bytes(ctx, ptr_v.get_type(ctx)));
+                    match tags.get(&ptr_v).copied() {
+                        Some(LocalTag::GlobalPtr(p)) => {
+                            let expected_eb = slice_elem_bytes.get(&p).copied().unwrap_or(0);
+                            if expected_eb == 0 || actual_eb != expected_eb {
+                                return Err(reject(
+                                    &opid,
+                                    format!(
+                                        "atomic pointer cast changed slice parameter {p} element size from {expected_eb}B to {actual_eb}B"
+                                    ),
+                                ));
+                            }
+                            accessed_params.insert(p);
+                            if is_write {
+                                written_params.insert(p);
+                            }
+                            if let Some(pair) = ptr_assert_map.remove(&ptr_v)
+                                && !candidate_asserts.contains(&pair)
+                            {
+                                candidate_asserts.push(pair);
+                            }
+                        }
+                        Some(LocalTag::SharedPtr(sid, _)) => {
+                            let expected_eb = shared_decls.get(sid).map_or(0, |&(_, _, eb)| eb);
+                            if expected_eb == 0 || actual_eb != expected_eb {
+                                return Err(reject(
+                                    &opid,
+                                    format!(
+                                        "atomic pointer cast changed SharedArray {sid} element size from {expected_eb}B to {actual_eb}B"
+                                    ),
+                                ));
+                            }
+                            accessed_shared.insert(sid);
+                            if let Some(pair) = ptr_assert_map.remove(&ptr_v)
+                                && !candidate_asserts.contains(&pair)
+                            {
+                                candidate_asserts.push(pair);
+                            }
+                            if also_reads {
+                                cfg_blocks[new_b]
+                                    .ops
+                                    .push(CfgOpItem::SharedRead { shared_id: sid });
+                            }
+                            if is_write {
+                                cfg_blocks[new_b]
+                                    .ops
+                                    .push(CfgOpItem::SharedWrite { shared_id: sid });
+                            }
+                        }
+                        _ => {
+                            return Err(reject(
+                                &opid,
+                                format!(
+                                    "unmodeled raw-pointer atomic `{opid}` in verified kernel `{kernel_name}`"
+                                ),
+                            ));
+                        }
+                    }
+                    if let Some(res) = res_opt {
+                        let rw = mir_uint_width(ctx, res.get_type(ctx));
+                        stmts.push(MirStmt::Assign(
+                            val_ids[&res],
+                            MirRhs::AtomicOp(
+                                is_write,
+                                scope,
+                                val_ids[&ptr_v],
+                                opaque_ids[&res],
+                                if rw > 1 { rw } else { 0 },
+                            ),
+                        ));
+                    } else {
+                        let vv = val_opds[0];
+                        stmts.push(MirStmt::AtomicStore(scope, val_ids[&ptr_v], val_ids[&vv]));
+                    }
+                }
+                "nvvm.activemask"
+                | "nvvm.read_ptx_sreg_lanemask_eq"
+                | "nvvm.read_ptx_sreg_lanemask_lt"
+                | "nvvm.read_ptx_sreg_lanemask_le"
+                | "nvvm.read_ptx_sreg_lanemask_gt"
+                | "nvvm.read_ptx_sreg_lanemask_ge"
+                    if op.get_num_operands() == 0 && op.get_num_results() == 1 =>
+                {
+                    let res = op.get_result(0);
+                    stmts.push(MirStmt::Assign(
+                        val_ids[&res],
+                        MirRhs::OpaqueUint(opaque_ids[&res], 32),
+                    ));
+                }
+                _ if (opid.starts_with("nvvm.vote_sync_")
+                    || opid.starts_with("nvvm.redux_sync_")
+                    || opid.starts_with("nvvm.match_any_sync_")
+                    || opid.starts_with("nvvm.match_all_sync_")
+                    || opid.starts_with("nvvm.shfl_sync"))
+                    && op.get_num_operands() >= 2
+                    && op.get_num_results() == 1 =>
+                {
                     for arg_v in op.operands() {
                         if let Some(tag) = tags.get(&arg_v) {
                             match tag {
@@ -4043,6 +4331,12 @@ pub(super) fn translate_mir_program(
                                 _ => {}
                             }
                         }
+                    }
+                    let mask_v = op.get_operand(0);
+                    if !opid.starts_with("nvvm.shfl_sync")
+                        && const_u64_vals.get(&mask_v) == Some(&0xFFFF_FFFF)
+                    {
+                        cfg_blocks[new_b].ops.push(CfgOpItem::WarpSyncFull);
                     }
                     let res = op.get_result(0);
                     stmts.push(MirStmt::Assign(val_ids[&res], fallback_rhs_for(res)));
@@ -4151,6 +4445,16 @@ pub(super) fn translate_mir_program(
             ));
         }
     }
+    for &p in &spec.no_global_race {
+        if !written_params.contains(&p) {
+            return Err(reject(
+                "no_data_race",
+                format!(
+                    "parameter {p} is listed in `no_data_race` but never written in the kernel"
+                ),
+            ));
+        }
+    }
     for &sid in &spec.no_oob_shared {
         if !accessed_shared.contains(&sid) {
             return Err(reject(
@@ -4230,6 +4534,7 @@ fn push_stmt_read_regs(stmt: &MirStmt, out: &mut Vec<usize>) {
             | MirRhs::Load(src)
             | MirRhs::CvtaShared(src)
             | MirRhs::LoadTmemBase(src, _)
+            | MirRhs::AtomicOp(_, _, src, _, _)
             | MirRhs::CtaUint1(_, _, src)
             | MirRhs::CtaUnary(src) => out.push(*src),
             MirRhs::BinOp(_, _, l, r)
@@ -4253,7 +4558,7 @@ fn push_stmt_read_regs(stmt: &MirStmt, out: &mut Vec<usize>) {
             | MirRhs::CtaConst
             | MirRhs::OpaqueVal => {}
         },
-        MirStmt::Store(p, v) => {
+        MirStmt::Store(p, v) | MirStmt::AtomicStore(_, p, v) => {
             out.push(*p);
             out.push(*v);
         }

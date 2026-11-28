@@ -35,11 +35,11 @@ We do not prove functional correctness or floating-point math formulas. Instead,
 
 | Property You Write  | What Lean 4 Proves at Compile Time                        | What Is Not Claimed                       |
 |:--------------------|:----------------------------------------------------------|:------------------------------------------|
-| `no_oob_idx`        | Every buffer read and write index stays below its length  | Values stored at those indices (`NaN`)    |
-| `no_data_race`      | No two threads conflict on shared memory in the same step | Shared-memory bank conflicts (speed only) |
+| `no_oob_idx`        | Every buffer read, write, and atomic index stays in range | Values stored at those indices (`NaN`)    |
+| `no_data_race`      | No non-serialized or wrong-scope races on shared/global   | Shared-memory bank conflicts (speed only) |
 | `disjoint_writes`   | Two different threads never write to the same output slot | Which formula is written (`a - b` vs `+`) |
 | `writes_all_elems`  | Every output slot is written by a launched thread         | Whether the written value is right        |
-| `uniform_barriers`  | Every thread in the block reaches every barrier           | Waiting across different thread blocks    |
+| `uniform_barriers`  | Convergent barriers, warp votes, and CTA-uniform exits    | Waiting across different thread blocks    |
 | `tmem_lifecycle`    | Valid `TMEM` bounds, warpgroup slices, and async order    | Floating-point Tensor Core rounding       |
 
 Because shared-memory race checks group accesses by each thread's barrier phase, `no_data_race(TILE)` on a `SharedArray` always requires `uniform_barriers` in the same `#[verify(...)]` attribute.
@@ -723,4 +723,17 @@ Build and benchmark on B200 with:
 ```console
 $ cargo oxide build safe_gemm_sol_final --arch sm_100a
 $ cargo oxide run safe_gemm_sol_final --arch sm_100a
+```
+
+---
+
+### Example 10: Scoped Atomics & Warp Votes (`safe_atomics`)
+
+Histograms, stream compaction, and sticky fault words intentionally let multiple threads update the same slot through hardware atomics while voting across 32-lane warps:
+- **Warp convergence**: Lean 4 checks that full-warp collectives (`warp::ballot`, `redux`, `match`) execute with all 32 warp lanes converged, rejecting votes hidden inside lane-divergent branches (`if lane == 0`).
+- **Scope-aware `no_data_race`**: `BlockAtomic*` serializes threads inside one block (accepted on `SharedArray` or per-block global partitions, rejected when shared across blocks), while `DeviceAtomic*` and `SystemAtomic*` serialize across the entire grid. Mixing an atomic with a plain read or write in the same step is rejected.
+
+```console
+$ cargo oxide lean-export safe_atomics --function two_level_histogram
+$ cargo oxide run safe_atomics
 ```

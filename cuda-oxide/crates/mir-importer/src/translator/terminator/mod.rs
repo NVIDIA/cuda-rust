@@ -3252,6 +3252,8 @@ fn try_dispatch_intrinsic(
         | "cuda_device::thread::__verify_no_oob_shared_config"
         | "cuda_device::__verify_no_data_race_config"
         | "cuda_device::thread::__verify_no_data_race_config"
+        | "cuda_device::__verify_no_global_race_config"
+        | "cuda_device::thread::__verify_no_global_race_config"
         | "cuda_device::__verify_uniform_barriers_config"
         | "cuda_device::thread::__verify_uniform_barriers_config"
         | "cuda_device::__verify_tmem_lifecycle_config"

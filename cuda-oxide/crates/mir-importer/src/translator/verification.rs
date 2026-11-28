@@ -51,6 +51,8 @@ pub(crate) const VERIFICATION_METADATA_MARKERS: &[&str] = &[
     "cuda_device::thread::__verify_no_oob_shared_config",
     "cuda_device::__verify_no_data_race_config",
     "cuda_device::thread::__verify_no_data_race_config",
+    "cuda_device::__verify_no_global_race_config",
+    "cuda_device::thread::__verify_no_global_race_config",
     "cuda_device::__verify_uniform_barriers_config",
     "cuda_device::thread::__verify_uniform_barriers_config",
     "cuda_device::__verify_tmem_lifecycle_config",
@@ -79,6 +81,8 @@ pub(crate) fn verification_marker_leaf(path: &str) -> Option<&'static str> {
         | "cuda_device::thread::__verify_no_oob_shared_config" => "__verify_no_oob_shared_config",
         "cuda_device::__verify_no_data_race_config"
         | "cuda_device::thread::__verify_no_data_race_config" => "__verify_no_data_race_config",
+        "cuda_device::__verify_no_global_race_config"
+        | "cuda_device::thread::__verify_no_global_race_config" => "__verify_no_global_race_config",
         "cuda_device::__verify_uniform_barriers_config"
         | "cuda_device::thread::__verify_uniform_barriers_config" => {
             "__verify_uniform_barriers_config"
@@ -109,6 +113,8 @@ struct DetectedVerificationMetadata {
     no_oob_shared: Vec<usize>,
     /// Static `SharedArray` indices requested in `#[verify(no_data_race(...))]`.
     no_data_race: Vec<usize>,
+    /// Global slice parameter indices requested in `#[verify(no_data_race(...))]`.
+    no_global_race: Vec<usize>,
     /// Whether `#[verify(uniform_barriers)]` was requested.
     uniform_barriers: bool,
     /// Whether `#[verify(tmem_lifecycle)]` was requested.
@@ -123,6 +129,7 @@ impl DetectedVerificationMetadata {
             || !self.writes_all_elems.is_empty()
             || !self.no_oob_shared.is_empty()
             || !self.no_data_race.is_empty()
+            || !self.no_global_race.is_empty()
             || self.uniform_barriers
             || self.tmem_lifecycle
     }
@@ -303,6 +310,12 @@ fn detect_verification_metadata(
             && !meta.no_data_race.contains(&shared_idx)
         {
             meta.no_data_race.push(shared_idx);
+        } else if (fn_name == "__verify_no_global_race_config"
+            || fn_name.ends_with("::__verify_no_global_race_config"))
+            && let Some(param) = args.0.first().and_then(read_const_usize_arg)
+            && !meta.no_global_race.contains(&param)
+        {
+            meta.no_global_race.push(param);
         } else if fn_name == "__verify_uniform_barriers_config"
             || fn_name.ends_with("::__verify_uniform_barriers_config")
         {
@@ -362,6 +375,7 @@ pub(crate) fn attach_verification_attributes(
             ),
             ("verify_no_oob_shared", &verification_meta.no_oob_shared),
             ("verify_no_data_race", &verification_meta.no_data_race),
+            ("verify_no_global_race", &verification_meta.no_global_race),
         ] {
             if !indices.is_empty() {
                 let formatted = indices

@@ -289,23 +289,125 @@ theorem noUnbackpressuredLoop_of_check {cfg : ControlFlowCfg}
   have hcert := List.all_eq_true.mp hcheck (prod, cons, bp) hmem -- Extract its unreachability certificate
   exact not_pathAvoiding_of_certify hcert                   -- Apply `not_pathAvoiding_of_certify`
 
+/-- Verify in `O(V + E)` that `vis` is a forward-closed superset of all blocks reachable from `0`. -/
+def validForwardSuperset (cfg : ControlFlowCfg) (vis : List Nat) : Bool :=
+  (decide (0 ≥ cfg.blocks.length) || vis.contains 0) &&
+  ((List.range cfg.blocks.length).all fun x =>
+    !vis.contains x ||
+    ((cfg.blockAt x).succs.all fun (_, w) => decide (w ≥ cfg.blocks.length) || vis.contains w))
+
+/-- Helper: forward edge-closure of `vis` propagates `vis.contains` along `PathAvoiding cfg []`. -/
+theorem mem_forwardSuperset_step {cfg : ControlFlowCfg} {vis : List Nat}
+    (hclosed : ((List.range cfg.blocks.length).all fun x =>
+      !vis.contains x ||
+      ((cfg.blockAt x).succs.all fun (_, w) => decide (w ≥ cfg.blocks.length) || vis.contains w)) = true)
+    {u v : Nat} (hp : PathAvoiding cfg [] u v) (hu : vis.contains u = true) :
+    vis.contains v = true := by
+  induction hp with
+  | refl _ _ => exact hu
+  | @step x w _ cond hbx _ hedge hrest ih =>
+      have hx := List.all_eq_true.mp hclosed x (List.mem_range.mpr hbx)
+      rw [hu] at hx; simp only [Bool.not_true, Bool.false_or] at hx
+      have hw := List.all_eq_true.mp hx (cond, w) hedge
+      have hwlt : w < cfg.blocks.length := by cases hrest with | refl hb _ => exact hb | step hb _ _ _ => exact hb
+      rcases Bool.or_eq_true_iff.mp hw with hge | hmem
+      · have hge' : w ≥ cfg.blocks.length := of_decide_eq_true hge; omega
+      · exact ih hmem
+
+/-- Soundness of `validForwardSuperset`: every block `u` with `PathAvoiding cfg [] 0 u` satisfies `vis.contains u`. -/
+theorem mem_forwardSuperset_of_pathAvoiding {cfg : ControlFlowCfg} {vis : List Nat} {u : Nat}
+    (hfwd : validForwardSuperset cfg vis = true)
+    (hp : PathAvoiding cfg [] 0 u) :
+    vis.contains u = true := by
+  rcases Bool.and_eq_true_iff.mp hfwd with ⟨h0, hclosed⟩
+  have h0lt : 0 < cfg.blocks.length := by cases hp with | refl hb _ => exact hb | step hb _ _ _ => exact hb
+  have h0mem : vis.contains 0 = true := by
+    rcases Bool.or_eq_true_iff.mp h0 with hge | hm
+    · have hge' : 0 ≥ cfg.blocks.length := of_decide_eq_true hge; omega
+    · exact hm
+  exact mem_forwardSuperset_step hclosed hp h0mem
+
+/-- Verify in `O(V + E)` that `vis` is a backward-closed superset of all blocks with an `avoid`-free path into `dsts`. -/
+def validBackwardSuperset (cfg : ControlFlowCfg) (avoid dsts vis : List Nat) : Bool :=
+  (dsts.all fun d => avoid.contains d || decide (d ≥ cfg.blocks.length) || vis.contains d) &&
+  ((List.range cfg.blocks.length).all fun x =>
+    avoid.contains x ||
+    ((cfg.blockAt x).succs.all fun (_, w) => !vis.contains w || vis.contains x))
+
+/-- Soundness of `validBackwardSuperset`: any `PathAvoiding cfg avoid u dst` with `dst ∈ dsts` forces `vis.contains u`. -/
+theorem mem_backwardSuperset_of_pathAvoiding {cfg : ControlFlowCfg} {avoid dsts vis : List Nat} {u dst : Nat}
+    (hbwd : validBackwardSuperset cfg avoid dsts vis = true)
+    (hp : PathAvoiding cfg avoid u dst)
+    (hdst : dst ∈ dsts) :
+    vis.contains u = true := by
+  rcases Bool.and_eq_true_iff.mp hbwd with ⟨hdsts, hclosed⟩
+  induction hp with
+  | @refl d hbd havd =>
+      have hd := List.all_eq_true.mp hdsts d hdst
+      rcases Bool.or_eq_true_iff.mp hd with hleft | hmem
+      · rcases Bool.or_eq_true_iff.mp hleft with hav | hge
+        · exact False.elim (havd (List.contains_iff_mem.mp hav))
+        · have hge' : d ≥ cfg.blocks.length := of_decide_eq_true hge; omega
+      · exact hmem
+  | @step x w _ cond hbx havx hedge _ ih =>
+      have hwVis := ih hdst
+      have hx := List.all_eq_true.mp hclosed x (List.mem_range.mpr hbx)
+      rcases Bool.or_eq_true_iff.mp hx with hav | hsuccs
+      · exact False.elim (havx (List.contains_iff_mem.mp hav))
+      · have hw := List.all_eq_true.mp hsuccs (cond, w) hedge
+        dsimp only at hw; rw [hwVis] at hw; simpa using hw
+
+/-- Two-backward-walk `O(V + E)` checker for `NoDivergentBypass`:
+    1. Walk backward once from `[target]` (`reachesTarget`),
+    2. Walk backward once from `rets` avoiding `[target]` (`reachesRetAvoid`),
+    3. Check that no reachable non-CTA-uniform split `u ∈ reach0` lies in both sets. -/
+def checkNoDivergentBypassWith (cfg revCfg : ControlFlowCfg) (reach0 rets : List Nat) (target : Nat) : Bool :=
+  let fuel := cfg.blocks.length + 1
+  let reachesTarget := bfsWaveAvoiding revCfg [] fuel [target] []
+  let reachesRetAvoid := bfsWaveAvoiding revCfg [target] fuel rets []
+  validBackwardSuperset cfg [] [target] reachesTarget &&
+  validBackwardSuperset cfg [target] rets reachesRetAvoid &&
+  (reach0.all fun u =>
+    isCtaUniformSplit cfg u || !reachesTarget.contains u || !reachesRetAvoid.contains u)
+
+/-- Soundness of the 2-backward-walk `checkNoDivergentBypassWith` checker. -/
+theorem noDivergentBypass_of_checkWith {cfg revCfg : ControlFlowCfg} {reach0 : List Nat} {target : Nat}
+    (hfwd0 : validForwardSuperset cfg reach0 = true)
+    (h : checkNoDivergentBypassWith cfg revCfg reach0 (returnBlocks cfg) target = true) :
+    NoDivergentBypass cfg target := by
+  unfold checkNoDivergentBypassWith at h
+  dsimp only at h
+  rcases Bool.and_eq_true_iff.mp h with ⟨hb12, hdisj⟩
+  rcases Bool.and_eq_true_iff.mp hb12 with ⟨hbTgt, hbRet⟩
+  intro u hp0u hnotUni hpuTgt ret hret hpAvoid
+  have huReach0 : reach0.contains u = true := mem_forwardSuperset_of_pathAvoiding hfwd0 hp0u
+  have huTgt := mem_backwardSuperset_of_pathAvoiding hbTgt hpuTgt (List.Mem.head _)
+  have huRet := mem_backwardSuperset_of_pathAvoiding hbRet hpAvoid hret
+  have huCheck := List.all_eq_true.mp hdisj u (List.contains_iff_mem.mp huReach0)
+  rw [hnotUni, huTgt, huRet] at huCheck
+  contradiction
+
 /-- Check `UniformBarriers cfg` against a precomputed `inv : StateMap` in `O(blocks)` time. -/
 def checkUniformBarriersWith (cfg : ControlFlowCfg) (inv : StateMap) : Bool :=
+  let revCfg := reverseCfg cfg
+  let reach0 := reachableNodesAvoiding cfg 0 []
+  let rets := returnBlocks cfg
   decide (0 < countEffectiveBarriers cfg) &&
+  validForwardSuperset cfg reach0 &&
   ((syncBarrierBlocks cfg).all fun b =>
     decide (activeGuardAt cfg b = .tr) &&
-    (isCyclicBlockBool cfg b ||
-      (returnBlocks cfg).all fun ret => certifyUnreachable cfg [b] 0 ret)) &&
+    (isCyclicBlockBool cfg b || checkNoDivergentBypassWith cfg revCfg reach0 rets b)) &&
+  ((warpSyncBlocks cfg).all fun wBlk =>
+    (activeGuardAt cfg wBlk).isWarpConvergent cfg.blockDimX cfg.blockDimY) &&
   ((decide (cyclicBarrierBlocks cfg = []) || decide (cyclicBarrierLoopBodyStarts cfg ≠ [])) &&
    (cyclicBarrierLoopBodyStarts cfg).all fun (hdr, body) =>
-    ((returnBlocks cfg).all fun ret => certifyUnreachable cfg [hdr] 0 ret) &&
+    checkNoDivergentBypassWith cfg revCfg reach0 rets hdr &&
     ((cyclicBarrierBlocks cfg).all fun cb => certifyUnreachable cfg [cb] body hdr) &&
-    ((returnBlocks cfg).all fun ret => certifyUnreachable cfg [hdr] body ret)) &&
-  ((signaledMbarReadyBlocks cfg).all fun rBlk =>
-    (returnBlocks cfg).all fun ret => certifyUnreachable cfg [rBlk] 0 ret) &&
+    (rets.all fun ret => certifyUnreachable cfg [hdr] body ret)) &&
+  ((signaledMbarReadyBlocks cfg).all fun rBlk => checkNoDivergentBypassWith cfg revCfg reach0 rets rBlk) &&
   ((unsyncedDsmemBlocks cfg).all fun dBlk =>
     let postSyncs := (clusterSyncBlocks cfg).filter (· != dBlk)
-    (returnBlocks cfg).all fun ret => certifyUnreachable cfg postSyncs dBlk ret) &&
+    rets.all fun ret => certifyUnreachable cfg postSyncs dBlk ret) &&
   ((sharedReadSites cfg).all fun (s, rBlk) =>
     certifyUnreachable cfg (sharedInitDominators cfg s) 0 rBlk) &&
   validMbarArrivalCounts cfg &&
@@ -317,23 +419,28 @@ theorem uniform_barriers_cfg_of_stateMap {cfg : ControlFlowCfg} {inv : StateMap}
     (hcheck : checkUniformBarriersWith cfg inv = true) :
     UniformBarriersCfg cfg := by
   unfold checkUniformBarriersWith at hcheck
+  dsimp only at hcheck
   rcases Bool.and_eq_true_iff.mp hcheck with ⟨h0123456, hasync⟩
   rcases Bool.and_eq_true_iff.mp h0123456 with ⟨h012345, hmbarCnt⟩
   rcases Bool.and_eq_true_iff.mp h012345 with ⟨h01234, hsinit⟩
   rcases Bool.and_eq_true_iff.mp h01234 with ⟨h0123, hdsmem⟩
   rcases Bool.and_eq_true_iff.mp h0123 with ⟨h012, hmbar⟩
-  rcases Bool.and_eq_true_iff.mp h012 with ⟨h01, hcyc⟩
-  rcases Bool.and_eq_true_iff.mp h01 with ⟨hcnt, hsync⟩
+  rcases Bool.and_eq_true_iff.mp h012 with ⟨h01w, hcyc⟩
+  rcases Bool.and_eq_true_iff.mp h01w with ⟨h01, hwarp⟩
+  rcases Bool.and_eq_true_iff.mp h01 with ⟨hcntFwd, hsync⟩
+  rcases Bool.and_eq_true_iff.mp hcntFwd with ⟨hcnt, hfwd0⟩
   rcases Bool.and_eq_true_iff.mp hcyc with ⟨hhasHdr, hloops⟩
-  refine ⟨of_decide_eq_true hcnt, ?_, ⟨?_, ?_⟩, ?_, ?_, ?_, hmbarCnt, ?_⟩
+  refine ⟨of_decide_eq_true hcnt, ?_, ?_, ⟨?_, ?_⟩, ?_, ?_, ?_, hmbarCnt, ?_⟩
   · intro b hb
     have hb_ok := List.all_eq_true.mp hsync b hb
     rcases Bool.and_eq_true_iff.mp hb_ok with ⟨htr, hacyc⟩
     refine ⟨of_decide_eq_true htr, ?_⟩
-    intro hnotcyc ret hret
-    rcases Bool.or_eq_true_iff.mp hacyc with hcyc_true | hall_ret
+    intro hnotcyc
+    rcases Bool.or_eq_true_iff.mp hacyc with hcyc_true | hndb
     · rw [hnotcyc] at hcyc_true; contradiction
-    · exact not_pathAvoiding_of_certify (List.all_eq_true.mp hall_ret ret hret)
+    · exact noDivergentBypass_of_checkWith hfwd0 hndb
+  · intro wBlk hwBlk
+    exact List.all_eq_true.mp hwarp wBlk hwBlk
   · intro hne
     rcases Bool.or_eq_true_iff.mp hhasHdr with hemp | hnonemp
     · exact False.elim (hne (of_decide_eq_true hemp))
@@ -342,13 +449,11 @@ theorem uniform_barriers_cfg_of_stateMap {cfg : ControlFlowCfg} {inv : StateMap}
     have hp_ok := List.all_eq_true.mp hloops (hdr, body) hpair
     rcases Bool.and_eq_true_iff.mp hp_ok with ⟨h12, hmid⟩
     rcases Bool.and_eq_true_iff.mp h12 with ⟨hentry, hcb⟩
-    refine ⟨?_, ?_, ?_⟩
-    · intro ret hret; exact not_pathAvoiding_of_certify (List.all_eq_true.mp hentry ret hret)
+    refine ⟨noDivergentBypass_of_checkWith hfwd0 hentry, ?_, ?_⟩
     · intro cb hcb_mem; exact not_pathAvoiding_of_certify (List.all_eq_true.mp hcb cb hcb_mem)
     · intro ret hret; exact not_pathAvoiding_of_certify (List.all_eq_true.mp hmid ret hret)
-  · intro rBlk hrBlk ret hret
-    have hr := List.all_eq_true.mp hmbar rBlk hrBlk
-    exact not_pathAvoiding_of_certify (List.all_eq_true.mp hr ret hret)
+  · intro rBlk hrBlk
+    exact noDivergentBypass_of_checkWith hfwd0 (List.all_eq_true.mp hmbar rBlk hrBlk)
   · intro dBlk hdBlk ret hret
     have hd := List.all_eq_true.mp hdsmem dBlk hdBlk
     exact not_pathAvoiding_of_certify (List.all_eq_true.mp hd ret hret)

@@ -212,6 +212,124 @@ theorem rowProduct2D_no_oob_x :
   mir_vc rowProduct2DMirFunc
 end RowProduct2D
 
+/-- Block-uniform early `return` (`if blockIdx_x >= m { return; }`) followed by a pre-barrier
+    strided `while` loop (`succs := [(.unknown, 3), (.unknown, 1)]`) and `sync_threads()`
+    satisfies `UniformBarriersCfg` (`rms_norm` / `ssmax_rows` control-flow shape). -/
+def uniformEarlyReturnCfg : ControlFlow.ControlFlowCfg :=
+  { blockDimX := 256, blockDimY := 1, numShared := 1, numBarriers := 0
+  , blocks := [
+      { succs := [(.uniform, 1), (.uniform, 2)] },
+      { succs := [(.unknown, 3), (.unknown, 1)] },
+      { isReturn := true },
+      { succs := [(.coord (.eq (.mod .tx 32) (.const 0)), 4),
+                  (.coord (.ne (.mod .tx 32) (.const 0)), 5)] },
+      { ops := [.sharedWrite 0], succs := [(.always, 5)] },
+      { ops := [.syncThreads], succs := [(.always, 6)] },
+      { ops := [.sharedRead 0], succs := [(.always, 2)] } ] }
+
+theorem uniform_early_return_before_sync : ControlFlow.UniformBarriersCfg uniformEarlyReturnCfg :=
+  CudaOxide.Proofs.ControlFlow.uniform_barriers_cfg_of_stateMap
+    (inv := CudaOxide.Proofs.ControlFlow.inferStateMap uniformEarlyReturnCfg) (by decide)
+
+namespace BoolAndStridedLoop
+/-- Multi-read 64-bit strided loop (`while it + 768 < x.len()`) carrying a `bool` (`width = 1`)
+    and a float-guarded `u32` accumulator (`width = 32` widened to `.unk`) proves `MirNoOobGlobal`. -/
+def stridedBoolLoopFunc : CudaOxide.Mir.Program.MirFunc :=
+  { domain := 1
+  , blockDimX := 256
+  , blockDimY := 1
+  , params := [(.slice false)]
+  , blocks := [
+      { args := [⟨0, 0⟩], stmts := [
+          (.assign 1 (.sreg .tidX)),
+          (.assign 2 (.intCast 64 1)),
+          (.assign 3 (.sliceLen 0)),
+          (.assign 4 (.constBool true)),
+          (.assign 5 (.constInt 32 0))
+        ], term := (.goto 1 [2, 4, 5]) },
+      { args := [⟨6, 64⟩, ⟨7, 1⟩, ⟨8, 32⟩], isLoopHeader := true, stmts := [
+          (.assign 9 (.constInt 64 768)),
+          (.assign 10 (.binOp .add 64 6 9)),
+          (.assign 11 (.cmpOp .lt 10 3)),
+          (.assign 12 (.notBool 11))
+        ], term := (.condBr 12 4 [] 2 []) },
+      { stmts := [
+          (.assign 13 (.slicePtr 0)),
+          (.assign 14 (.ptrOffset 13 6)),
+          (.assign 15 (.load 14)),
+          (.assign 16 (.constInt 64 768)),
+          (.assign 17 (.binOp .add 64 6 16)),
+          (.assign 18 (.ptrOffset 13 17)),
+          (.assign 19 (.load 18)),
+          (.assign 20 .opaqueVal)
+        ], term := (.condBr 20 3 [8] 3 [1]) },
+      { args := [⟨21, 32⟩], stmts := [
+          (.assign 22 (.constBool false)),
+          (.assign 23 (.constInt 64 1024)),
+          (.assign 24 (.binOp .add 64 6 23))
+        ], term := (.goto 1 [24, 22, 21]) },
+      { stmts := [], term := .ret } ] }
+
+mir_def_sym_table stridedBoolLoopFunc
+
+theorem strided_valid : CudaOxide.Proofs.Program.validSymFunc stridedBoolLoopFunc symTable = true := rfl
+theorem strided_events : CudaOxide.Proofs.Program.collectSymMemEvents stridedBoolLoopFunc symTable = symMemEvents := rfl
+
+theorem strided_bool_loop_no_oob : CudaOxide.Contracts.Program.MirNoOobGlobal stridedBoolLoopFunc 0 := by
+  apply CudaOxide.Proofs.Program.vcNoOobGlobal_of_table strided_valid strided_events (by mir_bind_events)
+  mir_vc stridedBoolLoopFunc
+end BoolAndStridedLoop
+
+/-- Full-warp `vote.sync` (`CfgOp.warpSyncFull`) at a 32-lane warp-convergent block satisfies `UniformBarriersCfg`. -/
+def warpVoteConvergentCfg : ControlFlow.ControlFlowCfg :=
+  { blockDimX := 256, blockDimY := 1, numShared := 0, numBarriers := 0
+  , blocks := [
+      { ops := [.warpSyncFull], succs := [(.always, 1)] },
+      { isReturn := true } ] }
+
+theorem warp_vote_convergent : ControlFlow.UniformBarriersCfg warpVoteConvergentCfg :=
+  CudaOxide.Proofs.ControlFlow.uniform_barriers_cfg_of_stateMap
+    (inv := CudaOxide.Proofs.ControlFlow.inferStateMap warpVoteConvergentCfg) (by decide)
+
+namespace GlobalDeviceAtomicCounter
+/-- Multi-CTA `.device`-scoped `fetch_add` + `atomicStore` on `done[0]` satisfies `MirNoGlobalRace`. -/
+def atomicCounterFunc : CudaOxide.Mir.Program.MirFunc :=
+  { domain := 1
+  , blockDimX := 256
+  , blockDimY := 1
+  , params := [(.slice true), (.scalar 32)]
+  , blocks := [
+      { args := [⟨0, 0⟩, ⟨1, 32⟩], stmts := [
+          (.assign 2 (.constInt 64 0)),
+          (.assign 3 (.sliceLen 0)),
+          (.assign 4 (.cmpOp .lt 2 3))
+        ], term := (.condBr 4 1 [] 3 []) },
+      { stmts := [
+          (.assign 5 (.slicePtr 0)),
+          (.assign 6 (.ptrOffset 5 2)),
+          (.assign 7 (.atomicOp true .device 6 0 32)),
+          (.assign 8 (.cmpOp .eq 7 1))
+        ], term := (.condBr 8 2 [] 3 []) },
+      { stmts := [
+          (.assign 9 (.constInt 32 0)),
+          (.atomicStore .device 6 9)
+        ], term := (.goto 3 []) },
+      { stmts := [], term := .ret } ] }
+
+mir_def_sym_table atomicCounterFunc
+
+theorem atomic_valid : CudaOxide.Proofs.Program.validSymFunc atomicCounterFunc symTable = true := rfl
+theorem atomic_events : CudaOxide.Proofs.Program.collectSymMemEvents atomicCounterFunc symTable = symMemEvents := rfl
+
+theorem atomic_counter_no_oob : CudaOxide.Contracts.Program.MirNoOobGlobal atomicCounterFunc 0 := by
+  apply CudaOxide.Proofs.Program.vcNoOobGlobal_of_table atomic_valid atomic_events (by mir_bind_events)
+  mir_vc atomicCounterFunc
+
+theorem atomic_counter_no_race : CudaOxide.Contracts.Program.MirNoGlobalRace atomicCounterFunc 0 := by
+  apply CudaOxide.Proofs.Program.vcNoGlobalRace_of_table atomic_valid atomic_events (by mir_bind_pairs)
+  mir_vc atomicCounterFunc
+end GlobalDeviceAtomicCounter
+
 #print axioms no_oob_idx_all
 #print axioms disjoint_writes_c
 #print axioms writes_all_elems_c
@@ -220,6 +338,12 @@ end RowProduct2D
 #print axioms quadGather_no_oob_x
 #print axioms quadGather_asserts_redundant
 #print axioms RowProduct2D.rowProduct2D_no_oob_x
+#print axioms uniform_early_return_before_sync
+#print axioms BoolAndStridedLoop.strided_bool_loop_no_oob
+#print axioms warp_vote_convergent
+#print axioms GlobalDeviceAtomicCounter.atomic_counter_no_oob
+#print axioms GlobalDeviceAtomicCounter.atomic_counter_no_race
+#print axioms CudaOxide.Proofs.Program.vcNoGlobalRace_of_table
 #print axioms CudaOxide.Mir.Program.ReachableTrapFree.toReachable
 #print axioms CudaOxide.Mir.Program.EmitsTrapFreeEvent.toEmitsEvent
 #print axioms index_lt_of_guard

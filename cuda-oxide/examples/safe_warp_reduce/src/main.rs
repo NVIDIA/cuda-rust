@@ -25,6 +25,7 @@
 //! ```
 
 use cuda_core::{CudaContext, DeviceBuffer, LaunchConfig1D};
+use cuda_device::atomic::{AtomicOrdering, BlockAtomicU32, DeviceAtomicU32};
 use cuda_device::{
     DisjointSlice, SharedArray, cuda_module, kernel, launch_bounds, launch_contract, thread,
     verify, warp,
@@ -110,6 +111,117 @@ mod kernels {
             *out_elem = block_sum;
         }
     }
+
+    /// Batched multi-read strided block reduction with a CTA-uniform early
+    /// `return` (`if blockIdx_x() >= active_blocks { return; }`) and a
+    /// loop-carried `bool` flag (`all_finite`), matching real inference
+    /// reduction kernels (`rms_norm` / `argmax_rows` control-flow shape).
+    #[launch_bounds(256)]
+    #[launch_contract(
+        domain = 1,
+        block = (256, 1, 1),
+        requires = (data.len() >= out.len()),
+    )]
+    #[verify(
+        no_oob_idx(data, out, WSUM),
+        no_data_race(WSUM),
+        disjoint_writes(out),
+        uniform_barriers
+    )]
+    #[kernel]
+    pub fn batched_strided_reduce(data: &[f32], active_blocks: u32, out: &mut [f32]) {
+        /// Shared-memory scratchpad holding one partial sum per warp (`8` floats).
+        static mut WSUM: SharedArray<f32, 8> = SharedArray::UNINIT;
+
+        let blk = thread::blockIdx_x();
+        if blk >= active_blocks {
+            return;
+        }
+        let tid = thread::threadIdx_x() as usize;
+        let k = data.len();
+        let mut acc = 0.0f32;
+        let mut all_finite = true;
+        let mut it = tid;
+        while it + 3 * 256 < k {
+            let v0 = data[it];
+            let v1 = data[it + 256];
+            let v2 = data[it + 2 * 256];
+            let v3 = data[it + 3 * 256];
+            all_finite &= v0.is_finite() && v1.is_finite() && v2.is_finite() && v3.is_finite();
+            acc += v0 + v1 + v2 + v3;
+            it += 4 * 256;
+        }
+        while it < k {
+            let v = data[it];
+            all_finite &= v.is_finite();
+            acc += v;
+            it += 256;
+        }
+        let part = warp::reduce_sum_f32(if all_finite { acc } else { 0.0 });
+        if warp::lane_id() == 0 {
+            WSUM[tid / 32] = part;
+        }
+        thread::sync_threads();
+        let total = WSUM[0] + WSUM[1] + WSUM[2] + WSUM[3] + WSUM[4] + WSUM[5] + WSUM[6] + WSUM[7];
+        let gid = (blk as usize) * 256 + tid;
+        if gid < out.len() {
+            out[gid] = total;
+        }
+    }
+
+    /// Safe SIMT warp-ballot + `SharedArray<BlockAtomicU32, 8>` + global
+    /// `&mut [DeviceAtomicU32]` histogram kernel with zero `unsafe` blocks:
+    /// - Initializes `HIST[0..8]` with `.cta` atomic stores,
+    /// - Votes across each 32-lane warp with `warp::ballot(val > 16.0)` and
+    ///   accumulates popcounts into `HIST[tid & 7]` via `BlockAtomicU32::fetch_add`,
+    /// - Tallies total positive warps across all CTAs into `global_total[0]`
+    ///   via `.gpu`-scoped `DeviceAtomicU32::fetch_add` (`MirNoGlobalRace`).
+    #[launch_bounds(256)]
+    #[launch_contract(
+        domain = 1,
+        block = (256, 1, 1),
+        requires = (data.len() >= out.len()),
+    )]
+    #[verify(
+        no_oob_idx(data, global_total, out, HIST),
+        no_data_race(HIST, global_total),
+        disjoint_writes(out),
+        uniform_barriers
+    )]
+    #[kernel]
+    pub fn ballot_atomic_histogram(
+        data: &[f32],
+        global_total: &mut [DeviceAtomicU32],
+        mut out: DisjointSlice<u32>,
+    ) {
+        /// Shared 8-bin `.cta`-scoped atomic histogram (`BlockAtomicU32`).
+        static mut HIST: SharedArray<BlockAtomicU32, WARPS_PER_BLOCK> = SharedArray::UNINIT;
+
+        let idx = thread::index_1d();
+        let gid = idx.get();
+        let tid = thread::threadIdx_x() as usize;
+
+        if tid < WARPS_PER_BLOCK {
+            HIST[tid].store(0, AtomicOrdering::Relaxed);
+        }
+        thread::sync_threads();
+
+        let val = if gid < data.len() { data[gid] } else { 0.0 };
+        let high_mask = warp::ballot(val > 16.0);
+        if warp::lane_id() == 0 {
+            let count = high_mask.count_ones();
+            HIST[tid & 7].fetch_add(count, AtomicOrdering::Relaxed);
+            if !global_total.is_empty() {
+                global_total[0].fetch_add(count, AtomicOrdering::Relaxed);
+            }
+        }
+        thread::sync_threads();
+
+        let bin_val = HIST[tid / 32].load(AtomicOrdering::Relaxed);
+        if let Some(slot) = out.get_mut(idx) {
+            *slot = bin_val;
+        }
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -131,14 +243,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let prep_block = module.prepare_block_reduce_sum(config)?;
     module.block_reduce_sum(&stream, &prep_block, &d_data, &mut d_block_out)?;
+
+    let mut d_batched_out = DeviceBuffer::from_host(&stream, &vec![0.0f32; N])?;
+    let prep_batched = module.prepare_batched_strided_reduce(config)?;
+    module.batched_strided_reduce(
+        &stream,
+        &prep_batched,
+        &d_data,
+        NUM_BLOCKS - 1,
+        &mut d_batched_out,
+    )?;
+
+    let mut d_global_total =
+        DeviceBuffer::from_host(&stream, &[0u32])?.wrap_elem::<DeviceAtomicU32>();
+    let mut d_hist_out = DeviceBuffer::from_host(&stream, &vec![0u32; N])?;
+    let prep_hist = module.prepare_ballot_atomic_histogram(config)?;
+    module.ballot_atomic_histogram(
+        &stream,
+        &prep_hist,
+        &d_data,
+        &mut d_global_total,
+        &mut d_hist_out,
+    )?;
+    let d_global_total_u32 = d_global_total.peel_elem::<u32>();
     stream.synchronize()?;
 
     let warp_out = d_warp_out.to_host_vec(&stream)?;
     let block_out = d_block_out.to_host_vec(&stream)?;
+    let batched_out = d_batched_out.to_host_vec(&stream)?;
+    let global_total_host = d_global_total_u32.to_host_vec(&stream)?;
+    let hist_out = d_hist_out.to_host_vec(&stream)?;
+    // Each 32-lane warp has values 1..=32, so 16 lanes have `val > 16.0` per warp!
+    // Across `NUM_BLOCKS * WARPS_PER_BLOCK` warps = 32 warps * 16 = 512 total high lanes.
+    assert_eq!(
+        global_total_host[0],
+        NUM_BLOCKS * (WARPS_PER_BLOCK as u32) * 16
+    );
+    assert_eq!(hist_out[0], (WARPS_PER_BLOCK as u32) * 16);
 
     // Sum of 1..=32 is 32 * 33 / 2 = 528.0 per warp, and 8 * 528.0 = 4224.0 per 256-thread block.
     let expected_warp_sum = 528.0f32;
     let expected_block_sum = (WARPS_PER_BLOCK as f32) * expected_warp_sum;
+    let expected_grid_sum = (NUM_BLOCKS as f32) * expected_block_sum;
 
     for (i, &got) in warp_out.iter().enumerate() {
         assert!(
@@ -150,6 +296,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         assert!(
             (got - expected_block_sum).abs() < 1e-4,
             "block_reduce_sum mismatch at {i}: got {got}, expected {expected_block_sum}"
+        );
+    }
+    let active_cutoff = ((NUM_BLOCKS - 1) * BLOCK_SIZE) as usize;
+    for (i, &got) in batched_out.iter().enumerate() {
+        let exp = if i < active_cutoff {
+            expected_grid_sum
+        } else {
+            0.0
+        };
+        assert!(
+            (got - exp).abs() < 1e-3,
+            "batched_strided_reduce mismatch at {i}: got {got}, expected {exp}"
         );
     }
 

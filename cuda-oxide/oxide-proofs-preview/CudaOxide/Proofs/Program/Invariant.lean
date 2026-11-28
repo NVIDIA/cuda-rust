@@ -225,7 +225,7 @@ def initialSymRegs (f : MirFunc) : SymRegList :=
 
 /-- SSA variables referenced inside a single `Rhs`. -/
 def rhsUsedVars : Rhs → List Nat
-  | .copy s | .notBool s | .intCast _ s | .load s | .cvtaShared s | .loadTmemBase s _ | .ctaUint1 _ _ s | .ctaUnary s => [s]
+  | .copy s | .notBool s | .intCast _ s | .load s | .cvtaShared s | .loadTmemBase s _ | .atomicOp _ _ s _ _ | .ctaUint1 _ _ s | .ctaUnary s => [s]
   | .binOp _ _ l r | .checkedOvf _ _ l r | .cmpOp _ l r | .ptrOffset l r | .ctaBin l r => [l, r]
   | .mbarTryWait _ sv _ => [sv]
   | _ => []
@@ -233,7 +233,7 @@ def rhsUsedVars : Rhs → List Nat
 /-- SSA variables referenced inside a single `Stmt`. -/
 def stmtUsedVars : Stmt → List Nat
   | .assign _ rhs => rhsUsedVars rhs
-  | .store p v => [p, v]
+  | .store p v | .atomicStore _ p v => [p, v]
   | .assertCond _ c => [c]
   | .barrierSlotCheck p | .tmemAlloc p _ | .smemDescRead p _ | .tmemAccess p _ _ _ => [p]
   | .clusterRankCheck r => [r]
@@ -271,8 +271,10 @@ def pruneIntraBlockRegs (crossLive : List Nat) (regs : SymRegList) : SymRegList 
     | _ => if crossLive.contains v then sv else .unk
   pruned.reverse.dropWhile (· == .unk) |>.reverse
 
-/-- Single forward pass of `inferSymTable` parameterized by pre-seeded per-header `loopBounds`. -/
-def inferSymTablePass (f : MirFunc) (hdrBounds : Nat → List (Nat × Nat × Nat)) : List SymBlockInv :=
+/-- Single forward pass of `inferSymTable` parameterized by pre-seeded per-header `loopBounds`
+    and `unkVars` (loop-header `BlockArg` IDs whose incoming edges widen to `.unk`). -/
+def inferSymTablePass (f : MirFunc) (hdrBounds : Nat → List (Nat × Nat × Nat))
+    (unkVars : List Nat := []) : List SymBlockInv :=
   let n := f.blocks.length
   if n == 0 then []
   else
@@ -297,7 +299,7 @@ def inferSymTablePass (f : MirFunc) (hdrBounds : Nat → List (Nat × Nat × Nat
             let nextRegs :=
               if dstBlk.isLoopHeader then
                 dstBlk.args.foldl (fun r ba =>
-                  if ba.width ≤ 1 then r.setVar ba.varId .unk
+                  if ba.width ≤ 1 || unkVars.contains ba.varId then r.setVar ba.varId .unk
                   else r.setVar ba.varId (.int (.havoc ba.varId ba.width))) boundRegs
               else
                 boundRegs
@@ -367,7 +369,7 @@ def pruneHdrBounds (f : MirFunc) (tbl : List SymBlockInv)
           else
             let pr := bindSymBlockArgs outRegs outRegs hdrBlk.args args
             match pr.getVar vid with
-            | .int e => symIntBoundedUnder ec e lim
+            | .int e => symIntBoundedUnder f ec e lim
             | _ => false
         match blk.term with
         | .goto dst args => checkOne effC dst args
@@ -379,16 +381,48 @@ def pruneHdrBounds (f : MirFunc) (tbl : List SymBlockInv)
         | _ => true
     if lbsOk.isEmpty then none else some (hdr, lbsOk)
 
-/-- Infer the `List SymBlockInv` invariant table for `f` (including nested inductive ring bounds
+/-- Collect loop-header `BlockArg.varId`s (`width > 1`) whose incoming edges in `tbl` fail `symIntFitsWidth`. -/
+def collectUnkHdrVars (f : MirFunc) (tbl : List SymBlockInv) (hdrs : List Nat) : List Nat :=
+  let n := f.blocks.length
+  hdrs.flatMap fun hdr =>
+    let hdrBlk := f.blockAt hdr
+    let inBlocks := (List.range n).filter fun b =>
+      (tbl.getD b {}).reachable && termTargets (f.blockAt b).term hdr
+    hdrBlk.args.filterMap fun fa =>
+      if fa.width ≤ 1 then none
+      else
+        let fitsAll := inBlocks.all fun b =>
+          let inv := tbl.getD b {}
+          let blk := f.blockAt b
+          let (outRegs, _, _, _, _) := symExecStmts f inv.effCond inv.regs inv.phaseSpec blk.term blk.stmts
+          let checkArgs := fun dst args =>
+            if dst != hdr then true
+            else
+              let pr := bindSymBlockArgs outRegs outRegs hdrBlk.args args
+              match pr.getVar fa.varId with
+              | .int e => symIntFitsWidth f fa.width e
+              | _ => false
+          match blk.term with
+          | .goto dst args => checkArgs dst args
+          | .condBr _ tBlk tArgs fBlk fArgs => checkArgs tBlk tArgs && checkArgs fBlk fArgs
+          | _ => true
+        if fitsAll then none else some fa.varId
+
+/-- Infer the `List SymBlockInv` invariant table for `f` (including nested inductive ring/strided bounds
     discovered via Houdini greatest-fixpoint pruning and independently certified by `validSymFunc`). -/
 def inferSymTable (f : MirFunc) : List SymBlockInv :=
-  let baseTbl := inferSymTablePass f (fun _ => [])
+  let rawTbl := inferSymTablePass f (fun _ => []) []
   let n := f.blocks.length
   let hdrs := (List.range n).filter fun hdr =>
-    (f.blockAt hdr).isLoopHeader && (baseTbl.getD hdr {}).reachable
-  if hdrs.isEmpty then baseTbl
+    (f.blockAt hdr).isLoopHeader && (rawTbl.getD hdr {}).reachable
+  if hdrs.isEmpty then rawTbl
   else
-    -- 1. Collect all wrap/mod bounds (`suggestRingBound`) from backedges across all loop headers:
+    let unkVars0 := collectUnkHdrVars f rawTbl hdrs
+    let baseTbl := if unkVars0.isEmpty then rawTbl else inferSymTablePass f (fun _ => []) unkVars0
+    let unkVars1 := collectUnkHdrVars f baseTbl hdrs
+    let unkVars := (unkVars0 ++ unkVars1).foldl (fun acc v => if acc.contains v then acc else v :: acc) []
+    let baseTbl := if unkVars1.isEmpty then baseTbl else inferSymTablePass f (fun _ => []) unkVars
+    -- 1. Collect all wrap/mod/strided bounds (`suggestRingBound`) from backedges across all loop headers:
     let perHdrBackEdges : List (Nat × List (Nat × SymRegList × List Nat)) :=
       hdrs.map fun hdr =>
         let edges := (List.range n).flatMap fun b =>
@@ -418,12 +452,12 @@ def inferSymTable (f : MirFunc) : List SymBlockInv :=
                   | some lim => if acc3.contains lim then acc3 else lim :: acc3
                   | none => acc3
               | _ => acc3) acc2) acc) []
-    -- 2. Seed optimistic candidate bounds (direct wrap bound OR outer loop arg initialized `< lim`):
+    -- 2. Seed optimistic candidate bounds (direct wrap/strided bound OR outer loop arg initialized `< lim`):
     let seedCand : List (Nat × List (Nat × Nat × Nat)) :=
       perHdrBackEdges.filterMap fun (hdr, edges) =>
         let hdrBlk := f.blockAt hdr
         let lbs := hdrBlk.args.filterMap fun fa =>
-          if fa.width ≤ 1 then none
+          if fa.width ≤ 1 || unkVars.contains fa.varId then none
           else
             let directLim := edges.findSome? fun (b, outRegs, args) =>
               if b < hdr then none
@@ -435,26 +469,29 @@ def inferSymTable (f : MirFunc) : List SymBlockInv :=
             match directLim with
             | some lim => some (fa.varId, fa.width, lim)
             | none =>
-                -- Check if forward entry edges pass a constant `< lim` for a `lim ∈ globalLims`:
+                -- Check if forward entry edges pass an expression statically `< lim` for `lim ∈ globalLims`:
                 globalLims.findSome? fun lim =>
                   let fwdOk := edges.all fun (b, outRegs, args) =>
                     if b ≥ hdr then true
                     else
                       let pr := bindSymBlockArgs outRegs outRegs hdrBlk.args args
                       match pr.getVar fa.varId with
-                      | .int (.const c) => decide (c < lim)
+                      | .int e =>
+                          match symIntStaticLe f e with
+                          | some ub => decide (ub < lim)
+                          | none => false
                       | _ => false
                   if fwdOk then some (fa.varId, fa.width, lim) else none
         if lbs.isEmpty then none else some (hdr, lbs)
     if seedCand.isEmpty then baseTbl
     else
       let rec houdini (fuel : Nat) (cand : List (Nat × List (Nat × Nat × Nat))) : List SymBlockInv :=
-        let tbl := inferSymTablePass f fun hdr =>
+        let tbl := inferSymTablePass f (fun hdr =>
           match cand.find? (fun p => p.1 == hdr) with
           | some (_, lbs) => lbs
-          | none => []
+          | none => []) unkVars
         match fuel with
-        | 0 => inferSymTablePass f (fun _ => [])
+        | 0 => baseTbl
         | fuel' + 1 =>
             let pruned := pruneHdrBounds f tbl cand
             if pruned == cand then tbl
@@ -569,16 +606,15 @@ def validSymEdge (f : MirFunc) (tbl : List SymBlockInv)
       decide (0 < w) &&
       (dstInv.regs.getVar vid == .int (.havoc vid w)) &&
       match passedRegs.getVar vid with
-      | .int e => symIntFitsWidth f w e && symIntBoundedUnder edgeCond e lim
+      | .int e => symIntFitsWidth f w e && symIntBoundedUnder f edgeCond e lim
       | _ => false) &&
     (dstBlk.args.all fun fa =>
-      if fa.width == 0 then
-        dstInv.regs.getVar fa.varId == .unk
-      else
-        dstInv.regs.getVar fa.varId == .int (.havoc fa.varId fa.width) &&
-        match passedRegs.getVar fa.varId with
-        | .int e => symIntFitsWidth f fa.width e
-        | _ => false) &&
+      dstInv.regs.getVar fa.varId == .unk ||
+      (decide (1 < fa.width) &&
+       dstInv.regs.getVar fa.varId == .int (.havoc fa.varId fa.width) &&
+       match passedRegs.getVar fa.varId with
+       | .int e => symIntFitsWidth f fa.width e
+       | _ => false)) &&
     checkLoopRegsEquiv hdrArgIds edgeCond 0 dstInv.regs passedRegs
 
 /-- Computable certificate checker verifying that `tbl` is a sound inductive symbolic
@@ -679,7 +715,7 @@ theorem loopBoundsCond_eval_true {env : InputEnv} {t : ThreadCtx} {havoc' : Nat 
 /-- Edge preservation lemma: if `validSymEdge` holds on `(b -> dst)`, concrete `(outRegs, outPhase)`
     transitions to `dstInv` under an updated `havoc'`. -/
 theorem validSymEdge_sound {f : MirFunc} {tbl : List SymBlockInv} {env : InputEnv} {t : ThreadCtx}
-    (hvalidIn : f.validInput env)
+    (hvalidIn : f.validInput env) (hth : f.validThread t)
     {edgeCond : SymBool} {outRegs : RegFile} {outSR : SymRegList}
     {outPhase : Nat} {outPs : PhaseSpec} {havoc : Nat → Nat}
     {dst : Nat} {argVars : List Nat}
@@ -754,18 +790,17 @@ theorem validSymEdge_sound {f : MirFunc} {tbl : List SymBlockInv} {env : InputEn
         rw [hcontains, if_pos rfl, hbVal]
         dsimp only [Val.asInt]
         rw [symIntFitsWidth_sound hvalidIn hfitsW]
-        exact symIntBoundedUnder_sound hecond eSym lim hbndE
+        exact symIntBoundedUnder_sound hvalidIn hth hecond eSym lim hbndE
     · intro v                                             -- Goal 2b: Every register in `dstInv.regs` matches under `havoc'`
       by_cases hmem : hdrArgIds.contains v = true         -- Split: loop-carried `BlockArg` vs. outer invariant var
-      · have hvMem : v ∈ hdrArgIds := List.contains_iff_mem.mp hmem -- Subcase: loop-carried `BlockArg` (`SymInt.havoc vid w`)
+      · have hvMem : v ∈ hdrArgIds := List.contains_iff_mem.mp hmem -- Subcase: loop-carried `BlockArg` (`SymInt.havoc vid w` or `.unk`)
         obtain ⟨fa, hfaMem, hfaId⟩ := List.mem_map.mp hvMem
         have hpOk := List.all_eq_true.mp hargsOk fa hfaMem
         subst hfaId
-        by_cases hw0 : (fa.width == 0) = true
-        · rw [hw0] at hpOk; simp only [↓reduceIte, beq_iff_eq] at hpOk
-          rw [hpOk]; trivial
-        · rw [if_neg hw0] at hpOk; simp only [Bool.and_eq_true, beq_iff_eq] at hpOk
-          rcases hpOk with ⟨hdstH, hfitsM⟩
+        rcases Bool.or_eq_true_iff.mp hpOk with hunk | hintOk
+        · rw [beq_iff_eq.mp hunk]; trivial
+        · simp only [Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq] at hintOk
+          rcases hintOk with ⟨⟨_, hdstH⟩, hfitsM⟩
           rw [hdstH]
           cases hpsv : passedSR.getVar fa.varId <;> rw [hpsv] at hfitsM
           all_goals try contradiction
@@ -787,7 +822,7 @@ theorem validSymEdge_sound {f : MirFunc} {tbl : List SymBlockInv} {env : InputEn
     of `f` satisfies the validated symbolic invariant `tbl.getD b {}` for some `havoc`. -/
 theorem symReachable_sound {f : MirFunc} {tbl : List SymBlockInv}
     (hvalid : validSymFunc f tbl = true)
-    {env : InputEnv} {t : ThreadCtx} (hvalidIn : f.validInput env)
+    {env : InputEnv} {t : ThreadCtx} (hvalidIn : f.validInput env) (hth : f.validThread t)
     {b phase : Nat} {regs : RegFile}
     (hreach : Reachable f env t b regs phase) :
     b < f.blocks.length ∧
@@ -816,7 +851,7 @@ theorem symReachable_sound {f : MirFunc} {tbl : List SymBlockInv}
       rw [hexec] at hmOut hpsOut                          --   Step through `b0.stmts` via `symExecStmts_correct`
       rw [hterm] at hbOk hmOut hpsOut
       obtain ⟨hrDst, havoc', hpcDst, hpsDst, hmDst⟩ :=    --   Cross `(b0 -> dst)` via `validSymEdge_sound`
-        validSymEdge_sound hvalidIn hbOk.2 hpc0 hmOut hpsOut
+        validSymEdge_sound hvalidIn hth hbOk.2 hpc0 hmOut hpsOut
       exact ⟨hdst, hrDst, havoc', hpcDst, hpsDst, hmDst⟩
   | @stepCondTrue b0 tBlk fBlk cond p0 outP r0 outR evs tevs tArgs fArgs _ hexec hterm hcond hdst ih => -- Inductive step: `condBr` true arm
       obtain ⟨hb0, hr0, havoc, hpc0, hps0, hm0⟩ := ih
@@ -839,13 +874,13 @@ theorem symReachable_sound {f : MirFunc} {tbl : List SymBlockInv}
           simp only [Bool.and_eq_true] at hbrOk           --   Split `validSymEdge` conjunction across both outgoing arms
           have hec := symBool_conj_true hpc0 hcTrue       --   Combine entry path condition `hpc0` with `cSym = true`
           obtain ⟨hrDst, havoc', hpcDst, hpsDst, hmDst⟩ :=
-            validSymEdge_sound hvalidIn hbrOk.1 hec hmOut hpsOut
+            validSymEdge_sound hvalidIn hth hbrOk.1 hec hmOut hpsOut
           exact ⟨hdst, hrDst, havoc', hpcDst, hpsDst, hmDst⟩
       | unk =>                                            --   Untracked float/runtime guard: preserve `effCond` conservatively
           rw [hget] at hbrOk
           simp only [Bool.and_eq_true] at hbrOk
           obtain ⟨hrDst, havoc', hpcDst, hpsDst, hmDst⟩ :=
-            validSymEdge_sound hvalidIn hbrOk.1 hpc0 hmOut hpsOut
+            validSymEdge_sound hvalidIn hth hbrOk.1 hpc0 hmOut hpsOut
           exact ⟨hdst, hrDst, havoc', hpcDst, hpsDst, hmDst⟩
       | int _ | ptr _ _ _ | condPtr _ _ _ _ | smemOff _ _ | smemDesc _ _ | tmemPtr _ _ =>
           rw [hget] at hbrOk; contradiction
@@ -872,13 +907,13 @@ theorem symReachable_sound {f : MirFunc} {tbl : List SymBlockInv}
             simp [SymBool.eval, hcFalse]
           have hec := symBool_conj_true hpc0 hnotTrue     --   Combine entry path condition `hpc0` with `!cSym = true`
           obtain ⟨hrDst, havoc', hpcDst, hpsDst, hmDst⟩ :=
-            validSymEdge_sound hvalidIn hbrOk.2 hec hmOut hpsOut
+            validSymEdge_sound hvalidIn hth hbrOk.2 hec hmOut hpsOut
           exact ⟨hdst, hrDst, havoc', hpcDst, hpsDst, hmDst⟩
       | unk =>                                            --   Untracked float/runtime guard: preserve `effCond` conservatively
           rw [hget] at hbrOk
           simp only [Bool.and_eq_true] at hbrOk
           obtain ⟨hrDst, havoc', hpcDst, hpsDst, hmDst⟩ :=
-            validSymEdge_sound hvalidIn hbrOk.2 hpc0 hmOut hpsOut
+            validSymEdge_sound hvalidIn hth hbrOk.2 hpc0 hmOut hpsOut
           exact ⟨hdst, hrDst, havoc', hpcDst, hpsDst, hmDst⟩
       | int _ | ptr _ _ _ | condPtr _ _ _ _ | smemOff _ _ | smemDesc _ _ | tmemPtr _ _ =>
           rw [hget] at hbrOk; contradiction
@@ -907,16 +942,17 @@ def collectSymTmemEvents (f : MirFunc) (tbl : List SymBlockInv) : List SymTmemEv
 /-- Lemma: every concrete `EmitsEvent` corresponds to a `SymMemEvent` in `collectSymMemEvents`. -/
 theorem emitsEvent_mem_collect {f : MirFunc} {tbl : List SymBlockInv}
     (hvalid : validSymFunc f tbl = true)
-    {env : InputEnv} {t : ThreadCtx} (hvalidIn : f.validInput env)
+    {env : InputEnv} {t : ThreadCtx} (hvalidIn : f.validInput env) (hth : f.validThread t)
     {ev : MemEvent} (hemits : EmitsEvent f env t ev) :
     ∃ havoc : Nat → Nat, ∃ sev ∈ collectSymMemEvents f tbl, ∃ idxSym : SymInt, ∃ k : Nat,
       k < sev.span ∧ 0 < sev.elemDiv ∧
       sev.isWrite = ev.isWrite ∧ sev.space = ev.space ∧ sev.bufId = ev.bufId ∧
-      evalSyncBar env t havoc sev.syncBar = ev.syncBar ∧ sev.indexOpt = some idxSym ∧
+      evalSyncBar env t havoc sev.syncBar = ev.syncBar ∧ sev.atomicScope = ev.atomicScope ∧
+      sev.indexOpt = some idxSym ∧
       (idxSym.eval env t havoc + k) / sev.elemDiv = ev.index ∧
       sev.pathCond.eval env t havoc = true ∧ sev.phaseSpec.matchesPhase ev.phase = true := by
   obtain ⟨b, phase, regs, hreach, hevMem⟩ := hemits
-  obtain ⟨hb, hr, havoc, hpc, hps, hm⟩ := symReachable_sound hvalid hvalidIn hreach
+  obtain ⟨hb, hr, havoc, hpc, hps, hm⟩ := symReachable_sound hvalid hvalidIn hth hreach
   have hvf := hvalid
   unfold validSymFunc at hvf; dsimp only at hvf
   simp only [Bool.and_eq_true, decide_eq_true_eq] at hvf
@@ -925,8 +961,8 @@ theorem emitsEvent_mem_collect {f : MirFunc} {tbl : List SymBlockInv}
   rw [hr] at hbOk; simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte, Bool.and_eq_true] at hbOk
   obtain ⟨_, _, hmE, _, _⟩ := symExecStmts_correct f env t havoc (tbl.getD b {}).effCond hpc (f.blockAt b).term
     (f.blockAt b).stmts regs (tbl.getD b {}).regs phase (tbl.getD b {}).phaseSpec hm hps hbOk.1.1.1 hbOk.1.2
-  obtain ⟨sev, hsev, idxS, k, hks, hdiv, hw, hsp, hbid, hab, hidxOpt, hidxEv, hpce, hpse⟩ := hmE ev hevMem
-  refine ⟨havoc, sev, ?_, idxS, k, hks, hdiv, hw, hsp, hbid, hab, hidxOpt, hidxEv, hpce, hpse⟩
+  obtain ⟨sev, hsev, idxS, k, hks, hdiv, hw, hsp, hbid, hab, hasc, hidxOpt, hidxEv, hpce, hpse⟩ := hmE ev hevMem
+  refine ⟨havoc, sev, ?_, idxS, k, hks, hdiv, hw, hsp, hbid, hab, hasc, hidxOpt, hidxEv, hpce, hpse⟩
   unfold collectSymMemEvents
   rw [List.mem_flatMap]
   refine ⟨b, List.mem_range.mpr hb, ?_⟩
@@ -935,7 +971,7 @@ theorem emitsEvent_mem_collect {f : MirFunc} {tbl : List SymBlockInv}
 /-- Lemma: every concrete `EmitsTmemEvent` corresponds to a `SymTmemEvent` in `collectSymTmemEvents`. -/
 theorem emitsTmemEvent_mem_collect {f : MirFunc} {tbl : List SymBlockInv}
     (hvalid : validSymFunc f tbl = true)
-    {env : InputEnv} {t : ThreadCtx} (hvalidIn : f.validInput env)
+    {env : InputEnv} {t : ThreadCtx} (hvalidIn : f.validInput env) (hth : f.validThread t)
     {tev : TmemEvent} (hemits : EmitsTmemEvent f env t tev) :
     ∃ havoc : Nat → Nat, ∃ stev ∈ collectSymTmemEvents f tbl, ∃ relSym : SymInt,
       stev.allocCols = tev.allocCols ∧ stev.heightLanes = tev.heightLanes ∧
@@ -943,7 +979,7 @@ theorem emitsTmemEvent_mem_collect {f : MirFunc} {tbl : List SymBlockInv}
       stev.relAddrOpt = some relSym ∧ relSym.eval env t havoc = tev.relAddr ∧
       stev.pathCond.eval env t havoc = true := by
   obtain ⟨b, phase, regs, hreach, htevMem⟩ := hemits
-  obtain ⟨hb, hr, havoc, hpc, hps, hm⟩ := symReachable_sound hvalid hvalidIn hreach
+  obtain ⟨hb, hr, havoc, hpc, hps, hm⟩ := symReachable_sound hvalid hvalidIn hth hreach
   have hvf := hvalid
   unfold validSymFunc at hvf; dsimp only at hvf
   simp only [Bool.and_eq_true, decide_eq_true_eq] at hvf

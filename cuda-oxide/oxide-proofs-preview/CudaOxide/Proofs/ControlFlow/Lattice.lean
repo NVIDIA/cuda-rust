@@ -747,6 +747,13 @@ theorem stepOp_mono (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr)
         rw [hcp]; dsimp only at hstep ⊢
         injection hstep with hstep; subst hstep
         exact ⟨conc, rfl, hsub⟩
+  | warpSyncFull =>                                       -- Case 18b': Full-warp `*.sync 0xFFFF_FFFF` checks 32-lane warp convergence
+      dsimp only [stepOp] at hstep ⊢
+      by_cases hwc : (!blkGuard.isWarpConvergent cfg.blockDimX cfg.blockDimY) = true
+      · rw [if_pos hwc] at hstep; contradiction
+      · rw [if_neg hwc] at hstep ⊢
+        injection hstep with hstep; subst hstep
+        exact ⟨conc, rfl, hsub⟩
   | tmemFenceBeforeSync =>                                -- Case 18c: `tcgen05_fence_before_thread_sync` checks warp convergence + retired `ld`s
       dsimp only [stepOp] at hstep ⊢
       by_cases hp1 : (!blkGuard.isWarpConvergent cfg.blockDimX cfg.blockDimY || !abs.pendingLoads.isEmpty) = true

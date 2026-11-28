@@ -21,21 +21,22 @@ theorem foldr_and_of_mem {α : Type} {P : α → Prop} :
   | _ :: _, ⟨hp, _⟩, _, List.Mem.head _ => hp
   | _ :: tl, ⟨_, htl⟩, x, List.Mem.tail _ hm => foldr_and_of_mem tl htl x hm
 
-/-- Remove exact duplicate symbolic events before generating VC obligations. -/
-def dedupEvents {α : Type} [DecidableEq α] : List α → List α
+/-- Remove exact duplicate symbolic events before generating VC obligations
+    (using non-dependent `BEq` so `whnf` never constructs `DecidableEq` proof terms). -/
+def dedupEvents {α : Type} [BEq α] : List α → List α
   | [] => []
   | x :: xs =>
       let rest := dedupEvents xs
-      if decide (x ∈ rest) then rest else x :: rest
+      if rest.contains x then rest else x :: rest
 
-theorem mem_dedupEvents {α : Type} [DecidableEq α] {x : α} :
+theorem mem_dedupEvents {α : Type} [BEq α] [LawfulBEq α] {x : α} :
     ∀ {xs : List α}, x ∈ xs → x ∈ dedupEvents xs
   | [], h => nomatch h
   | y :: tl, h => by
       dsimp only [dedupEvents]
       rcases List.mem_cons.mp h with rfl | htl
       · split
-        · rename_i hin; exact of_decide_eq_true hin
+        · rename_i hin; exact List.contains_iff_mem.mp hin
         · exact List.Mem.head _
       · have ih := mem_dedupEvents htl
         split
@@ -501,8 +502,8 @@ theorem vcNoOobGlobal_of_table {f : MirFunc} {tbl : List SymBlockInv}
          symSpanInBounds sev ((sev.indexOpt.getD (.const 0)).eval env t havoc) (env.sliceLen paramId)) ∧ acc) True) :
     MirNoOobGlobal f paramId := by
   intro env t ev hIn hTh hemits hsp hbid                    -- Step 1: Pick any GPU thread `t` and global access `ev`
-  obtain ⟨havoc, sev, hsev, idxS, k, hks, hdiv, _, hssp, hsbid, _, hopt, hidxEv, hpc, _⟩ :=
-    emitsEvent_mem_collect hvalid hIn hemits                -- Step 2: Map concrete `ev` to its symbolic event `sev`
+  obtain ⟨havoc, sev, hsev, idxS, k, hks, hdiv, _, hssp, hsbid, _, _, hopt, hidxEv, hpc, _⟩ :=
+    emitsEvent_mem_collect hvalid hIn hTh hemits            -- Step 2: Map concrete `ev` to its symbolic event `sev`
   have hfMem : sev ∈ sevs := by                             -- Step 3: Show `sev` belongs to the filtered `paramId` slice list
     rw [← hevs]; apply mem_dedupEvents; rw [← hmem, List.mem_filter]; exact ⟨hsev, by simp [hssp, hsp, hsbid, hbid]⟩
   have hp := foldr_and_of_mem _ (foldr_holds_to_eval sevs (hvc env t havoc hIn hTh)) sev hfMem hpc -- Step 4: Extract `omega`'s VC proof for `sev`
@@ -523,8 +524,8 @@ theorem vcNoOobShared_of_table {f : MirFunc} {tbl : List SymBlockInv}
          symSpanInBounds sev ((sev.indexOpt.getD (.const 0)).eval env t havoc) cap) ∧ acc) True) :
     MirNoOobShared f sharedId := by
   intro env t ev hIn hTh hemits hsp hbid                    -- Step 1: Pick any CTA thread `t` and shared access `ev`
-  obtain ⟨havoc, sev, hsev, idxS, k, hks, hdiv, _, hssp, hsbid, _, hopt, hidxEv, hpc, _⟩ :=
-    emitsEvent_mem_collect hvalid hIn hemits                -- Step 2: Map concrete `ev` to its symbolic event `sev`
+  obtain ⟨havoc, sev, hsev, idxS, k, hks, hdiv, _, hssp, hsbid, _, _, hopt, hidxEv, hpc, _⟩ :=
+    emitsEvent_mem_collect hvalid hIn hTh hemits            -- Step 2: Map concrete `ev` to its symbolic event `sev`
   have hfMem : sev ∈ sevs := by                             -- Step 3: Show `sev` belongs to `SharedArray` `sharedId`'s list
     rw [← hevs]; apply mem_dedupEvents; rw [← hmem, List.mem_filter]; exact ⟨hsev, by simp [hssp, hsp, hsbid, hbid]⟩
   have hp := foldr_and_of_mem _ (foldr_holds_to_eval sevs (hvc env t havoc hIn hTh)) sev hfMem hpc -- Step 4: Extract `omega`'s VC proof for `sev`
@@ -551,10 +552,10 @@ theorem vcDisjointWrites_of_table {f : MirFunc} {tbl : List SymBlockInv}
            (t₁.bx = t₂.bx ∧ t₁.by_ = t₂.by_ ∧ t₁.tx = t₂.tx ∧ t₁.ty = t₂.ty)) ∧ acc) True) :
     MirDisjointWrites f paramId := by
   intro env t₁ t₂ ev₁ ev₂ hIn hT1 hT2 hem1 hem2 hsp1 hsp2 hb1 hb2 hw hidx -- Step 1: Pick two threads `t₁, t₂` colliding on `ev₁.index = ev₂.index`
-  obtain ⟨h₁, s1, hs1, i1, k1, hk1, hd1, hw1, hssp1, hsbid1, _, ho1, hi1, hpc1, _⟩ :=
-    emitsEvent_mem_collect hvalid hIn hem1                  -- Step 2a: Map `ev₁` to symbolic event `s1`
-  obtain ⟨h₂, s2, hs2, i2, k2, hk2, hd2, hw2, hssp2, hsbid2, _, ho2, hi2, hpc2, _⟩ :=
-    emitsEvent_mem_collect hvalid hIn hem2                  -- Step 2b: Map `ev₂` to symbolic event `s2`
+  obtain ⟨h₁, s1, hs1, i1, k1, hk1, hd1, hw1, hssp1, hsbid1, _, _, ho1, hi1, hpc1, _⟩ :=
+    emitsEvent_mem_collect hvalid hIn hT1 hem1              -- Step 2a: Map `ev₁` to symbolic event `s1`
+  obtain ⟨h₂, s2, hs2, i2, k2, hk2, hd2, hw2, hssp2, hsbid2, _, _, ho2, hi2, hpc2, _⟩ :=
+    emitsEvent_mem_collect hvalid hIn hT2 hem2              -- Step 2b: Map `ev₂` to symbolic event `s2`
   rw [hmem] at hs1 hs2
   have hm1 : s1 ∈ memEvs.filter (fun s => s.space == .global && s.bufId == paramId) := by
     rw [List.mem_filter]; exact ⟨hs1, by simp [hssp1, hsp1, hsbid1, hb1]⟩
@@ -572,6 +573,61 @@ theorem vcDisjointWrites_of_table {f : MirFunc} {tbl : List SymBlockInv}
     rw [hi1, hi2, hidx]                                     -- Step 5: Rewrite `ev₁.index = ev₂.index` into symbolic form
   obtain ⟨hbx, hby, htx, hty⟩ := symPairRaceOblig_sound hk1 hd1 hk2 hd2 hp heqIdx -- Step 6: Deduce all 4 coordinates match
   cases t₁; cases t₂; simp_all                              -- Step 7: Conclude `t₁ = t₂`
+
+/-- True when `s1` and `s2` are both atomic operations (`atomicScope.isSome`), which satisfies
+    `morallyStrongAtomic` for any two threads in the same CTA (`t₁.bx = t₂.bx ∧ t₁.by_ = t₂.by_`). -/
+def symSharedAtomicOrdered (s1 s2 : SymMemEvent) : Bool :=
+  s1.atomicScope.isSome && s2.atomicScope.isSome
+
+theorem symSharedAtomicOrdered_sound {t₁ t₂ : ThreadCtx} {ev₁ ev₂ : MemEvent} {s1 s2 : SymMemEvent}
+    (hbx : t₁.bx = t₂.bx) (hby : t₁.by_ = t₂.by_)
+    (ho : symSharedAtomicOrdered s1 s2 = true)
+    (ha1 : s1.atomicScope = ev₁.atomicScope) (ha2 : s2.atomicScope = ev₂.atomicScope) :
+    morallyStrongAtomic t₁ t₂ ev₁ ev₂ := by
+  unfold symSharedAtomicOrdered at ho
+  rcases Bool.and_eq_true_iff.mp ho with ⟨hs1, hs2⟩
+  rw [ha1] at hs1; rw [ha2] at hs2
+  unfold morallyStrongAtomic
+  cases hsc1 : ev₁.atomicScope <;> rw [hsc1] at hs1 <;> try contradiction
+  cases hsc2 : ev₂.atomicScope <;> rw [hsc2] at hs2 <;> try contradiction
+  rename_i sc1 sc2
+  constructor
+  · cases sc1
+    · exact Or.inr (Or.inr ⟨rfl, hbx, hby⟩)
+    · exact Or.inl rfl
+    · exact Or.inr (Or.inl rfl)
+  · cases sc2
+    · exact Or.inr (Or.inr ⟨rfl, hbx, hby⟩)
+    · exact Or.inl rfl
+    · exact Or.inr (Or.inl rfl)
+
+/-- True when `s` carries `.device` or `.system` atomic scope (morally strong across all CTAs). -/
+def isGridAtomicScope : Option AtomicScope → Bool
+  | some .device | some .system => true
+  | _ => false
+
+/-- True when both `s1` and `s2` carry `.device` / `.system` atomic scope. -/
+def symGlobalAtomicOrdered (s1 s2 : SymMemEvent) : Bool :=
+  isGridAtomicScope s1.atomicScope && isGridAtomicScope s2.atomicScope
+
+theorem symGlobalAtomicOrdered_sound {t₁ t₂ : ThreadCtx} {ev₁ ev₂ : MemEvent} {s1 s2 : SymMemEvent}
+    (ho : symGlobalAtomicOrdered s1 s2 = true)
+    (ha1 : s1.atomicScope = ev₁.atomicScope) (ha2 : s2.atomicScope = ev₂.atomicScope) :
+    morallyStrongAtomic t₁ t₂ ev₁ ev₂ := by
+  unfold symGlobalAtomicOrdered at ho
+  rcases Bool.and_eq_true_iff.mp ho with ⟨hg1, hg2⟩
+  rw [ha1] at hg1; rw [ha2] at hg2
+  unfold morallyStrongAtomic
+  cases hsc1 : ev₁.atomicScope <;> rw [hsc1] at hg1 <;> try contradiction
+  cases hsc2 : ev₂.atomicScope <;> rw [hsc2] at hg2 <;> try contradiction
+  rename_i sc1 sc2
+  constructor
+  · cases sc1 <;> simp [isGridAtomicScope] at hg1
+    · exact Or.inl rfl
+    · exact Or.inr (Or.inl rfl)
+  · cases sc2 <;> simp [isGridAtomicScope] at hg2
+    · exact Or.inl rfl
+    · exact Or.inr (Or.inl rfl)
 
 /-- Extract `some c` when `hyp` syntactically entails `t.tx = c` (direct `tid == c` or `warp == w ∧ lane == l`). -/
 def findEqTidX : SymBool → Option Nat
@@ -808,6 +864,7 @@ theorem vcNoSharedRace_of_table {f : MirFunc} {cfg : ControlFlowCfg} {tbl : List
                  (p.1.isWrite || p.2.isWrite) &&
                  !(p.1.phaseSpec.disjoint p.2.phaseSpec) &&
                  !(symAsyncOrdered f p.1 p.2) &&
+                 !(symSharedAtomicOrdered p.1 p.2) &&
                  !(symPinsSameThread f p.1 p.2)).map fun p =>
                    (p.1, p.2, extractAsyncSlotPair f p.1 p.2)) = pairs)
     (hvc : ∀ env : InputEnv, ∀ t₁ t₂ : ThreadCtx, ∀ h₁ h₂ : Nat → Nat, -- For ANY two threads `t₁, t₂` in the same CTA:
@@ -823,69 +880,174 @@ theorem vcNoSharedRace_of_table {f : MirFunc} {cfg : ControlFlowCfg} {tbl : List
              (t₁.tx = t₂.tx ∧ t₁.ty = t₂.ty))) ∧ acc) True) :
     MirNoSharedRace f cfg sharedId := by
   refine ⟨hunif, ?_⟩                                        -- Supply `UniformBarriers cfg` for phase alignment
-  intro env t₁ t₂ ev₁ ev₂ hIn hT1 hT2 hbx hby hem1 hem2 hsp1 hsp2 hb1 hb2 hph hnotOrd hw hidx
-  obtain ⟨h₁, s1, hs1, i1, k1, hk1, hd1, hw1, hssp1, hsbid1, hab1, ho1, hi1, hpc1, hps1⟩ :=
-    emitsEvent_mem_collect hvalid hIn hem1
-  obtain ⟨h₂, s2, hs2, i2, k2, hk2, hd2, hw2, hssp2, hsbid2, hab2, ho2, hi2, hpc2, hps2⟩ :=
-    emitsEvent_mem_collect hvalid hIn hem2
+  intro env t₁ t₂ ev₁ ev₂ hIn hT1 hT2 hbx hby hem1 hem2 hsp1 hsp2 hb1 hb2 hph hnotOrd hnotAt hw hidx
+  obtain ⟨h₁, s1, hs1, i1, k1, hk1, hd1, hw1, hssp1, hsbid1, hab1, hasc1, ho1, hi1, hpc1, hps1⟩ :=
+    emitsEvent_mem_collect hvalid hIn hT1 hem1
+  obtain ⟨h₂, s2, hs2, i2, k2, hk2, hd2, hw2, hssp2, hsbid2, hab2, hasc2, ho2, hi2, hpc2, hps2⟩ :=
+    emitsEvent_mem_collect hvalid hIn hT2 hem2
   by_cases hdisj : s1.phaseSpec.disjoint s2.phaseSpec = true
   · exact False.elim (phaseSpec_disjoint_sound hdisj hps1 hps2 hph)
   · by_cases haord : symAsyncOrdered f s1 s2 = true
     · exact False.elim (hnotOrd (symAsyncOrdered_sound haord hab1 hab2 hpc1 hpc2))
-    · by_cases hpin : symPinsSameThread f s1 s2 = true
-      · exact symPinsSameThread_sound hT1 hT2 hbx hby hpin hpc1 hpc2
-      · rw [hmem] at hs1 hs2
-        have hm1 : s1 ∈ dedupEvents (memEvs.filter (fun s => s.space == .shared && s.bufId == sharedId)) := by
-          apply mem_dedupEvents; rw [List.mem_filter]; exact ⟨hs1, by simp [hssp1, hsp1, hsbid1, hb1]⟩
-        have hm2 : s2 ∈ dedupEvents (memEvs.filter (fun s => s.space == .shared && s.bufId == sharedId)) := by
-          apply mem_dedupEvents; rw [List.mem_filter]; exact ⟨hs2, by simp [hssp2, hsp2, hsbid2, hb2]⟩
-        have hwOr : (s1.isWrite || s2.isWrite) = true := by
-          rw [hw1, hw2]; rcases hw with hwL | hwR <;> simp_all
-        have hnd : (!(s1.phaseSpec.disjoint s2.phaseSpec)) = true := by
-          cases hc : s1.phaseSpec.disjoint s2.phaseSpec <;> simp_all
-        have hna : (!(symAsyncOrdered f s1 s2)) = true := by
-          cases hc : symAsyncOrdered f s1 s2 <;> simp_all
-        have hnp : (!(symPinsSameThread f s1 s2)) = true := by
-          cases hc : symPinsSameThread f s1 s2 <;> simp_all
-        rcases mem_upperTriPairs hm1 hm2 with h12 | h21
-        · have hpair : (s1, s2, extractAsyncSlotPair f s1 s2) ∈ pairs := by
-            rw [← hpairs, List.mem_map]
-            refine ⟨(s1, s2), List.mem_filter.mpr ⟨h12, ?_⟩, rfl⟩
-            simp [hwOr, hnd, hna, hnp]
-          have hp0 := foldr_and_of_mem _ (foldr_holds2_to_eval pairs (hvc env t₁ t₂ h₁ h₂ hIn hT1 hT2 hbx hby))
-            (s1, s2, extractAsyncSlotPair f s1 s2) hpair hpc1 hpc2
-          have hp := symAsyncSlotGuard_sound hab1 hab2 hpc1 hpc2 hnotOrd hp0
-          rw [ho1, ho2] at hp; dsimp only [Option.getD] at hp
-          have heqIdx : (i1.eval env t₁ h₁ + k1) / s1.elemDiv = (i2.eval env t₂ h₂ + k2) / s2.elemDiv := by
-            rw [hi1, hi2, hidx]
-          obtain ⟨htx, hty⟩ := symPairRaceOblig_sound hk1 hd1 hk2 hd2 hp heqIdx
-          cases t₁; cases t₂; simp_all
-        · have hnotOrd2 : ¬ asyncOrdered f env ev₂ ev₁ := fun ho => hnotOrd ho.symm
-          by_cases hdisj2 : s2.phaseSpec.disjoint s1.phaseSpec = true
-          · exact False.elim (phaseSpec_disjoint_sound hdisj2 hps2 hps1 hph.symm)
-          · by_cases haord2 : symAsyncOrdered f s2 s1 = true
-            · exact False.elim (hnotOrd2 (symAsyncOrdered_sound haord2 hab2 hab1 hpc2 hpc1))
-            · by_cases hpin2 : symPinsSameThread f s2 s1 = true
-              · exact (symPinsSameThread_sound hT2 hT1 hbx.symm hby.symm hpin2 hpc2 hpc1).symm
-              · have hpair : (s2, s1, extractAsyncSlotPair f s2 s1) ∈ pairs := by
-                  rw [← hpairs, List.mem_map]
-                  refine ⟨(s2, s1), List.mem_filter.mpr ⟨h21, ?_⟩, rfl⟩
-                  have hwOr2 : (s2.isWrite || s1.isWrite) = true := by rw [Bool.or_comm]; exact hwOr
-                  have hnd2 : (!(s2.phaseSpec.disjoint s1.phaseSpec)) = true := by
-                    cases hc : s2.phaseSpec.disjoint s1.phaseSpec <;> simp_all
-                  have hna2 : (!(symAsyncOrdered f s2 s1)) = true := by
-                    cases hc : symAsyncOrdered f s2 s1 <;> simp_all
-                  have hnp2 : (!(symPinsSameThread f s2 s1)) = true := by
-                    cases hc : symPinsSameThread f s2 s1 <;> simp_all
-                  simp [hwOr2, hnd2, hna2, hnp2]
-                have hp0 := foldr_and_of_mem _ (foldr_holds2_to_eval pairs (hvc env t₂ t₁ h₂ h₁ hIn hT2 hT1 hbx.symm hby.symm))
-                  (s2, s1, extractAsyncSlotPair f s2 s1) hpair hpc2 hpc1
-                have hp := symAsyncSlotGuard_sound hab2 hab1 hpc2 hpc1 hnotOrd2 hp0
-                rw [ho2, ho1] at hp; dsimp only [Option.getD] at hp
-                have heqIdx : (i2.eval env t₂ h₂ + k2) / s2.elemDiv = (i1.eval env t₁ h₁ + k1) / s1.elemDiv := by
-                  rw [hi2, hi1, hidx]
-                obtain ⟨htx, hty⟩ := symPairRaceOblig_sound hk2 hd2 hk1 hd1 hp heqIdx
-                cases t₁; cases t₂; simp_all
+    · by_cases hatm : symSharedAtomicOrdered s1 s2 = true
+      · exact False.elim (hnotAt (symSharedAtomicOrdered_sound hbx hby hatm hasc1 hasc2))
+      · by_cases hpin : symPinsSameThread f s1 s2 = true
+        · exact symPinsSameThread_sound hT1 hT2 hbx hby hpin hpc1 hpc2
+        · rw [hmem] at hs1 hs2
+          have hm1 : s1 ∈ dedupEvents (memEvs.filter (fun s => s.space == .shared && s.bufId == sharedId)) := by
+            apply mem_dedupEvents; rw [List.mem_filter]; exact ⟨hs1, by simp [hssp1, hsp1, hsbid1, hb1]⟩
+          have hm2 : s2 ∈ dedupEvents (memEvs.filter (fun s => s.space == .shared && s.bufId == sharedId)) := by
+            apply mem_dedupEvents; rw [List.mem_filter]; exact ⟨hs2, by simp [hssp2, hsp2, hsbid2, hb2]⟩
+          have hwOr : (s1.isWrite || s2.isWrite) = true := by
+            rw [hw1, hw2]; rcases hw with hwL | hwR <;> simp_all
+          have hnd : (!(s1.phaseSpec.disjoint s2.phaseSpec)) = true := by
+            cases hc : s1.phaseSpec.disjoint s2.phaseSpec <;> simp_all
+          have hna : (!(symAsyncOrdered f s1 s2)) = true := by
+            cases hc : symAsyncOrdered f s1 s2 <;> simp_all
+          have hnat : (!(symSharedAtomicOrdered s1 s2)) = true := by
+            cases hc : symSharedAtomicOrdered s1 s2 <;> simp_all
+          have hnp : (!(symPinsSameThread f s1 s2)) = true := by
+            cases hc : symPinsSameThread f s1 s2 <;> simp_all
+          rcases mem_upperTriPairs hm1 hm2 with h12 | h21
+          · have hpair : (s1, s2, extractAsyncSlotPair f s1 s2) ∈ pairs := by
+              rw [← hpairs, List.mem_map]
+              refine ⟨(s1, s2), List.mem_filter.mpr ⟨h12, ?_⟩, rfl⟩
+              simp [hwOr, hnd, hna, hnat, hnp]
+            have hp0 := foldr_and_of_mem _ (foldr_holds2_to_eval pairs (hvc env t₁ t₂ h₁ h₂ hIn hT1 hT2 hbx hby))
+              (s1, s2, extractAsyncSlotPair f s1 s2) hpair hpc1 hpc2
+            have hp := symAsyncSlotGuard_sound hab1 hab2 hpc1 hpc2 hnotOrd hp0
+            rw [ho1, ho2] at hp; dsimp only [Option.getD] at hp
+            have heqIdx : (i1.eval env t₁ h₁ + k1) / s1.elemDiv = (i2.eval env t₂ h₂ + k2) / s2.elemDiv := by
+              rw [hi1, hi2, hidx]
+            obtain ⟨htx, hty⟩ := symPairRaceOblig_sound hk1 hd1 hk2 hd2 hp heqIdx
+            cases t₁; cases t₂; simp_all
+          · have hnotOrd2 : ¬ asyncOrdered f env ev₂ ev₁ := fun ho => hnotOrd ho.symm
+            have hnotAt2 : ¬ morallyStrongAtomic t₂ t₁ ev₂ ev₁ := by
+              intro hm; apply hnotAt
+              by_cases hat2 : symSharedAtomicOrdered s2 s1 = true
+              · have hat1 : symSharedAtomicOrdered s1 s2 = true := by
+                  unfold symSharedAtomicOrdered at hat2 ⊢; rw [Bool.and_comm]; exact hat2
+                exact symSharedAtomicOrdered_sound hbx hby hat1 hasc1 hasc2
+              · unfold morallyStrongAtomic at hm
+                cases hsc2 : ev₂.atomicScope <;> cases hsc1 : ev₁.atomicScope <;> rw [hsc2, hsc1] at hm <;> try contradiction
+                exfalso; apply hat2; unfold symSharedAtomicOrdered; rw [hasc2, hasc1, hsc2, hsc1]; rfl
+            by_cases hdisj2 : s2.phaseSpec.disjoint s1.phaseSpec = true
+            · exact False.elim (phaseSpec_disjoint_sound hdisj2 hps2 hps1 hph.symm)
+            · by_cases haord2 : symAsyncOrdered f s2 s1 = true
+              · exact False.elim (hnotOrd2 (symAsyncOrdered_sound haord2 hab2 hab1 hpc2 hpc1))
+              · by_cases hatm2 : symSharedAtomicOrdered s2 s1 = true
+                · exact False.elim (hnotAt2 (symSharedAtomicOrdered_sound hbx.symm hby.symm hatm2 hasc2 hasc1))
+                · by_cases hpin2 : symPinsSameThread f s2 s1 = true
+                  · exact (symPinsSameThread_sound hT2 hT1 hbx.symm hby.symm hpin2 hpc2 hpc1).symm
+                  · have hpair : (s2, s1, extractAsyncSlotPair f s2 s1) ∈ pairs := by
+                      rw [← hpairs, List.mem_map]
+                      refine ⟨(s2, s1), List.mem_filter.mpr ⟨h21, ?_⟩, rfl⟩
+                      have hwOr2 : (s2.isWrite || s1.isWrite) = true := by rw [Bool.or_comm]; exact hwOr
+                      have hnd2 : (!(s2.phaseSpec.disjoint s1.phaseSpec)) = true := by
+                        cases hc : s2.phaseSpec.disjoint s1.phaseSpec <;> simp_all
+                      have hna2 : (!(symAsyncOrdered f s2 s1)) = true := by
+                        cases hc : symAsyncOrdered f s2 s1 <;> simp_all
+                      have hnat2 : (!(symSharedAtomicOrdered s2 s1)) = true := by
+                        cases hc : symSharedAtomicOrdered s2 s1 <;> simp_all
+                      have hnp2 : (!(symPinsSameThread f s2 s1)) = true := by
+                        cases hc : symPinsSameThread f s2 s1 <;> simp_all
+                      simp [hwOr2, hnd2, hna2, hnat2, hnp2]
+                    have hp0 := foldr_and_of_mem _ (foldr_holds2_to_eval pairs (hvc env t₂ t₁ h₂ h₁ hIn hT2 hT1 hbx.symm hby.symm))
+                      (s2, s1, extractAsyncSlotPair f s2 s1) hpair hpc2 hpc1
+                    have hp := symAsyncSlotGuard_sound hab2 hab1 hpc2 hpc1 hnotOrd2 hp0
+                    rw [ho2, ho1] at hp; dsimp only [Option.getD] at hp
+                    have heqIdx : (i2.eval env t₂ h₂ + k2) / s2.elemDiv = (i1.eval env t₁ h₁ + k1) / s1.elemDiv := by
+                      rw [hi2, hi1, hidx]
+                    obtain ⟨htx, hty⟩ := symPairRaceOblig_sound hk2 hd2 hk1 hd1 hp heqIdx
+                    cases t₁; cases t₂; simp_all
+
+/-- Soundness of `vcNoGlobalRace` (`no_data_race(slice_param)`) from `memEvs = collectSymMemEvents f tbl`:
+    - Device/system atomic pairs are pruned in `O(1)` via `symGlobalAtomicOrdered`,
+    - Block-scoped (`.cta`) atomic pairs reduce to `t₁.bx = t₂.bx ∧ t₁.by_ = t₂.by_` (same CTA),
+    - Non-atomic or mixed atomic/non-atomic pairs require full thread identity `t₁ = t₂`. -/
+theorem vcNoGlobalRace_of_table {f : MirFunc} {tbl : List SymBlockInv}
+    {memEvs : List SymMemEvent} {paramId : Nat}
+    {pairs : List (SymMemEvent × SymMemEvent)}
+    (hvalid : validSymFunc f tbl = true)
+    (hmem : collectSymMemEvents f tbl = memEvs)
+    (hpairs : (let sevs := dedupEvents (memEvs.filter fun s => s.space == .global && s.bufId == paramId)
+               (upperTriPairs sevs).filter fun p =>
+                 (p.1.isWrite || p.2.isWrite) && !(symGlobalAtomicOrdered p.1 p.2)) = pairs)
+    (hvc : ∀ env : InputEnv, ∀ t₁ t₂ : ThreadCtx, ∀ h₁ h₂ : Nat → Nat, -- For ANY two threads `t₁, t₂` and loop states `h₁, h₂`:
+      f.validInput env → f.validThread t₁ → f.validThread t₂ →
+      pairs.foldr (fun p acc =>
+        (p.1.pathCond.holds env t₁ h₁ →                                -- IF both events' path conditions hold
+         p.2.pathCond.holds env t₂ h₂ →                                -- AND their global element indices collide,
+         symPairRaceOblig p.1 p.2
+           ((p.1.indexOpt.getD (.const 0)).eval env t₁ h₁)
+           ((p.2.indexOpt.getD (.const 0)).eval env t₂ h₂)
+           (if symSharedAtomicOrdered p.1 p.2 then                     -- THEN `.cta` atomic pairs require same CTA (`bx, by_`),
+              t₁.bx = t₂.bx ∧ t₁.by_ = t₂.by_                          -- while non-atomic / mixed pairs require `t₁ = t₂`.
+            else
+              t₁.bx = t₂.bx ∧ t₁.by_ = t₂.by_ ∧ t₁.tx = t₂.tx ∧ t₁.ty = t₂.ty)) ∧ acc) True) :
+    MirNoGlobalRace f paramId := by
+  intro env t₁ t₂ ev₁ ev₂ hIn hT1 hT2 hem1 hem2 hsp1 hsp2 hb1 hb2 hnotAt hw hidx
+  obtain ⟨h₁, s1, hs1, i1, k1, hk1, hd1, hw1, hssp1, hsbid1, _, hasc1, ho1, hi1, hpc1, _⟩ :=
+    emitsEvent_mem_collect hvalid hIn hT1 hem1
+  obtain ⟨h₂, s2, hs2, i2, k2, hk2, hd2, hw2, hssp2, hsbid2, _, hasc2, ho2, hi2, hpc2, _⟩ :=
+    emitsEvent_mem_collect hvalid hIn hT2 hem2
+  by_cases hgord : symGlobalAtomicOrdered s1 s2 = true
+  · exact False.elim (hnotAt (symGlobalAtomicOrdered_sound hgord hasc1 hasc2))
+  · rw [hmem] at hs1 hs2
+    have hm1 : s1 ∈ dedupEvents (memEvs.filter (fun s => s.space == .global && s.bufId == paramId)) := by
+      apply mem_dedupEvents; rw [List.mem_filter]; exact ⟨hs1, by simp [hssp1, hsp1, hsbid1, hb1]⟩
+    have hm2 : s2 ∈ dedupEvents (memEvs.filter (fun s => s.space == .global && s.bufId == paramId)) := by
+      apply mem_dedupEvents; rw [List.mem_filter]; exact ⟨hs2, by simp [hssp2, hsp2, hsbid2, hb2]⟩
+    have hwOr : (s1.isWrite || s2.isWrite) = true := by
+      rw [hw1, hw2]; rcases hw with hwL | hwR <;> simp_all
+    have hng : (!(symGlobalAtomicOrdered s1 s2)) = true := by
+      cases hc : symGlobalAtomicOrdered s1 s2 <;> simp_all
+    rcases mem_upperTriPairs hm1 hm2 with h12 | h21
+    · have hpair : (s1, s2) ∈ pairs := by
+        rw [← hpairs, List.mem_filter]; exact ⟨h12, by simp [hwOr, hng]⟩
+      have hp := foldr_and_of_mem _ (foldr_holds2_to_eval pairs (hvc env t₁ t₂ h₁ h₂ hIn hT1 hT2)) (s1, s2) hpair hpc1 hpc2
+      rw [ho1, ho2] at hp; dsimp only [Option.getD] at hp
+      have heqIdx : (i1.eval env t₁ h₁ + k1) / s1.elemDiv = (i2.eval env t₂ h₂ + k2) / s2.elemDiv := by
+        rw [hi1, hi2, hidx]
+      have hres := symPairRaceOblig_sound hk1 hd1 hk2 hd2 hp heqIdx
+      by_cases hcta : symSharedAtomicOrdered s1 s2 = true
+      · rw [if_pos hcta] at hres
+        exact False.elim (hnotAt (symSharedAtomicOrdered_sound hres.1 hres.2 hcta hasc1 hasc2))
+      · rw [if_neg hcta] at hres
+        rcases hres with ⟨hbx, hby, htx, hty⟩; cases t₁; cases t₂; simp_all
+    · have hnotAt2 : ¬ morallyStrongAtomic t₂ t₁ ev₂ ev₁ := by
+        intro hm; apply hnotAt; unfold morallyStrongAtomic at hm ⊢
+        cases hsc1 : ev₁.atomicScope <;> cases hsc2 : ev₂.atomicScope <;>
+          rw [hsc2, hsc1] at hm <;> try contradiction
+        dsimp only at hm ⊢
+        rcases hm with ⟨hm2, hm1⟩
+        refine ⟨?_, ?_⟩
+        · rcases hm1 with h | h | ⟨h, hbx, hby⟩
+          · exact Or.inl h
+          · exact Or.inr (Or.inl h)
+          · exact Or.inr (Or.inr ⟨h, hbx.symm, hby.symm⟩)
+        · rcases hm2 with h | h | ⟨h, hbx, hby⟩
+          · exact Or.inl h
+          · exact Or.inr (Or.inl h)
+          · exact Or.inr (Or.inr ⟨h, hbx.symm, hby.symm⟩)
+      by_cases hgord2 : symGlobalAtomicOrdered s2 s1 = true
+      · exact False.elim (hnotAt2 (symGlobalAtomicOrdered_sound hgord2 hasc2 hasc1))
+      · have hpair : (s2, s1) ∈ pairs := by
+          rw [← hpairs, List.mem_filter]
+          have hwOr2 : (s2.isWrite || s1.isWrite) = true := by rw [Bool.or_comm]; exact hwOr
+          have hng2 : (!(symGlobalAtomicOrdered s2 s1)) = true := by
+            cases hc : symGlobalAtomicOrdered s2 s1 <;> simp_all
+          exact ⟨h21, by simp [hwOr2, hng2]⟩
+        have hp := foldr_and_of_mem _ (foldr_holds2_to_eval pairs (hvc env t₂ t₁ h₂ h₁ hIn hT2 hT1)) (s2, s1) hpair hpc2 hpc1
+        rw [ho2, ho1] at hp; dsimp only [Option.getD] at hp
+        have heqIdx : (i2.eval env t₂ h₂ + k2) / s2.elemDiv = (i1.eval env t₁ h₁ + k1) / s1.elemDiv := by
+          rw [hi2, hi1, hidx]
+        have hres := symPairRaceOblig_sound hk2 hd2 hk1 hd1 hp heqIdx
+        by_cases hcta2 : symSharedAtomicOrdered s2 s1 = true
+        · rw [if_pos hcta2] at hres
+          exact False.elim (hnotAt2 (symSharedAtomicOrdered_sound hres.1 hres.2 hcta2 hasc2 hasc1))
+        · rw [if_neg hcta2] at hres
+          rcases hres with ⟨hbx, hby, htx, hty⟩; cases t₁; cases t₂; simp_all
 
 /-- Soundness of `vcAssertRedundant` from pre-computed `assEvs = collectSymAssertEvents f tbl`. -/
 theorem vcAssertRedundant_of_table {f : MirFunc} {tbl : List SymBlockInv}
@@ -900,7 +1062,7 @@ theorem vcAssertRedundant_of_table {f : MirFunc} {tbl : List SymBlockInv}
          (aev.condOpt.getD (.lit false)).holds env t havoc) ∧ acc) True) :
     MirAssertRedundant f assertId := by
   intro env t b phase regs hIn hTh hreach pfx sfx cond hstmts -- Step 1: Pick any reachable block `b` containing `assertCond assertId cond`
-  obtain ⟨hb, hr, havoc, hpc, hps, hm⟩ := symReachable_sound hvalid hIn hreach -- Step 2: Obtain block `b`'s symbolic invariant match
+  obtain ⟨hb, hr, havoc, hpc, hps, hm⟩ := symReachable_sound hvalid hIn hTh hreach -- Step 2: Obtain block `b`'s symbolic invariant match
   have hvf := hvalid
   unfold validSymFunc at hvf
   simp only [Bool.and_eq_true, decide_eq_true_eq] at hvf
@@ -955,7 +1117,7 @@ theorem vcNoOobTmem_of_table {f : MirFunc} {tbl : List SymBlockInv}
     MirNoOobTmem f := by
   intro env t tev hIn hTh hemits                            -- Step 1: Pick any CTA thread `t` and `TMEM` access `tev`
   obtain ⟨havoc, stev, hstev, relS, hac, hhl, hwc, hwr, hro, hre, hpc⟩ :=
-    emitsTmemEvent_mem_collect hvalid hIn hemits            -- Step 2: Map `tev` to its symbolic `SymTmemEvent` `stev`
+    emitsTmemEvent_mem_collect hvalid hIn hTh hemits        -- Step 2: Map `tev` to its symbolic `SymTmemEvent` `stev`
   rw [htmem, hevs] at hstev
   have hp := foldr_and_of_mem _ (foldr_holds_to_eval tevs (hvc env t havoc hIn hTh)) stev hstev hpc -- Step 3: Extract `omega`'s VC proof
   rw [hro] at hp; dsimp only [Option.getD] at hp            -- Step 4: Unwrap `stev.relAddrOpt = some relS`
@@ -1037,15 +1199,15 @@ theorem symRankEventsOfStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadC
               exact ⟨rev, hmem, hp, hrEq⟩
           | copy _ | constInt _ _ | constBool _ | sreg _ | index1D | coord2DU32 | paramScalar _ | slicePtr _
           | sliceLen _ | sharedBase _ | binOp _ _ _ _ | checkedOvf _ _ _ _ | cmpOp _ _ _ | notBool _ | intCast _ _
-          | ptrOffset _ _ | mbarTryWait _ _ _ | cvtaShared _ | opaqueUint _ _ | ctaUint1 _ _ _ | ctaConst | ctaUnary _ | ctaBin _ _ | opaqueVal =>
+          | ptrOffset _ _ | mbarTryWait _ _ _ | cvtaShared _ | atomicOp _ _ _ _ _ | opaqueUint _ _ | ctaUint1 _ _ _ | ctaConst | ctaUnary _ | ctaBin _ _ | opaqueVal =>
               obtain ⟨rev, hmem, hp, hrEq⟩ := symRankEventsOfStmts_correct f env t havoc pCond term
-                rest tl sfx _ _ phase rv r hnextGen htl (by simpa [execStmts] using hr)
+                rest tl sfx _ _ phase rv r hnextGen htl (by simpa [execStmts, evalRhs] using hr)
               exact ⟨rev, hmem, hp, hrEq⟩
       | clusterRankCheck rv0 =>
           obtain ⟨rev, hmem, hp, hrEq⟩ := symRankEventsOfStmts_correct f env t havoc pCond term
             rest tl sfx regs sregs phase rv r hmatch htl (by simpa [execStmts] using hr)
           exact ⟨rev, List.Mem.tail _ hmem, hp, hrEq⟩
-      | store _ _ | barrierSlotCheck _ | assertCond _ _ | mbarArrive _ _ _ | mbarArriveExpectTx _ _ _
+      | store _ _ | atomicStore _ _ _ | barrierSlotCheck _ | assertCond _ _ | mbarArrive _ _ _ | mbarArriveExpectTx _ _ _
       | tmaCopyG2S _ _ _ _ | tmemAlloc _ _ | smemDescRead _ _ | tmemAccess _ _ _ _ =>
           obtain ⟨rev, hmem, hp, hrEq⟩ := symRankEventsOfStmts_correct f env t havoc pCond term
             rest tl sfx regs sregs phase rv r hmatch htl (by simpa [execStmts] using hr)
@@ -1082,7 +1244,7 @@ theorem vcNoOobClusterRank_of_table {f : MirFunc} {tbl : List SymBlockInv}
          symRankInBounds rev env t havoc f.clusterDimX) ∧ acc) True) :
     MirNoOobClusterRank f := by
   intro env t b phase regs hIn hTh hreach pfx sfx rankVar r hstmts hr -- Step 1: Pick any reachable `clusterRankCheck rankVar`
-  obtain ⟨hb, hrch, havoc, hpc, _, hm⟩ := symReachable_sound hvalid hIn hreach -- Step 2: Obtain block `b`'s symbolic invariant match
+  obtain ⟨hb, hrch, havoc, hpc, _, hm⟩ := symReachable_sound hvalid hIn hTh hreach -- Step 2: Obtain block `b`'s symbolic invariant match
   obtain ⟨rev, hrevMem, hpce, hrEq⟩ := symRankEventsOfStmts_correct f env t havoc
     (tbl.getD b {}).effCond (f.blockAt b).term (f.blockAt b).stmts pfx sfx regs (tbl.getD b {}).regs phase rankVar r hm hstmts hr
   have hfMem : rev ∈ revs := by                             -- Step 3: Show `rev` belongs to `symRankEvents`
@@ -1179,6 +1341,13 @@ theorem findBlockGlobalWrite_sound (f : MirFunc) (paramId : Nat) (env : InputEnv
               exact ⟨hr, hnt, fun idxSym hs => by
                 obtain ⟨ev, hev, hprops⟩ := hw idxSym hs
                 exact ⟨ev, List.mem_append_right _ hev, hprops⟩⟩
+          | atomicOp isW scope ptr id w =>
+              obtain ⟨hr, hnt, hw⟩ := findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest _ _ phase hnextGen
+              refine ⟨by simpa [findBlockGlobalWrite, execStmts, evalRhs] using hr,
+                      by simpa [findBlockGlobalWrite, stmtsNoTrap, evalRhs] using hnt,
+                      fun idxSym hs => ?_⟩
+              obtain ⟨ev, hev, hprops⟩ := hw idxSym (by simpa [findBlockGlobalWrite] using hs)
+              exact ⟨ev, List.mem_append_right _ (by simpa [evalRhs] using hev), hprops⟩
           | copy _ | constInt _ _ | constBool _ | sreg _ | index1D | coord2DU32 | paramScalar _ | slicePtr _
           | sliceLen _ | sharedBase _ | binOp _ _ _ _ | checkedOvf _ _ _ _ | cmpOp _ _ _ | notBool _ | intCast _ _
           | ptrOffset _ _ | mbarTryWait _ _ _ | cvtaShared _ | opaqueUint _ _ | ctaUint1 _ _ _ | ctaConst | ctaUnary _ | ctaBin _ _ | opaqueVal =>
@@ -1248,7 +1417,7 @@ theorem findBlockGlobalWrite_sound (f : MirFunc) (paramId : Nat) (env : InputEnv
                   split at hcur <;> contradiction
       | syncThreads =>
           exact findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest regs sregs (phase + 1) hmatch
-      | barrierSlotCheck _ | tmaCopyG2S _ _ _ _ | tmemAlloc _ _ | smemDescRead _ _ =>
+      | atomicStore _ _ _ | barrierSlotCheck _ | tmaCopyG2S _ _ _ _ | tmemAlloc _ _ | smemDescRead _ _ =>
           obtain ⟨hr, hnt, hw⟩ := findBlockGlobalWrite_sound f paramId env t havoc pCond hpc term rest regs sregs phase hmatch
           exact ⟨hr, hnt, fun idxSym hs => by
             obtain ⟨ev, hev, hprops⟩ := hw idxSym hs

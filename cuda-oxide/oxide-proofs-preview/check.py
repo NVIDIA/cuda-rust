@@ -27,10 +27,15 @@ REJECTED = (
     ("tests/program/RejectedUnknownGuard.lean", "branch pruned on an untracked guard"),
     ("tests/program/RejectedUnknownWriteCoverage.lean", "write coverage claimed across an untracked guard"),
     ("tests/program/RejectedDivergentLoopUniformity.lean", "barrier loop bounded by a split-thread join"),
+    ("RejectedMixedAtomicRace.lean", "mixed atomic and non-atomic access on global slice"),
+    ("RejectedCrossBlockCtaAtomic.lean", "CTA-scoped BlockAtomic on global slice across blocks"),
 )
 # Refused by the CTA state machine: `decide` evaluates `checkUniformBarriersWith` to `false`.
 REJECTED_BARRIERS = (
     ("RejectedTmaReadAfterSync.lean", "TMA destination read after sync_threads without an mbarrier wait"),
+    ("RejectedDivergentEarlyReturn.lean", "thread-divergent early return before sync_threads"),
+    ("RejectedConditionalUniformInit.lean", "conditional uniform diamond leaving shared memory uninitialized"),
+    ("RejectedDivergentWarpVote.lean", "full-warp vote collective inside sub-warp divergent guard"),
 )
 
 

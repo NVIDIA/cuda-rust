@@ -1409,6 +1409,88 @@ pub fn emit_dynamic_shared_offset(
     )
 }
 
+/// Emit the tcgen05 shared-memory descriptor packing operation.
+///
+/// `cuda_device::tcgen05::tcgen05_smem_descriptor` has a real body for host
+/// code and constant evaluation. Device code gets `nvvm.tcgen05_smem_descriptor`
+/// instead of a call, so each backend chooses how to encode the descriptor.
+#[allow(clippy::too_many_arguments)]
+pub fn emit_tcgen05_smem_descriptor(
+    ctx: &mut Context,
+    body: &mir::Body,
+    args: &[mir::Operand],
+    destination: &mir::Place,
+    target: &Option<usize>,
+    block_ptr: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    value_map: &mut ValueMap,
+    block_map: &[Ptr<BasicBlock>],
+    loc: Location,
+) -> TranslationResult<Ptr<Operation>> {
+    use dialect_nvvm::ops::Tcgen05SmemDescriptorOp;
+    use pliron::builtin::types::Signedness;
+
+    if args.len() != 6 {
+        return input_err!(
+            loc.clone(),
+            TranslationErr::unsupported(format!(
+                "tcgen05_smem_descriptor expects 6 arguments, got {}",
+                args.len()
+            ))
+        );
+    }
+
+    let mut operands = Vec::with_capacity(args.len());
+    let mut last_op = prev_op;
+    for arg in args {
+        let (value, op) =
+            rvalue::translate_operand(ctx, body, arg, value_map, block_ptr, last_op, loc.clone())?;
+        operands.push(value);
+        last_op = op;
+    }
+
+    let (prepared_destination, last_op) = helpers::prepare_destination_write(
+        ctx,
+        body,
+        destination,
+        value_map,
+        block_ptr,
+        last_op,
+        loc.clone(),
+    )?;
+
+    let u64_ty = IntegerType::get(ctx, 64, Signedness::Unsigned);
+    let desc_op = Operation::new(
+        ctx,
+        Tcgen05SmemDescriptorOp::get_concrete_op_info(),
+        vec![u64_ty.into()],
+        operands,
+        vec![],
+        0,
+    );
+    desc_op.deref_mut(ctx).set_loc(loc.clone());
+
+    if let Some(prev) = last_op {
+        desc_op.insert_after(ctx, prev);
+    } else {
+        desc_op.insert_at_front(block_ptr, ctx);
+    }
+
+    let result_value = desc_op.deref(ctx).get_result(0);
+    helpers::emit_prepared_result_and_goto(
+        ctx,
+        prepared_destination,
+        result_value,
+        target,
+        block_ptr,
+        desc_op,
+        value_map,
+        block_map,
+        loc,
+        "tcgen05_smem_descriptor call without target block",
+    )
+}
+
 /// Emit a generic-to-shared conversion with the requested integer width.
 ///
 /// Converts a generic-address pointer into its raw `.shared` window offset,

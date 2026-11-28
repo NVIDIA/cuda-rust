@@ -5,13 +5,14 @@
 
 use dialect_mir::types::MirPtrType;
 use dialect_nvvm::ops::{
-    AssertFailOp, CvtaGenericToSharedOffsetOp, VprintfOp, WgmmaMakeSmemDescOp, WgmmaMaxPendingAttr,
-    WgmmaMmaGroupM64N64K16F32Bf16Op, WgmmaMmaGroupValuesM64N64K8F32Tf32Op,
-    WgmmaMmaGroupValuesM64N64K16F32Bf16Op, WgmmaMmaGroupValuesM64N64K16F32F16Op,
-    WgmmaMmaGroupValuesM64N128K16F32Bf16Op, WgmmaMmaLoopPipelineValuesM64N64K16F32Bf16Op,
-    WgmmaMmaLoopValuesM64N64K16F32Bf16Op, WgmmaMmaLoopValuesM64N64K16F32F16Op,
-    WgmmaMmaM64N64K8F32Tf32Op, WgmmaMmaM64N64K16F32Bf16Op, WgmmaMmaM64N64K16F32F16Op,
-    WgmmaMmaM64N128K16F32Bf16Op, WgmmaMmaPipelineValuesM64N64K16F32Bf16Op,
+    AssertFailOp, CvtaGenericToSharedOffsetOp, Tcgen05SmemDescriptorOp, VprintfOp,
+    WgmmaMakeSmemDescOp, WgmmaMaxPendingAttr, WgmmaMmaGroupM64N64K16F32Bf16Op,
+    WgmmaMmaGroupValuesM64N64K8F32Tf32Op, WgmmaMmaGroupValuesM64N64K16F32Bf16Op,
+    WgmmaMmaGroupValuesM64N64K16F32F16Op, WgmmaMmaGroupValuesM64N128K16F32Bf16Op,
+    WgmmaMmaLoopPipelineValuesM64N64K16F32Bf16Op, WgmmaMmaLoopValuesM64N64K16F32Bf16Op,
+    WgmmaMmaLoopValuesM64N64K16F32F16Op, WgmmaMmaM64N64K8F32Tf32Op, WgmmaMmaM64N64K16F32Bf16Op,
+    WgmmaMmaM64N64K16F32F16Op, WgmmaMmaM64N128K16F32Bf16Op,
+    WgmmaMmaPipelineValuesM64N64K16F32Bf16Op,
 };
 
 use pliron::{
@@ -933,4 +934,73 @@ fn handwritten_ffi_and_wgmma_carriers_verify_exact_shapes() {
         "unexpected missing-attribute error: {}",
         missing_attr_error.err
     );
+}
+
+#[test]
+fn tcgen05_smem_descriptor_verifies_its_field_types() {
+    let mut ctx = Context::new();
+    dialect_mir::register(&mut ctx);
+    dialect_nvvm::register(&mut ctx);
+
+    let u8_ty = IntegerType::get(&ctx, 8, Signedness::Unsigned);
+    let u32_ty = IntegerType::get(&ctx, 32, Signedness::Unsigned);
+    let u64_ty = IntegerType::get(&ctx, 64, Signedness::Unsigned);
+    // The importer types `bool` as a signless one-bit integer.
+    let bool_ty = IntegerType::get(&ctx, 1, Signedness::Signless);
+    let block = BasicBlock::new(
+        &mut ctx,
+        None,
+        vec![u32_ty.into(), u8_ty.into(), bool_ty.into(), u64_ty.into()],
+    );
+    let word = block.deref(&ctx).get_argument(0);
+    let byte = block.deref(&ctx).get_argument(1);
+    let flag = block.deref(&ctx).get_argument(2);
+    let wide = block.deref(&ctx).get_argument(3);
+
+    let fields = vec![wide, word, word, byte, flag, byte];
+    let descriptor = Operation::new(
+        &mut ctx,
+        Tcgen05SmemDescriptorOp::get_concrete_op_info(),
+        vec![u64_ty.into()],
+        fields.clone(),
+        vec![],
+        0,
+    );
+    assert!(
+        Tcgen05SmemDescriptorOp::new(descriptor)
+            .verify(&ctx)
+            .is_ok()
+    );
+
+    for (operands, results) in [
+        // The address is the u64 shared offset.
+        (
+            vec![word, word, word, byte, flag, byte],
+            vec![u64_ty.into()],
+        ),
+        // The leading-dimension mode is a bool.
+        (
+            vec![wide, word, word, byte, byte, byte],
+            vec![u64_ty.into()],
+        ),
+        // The swizzle mode is a u8.
+        (
+            vec![wide, word, word, byte, flag, word],
+            vec![u64_ty.into()],
+        ),
+        // The descriptor is a u64.
+        (fields.clone(), vec![u32_ty.into()]),
+        // Exact arity is required.
+        (fields[..5].to_vec(), vec![u64_ty.into()]),
+    ] {
+        let invalid = Operation::new(
+            &mut ctx,
+            Tcgen05SmemDescriptorOp::get_concrete_op_info(),
+            results,
+            operands,
+            vec![],
+            0,
+        );
+        assert!(Tcgen05SmemDescriptorOp::new(invalid).verify(&ctx).is_err());
+    }
 }

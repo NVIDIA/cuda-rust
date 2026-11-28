@@ -40,6 +40,9 @@ cluster synchronization, elected-lane results and multicast TMA. The
 [`fp16_gemm_256x352_cute`](../../cute-rs-preview/examples/fp16_gemm_256x352_cute)
 example exercises these together. It also preserves fixed cluster dimensions
 in `nvvm.cluster_dim` and the scalar order of compiler-created register arrays.
+A shared-memory operand descriptor built with `Tcgen05SmemDescriptor` is exported
+as one `nvvm.tcgen05_mma_smem_desc_v2` operation, not as the shifts and ors of
+its encoding, so the consumer sees which shared address an MMA reads.
 Unsupported primitive selectors and intrinsic identities fail at export.
 
 ## Primitive-only profile

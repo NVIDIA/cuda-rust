@@ -1308,38 +1308,66 @@ impl Tcgen05SmemDescriptorBuilder {
 
     /// Build the SMEM descriptor.
     ///
-    /// Encodes all settings into the 64-bit descriptor format.
+    /// Encodes all settings into the 64-bit descriptor format through
+    /// [`tcgen05_smem_descriptor`], so a device compiler sees one descriptor
+    /// operation instead of the shifts and ors of the encoding.
     #[inline(always)]
     pub const fn build(self) -> Tcgen05SmemDescriptor {
-        let mut raw: u64 = 0;
-
-        // Bits 0-13: (address >> 4) & 0x3FFF
-        raw |= (self.address >> 4) & 0x3FFF;
-
-        // Bits 16-29: (leading_dim_bytes >> 4) & 0x3FFF
-        raw |= (((self.leading_dim_bytes >> 4) & 0x3FFF) as u64) << 16;
-
-        // Bits 32-45: (stride_bytes >> 4) & 0x3FFF
-        raw |= (((self.stride_bytes >> 4) & 0x3FFF) as u64) << 32;
-
-        // Bits 46-48: Fixed = 0b001
-        raw |= 1u64 << 46;
-
-        // Bits 49-51: Base offset (3 bits)
-        raw |= ((self.base_offset & 0x7) as u64) << 49;
-
-        // Bit 52: Leading dim mode (0 = relative, 1 = absolute)
-        if self.leading_dim_absolute {
-            raw |= 1u64 << 52;
+        Tcgen05SmemDescriptor {
+            raw: tcgen05_smem_descriptor(
+                self.address,
+                self.leading_dim_bytes,
+                self.stride_bytes,
+                self.base_offset,
+                self.leading_dim_absolute,
+                self.swizzle as u8,
+            ),
         }
-
-        // Bits 53-60: Fixed = 0 (already zero)
-
-        // Bits 61-63: Swizzle mode (3 bits)
-        raw |= (self.swizzle as u64) << 61;
-
-        Tcgen05SmemDescriptor { raw }
     }
+}
+
+/// Pack the fields of a tcgen05 shared-memory descriptor into its 64-bit encoding.
+///
+/// The arguments are the fields of [`Tcgen05SmemDescriptorBuilder`]: the shared
+/// start address and the two offsets in bytes, the base offset, the leading
+/// dimension mode and the swizzle mode. The layout is the one documented on
+/// [`Tcgen05SmemDescriptor`]. The three byte values lose their low four bits
+/// and are masked to 14 bits, `base_offset` and `swizzle` are masked to 3 bits.
+///
+/// In device code the compiler replaces a call to this function with the
+/// descriptor operation `nvvm.tcgen05_smem_descriptor`. The native backend
+/// lowers that operation to the integer arithmetic of the body below. The
+/// CUTLASS MLIR backend exports it as `nvvm.tcgen05_mma_smem_desc_v2`. The body
+/// is the same encoding for constant evaluation and for host code, which is
+/// why this is a `const fn` with a real body and not an `unreachable!()` stub.
+///
+/// Most code should build descriptors with [`Tcgen05SmemDescriptor`] instead of
+/// calling this function.
+#[inline(never)]
+#[must_use]
+pub const fn tcgen05_smem_descriptor(
+    address: u64,
+    leading_dim_bytes: u32,
+    stride_bytes: u32,
+    base_offset: u8,
+    leading_dim_absolute: bool,
+    swizzle: u8,
+) -> u64 {
+    // Bits 0-13: (address >> 4) & 0x3FFF
+    ((address >> 4) & 0x3FFF)
+        // Bits 16-29: (leading_dim_bytes >> 4) & 0x3FFF
+        | ((((leading_dim_bytes >> 4) & 0x3FFF) as u64) << 16)
+        // Bits 32-45: (stride_bytes >> 4) & 0x3FFF
+        | ((((stride_bytes >> 4) & 0x3FFF) as u64) << 32)
+        // Bits 46-48: Fixed = 0b001
+        | (1u64 << 46)
+        // Bits 49-51: Base offset (3 bits)
+        | (((base_offset & 0x7) as u64) << 49)
+        // Bit 52: Leading dim mode (0 = relative, 1 = absolute)
+        | ((leading_dim_absolute as u64) << 52)
+        // Bits 53-60: Fixed = 0
+        // Bits 61-63: Swizzle mode (3 bits)
+        | (((swizzle & 0x7) as u64) << 61)
 }
 
 impl Default for Tcgen05SmemDescriptorBuilder {
@@ -1634,5 +1662,91 @@ mod tests {
             .build();
         assert_eq!((descriptor.raw() >> 7) & 0x7, 4);
         assert_eq!((descriptor.raw() >> 10) & 0x7, 5);
+    }
+
+    /// The shifts and ors `Tcgen05SmemDescriptorBuilder::build` used before it
+    /// called `tcgen05_smem_descriptor`, kept as an independent reference.
+    fn reference_smem_descriptor(
+        address: u64,
+        leading_dim_bytes: u32,
+        stride_bytes: u32,
+        base_offset: u8,
+        leading_dim_absolute: bool,
+        swizzle: Tcgen05SwizzleMode,
+    ) -> u64 {
+        let mut raw: u64 = 0;
+        raw |= (address >> 4) & 0x3FFF;
+        raw |= (((leading_dim_bytes >> 4) & 0x3FFF) as u64) << 16;
+        raw |= (((stride_bytes >> 4) & 0x3FFF) as u64) << 32;
+        raw |= 1u64 << 46;
+        raw |= ((base_offset & 0x7) as u64) << 49;
+        if leading_dim_absolute {
+            raw |= 1u64 << 52;
+        }
+        raw |= (swizzle as u64) << 61;
+        raw
+    }
+
+    #[test]
+    fn smem_descriptor_builder_keeps_its_encoding() {
+        let swizzles = [
+            Tcgen05SwizzleMode::None,
+            Tcgen05SwizzleMode::Swizzle128B32BAtom,
+            Tcgen05SwizzleMode::Swizzle128B,
+            Tcgen05SwizzleMode::Swizzle64B,
+            Tcgen05SwizzleMode::Swizzle32B,
+        ];
+        // In-range values, field boundaries, and values wider than a field.
+        let addresses = [0u64, 16, 0x1000, 0x3_FFF0, 0x4_0000, 0xFFFF_FFFF_FFFF_FFFF];
+        let offsets = [0u32, 16, 2048, 0x3_FFF0, 0x4_0000, 0xFFFF_FFFF];
+        for &address in &addresses {
+            for &leading in &offsets {
+                for &stride in &offsets {
+                    for base_offset in [0u8, 5, 7, 0xFF] {
+                        for absolute in [false, true] {
+                            for &swizzle in &swizzles {
+                                let built = Tcgen05SmemDescriptor::builder()
+                                    .address(address)
+                                    .leading_dim_bytes(leading)
+                                    .stride_bytes(stride)
+                                    .base_offset(base_offset)
+                                    .leading_dim_absolute(absolute)
+                                    .swizzle(swizzle)
+                                    .build()
+                                    .raw();
+                                assert_eq!(
+                                    built,
+                                    reference_smem_descriptor(
+                                        address,
+                                        leading,
+                                        stride,
+                                        base_offset,
+                                        absolute,
+                                        swizzle
+                                    )
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn smem_descriptor_constructors_match_known_bits() {
+        // 128x16 f16 K-major tile at shared offset 0x1000: LBO 2048, SBO 128.
+        let k_major =
+            Tcgen05SmemDescriptor::for_k_major(0x1000, 128, 16, 2, Tcgen05SwizzleMode::None);
+        assert_eq!(k_major.raw(), 0x0000_4008_0080_0100);
+        let mn_major =
+            Tcgen05SmemDescriptor::for_mn_major(0x1000, 128, 16, 2, Tcgen05SwizzleMode::None);
+        assert_eq!(mn_major.raw(), k_major.raw());
+        let from_bytes =
+            Tcgen05SmemDescriptor::from_bytes(0x1000, 16, 1024, Tcgen05SwizzleMode::Swizzle128B);
+        assert_eq!(from_bytes.raw(), 0x4000_4040_0001_0100);
+        // The encoding is still usable in constant evaluation.
+        const DESCRIPTOR: u64 = tcgen05_smem_descriptor(0x1000, 16, 1024, 0, false, 2);
+        assert_eq!(DESCRIPTOR, from_bytes.raw());
     }
 }

@@ -1598,6 +1598,62 @@ fn verifies_stage6_tcgen05_tmem_proxy_and_mbarrier_lifecycle() {
     );
 }
 
+/// The descriptor of operand A as `nvvm.tcgen05_smem_descriptor`, which is what
+/// `Tcgen05SmemDescriptorBuilder::build` imports as, in place of the written-out
+/// `shr`, `bitand` and `bitor` of the fixture. `address` names the byte offset.
+fn tcgen05_matmul_with_descriptor_op(prefix: &str, address: &str) -> String {
+    let written_out = "        a_shr = mir.shr (a_off, sh4) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;\n        a_m = mir.bitand (a_shr, mask_desc) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;\n        a_desc = mir.bitor (a_m, desc_flags) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;";
+    assert!(TCGEN05_MATMUL_FIXTURE.contains(written_out));
+    let operation = format!(
+        "{prefix}        a_lbo = mir.constant () [] [value: builtin.integer <2048: ui32>]: <() -> (builtin.integer ui32)>;\n        a_sbo = mir.constant () [] [value: builtin.integer <128: ui32>]: <() -> (builtin.integer ui32)>;\n        a_base = mir.constant () [] [value: builtin.integer <0: ui8>]: <() -> (builtin.integer ui8)>;\n        a_abs = mir.constant () [] [value: builtin.integer <0: i1>]: <() -> (builtin.integer i1)>;\n        a_swizzle = mir.constant () [] [value: builtin.integer <0: ui8>]: <() -> (builtin.integer ui8)>;\n        a_desc = nvvm.tcgen05_smem_descriptor ({address}, a_lbo, a_sbo, a_base, a_abs, a_swizzle) [] []: <(builtin.integer ui64, builtin.integer ui32, builtin.integer ui32, builtin.integer ui8, builtin.integer i1, builtin.integer ui8) -> (builtin.integer ui64)>;"
+    );
+    TCGEN05_MATMUL_FIXTURE.replacen(written_out, &operation, 1)
+}
+
+#[test]
+fn verifies_tcgen05_smem_descriptor_operation_like_the_written_out_encoding() {
+    let Some(lean_dir) = lean_package_dir_if_available() else {
+        return;
+    };
+
+    // 1. The descriptor operation on a verified `SharedArray` offset exports as
+    //    the same shared-memory read of the MMA and passes Lean 4.
+    let with_operation = tcgen05_matmul_with_descriptor_op("", "a_off");
+    let valid_lean = export_named_source(&with_operation, "tcgen05_matmul_verified")
+        .expect("the descriptor operation must export cleanly");
+    assert!(valid_lean.contains("(.smemDescRead"));
+    assert!(valid_lean.contains("theorem verify_tmem_lifecycle"));
+    lean_exporter::runner::check_generated_lean(&valid_lean, &lean_dir)
+        .expect("the descriptor operation must pass Lean 4 verification");
+
+    // 2. Negative: `smem_a_off + 2048` through the operation still overflows
+    //    the 4096-byte `SMEM_A`, as it does with the written-out encoding.
+    let byte_oob = tcgen05_matmul_with_descriptor_op(
+        "        c2048_off = mir.constant () [] [value: builtin.integer <2048: ui64>]: <() -> (builtin.integer ui64)>;\n        a_off_shifted = mir.add (a_off, c2048_off) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;\n",
+        "a_off_shifted",
+    );
+    let oob_lean = export_named_source(&byte_oob, "tcgen05_matmul_verified")
+        .expect("exports byte_offset + tile_bytes = 6144 against 4096-byte SMEM_A");
+    assert!(oob_lean.contains("(.smemDescRead"));
+    let err = lean_exporter::runner::check_generated_lean(&oob_lean, &lean_dir)
+        .expect_err("Lean 4 must reject `smem_a_off + 2048` through the descriptor operation");
+    assert!(
+        err.to_string().contains("omega could not prove the goal"),
+        "unexpected Lean error for SMEM descriptor byte offset overflow: {err}"
+    );
+
+    // 3. Negative: a descriptor whose address is not a verified `SharedArray`
+    //    offset is not a shared-memory operand the MMA may read.
+    let untracked = tcgen05_matmul_with_descriptor_op("", "sh4");
+    let err = export_named_source(&untracked, "tcgen05_matmul_verified")
+        .expect_err("an untracked descriptor address must be rejected");
+    assert!(
+        err.to_string()
+            .contains("must derive from `cvta_generic_to_shared_offset`"),
+        "unexpected error for an untracked descriptor address: {err}"
+    );
+}
+
 #[test]
 fn verifies_plain_mut_slice_and_rejects_unverified_wraparound_and_cross_thread_races() {
     let Some(lean_dir) = lean_package_dir_if_available() else {

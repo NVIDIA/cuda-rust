@@ -2501,6 +2501,13 @@ impl<'tcx> DeviceCollector<'tcx> {
         // Filter out problematic modules (intentional skip, not an error)
         let path = self.tcx.def_path_str(def_id);
 
+        // `tcgen05_smem_descriptor` has a real body for host code and constant
+        // evaluation. mir-importer replaces every device call to it with the
+        // descriptor operation, so the body never enters device codegen.
+        if path == "cuda_device::tcgen05::tcgen05_smem_descriptor" {
+            return CollectDecision::SkipIntentional;
+        }
+
         // Skip formatting and panic machinery (uses FnPtr types we can't translate)
         if path.contains("::fmt::") || path.contains("::panicking::") {
             return CollectDecision::SkipIntentional;

@@ -66,13 +66,44 @@ def asyncOrdered (f : MirFunc) (env : InputEnv) (ev₁ ev₂ : MemEvent) : Prop 
   (∃ b s : Nat, ev₂.syncBar = some (b, s) ∧ ev₁.syncBar = none ∧   -- `ev₂` released `BAR[s]`
                 f.hasValidBarSignal b = true ∧ env.mbarFlag b s = true)   -- and `BAR[s]` completed before `ev₁`.
 
+/-- PTX ISA §8.4 morally-strong atomic serialization: `ev₁` and `ev₂` are both atomic
+    operations (`atomicScope = some sc`) whose synchronization scopes include both
+    executing threads `(t₁, t₂)` (`.device` / `.system` across all CTAs, or `.block`
+    when `t₁` and `t₂` belong to the exact same CTA). -/
+def morallyStrongAtomic (t₁ t₂ : ThreadCtx) (ev₁ ev₂ : MemEvent) : Prop :=
+  match ev₁.atomicScope, ev₂.atomicScope with               -- Both accesses must be atomic (`none` fails immediately):
+  | some sc₁, some sc₂ =>
+      (sc₁ = .device ∨ sc₁ = .system ∨                      -- `ev₁`'s scope covers `(t₁, t₂)` across device/system
+        (sc₁ = .block ∧ t₁.bx = t₂.bx ∧ t₁.by_ = t₂.by_)) ∧ --   or within the same CTA (`bx₁ = bx₂ ∧ by₁ = by₂`), AND
+      (sc₂ = .device ∨ sc₂ = .system ∨                      -- `ev₂`'s scope also covers `(t₁, t₂)` across device/system
+        (sc₂ = .block ∧ t₁.bx = t₂.bx ∧ t₁.by_ = t₂.by_))   --   or within the same CTA.
+  | _, _ => False                                           -- Any mixed atomic + non-atomic pair is NEVER race-free.
+
+/-- **`no_data_race(slice_param)`**: On every valid launch input `env`, if two valid
+    GPU threads `t₁, t₂` perform conflicting global accesses on `paramId` at the same
+    element index (`ev₁.index = ev₂.index`, at least one being a write) that are NOT
+    serialized by morally-strong atomic operations (`¬ morallyStrongAtomic t₁ t₂ ev₁ ev₂`),
+    they must be the exact same GPU thread (`t₁ = t₂`). -/
+def MirNoGlobalRace (f : MirFunc) (paramId : Nat) : Prop :=
+  ∀ env : InputEnv, ∀ t₁ t₂ : ThreadCtx, ∀ ev₁ ev₂ : MemEvent, -- Pick ANY launch `env`, two threads `t₁, t₂`, and two events:
+    f.validInput env →                                      -- IF `env` satisfies launch preconditions,
+    f.validThread t₁ → f.validThread t₂ →                   -- AND both `t₁` and `t₂` are valid GPU threads,
+    EmitsEvent f env t₁ ev₁ → EmitsEvent f env t₂ ev₂ →     -- AND `t₁` emits `ev₁` while `t₂` emits `ev₂`,
+    ev₁.space = .global → ev₂.space = .global →             -- AND both events access global slice memory,
+    ev₁.bufId = paramId → ev₂.bufId = paramId →             -- AND both target slice parameter `paramId`,
+    ¬ morallyStrongAtomic t₁ t₂ ev₁ ev₂ →                   -- AND they are not serialized by morally-strong atomics,
+    (ev₁.isWrite = true ∨ ev₂.isWrite = true) →             -- AND at least one of the two accesses is a write,
+    ev₁.index = ev₂.index →                                 -- AND both compute the exact same element index,
+    t₁ = t₂                                                 -- THEN they are the exact same GPU thread.
+
 /-- **`no_data_race(SHARED)`**: Barrier synchronization is uniform across the CTA
     (`UniformBarriers cfg`, so per-thread `sync_threads()` counters represent the same
     CTA epoch), AND within any single CTA (`t₁.bx = t₂.bx ∧ t₁.by_ = t₂.by_`), if two
     valid threads `t₁, t₂` access the same `SharedArray` `sharedId` in the same barrier
-    phase (`ev₁.phase = ev₂.phase`), are not ordered by an `mbarrier` completion handoff
-    (`¬ asyncOrdered f env ev₁ ev₂`), at least one is a write, and their element indices
-    collide (`ev₁.index = ev₂.index`), then `t₁ = t₂`. -/
+    phase (`ev₁.phase = ev₂.phase`), are neither ordered by an `mbarrier` completion handoff
+    (`¬ asyncOrdered f env ev₁ ev₂`) nor serialized by morally-strong atomics
+    (`¬ morallyStrongAtomic t₁ t₂ ev₁ ev₂`), at least one is a write, and their element
+    indices collide (`ev₁.index = ev₂.index`), then `t₁ = t₂`. -/
 def MirNoSharedRace (f : MirFunc) (cfg : ControlFlowCfg) (sharedId : Nat) : Prop :=
   UniformBarriers f cfg ∧                                   -- CTA barriers are uniform so `ev.phase` epochs align, AND
   ∀ env : InputEnv, ∀ t₁ t₂ : ThreadCtx, ∀ ev₁ ev₂ : MemEvent, -- Pick ANY launch `env`, two CTA threads, and two events:
@@ -84,6 +115,7 @@ def MirNoSharedRace (f : MirFunc) (cfg : ControlFlowCfg) (sharedId : Nat) : Prop
     ev₁.bufId = sharedId → ev₂.bufId = sharedId →           -- AND both target `SharedArray` `sharedId`,
     ev₁.phase = ev₂.phase →                                 -- AND both execute in the same `sync_threads()` phase,
     ¬ asyncOrdered f env ev₁ ev₂ →                          -- AND neither is ordered after the other by `mbarrier` wait,
+    ¬ morallyStrongAtomic t₁ t₂ ev₁ ev₂ →                   -- AND they are not serialized by morally-strong atomics,
     (ev₁.isWrite = true ∨ ev₂.isWrite = true) →             -- AND at least one access is a write,
     ev₁.index = ev₂.index →                                 -- AND both hit the exact same shared-memory slot,
     t₁ = t₂                                                 -- THEN they are the exact same thread (`tx₁ = tx₂ ∧ ty₁ = ty₂`).

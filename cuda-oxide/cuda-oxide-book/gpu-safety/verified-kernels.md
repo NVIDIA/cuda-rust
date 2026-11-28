@@ -35,11 +35,11 @@ We do not prove functional correctness or floating-point math formulas. Instead,
 
 | Property You Write  | What Lean 4 Proves at Compile Time                        | What Is Not Claimed                       |
 |:--------------------|:----------------------------------------------------------|:------------------------------------------|
-| `no_oob_idx`        | Every buffer read and write index stays below its length  | Values stored at those indices (`NaN`)    |
-| `no_data_race`      | No two threads conflict on shared memory in the same step | Shared-memory bank conflicts (speed only) |
+| `no_oob_idx`        | Every buffer read, write, and atomic index stays in range | Values stored at those indices (`NaN`)    |
+| `no_data_race`      | No non-serialized or wrong-scope races on shared/global   | Shared-memory bank conflicts (speed only) |
 | `disjoint_writes`   | Two different threads never write to the same output slot | Which formula is written (`a - b` vs `+`) |
 | `writes_all_elems`  | Every output slot is written by a launched thread         | Whether the written value is right        |
-| `uniform_barriers`  | Every thread in the block reaches every barrier           | Waiting across different thread blocks    |
+| `uniform_barriers`  | Convergent barriers, warp votes, and CTA-uniform exits    | Waiting across different thread blocks    |
 | `tmem_lifecycle`    | Valid `TMEM` bounds, warpgroup slices, and async order    | Floating-point Tensor Core rounding       |
 
 Because shared-memory race checks group accesses by each thread's barrier phase, `no_data_race(TILE)` on a `SharedArray` always requires `uniform_barriers` in the same `#[verify(...)]` attribute.

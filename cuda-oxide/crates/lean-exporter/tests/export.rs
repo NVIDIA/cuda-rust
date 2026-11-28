@@ -3193,6 +3193,7 @@ fn mir_stmt_read_regs(stmt: &lean_exporter::translate::program::MirStmt) -> Vec<
             | MirRhs::Load(src)
             | MirRhs::CvtaShared(src)
             | MirRhs::LoadTmemBase(src, _)
+            | MirRhs::AtomicOp(_, _, src, _, _)
             | MirRhs::CtaUint1(_, _, src)
             | MirRhs::CtaUnary(src) => vec![*src],
             MirRhs::BinOp(_, _, l, r)
@@ -3213,7 +3214,9 @@ fn mir_stmt_read_regs(stmt: &lean_exporter::translate::program::MirStmt) -> Vec<
             | MirRhs::CtaConst
             | MirRhs::OpaqueVal => Vec::new(),
         },
-        MirStmt::Store(p, v) | MirStmt::TmaCopyG2S(p, _, v, _) => vec![*p, *v],
+        MirStmt::Store(p, v) | MirStmt::AtomicStore(_, p, v) | MirStmt::TmaCopyG2S(p, _, v, _) => {
+            vec![*p, *v]
+        }
         MirStmt::AssertCond(_, r)
         | MirStmt::BarrierSlotCheck(r)
         | MirStmt::ClusterRankCheck(r)
@@ -3858,17 +3861,17 @@ mir.func @scale_quad: builtin.function <(mir.slice <builtin.fp32 ,mutable:false,
     let valid_lean =
         export_named_source(scale_quad_mir, "scale_quad").expect("exports scale_quad cleanly");
 
-    // Negative: unmodeled warp vote / atomic ops still fail closed:
-    let vote_mir = scale_quad_mir.replacen(
+    // Negative: unmodeled Hopper `wgmma` ops still fail closed:
+    let wgmma_mir = scale_quad_mir.replacen(
         "    mir.goto () [^exit] []: <() -> ()>",
-        "    m32 = mir.constant () [] [value: builtin.integer <4294967295: ui32>]: <() -> (builtin.integer ui32)>;\n    _bal = nvvm.vote_sync_ballot (m32, in_n) [] []: <(builtin.integer ui32, builtin.integer i1) -> (builtin.integer ui32)>;\n    mir.goto () [^exit] []: <() -> ()>",
+        "    nvvm.wgmma_fence_aligned () [] []: <() -> ()>;\n    mir.goto () [^exit] []: <() -> ()>",
         1,
     );
-    let vote_err = export_named_source(&vote_mir, "scale_quad")
-        .expect_err("unmodeled vote_sync_ballot must fail closed");
+    let wgmma_err = export_named_source(&wgmma_mir, "scale_quad")
+        .expect_err("unmodeled wgmma_fence_aligned must fail closed");
     assert!(
-        vote_err.to_string().contains("nvvm.vote_sync_ballot"),
-        "unexpected error: {vote_err}"
+        wgmma_err.to_string().contains("nvvm.wgmma_fence_aligned"),
+        "unexpected error: {wgmma_err}"
     );
 
     if let Some(lean_dir) = lean_package_dir_if_available() {
@@ -3997,5 +4000,161 @@ mir.func @strided_reduce_early_ret: builtin.function <(mir.slice <builtin.fp32 ,
             .expect("transcribes mid_loop_ret");
         lean_exporter::runner::check_generated_lean(&mid_ret_lean, &lean_dir)
             .expect_err("Lean 4 must reject divergent mid-loop early return before sync_threads");
+    }
+}
+
+#[test]
+fn verifies_warp_vote_and_scoped_atomics_and_rejects_divergent_votes_and_scope_or_mixed_races() {
+    let valid_mir = r#"
+mir.func @ballot_and_atomics: builtin.function <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>, mir.slice <builtin.integer ui32,mutable:true,kind:UniqueRef>, mir.slice <builtin.integer ui32,mutable:true,kind:UniqueRef>) -> ()>
+  [contract_requires_len_ge: builtin.string "0>=2", gpu_kernel: builtin.string "true", launch_contract_domain: builtin.integer <1: ui32>, reqntid_x: builtin.integer <256: ui32>, reqntid_y: builtin.integer <1: ui32>, reqntid_z: builtin.integer <1: ui32>, verify_disjoint_writes: builtin.string "2", verify_no_data_race: builtin.string "0", verify_no_global_race: builtin.string "1", verify_no_oob_idx: builtin.string "0,1,2", verify_no_oob_shared: builtin.string "0", verify_uniform_barriers: builtin.string "true"]
+{
+  ^entry(x: mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>, done: mir.slice <builtin.integer ui32,mutable:true,kind:UniqueRef>, out: mir.slice <builtin.integer ui32,mutable:true,kind:UniqueRef>):
+    tx32 = nvvm.read_ptx_sreg_tid_x () [] []: <() -> (builtin.integer ui32)>;
+    tid = mir.cast (tx32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+    c8_u64 = mir.constant () [] [value: builtin.integer <8: ui64>]: <() -> (builtin.integer ui64)>;
+    init_sh = mir.lt (tid, c8_u64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+    mir.cond_br (init_sh) [^zero_sh, ^post_init] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+  ^zero_sh():
+    sh0 = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui32, size: builtin.integer <8: i64>, alloc_key: builtin.string "HIST", source_name: builtin.string "k::HIST"]: <() -> (mir.ptr <builtin.integer ui32,mutable:true,addrspace:3,kind:Erased>)>;
+    sh_init_p = mir.ptr_offset (sh0, tid) [] []: <(mir.ptr <builtin.integer ui32,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.integer ui32,mutable:true,addrspace:3,kind:Erased>)>;
+    z32 = mir.constant () [] [value: builtin.integer <0: ui32>]: <() -> (builtin.integer ui32)>;
+    nvvm.atomic_store (z32, sh_init_p) [] [nvvm_st_ordering: nvvm.atomic_ordering Relaxed, nvvm_st_scope: nvvm.atomic_scope Block]: <(builtin.integer ui32, mir.ptr <builtin.integer ui32,mutable:true,addrspace:3,kind:Erased>) -> ()>;
+    mir.goto () [^post_init] []: <() -> ()>
+
+  ^post_init():
+    nvvm.barrier0 () [] []: <() -> ()>;
+    full_mask = mir.constant () [] [value: builtin.integer <4294967295: ui32>]: <() -> (builtin.integer ui32)>;
+    pred_true = mir.constant () [] [value: builtin.integer <1: i1>]: <() -> (builtin.integer i1)>;
+    bmask = nvvm.vote_sync_ballot (full_mask, pred_true) [] []: <(builtin.integer ui32, builtin.integer i1) -> (builtin.integer ui32)>;
+    rsum = nvvm.redux_sync_add (full_mask, bmask) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer ui32)>;
+    c7_u64 = mir.constant () [] [value: builtin.integer <7: ui64>]: <() -> (builtin.integer ui64)>;
+    bin_idx = mir.bitand (tid, c7_u64) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+    sh1 = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui32, size: builtin.integer <8: i64>, alloc_key: builtin.string "HIST", source_name: builtin.string "k::HIST"]: <() -> (mir.ptr <builtin.integer ui32,mutable:true,addrspace:3,kind:Erased>)>;
+    sh_bin_p = mir.ptr_offset (sh1, bin_idx) [] []: <(mir.ptr <builtin.integer ui32,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.integer ui32,mutable:true,addrspace:3,kind:Erased>)>;
+    _prev_sh = nvvm.atomic_rmw (sh_bin_p, rsum) [] [nvvm_rmw_kind: nvvm.atomic_rmw_kind Add, nvvm_rmw_ordering: nvvm.atomic_ordering Relaxed, nvvm_rmw_scope: nvvm.atomic_scope Block]: <(mir.ptr <builtin.integer ui32,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui32) -> (builtin.integer ui32)>;
+    nvvm.barrier0 () [] []: <() -> ()>;
+    sh2 = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui32, size: builtin.integer <8: i64>, alloc_key: builtin.string "HIST", source_name: builtin.string "k::HIST"]: <() -> (mir.ptr <builtin.integer ui32,mutable:true,addrspace:3,kind:Erased>)>;
+    z64 = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+    sh0_p = mir.ptr_offset (sh2, z64) [] []: <(mir.ptr <builtin.integer ui32,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.integer ui32,mutable:true,addrspace:3,kind:Erased>)>;
+    hist_v = nvvm.atomic_load (sh0_p) [] [nvvm_ld_ordering: nvvm.atomic_ordering Acquire, nvvm_ld_scope: nvvm.atomic_scope Block]: <(mir.ptr <builtin.integer ui32,mutable:true,addrspace:3,kind:Erased>) -> (builtin.integer ui32)>;
+    done_len = mir.extract_field (done) [] [index: mir.field_index 1]: <(mir.slice <builtin.integer ui32,mutable:true,kind:UniqueRef>) -> (builtin.integer ui64)>;
+    has_done = mir.lt (z64, done_len) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+    mir.cond_br (has_done) [^ticket, ^write_out] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+  ^ticket():
+    done_ptr = mir.extract_field (done) [] [index: mir.field_index 0]: <(mir.slice <builtin.integer ui32,mutable:true,kind:UniqueRef>) -> (mir.ptr <builtin.integer ui32,mutable:true,addrspace:0,kind:UniqueRef>)>;
+    done0 = mir.ptr_offset (done_ptr, z64) [] []: <(mir.ptr <builtin.integer ui32,mutable:true,addrspace:0,kind:UniqueRef>, builtin.integer ui64) -> (mir.ptr <builtin.integer ui32,mutable:true,addrspace:0,kind:UniqueRef>)>;
+    c1_u32 = mir.constant () [] [value: builtin.integer <1: ui32>]: <() -> (builtin.integer ui32)>;
+    _old_ticket = nvvm.atomic_rmw (done0, c1_u32) [] [nvvm_rmw_kind: nvvm.atomic_rmw_kind Add, nvvm_rmw_ordering: nvvm.atomic_ordering AcqRel, nvvm_rmw_scope: nvvm.atomic_scope Device]: <(mir.ptr <builtin.integer ui32,mutable:true,addrspace:0,kind:UniqueRef>, builtin.integer ui32) -> (builtin.integer ui32)>;
+    mir.goto () [^write_out] []: <() -> ()>
+
+  ^write_out():
+    bx32 = nvvm.read_ptx_sreg_ctaid_x () [] []: <() -> (builtin.integer ui32)>;
+    bx64 = mir.cast (bx32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+    c256 = mir.constant () [] [value: builtin.integer <256: ui64>]: <() -> (builtin.integer ui64)>;
+    boff = mir.mul (bx64, c256) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+    gid = mir.add (boff, tid) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+    out_len = mir.extract_field (out) [] [index: mir.field_index 1]: <(mir.slice <builtin.integer ui32,mutable:true,kind:UniqueRef>) -> (builtin.integer ui64)>;
+    in_out = mir.lt (gid, out_len) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+    mir.cond_br (in_out) [^do_out, ^exit] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+  ^do_out():
+    x_ptr = mir.extract_field (x) [] [index: mir.field_index 0]: <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>)>;
+    xp = mir.ptr_offset (x_ptr, gid) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>)>;
+    _xv = mir.load (xp) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>) -> (builtin.fp32)>;
+    out_ptr = mir.extract_field (out) [] [index: mir.field_index 0]: <(mir.slice <builtin.integer ui32,mutable:true,kind:UniqueRef>) -> (mir.ptr <builtin.integer ui32,mutable:true,addrspace:0,kind:UniqueRef>)>;
+    out_p = mir.ptr_offset (out_ptr, gid) [] []: <(mir.ptr <builtin.integer ui32,mutable:true,addrspace:0,kind:UniqueRef>, builtin.integer ui64) -> (mir.ptr <builtin.integer ui32,mutable:true,addrspace:0,kind:UniqueRef>)>;
+    mir.store (out_p, hist_v) [] []: <(mir.ptr <builtin.integer ui32,mutable:true,addrspace:0,kind:UniqueRef>, builtin.integer ui32) -> ()>;
+    mir.goto () [^exit] []: <() -> ()>
+
+  ^exit():
+    mir.return () [] []: <() -> ()>
+}
+"#;
+    let valid_lean =
+        export_named_source(valid_mir, "ballot_and_atomics").expect("transcribes ballot + atomics");
+    assert!(valid_lean.contains(".warpSyncFull"));
+    assert!(valid_lean.contains("(.atomicOp true .block"));
+    assert!(valid_lean.contains("(.atomicOp true .device"));
+    assert!(valid_lean.contains("CudaOxide.Contracts.Program.MirNoGlobalRace mirFunc 1"));
+
+    // Exporter negative: raw-pointer `nvvm.atomic_rmw` on an untracked pointer must fail closed!
+    let raw_ptr_atomic = valid_mir
+        .replacen(
+            "builtin.function <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>,",
+            "builtin.function <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>, mir.ptr <builtin.integer ui32,mutable:true,addrspace:0,kind:Erased>,",
+            1,
+        )
+        .replacen(
+            "^entry(x: mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>,",
+            "^entry(x: mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>, raw_p: mir.ptr <builtin.integer ui32,mutable:true,addrspace:0,kind:Erased>,",
+            1,
+        )
+        .replacen("0>=2", "0>=3", 1)
+        .replacen("verify_disjoint_writes: builtin.string \"2\"", "verify_disjoint_writes: builtin.string \"3\"", 1)
+        .replacen("verify_no_global_race: builtin.string \"1\"", "verify_no_global_race: builtin.string \"2\"", 1)
+        .replacen("verify_no_oob_idx: builtin.string \"0,1,2\"", "verify_no_oob_idx: builtin.string \"0,2,3\"", 1)
+        .replacen(
+            "_old_ticket = nvvm.atomic_rmw (done0, c1_u32)",
+            "_old_ticket = nvvm.atomic_rmw (raw_p, c1_u32)",
+            1,
+        );
+    let raw_err = export_named_source(&raw_ptr_atomic, "ballot_and_atomics")
+        .expect_err("untracked raw-pointer atomic must fail closed in lean-exporter");
+    assert!(
+        raw_err.to_string().contains("unmodeled raw-pointer atomic"),
+        "unexpected error: {raw_err}"
+    );
+
+    if let Some(lean_dir) = lean_package_dir_if_available() {
+        lean_exporter::runner::check_generated_lean(&valid_lean, &lean_dir)
+            .expect("Lean 4 proves warp ballot + shared BlockAtomic + global DeviceAtomic");
+
+        // Lean negative 1: `.block` (`BlockAtomic`) scope on global `done[0]` across CTAs fails `MirNoGlobalRace`!
+        let bad_cta_scope = valid_mir.replacen(
+            "nvvm_rmw_scope: nvvm.atomic_scope Device",
+            "nvvm_rmw_scope: nvvm.atomic_scope Block",
+            1,
+        );
+        let bad_cta_lean =
+            export_named_source(&bad_cta_scope, "ballot_and_atomics").expect("exports cta scope");
+        lean_exporter::runner::check_generated_lean(&bad_cta_lean, &lean_dir)
+            .expect_err("Lean 4 must reject BlockAtomic (.cta) on global done[0] across CTAs");
+
+        // Lean negative 2: mixed non-atomic `mir.store` alongside `nvvm.atomic_rmw` on `done[0]` fails `MirNoGlobalRace`!
+        let bad_mixed = valid_mir.replacen(
+            "    mir.goto () [^write_out] []: <() -> ()>",
+            "    mir.store (done0, c1_u32) [] []: <(mir.ptr <builtin.integer ui32,mutable:true,addrspace:0,kind:UniqueRef>, builtin.integer ui32) -> ()>;\n    mir.goto () [^write_out] []: <() -> ()>",
+            1,
+        );
+        let bad_mixed_lean =
+            export_named_source(&bad_mixed, "ballot_and_atomics").expect("exports mixed store");
+        lean_exporter::runner::check_generated_lean(&bad_mixed_lean, &lean_dir)
+            .expect_err("Lean 4 must reject mixed atomic + non-atomic store on done[0]");
+
+        // Lean negative 3: full-warp `nvvm.vote_sync_ballot(0xFFFF_FFFF, ...)` inside `if tid < 8` fails `UniformBarriers`!
+        let bad_div_vote = valid_mir.replacen(
+            "    nvvm.atomic_store (z32, sh_init_p)",
+            "    fmask0 = mir.constant () [] [value: builtin.integer <4294967295: ui32>]: <() -> (builtin.integer ui32)>;\n    p0 = mir.constant () [] [value: builtin.integer <1: i1>]: <() -> (builtin.integer i1)>;\n    _bad_v = nvvm.vote_sync_ballot (fmask0, p0) [] []: <(builtin.integer ui32, builtin.integer i1) -> (builtin.integer ui32)>;\n    nvvm.atomic_store (z32, sh_init_p)",
+            1,
+        );
+        let bad_vote_lean =
+            export_named_source(&bad_div_vote, "ballot_and_atomics").expect("exports div vote");
+        lean_exporter::runner::check_generated_lean(&bad_vote_lean, &lean_dir).expect_err(
+            "Lean 4 must reject full-warp vote_sync_ballot inside sub-warp `tid < 8` guard",
+        );
+
+        // Lean negative 4: claiming `disjoint_writes(done)` on multi-thread `done[0].fetch_add(1)` fails `MirDisjointWrites`!
+        let false_disjoint = valid_mir.replacen(
+            "verify_disjoint_writes: builtin.string \"2\"",
+            "verify_disjoint_writes: builtin.string \"1,2\"",
+            1,
+        );
+        let false_disjoint_lean = export_named_source(&false_disjoint, "ballot_and_atomics")
+            .expect("exports disjoint_writes(1,2)");
+        lean_exporter::runner::check_generated_lean(&false_disjoint_lean, &lean_dir)
+            .expect_err("Lean 4 must reject disjoint_writes claim on shared global atomic done[0]");
     }
 }

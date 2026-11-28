@@ -871,6 +871,8 @@ fn is_launch_metadata_marker_path(fn_path: &str) -> bool {
             | "cuda_device::thread::__verify_no_oob_shared_config"
             | "cuda_device::__verify_no_data_race_config"
             | "cuda_device::thread::__verify_no_data_race_config"
+            | "cuda_device::__verify_no_global_race_config"
+            | "cuda_device::thread::__verify_no_global_race_config"
             | "cuda_device::__verify_uniform_barriers_config"
             | "cuda_device::thread::__verify_uniform_barriers_config"
             | "cuda_device::__verify_tmem_lifecycle_config"
@@ -898,6 +900,8 @@ fn is_launch_metadata_marker_path(fn_path: &str) -> bool {
             || path.starts_with("thread::__verify_no_oob_shared_config::<")
             || path.starts_with("__verify_no_data_race_config::<")
             || path.starts_with("thread::__verify_no_data_race_config::<")
+            || path.starts_with("__verify_no_global_race_config::<")
+            || path.starts_with("thread::__verify_no_global_race_config::<")
             || path.starts_with("__grid_constant_config::<")
             || path.starts_with("thread::__grid_constant_config::<")
             || path.starts_with("__unchecked_indexing_config::<")

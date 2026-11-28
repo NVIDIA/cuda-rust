@@ -212,6 +212,7 @@ def symEvalRhsRaw (f : MirFunc) (sregs : SymRegList) : Rhs → SymVal
           let eb := max 1 (f.sharedDecls.getD sid { size := 0 }).elemBytes
           .smemOff sid (.binOp .mul 0 off (.const eb))
       | _ => .unk
+  | .atomicOp _ _ _ id w => if 1 < w then .int (.opaqueUint id w) else .unk
   | .opaqueUint id w | .ctaUint1 id w _ => .int (.opaqueUint id w)
   | .ctaConst | .ctaUnary _ | .ctaBin _ _ | .opaqueVal => .unk
 
@@ -231,6 +232,8 @@ theorem symEvalRhs_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
   | sliceLen _ | sharedBase _ | load _ | loadTmemBase _ _
   | opaqueUint _ _ | ctaUint1 _ _ _ | ctaConst | ctaUnary _ | ctaBin _ _ | opaqueVal =>
       simp [symEvalRhsRaw, evalRhs, SymVal.matchesVal, SymInt.eval, SymBool.eval]
+  | atomicOp _ _ _ id w =>
+      by_cases hw : 1 < w <;> simp [symEvalRhsRaw, evalRhs, hw, SymVal.matchesVal, SymInt.eval]
   | mbarTryWait barId slotVar isAcquire =>
       cases isAcquire
       · simp [symEvalRhsRaw, SymVal.matchesVal]
@@ -318,6 +321,8 @@ structure SymMemEvent where
   elemDiv : Nat := 1
   /-- `some (barId, slot)` when released by an `mbarrier` arrival or TMA transfer on `BAR[slot]`. -/
   syncBar : Option (Nat × SymInt) := none
+  /-- `some scope` when executed via a PTX atomic operation, or `none` for non-atomic accesses. -/
+  atomicScope : Option AtomicScope := none
   /-- Path condition active at this access site. -/
   pathCond : SymBool
   /-- Symbolic barrier phase active at this access site. -/
@@ -333,8 +338,8 @@ instance : LawfulBEq SymMemEvent where
     intro a b h; cases a; cases b
     change instBEqSymMemEvent.beq _ _ = true at h
     simp only [instBEqSymMemEvent.beq, Bool.and_eq_true, beq_iff_eq] at h
-    rcases h with ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9⟩
-    subst h1; subst h2; subst h3; subst h4; subst h5; subst h6; subst h7; subst h8; subst h9; rfl
+    rcases h with ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10⟩
+    subst h1; subst h2; subst h3; subst h4; subst h5; subst h6; subst h7; subst h8; subst h9; subst h10; rfl
 
 /-- Evaluate an optional symbolic `(barId, slotSym)` handle to `Option (Nat × Nat)`. -/
 def evalSyncBar (env : InputEnv) (t : ThreadCtx) (havoc : Nat → Nat) :
@@ -369,17 +374,22 @@ structure SymTmemEvent where
   deriving Repr, DecidableEq, Lean.ToExpr
 
 /-- Resolve a pointer `SymVal` under `pCond` into a 1-element `SymMemEvent` (or `indexOpt := none` on failure). -/
-def symSinglePtrEvent (pCond : SymBool) (ps : PhaseSpec) (isWrite : Bool) (sv : SymVal) : SymMemEvent :=
+def symSinglePtrEvent (pCond : SymBool) (ps : PhaseSpec) (isWrite : Bool) (sv : SymVal)
+    (aScope : Option AtomicScope := none) : SymMemEvent :=
   match sv with
   | .ptr sp bid off =>
-      { isWrite := isWrite, space := sp, bufId := bid, indexOpt := some off, pathCond := pCond, phaseSpec := ps }
+      { isWrite := isWrite, space := sp, bufId := bid, indexOpt := some off,
+        atomicScope := aScope, pathCond := pCond, phaseSpec := ps }
   | .condPtr g sp bid off =>
       if symImpliesVal pCond g true then
-        { isWrite := isWrite, space := sp, bufId := bid, indexOpt := some off, pathCond := pCond, phaseSpec := ps }
+        { isWrite := isWrite, space := sp, bufId := bid, indexOpt := some off,
+          atomicScope := aScope, pathCond := pCond, phaseSpec := ps }
       else
-        { isWrite := isWrite, space := .global, bufId := 0, indexOpt := none, pathCond := pCond, phaseSpec := ps }
+        { isWrite := isWrite, space := .global, bufId := 0, indexOpt := none,
+          atomicScope := aScope, pathCond := pCond, phaseSpec := ps }
   | _ =>
-      { isWrite := isWrite, space := .global, bufId := 0, indexOpt := none, pathCond := pCond, phaseSpec := ps }
+      { isWrite := isWrite, space := .global, bufId := 0, indexOpt := none,
+        atomicScope := aScope, pathCond := pCond, phaseSpec := ps }
 
 /-- Execute a block's statements symbolically from `(pCond, sregs, ps)`.
     - **What it does**: Steps through a basic block's `List Stmt`, updating `sregs` and `ps`
@@ -400,6 +410,11 @@ def symExecStmts (f : MirFunc) (pCond : SymBool) (sregs : SymRegList) (ps : Phas
           let mev := [symSinglePtrEvent pCond ps false (sregs.getVar ptr)]
           let (r', ps', mevs, aevs, tevs) := symExecStmts f pCond (sregs.setVar dst (.tmemPtr cols (.const 0))) ps term rest
           (r', ps', mev ++ mevs, aevs, tevs)
+      | .assign dst (.atomicOp isW scope ptr id w) =>
+          let mev := [symSinglePtrEvent pCond ps isW (sregs.getVar ptr) (some scope)]
+          let sv := symEvalRhs f sregs (.atomicOp isW scope ptr id w)
+          let (r', ps', mevs, aevs, tevs) := symExecStmts f pCond (sregs.setVar dst sv) ps term rest
+          (r', ps', mev ++ mevs, aevs, tevs)
       | .assign dst rhs =>
           let sv := symEvalRhs f sregs rhs
           symExecStmts f pCond (sregs.setVar dst sv) ps term rest
@@ -413,6 +428,10 @@ def symExecStmts (f : MirFunc) (pCond : SymBool) (sregs : SymRegList) (ps : Phas
                     [{ baseEv with syncBar := if baseEv.space == .shared then some (b, sSym) else none }]
                 | _ =>
                     [{ baseEv with indexOpt := none }]
+          let (r', ps', mevs, aevs, tevs) := symExecStmts f pCond sregs ps term rest
+          (r', ps', mev ++ mevs, aevs, tevs)
+      | .atomicStore scope ptr _ =>
+          let mev := [symSinglePtrEvent pCond ps true (sregs.getVar ptr) (some scope)]
           let (r', ps', mevs, aevs, tevs) := symExecStmts f pCond sregs ps term rest
           (r', ps', mev ++ mevs, aevs, tevs)
       | .barrierSlotCheck ptr =>
@@ -472,15 +491,18 @@ def symExecStmts (f : MirFunc) (pCond : SymBool) (sregs : SymRegList) (ps : Phas
 theorem symSinglePtrEvent_sound {env : InputEnv} {t : ThreadCtx} {havoc : Nat → Nat}
     {pCond : SymBool} (hpc : pCond.eval env t havoc = true)
     {ps : PhaseSpec} {phase : Nat} (hps : ps.matchesPhase phase = true)
-    {isW : Bool} {sv : SymVal} {v : Val} {ev : MemEvent}
+    {isW : Bool} {aSc : Option AtomicScope} {sv : SymVal} {v : Val} {ev : MemEvent}
     (hmatch : sv.matchesVal env t havoc v)
-    (hsome : (symSinglePtrEvent pCond ps isW sv).indexOpt.isSome = true)
-    (hmem : ev ∈ (match v with | .ptr sp bid off => [{ isWrite := isW, space := sp, bufId := bid, index := off, phase := phase : MemEvent }] | _ => [])) :
+    (hsome : (symSinglePtrEvent pCond ps isW sv aSc).indexOpt.isSome = true)
+    (hmem : ev ∈ (match v with
+      | .ptr sp bid off => [{ isWrite := isW, space := sp, bufId := bid, index := off, phase := phase, atomicScope := aSc : MemEvent }]
+      | _ => [])) :
     ∃ idxSym : SymInt, ∃ k : Nat,
-      let sev := symSinglePtrEvent pCond ps isW sv
+      let sev := symSinglePtrEvent pCond ps isW sv aSc
       k < sev.span ∧ 0 < sev.elemDiv ∧
       sev.isWrite = ev.isWrite ∧ sev.space = ev.space ∧ sev.bufId = ev.bufId ∧
-      evalSyncBar env t havoc sev.syncBar = ev.syncBar ∧ sev.indexOpt = some idxSym ∧
+      evalSyncBar env t havoc sev.syncBar = ev.syncBar ∧ sev.atomicScope = ev.atomicScope ∧
+      sev.indexOpt = some idxSym ∧
       (idxSym.eval env t havoc + k) / sev.elemDiv = ev.index ∧
       sev.pathCond.eval env t havoc = true ∧ sev.phaseSpec.matchesPhase ev.phase = true := by
   cases sv with
@@ -488,7 +510,7 @@ theorem symSinglePtrEvent_sound {env : InputEnv} {t : ThreadCtx} {havoc : Nat �
       dsimp only [symSinglePtrEvent]
       rw [SymVal.matchesVal] at hmatch; subst hmatch
       simp only [List.mem_singleton] at hmem; subst hmem
-      exact ⟨off, 0, Nat.zero_lt_one, Nat.zero_lt_one, rfl, rfl, rfl, rfl, rfl, by simp, hpc, hps⟩
+      exact ⟨off, 0, Nat.zero_lt_one, Nat.zero_lt_one, rfl, rfl, rfl, rfl, rfl, rfl, by simp, hpc, hps⟩
   | condPtr g sp bid off =>
       dsimp only [symSinglePtrEvent] at hsome ⊢
       by_cases himp : symImpliesVal pCond g true = true
@@ -496,7 +518,7 @@ theorem symSinglePtrEvent_sound {env : InputEnv} {t : ThreadCtx} {havoc : Nat �
         rw [SymVal.matchesVal] at hmatch
         rw [hmatch (symImpliesVal_sound hpc g true himp)] at hmem
         simp only [List.mem_singleton] at hmem; subst hmem
-        exact ⟨off, 0, Nat.zero_lt_one, Nat.zero_lt_one, rfl, rfl, rfl, rfl, rfl, by simp, hpc, hps⟩
+        exact ⟨off, 0, Nat.zero_lt_one, Nat.zero_lt_one, rfl, rfl, rfl, rfl, rfl, rfl, by simp, hpc, hps⟩
       · rw [if_neg himp] at hsome; simp at hsome
   | int _ | bool _ | smemOff _ _ | smemDesc _ _ | tmemPtr _ _ | unk =>
       dsimp only [symSinglePtrEvent] at hsome; simp at hsome
@@ -519,7 +541,8 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
         ∃ sev ∈ (symExecStmts f pCond sregs ps term stmts).2.2.1, ∃ idxSym : SymInt, ∃ k : Nat,
           k < sev.span ∧ 0 < sev.elemDiv ∧
           sev.isWrite = ev.isWrite ∧ sev.space = ev.space ∧ sev.bufId = ev.bufId ∧
-          evalSyncBar env t havoc sev.syncBar = ev.syncBar ∧ sev.indexOpt = some idxSym ∧
+          evalSyncBar env t havoc sev.syncBar = ev.syncBar ∧ sev.atomicScope = ev.atomicScope ∧
+          sev.indexOpt = some idxSym ∧
           (idxSym.eval env t havoc + k) / sev.elemDiv = ev.index ∧
           sev.pathCond.eval env t havoc = true ∧ sev.phaseSpec.matchesPhase ev.phase = true) ∧
       (∀ pfx sfx : List Stmt, ∀ aid cond : Nat,
@@ -604,6 +627,28 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
                     simp only [List.cons_append, List.cons.injEq] at heq
                     rcases heq with ⟨rfl, htl⟩
                     simpa [execStmts] using hmA tl sfx aid cond htl
+          | atomicOp isW scope ptr id w =>                --   Subcase 1b': `atomicOp` emits 1 atomic `SymMemEvent` + updates `dst`
+              simp only [symExecStmts, List.all_append, List.all_cons, List.all_nil, Bool.and_true, Bool.and_eq_true] at hallSome hallTmem
+              obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ :=
+                ih (regs.set dst (evalRhs f env t regs (.atomicOp isW scope ptr id w)))
+                   (sregs.setVar dst (symEvalRhs f sregs (.atomicOp isW scope ptr id w)))
+                   phase ps hnextGen hps hallSome.2 hallTmem
+              simp only [execStmts, evalRhs, symExecStmts] at hmR hmP hmE hmA hmT ⊢
+              refine ⟨hmR, hmP, ?_, ?_, hmT⟩
+              · intro ev hev
+                rw [List.mem_append] at hev
+                rcases hev with hhead | htail
+                · obtain ⟨idxS, k, hrest⟩ := symSinglePtrEvent_sound (aSc := some scope) hpc hps (hmatch ptr) hallSome.1 hhead
+                  exact ⟨_, List.mem_append_left _ (List.Mem.head _), idxS, k, hrest⟩
+                · obtain ⟨sev, hsev, idxS, k, hrest⟩ := hmE ev htail
+                  exact ⟨sev, List.mem_append_right _ hsev, idxS, k, hrest⟩
+              · intro pfx sfx aid cond heq
+                cases pfx with
+                | nil => simp at heq
+                | cons hd tl =>
+                    simp only [List.cons_append, List.cons.injEq] at heq
+                    rcases heq with ⟨rfl, htl⟩
+                    simpa [execStmts, evalRhs] using hmA tl sfx aid cond htl
           | _ =>                                          --   Subcase 1c: Pure arithmetic/pointer `Rhs` via `symEvalRhs_correct`
               simp only [execStmts, symExecStmts] at hallSome hallTmem ⊢
               obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih _ _ phase ps hnextGen hps hallSome hallTmem
@@ -649,7 +694,7 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
                           rw [hsp, SymVal.matchesVal] at hp; rw [hp] at hhead
                           simp only [List.mem_singleton] at hhead; subst hhead
                           refine ⟨_, List.mem_append_left _ (List.Mem.head _),
-                                  off, 0, Nat.zero_lt_one, Nat.zero_lt_one, rfl, rfl, rfl, ?_, rfl, by simp, hpc, hps⟩
+                                  off, 0, Nat.zero_lt_one, Nat.zero_lt_one, rfl, rfl, rfl, ?_, rfl, rfl, by simp, hpc, hps⟩
                           dsimp only [evalSyncBar]
                           cases sp <;> rfl
                       | condPtr g sp bid off =>
@@ -660,13 +705,32 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
                             rw [hp (symImpliesVal_sound hpc g true himp)] at hhead
                             simp only [List.mem_singleton] at hhead; subst hhead
                             refine ⟨_, List.mem_append_left _ (List.Mem.head _),
-                                    off, 0, Nat.zero_lt_one, Nat.zero_lt_one, rfl, rfl, rfl, ?_, rfl, by simp, hpc, hps⟩
+                                    off, 0, Nat.zero_lt_one, Nat.zero_lt_one, rfl, rfl, rfl, ?_, rfl, rfl, by simp, hpc, hps⟩
                             dsimp only [evalSyncBar]
                             cases sp <;> rfl
                           · simp [symSinglePtrEvent, himp] at hallSome
                       | _ =>
                           rw [hsp] at hallSome; dsimp only [symSinglePtrEvent] at hallSome; simp at hallSome
                   | _ => rw [hssv] at hallSome; simp at hallSome
+            · obtain ⟨sev, hsev, idxS, k, hrest⟩ := hmE ev htail
+              exact ⟨sev, List.mem_append_right _ hsev, idxS, k, hrest⟩
+          · intro pfx sfx aid cond heq
+            cases pfx with
+            | nil => simp at heq
+            | cons hd tl =>
+                simp only [List.cons_append, List.cons.injEq] at heq
+                rcases heq with ⟨rfl, htl⟩
+                simpa [execStmts] using hmA tl sfx aid cond htl
+      | atomicStore scope ptr _ =>                        -- Case 2b: `nvvm.atomic_store` emits 1 atomic write `SymMemEvent`
+          simp only [symExecStmts, List.all_append, List.all_cons, List.all_nil, Bool.and_true, Bool.and_eq_true] at hallSome hallTmem
+          obtain ⟨hmR, hmP, hmE, hmA, hmT⟩ := ih regs sregs phase ps hmatch hps hallSome.2 hallTmem
+          simp only [execStmts, symExecStmts]
+          refine ⟨hmR, hmP, ?_, ?_, hmT⟩
+          · intro ev hev
+            rw [List.mem_append] at hev
+            rcases hev with hhead | htail
+            · obtain ⟨idxS, k, hrest⟩ := symSinglePtrEvent_sound (aSc := some scope) hpc hps (hmatch ptr) hallSome.1 hhead
+              exact ⟨_, List.mem_append_left _ (List.Mem.head _), idxS, k, hrest⟩
             · obtain ⟨sev, hsev, idxS, k, hrest⟩ := hmE ev htail
               exact ⟨sev, List.mem_append_right _ hsev, idxS, k, hrest⟩
           · intro pfx sfx aid cond heq
@@ -788,7 +852,7 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
                        span := max 1 spanElems, elemDiv := 1, syncBar := some (barId, sSym),
                        pathCond := pCond, phaseSpec := ps },
                      List.mem_append_left _ (List.Mem.head _), off, k,
-                     List.mem_range.mp hkRange, Nat.zero_lt_one, rfl, rfl, rfl, rfl, rfl,
+                     List.mem_range.mp hkRange, Nat.zero_lt_one, rfl, rfl, rfl, rfl, rfl, rfl,
                      by simp, hpc, hps⟩
             · obtain ⟨sev, hsev, idxS, k, hrest⟩ := hmE ev htail
               exact ⟨sev, List.mem_append_right _ hsev, idxS, k, hrest⟩
@@ -844,7 +908,7 @@ theorem symExecStmts_correct (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
                   exact ⟨{ isWrite := false, space := .shared, bufId := sid, indexOpt := some byteOff,
                            span := max 1 tileBytes, elemDiv := eb, pathCond := pCond, phaseSpec := ps },
                          List.mem_append_left _ (List.Mem.head _), byteOff, k,
-                         List.mem_range.mp hkRange, hebPos, rfl, rfl, rfl, rfl, rfl,
+                         List.mem_range.mp hkRange, hebPos, rfl, rfl, rfl, rfl, rfl, rfl,
                          rfl, hpc, hps⟩
               | _ => rw [hsd] at hallSome; simp at hallSome
             · obtain ⟨sev, hsev, idxS, k, hrest⟩ := hmE ev htail

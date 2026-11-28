@@ -114,6 +114,8 @@ def UniformBarriersCfg (cfg : ControlFlowCfg) : Prop :=
     activeGuardAt cfg b = .tr ∧                             --   (1) `b` sits outside thread-divergent `if` guards,
     (isCyclicBlockBool cfg b = false →                      --   (2) if `b` is acyclic, no thread-divergent split
       NoDivergentBypass cfg b)) ∧                           --       bypasses `b` to `return`, AND
+  (∀ wBlk : Nat, wBlk ∈ warpSyncBlocks cfg →                --   (2b) every full-warp `0xFFFF_FFFF` collective executes
+    (activeGuardAt cfg wBlk).isWarpConvergent cfg.blockDimX cfg.blockDimY = true) ∧ -- with all 32 warp lanes converged, AND
   ((cyclicBarrierBlocks cfg ≠ [] →                          --   (3) if cyclic barriers exist, an enclosing loop
     cyclicBarrierLoopBodyStarts cfg ≠ []) ∧                 --       header dominates them, AND
    ∀ hdr body : Nat,                                        --       from every loop body start `(hdr, body)`:

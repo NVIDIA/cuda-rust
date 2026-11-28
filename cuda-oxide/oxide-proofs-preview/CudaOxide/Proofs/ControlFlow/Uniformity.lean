@@ -617,7 +617,7 @@ theorem uniform_barriers_of_stateMap {f : MirFunc} {cfg cfgRefined : ControlFlow
 
 /-- Variables referenced inside a single `Rhs` expression. -/
 def uniRhsVars : Rhs → List Nat
-  | .copy s | .notBool s | .intCast _ s | .load s | .cvtaShared s | .loadTmemBase s _ | .ctaUint1 _ _ s | .ctaUnary s => [s]
+  | .copy s | .notBool s | .intCast _ s | .load s | .cvtaShared s | .loadTmemBase s _ | .atomicOp _ _ s _ _ | .ctaUint1 _ _ s | .ctaUnary s => [s]
   | .binOp _ _ l r | .checkedOvf _ _ l r | .cmpOp _ l r | .ptrOffset l r | .ctaBin l r => [l, r]
   | .mbarTryWait _ sv _ => [sv]
   | _ => []

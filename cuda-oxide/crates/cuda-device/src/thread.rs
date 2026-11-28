@@ -1511,6 +1511,14 @@ pub fn __verify_no_data_race_config<const SHARED_IDX: usize>() {
     // Compiler marker: deliberately empty and removed during MIR import.
 }
 
+/// Internal compiler marker recording a `no_data_race(slice_param)` obligation
+/// on a global slice parameter from `#[verify(...)]`.
+#[doc(hidden)]
+#[inline(never)]
+pub fn __verify_no_global_race_config<const PARAM_IDX: usize>() {
+    // Compiler marker: deliberately empty and removed during MIR import.
+}
+
 /// Internal compiler marker recording a `uniform_barriers` obligation from
 /// `#[verify(...)]`.
 #[doc(hidden)]

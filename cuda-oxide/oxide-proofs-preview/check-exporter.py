@@ -1078,6 +1078,77 @@ mir.func @strided_reduce_early_ret: builtin.function <(mir.slice <builtin.fp32 ,
             raise RuntimeError(f"Expected thread-divergent early return `tid_x >= m` before sync_threads to fail UniformBarriers:\n{res_div_ret.stdout}")
         print("REJECTED as expected: thread-divergent early `return` (`tid_x >= m`) before `sync_threads()` fails `uniform_barriers`.", flush=True)
 
+        # Warp ballot (`nvvm.vote_sync_ballot`) + scoped atomics (`BlockAtomic` SMEM + `DeviceAtomic` global) checks:
+        ballot_atomic_source = """
+mir.func @ballot_atomic_check: builtin.function <(mir.slice <builtin.integer ui32,mutable:true,kind:UniqueRef>) -> ()>
+  [gpu_kernel: builtin.string "true", launch_contract_domain: builtin.integer <1: ui32>, reqntid_x: builtin.integer <256: ui32>, reqntid_y: builtin.integer <1: ui32>, reqntid_z: builtin.integer <1: ui32>, verify_no_data_race: builtin.string "0", verify_no_global_race: builtin.string "0", verify_no_oob_idx: builtin.string "0", verify_no_oob_shared: builtin.string "0", verify_uniform_barriers: builtin.string "true"]
+{
+  ^entry(done: mir.slice <builtin.integer ui32,mutable:true,kind:UniqueRef>):
+    tx32 = nvvm.read_ptx_sreg_tid_x () [] []: <() -> (builtin.integer ui32)>;
+    tid = mir.cast (tx32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+    c8 = mir.constant () [] [value: builtin.integer <8: ui64>]: <() -> (builtin.integer ui64)>;
+    in8 = mir.lt (tid, c8) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+    mir.cond_br (in8) [^init_h, ^sync1] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+  ^init_h():
+    sh0 = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui32, size: builtin.integer <8: i64>, alloc_key: builtin.string "HIST", source_name: builtin.string "k::HIST"]: <() -> (mir.ptr <builtin.integer ui32,mutable:true,addrspace:3,kind:Erased>)>;
+    sp0 = mir.ptr_offset (sh0, tid) [] []: <(mir.ptr <builtin.integer ui32,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.integer ui32,mutable:true,addrspace:3,kind:Erased>)>;
+    z32 = mir.constant () [] [value: builtin.integer <0: ui32>]: <() -> (builtin.integer ui32)>;
+    nvvm.atomic_store (z32, sp0) [] [nvvm_st_ordering: nvvm.atomic_ordering Relaxed, nvvm_st_scope: nvvm.atomic_scope Block]: <(builtin.integer ui32, mir.ptr <builtin.integer ui32,mutable:true,addrspace:3,kind:Erased>) -> ()>;
+    mir.goto () [^sync1] []: <() -> ()>
+
+  ^sync1():
+    nvvm.barrier0 () [] []: <() -> ()>;
+    fmask = mir.constant () [] [value: builtin.integer <4294967295: ui32>]: <() -> (builtin.integer ui32)>;
+    pt = mir.constant () [] [value: builtin.integer <1: i1>]: <() -> (builtin.integer i1)>;
+    bm = nvvm.vote_sync_ballot (fmask, pt) [] []: <(builtin.integer ui32, builtin.integer i1) -> (builtin.integer ui32)>;
+    c7 = mir.constant () [] [value: builtin.integer <7: ui64>]: <() -> (builtin.integer ui64)>;
+    bidx = mir.bitand (tid, c7) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+    sh1 = mir.shared_alloc () [] [elem_type: builtin.type builtin.integer ui32, size: builtin.integer <8: i64>, alloc_key: builtin.string "HIST", source_name: builtin.string "k::HIST"]: <() -> (mir.ptr <builtin.integer ui32,mutable:true,addrspace:3,kind:Erased>)>;
+    sp1 = mir.ptr_offset (sh1, bidx) [] []: <(mir.ptr <builtin.integer ui32,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.integer ui32,mutable:true,addrspace:3,kind:Erased>)>;
+    _old_s = nvvm.atomic_rmw (sp1, bm) [] [nvvm_rmw_kind: nvvm.atomic_rmw_kind Add, nvvm_rmw_ordering: nvvm.atomic_ordering Relaxed, nvvm_rmw_scope: nvvm.atomic_scope Block]: <(mir.ptr <builtin.integer ui32,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui32) -> (builtin.integer ui32)>;
+    z64 = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+    dlen = mir.extract_field (done) [] [index: mir.field_index 1]: <(mir.slice <builtin.integer ui32,mutable:true,kind:UniqueRef>) -> (builtin.integer ui64)>;
+    ok_d = mir.lt (z64, dlen) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+    mir.cond_br (ok_d) [^inc_d, ^ret_b] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+  ^inc_d():
+    dptr = mir.extract_field (done) [] [index: mir.field_index 0]: <(mir.slice <builtin.integer ui32,mutable:true,kind:UniqueRef>) -> (mir.ptr <builtin.integer ui32,mutable:true,addrspace:0,kind:UniqueRef>)>;
+    dp0 = mir.ptr_offset (dptr, z64) [] []: <(mir.ptr <builtin.integer ui32,mutable:true,addrspace:0,kind:UniqueRef>, builtin.integer ui64) -> (mir.ptr <builtin.integer ui32,mutable:true,addrspace:0,kind:UniqueRef>)>;
+    c1 = mir.constant () [] [value: builtin.integer <1: ui32>]: <() -> (builtin.integer ui32)>;
+    _old_g = nvvm.atomic_rmw (dp0, c1) [] [nvvm_rmw_kind: nvvm.atomic_rmw_kind Add, nvvm_rmw_ordering: nvvm.atomic_ordering AcqRel, nvvm_rmw_scope: nvvm.atomic_scope Device]: <(mir.ptr <builtin.integer ui32,mutable:true,addrspace:0,kind:UniqueRef>, builtin.integer ui32) -> (builtin.integer ui32)>;
+    mir.goto () [^ret_b] []: <() -> ()>
+
+  ^ret_b():
+    mir.return () [] []: <() -> ()>
+}
+"""
+        ba_mir = temporary / "ballot_atomic.mir"
+        ba_mir.write_text(ballot_atomic_source)
+        ba_lean = require_export(ba_mir, "ballot_atomic_check")
+        ba_file = temporary / "BallotAtomicValid.lean"
+        ba_file.write_text(ba_lean)
+        require_success("env", "lean", str(ba_file))
+        print("PASS: warp ballot + `.block` shared atomic + `.device` global atomic proves `MirNoSharedRace` and `MirNoGlobalRace`.", flush=True)
+
+        bad_scope_mir = temporary / "bad_scope_atomic.mir"
+        bad_scope_mir.write_text(
+            ballot_atomic_source.replace(
+                "nvvm_rmw_scope: nvvm.atomic_scope Device",
+                "nvvm_rmw_scope: nvvm.atomic_scope Block",
+                1,
+            )
+        )
+        bad_scope_lean = require_export(bad_scope_mir, "ballot_atomic_check")
+        bad_scope_file = temporary / "BadScopeAtomic.lean"
+        bad_scope_file.write_text(
+            "\n".join(line for line in bad_scope_lean.splitlines() if not line.startswith("#print axioms"))
+        )
+        res_bad_scope = run_lake("env", "lean", str(bad_scope_file))
+        if res_bad_scope.returncode == 0:
+            raise RuntimeError(f"Expected `.cta` BlockAtomic on global slice across blocks to fail MirNoGlobalRace:\n{res_bad_scope.stdout}")
+        print("REJECTED as expected: `.cta`-scoped `BlockAtomic` on global slice across blocks fails `MirNoGlobalRace`.", flush=True)
+
     print("Exporter checks passed for scalar, 1D vecadd, 2D SGEMM, Stage 3 warp/block reductions, Stage 4 sub-warp multi-buffer, Stage 5 async mbarrier, Stage 6 Blackwell tcgen05/TMEM, Stage 8 warp-specialized ring, Stage 9 2-CTA cluster + CLC, and Stage 10 dual-commit `_cg2` fixtures.")
 
 

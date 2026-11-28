@@ -323,6 +323,8 @@ inductive CfgOp where
   | tmemFenceBeforeSync
   /-- `tcgen05_fence_after_thread_sync()` ordering `tcgen05` after thread synchronization. -/
   | tmemFenceAfterSync
+  /-- Full-warp (`0xFFFF_FFFF`) synchronous warp collective (`vote.sync`, `redux.sync`, `match.sync`, `bar.warp.sync`). -/
+  | warpSyncFull
   deriving Repr, DecidableEq, Lean.ToExpr
 
 /-- One basic block in the kernel's transcribed `PostMem2Reg` control-flow graph. -/
@@ -627,7 +629,7 @@ def BranchCond.toGuardExpr (c : BranchCond) : GuardExpr :=
 
 /-- Compute the active dominating `GuardExpr` at basic block `b` across all 2-way branches.
     Any nested `.unknown` branch (`1..N` levels deep) attaches `.unknown` until reconvergence.
-    Pre-barrier loops (`!canReachAvoiding cfg b brBlk []`) reconverge at loop exit. -/
+    Pre-barrier loops (`!canReachAvoiding cfg b brBlk []`) reconverge at loop exit (`avoidArm := []`). -/
 def activeGuardAt (cfg : ControlFlowCfg) (b : Nat) : GuardExpr :=
   let reach0 := reachableNodesAvoiding cfg 0 []
   if !(b ∈ reach0) then .tr
@@ -978,6 +980,11 @@ def stepOp (cfg : ControlFlowCfg) (curBlk : Nat) (blkGuard : GuardExpr) (inCycle
           let nextReady := if st.tmemCommitReady && !st.mmaHazard then true else st.tmemReady
           some { st with tmemReady := nextReady, unFencedMbarWait := false }
       | _ => none
+  | .warpSyncFull =>
+      if !blkGuard.isWarpConvergent cfg.blockDimX cfg.blockDimY then
+        none
+      else
+        some st
   | .tmemDealloc cols isCg2 =>
       if (isCg2 && cfg.clusterDimX != 2)
           || inCycle || (blkGuard.selectsSingleFullWarp cfg.blockDimX cfg.blockDimY).isNone then
@@ -1174,6 +1181,11 @@ def syncBarrierBlocks (cfg : ControlFlowCfg) : List Nat :=
   (List.range cfg.blocks.length).filter fun b =>
     (cfg.blockAt b).ops.any fun op => op == .syncThreads || op == .clusterSync
 
+/-- Indices of all basic blocks in `cfg` containing a full-warp `*.sync 0xFFFF_FFFF` collective (`CfgOp.warpSyncFull`). -/
+def warpSyncBlocks (cfg : ControlFlowCfg) : List Nat :=
+  (List.range cfg.blocks.length).filter fun b =>
+    (cfg.blockAt b).ops.any (· == .warpSyncFull)
+
 /-- Indices of all basic blocks in `cfg` containing `.clusterSync`. -/
 def clusterSyncBlocks (cfg : ControlFlowCfg) : List Nat :=
   (List.range cfg.blocks.length).filter fun b =>
@@ -1217,10 +1229,10 @@ def signaledMbarReadyBlocks (cfg : ControlFlowCfg) : List Nat :=
       | _ => none
   raw.filter fun dst => activeGuardAt cfg dst == .tr
 
-/-- Total number of `sync_threads()` / `cluster_sync()` operations plus signaled `mbarrier` wait edges in `cfg`. -/
+/-- Total number of `sync_threads()` / `cluster_sync()` / `warpSyncFull` operations plus signaled `mbarrier` wait edges in `cfg`. -/
 def countEffectiveBarriers (cfg : ControlFlowCfg) : Nat :=
   let syncCount := (cfg.blocks.map fun blk =>
-    (blk.ops.filter fun op => op == .syncThreads || op == .clusterSync).length).sum
+    (blk.ops.filter fun op => op == .syncThreads || op == .clusterSync || op == .warpSyncFull).length).sum
   let sig := signaledBarrierIds cfg
   let mbarCount := (cfg.blocks.flatMap fun blk =>
     blk.succs.filterMap fun

@@ -25,6 +25,7 @@
 //! ```
 
 use cuda_core::{CudaContext, DeviceBuffer, LaunchConfig1D};
+use cuda_device::atomic::{AtomicOrdering, BlockAtomicU32, DeviceAtomicU32};
 use cuda_device::{
     DisjointSlice, SharedArray, cuda_module, kernel, launch_bounds, launch_contract, thread,
     verify, warp,
@@ -167,6 +168,60 @@ mod kernels {
             out[gid] = total;
         }
     }
+
+    /// Safe SIMT warp-ballot + `SharedArray<BlockAtomicU32, 8>` + global
+    /// `&mut [DeviceAtomicU32]` histogram kernel with zero `unsafe` blocks:
+    /// - Initializes `HIST[0..8]` with `.cta` atomic stores,
+    /// - Votes across each 32-lane warp with `warp::ballot(val > 16.0)` and
+    ///   accumulates popcounts into `HIST[tid & 7]` via `BlockAtomicU32::fetch_add`,
+    /// - Tallies total positive warps across all CTAs into `global_total[0]`
+    ///   via `.gpu`-scoped `DeviceAtomicU32::fetch_add` (`MirNoGlobalRace`).
+    #[launch_bounds(256)]
+    #[launch_contract(
+        domain = 1,
+        block = (256, 1, 1),
+        requires = (data.len() >= out.len()),
+    )]
+    #[verify(
+        no_oob_idx(data, global_total, out, HIST),
+        no_data_race(HIST, global_total),
+        disjoint_writes(out),
+        uniform_barriers
+    )]
+    #[kernel]
+    pub fn ballot_atomic_histogram(
+        data: &[f32],
+        global_total: &mut [DeviceAtomicU32],
+        mut out: DisjointSlice<u32>,
+    ) {
+        /// Shared 8-bin `.cta`-scoped atomic histogram (`BlockAtomicU32`).
+        static mut HIST: SharedArray<BlockAtomicU32, WARPS_PER_BLOCK> = SharedArray::UNINIT;
+
+        let idx = thread::index_1d();
+        let gid = idx.get();
+        let tid = thread::threadIdx_x() as usize;
+
+        if tid < WARPS_PER_BLOCK {
+            HIST[tid].store(0, AtomicOrdering::Relaxed);
+        }
+        thread::sync_threads();
+
+        let val = if gid < data.len() { data[gid] } else { 0.0 };
+        let high_mask = warp::ballot(val > 16.0);
+        if warp::lane_id() == 0 {
+            let count = high_mask.count_ones();
+            HIST[tid & 7].fetch_add(count, AtomicOrdering::Relaxed);
+            if !global_total.is_empty() {
+                global_total[0].fetch_add(count, AtomicOrdering::Relaxed);
+            }
+        }
+        thread::sync_threads();
+
+        let bin_val = HIST[tid / 32].load(AtomicOrdering::Relaxed);
+        if let Some(slot) = out.get_mut(idx) {
+            *slot = bin_val;
+        }
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -198,11 +253,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         NUM_BLOCKS - 1,
         &mut d_batched_out,
     )?;
+
+    let mut d_global_total =
+        DeviceBuffer::from_host(&stream, &[0u32])?.wrap_elem::<DeviceAtomicU32>();
+    let mut d_hist_out = DeviceBuffer::from_host(&stream, &vec![0u32; N])?;
+    let prep_hist = module.prepare_ballot_atomic_histogram(config)?;
+    module.ballot_atomic_histogram(
+        &stream,
+        &prep_hist,
+        &d_data,
+        &mut d_global_total,
+        &mut d_hist_out,
+    )?;
+    let d_global_total_u32 = d_global_total.peel_elem::<u32>();
     stream.synchronize()?;
 
     let warp_out = d_warp_out.to_host_vec(&stream)?;
     let block_out = d_block_out.to_host_vec(&stream)?;
     let batched_out = d_batched_out.to_host_vec(&stream)?;
+    let global_total_host = d_global_total_u32.to_host_vec(&stream)?;
+    let hist_out = d_hist_out.to_host_vec(&stream)?;
+    // Each 32-lane warp has values 1..=32, so 16 lanes have `val > 16.0` per warp!
+    // Across `NUM_BLOCKS * WARPS_PER_BLOCK` warps = 32 warps * 16 = 512 total high lanes.
+    assert_eq!(
+        global_total_host[0],
+        NUM_BLOCKS * (WARPS_PER_BLOCK as u32) * 16
+    );
+    assert_eq!(hist_out[0], (WARPS_PER_BLOCK as u32) * 16);
 
     // Sum of 1..=32 is 32 * 33 / 2 = 528.0 per warp, and 8 * 528.0 = 4224.0 per 256-thread block.
     let expected_warp_sum = 528.0f32;

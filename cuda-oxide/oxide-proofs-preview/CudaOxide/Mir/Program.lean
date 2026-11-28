@@ -39,6 +39,20 @@ instance : LawfulBEq AddrSpace where
   rfl := by intro a; cases a <;> rfl
   eq_of_beq := by intro a b; cases a <;> cases b <;> decide
 
+/-- Hardware PTX synchronization scope on an atomic memory operation (`nvvm.atomic_scope`). -/
+inductive AtomicScope where
+  /-- Intra-CTA scope (`.cta` / `BlockAtomic*`). -/
+  | block
+  /-- Device-wide GPU scope (`.gpu` / `DeviceAtomic*`). -/
+  | device
+  /-- System-wide GPU + host scope (`.sys` / `SystemAtomic*` / `core::sync::atomic::*`). -/
+  | system
+  deriving Repr, BEq, DecidableEq, Lean.ToExpr
+
+instance : LawfulBEq AtomicScope where
+  rfl := by intro a; cases a <;> rfl
+  eq_of_beq := by intro a b; cases a <;> cases b <;> decide
+
 /-- Parameter kind on a kernel `mir.func` entry signature. -/
 inductive ParamKind where
   /-- Scalar unsigned integer parameter of `width` bits (`0` for float/opaque scalars). -/
@@ -175,6 +189,8 @@ inductive Rhs where
   | cvtaShared (ptr : Nat)
   /-- Load the base `TMEM` handle of `cols` columns from shared-memory slot `ptr` (`TMEM_ADDR[0]`). -/
   | loadTmemBase (ptr cols : Nat)
+  /-- Result-producing atomic memory access (`atomic_load`, `atomic_rmw`, `atomic_cmpxchg`, `packed_atomic_add`). -/
+  | atomicOp (isWrite : Bool) (scope : AtomicScope) (ptr id width : Nat)
   /-- Arbitrary `width`-bit unsigned integer produced by an opaque call/extract (`id`, `width`). -/
   | opaqueUint (id width : Nat)
   /-- Arbitrary `width`-bit unsigned integer whose CTA-uniformity follows `src` (`clc_query_*`, race-free SMEM `u32`). -/
@@ -195,6 +211,8 @@ inductive Stmt where
   | assign (dst : Nat) (rhs : Rhs)
   /-- Memory store `*ptr = val` (`mir.store`). -/
   | store (ptr val : Nat)
+  /-- Atomic memory store `*ptr = val` with PTX scope `scope` (`nvvm.atomic_store`). -/
+  | atomicStore (scope : AtomicScope) (ptr val : Nat)
   /-- Bounds or invariant assertion (`mir.assert`), carrying a deterministic `assertId`. -/
   | assertCond (assertId cond : Nat)
   /-- CTA-wide barrier `thread::sync_threads()` (`nvvm.barrier0`). -/
@@ -564,12 +582,13 @@ def evalRhs (f : MirFunc) (env : InputEnv) (t : ThreadCtx) (regs : RegFile) : Rh
           .smemOff sid (off * eb)
       | _ => .unk
   | .loadTmemBase _ _ => .unk
+  | .atomicOp _ _ _ id w => if 1 < w then .int (wordMod w (env.opaqueUint t id)) else .unk
   | .opaqueUint id w | .ctaUint1 id w _ => .int (wordMod w (env.opaqueUint t id))
   | .ctaConst | .ctaUnary _ | .ctaBin _ _ | .opaqueVal => .unk
 
 /-- Memory access event observed while executing a basic block. -/
 structure MemEvent where
-  /-- `true` for `Stmt.store` / `tmaCopyG2S` / `tmemAlloc`, `false` for `load` / `smemDescRead` / `barrierSlotCheck`. -/
+  /-- `true` for `Stmt.store` / `atomicStore` / RMW `atomicOp` / `tmaCopyG2S` / `tmemAlloc`, `false` for reads. -/
   isWrite : Bool
   /-- Target address space (`.global` or `.shared`). -/
   space : AddrSpace
@@ -581,6 +600,8 @@ structure MemEvent where
   phase : Nat
   /-- `some (barId, slot)` when released by an `mbarrier` arrival or TMA transfer on `BAR[slot]`. -/
   syncBar : Option (Nat × Nat) := none
+  /-- `some scope` when executed via a PTX atomic operation, or `none` for non-atomic accesses. -/
+  atomicScope : Option AtomicScope := none
   deriving Repr, DecidableEq
 
 /-- Blackwell Tensor Memory (`TMEM`) access event observed while executing a basic block. -/
@@ -647,6 +668,15 @@ def execStmts (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
             | _ => []
           let (r', p', evs, tevs) := execStmts f env t (regs.set dst (.tmemPtr cols 0)) phase term rest
           (r', p', ev ++ evs, tevs)
+      | .assign dst (.atomicOp isW scope ptr id w) =>
+          let ev := match regs ptr with
+            | .ptr sp bid off =>
+                [{ isWrite := isW, space := sp, bufId := bid, index := off,
+                   phase := phase, atomicScope := some scope }]
+            | _ => []
+          let v := if 1 < w then .int (wordMod w (env.opaqueUint t id)) else .unk
+          let (r', p', evs, tevs) := execStmts f env t (regs.set dst v) phase term rest
+          (r', p', ev ++ evs, tevs)
       | .assign dst rhs =>
           let v := evalRhs f env t regs rhs
           execStmts f env t (regs.set dst v) phase term rest
@@ -658,6 +688,14 @@ def execStmts (f : MirFunc) (env : InputEnv) (t : ThreadCtx)
             | .ptr sp bid off =>
                 [{ isWrite := true, space := sp, bufId := bid, index := off,
                    phase := phase, syncBar := if sp == .shared then sbar else none }]
+            | _ => []
+          let (r', p', evs, tevs) := execStmts f env t regs phase term rest
+          (r', p', ev ++ evs, tevs)
+      | .atomicStore scope ptr _val =>
+          let ev := match regs ptr with
+            | .ptr sp bid off =>
+                [{ isWrite := true, space := sp, bufId := bid, index := off,
+                   phase := phase, atomicScope := some scope }]
             | _ => []
           let (r', p', evs, tevs) := execStmts f env t regs phase term rest
           (r', p', ev ++ evs, tevs)
@@ -859,7 +897,7 @@ def Rhs.isCtaUni (_f : MirFunc) (isUni isRfPtr : Nat → Bool) : Rhs → Bool
       | .tidX | .tidY | .laneId => false
   | .binOp _ _ l r | .checkedOvf _ _ l r | .cmpOp _ l r | .ptrOffset l r | .ctaBin l r => isUni l && isUni r
   | .load ptr => isRfPtr ptr && isUni ptr
-  | .index1D | .coord2DU32 | .mbarTryWait _ _ _ | .loadTmemBase _ _ | .opaqueUint _ _ | .opaqueVal => false
+  | .index1D | .coord2DU32 | .mbarTryWait _ _ _ | .loadTmemBase _ _ | .atomicOp _ _ _ _ _ | .opaqueUint _ _ | .opaqueVal => false
 
 /-- True when `rhs` produces a pointer into a race-free `SharedArray` (`sid ∈ f.raceFreeShared`). -/
 def Rhs.isRfSmemPtr (f : MirFunc) (isRfPtr : Nat → Bool) : Rhs → Bool

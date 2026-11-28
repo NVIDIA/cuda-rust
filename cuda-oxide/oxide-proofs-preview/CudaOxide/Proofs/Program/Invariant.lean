@@ -225,7 +225,7 @@ def initialSymRegs (f : MirFunc) : SymRegList :=
 
 /-- SSA variables referenced inside a single `Rhs`. -/
 def rhsUsedVars : Rhs → List Nat
-  | .copy s | .notBool s | .intCast _ s | .load s | .cvtaShared s | .loadTmemBase s _ | .ctaUint1 _ _ s | .ctaUnary s => [s]
+  | .copy s | .notBool s | .intCast _ s | .load s | .cvtaShared s | .loadTmemBase s _ | .atomicOp _ _ s _ _ | .ctaUint1 _ _ s | .ctaUnary s => [s]
   | .binOp _ _ l r | .checkedOvf _ _ l r | .cmpOp _ l r | .ptrOffset l r | .ctaBin l r => [l, r]
   | .mbarTryWait _ sv _ => [sv]
   | _ => []
@@ -233,7 +233,7 @@ def rhsUsedVars : Rhs → List Nat
 /-- SSA variables referenced inside a single `Stmt`. -/
 def stmtUsedVars : Stmt → List Nat
   | .assign _ rhs => rhsUsedVars rhs
-  | .store p v => [p, v]
+  | .store p v | .atomicStore _ p v => [p, v]
   | .assertCond _ c => [c]
   | .barrierSlotCheck p | .tmemAlloc p _ | .smemDescRead p _ | .tmemAccess p _ _ _ => [p]
   | .clusterRankCheck r => [r]
@@ -947,7 +947,8 @@ theorem emitsEvent_mem_collect {f : MirFunc} {tbl : List SymBlockInv}
     ∃ havoc : Nat → Nat, ∃ sev ∈ collectSymMemEvents f tbl, ∃ idxSym : SymInt, ∃ k : Nat,
       k < sev.span ∧ 0 < sev.elemDiv ∧
       sev.isWrite = ev.isWrite ∧ sev.space = ev.space ∧ sev.bufId = ev.bufId ∧
-      evalSyncBar env t havoc sev.syncBar = ev.syncBar ∧ sev.indexOpt = some idxSym ∧
+      evalSyncBar env t havoc sev.syncBar = ev.syncBar ∧ sev.atomicScope = ev.atomicScope ∧
+      sev.indexOpt = some idxSym ∧
       (idxSym.eval env t havoc + k) / sev.elemDiv = ev.index ∧
       sev.pathCond.eval env t havoc = true ∧ sev.phaseSpec.matchesPhase ev.phase = true := by
   obtain ⟨b, phase, regs, hreach, hevMem⟩ := hemits
@@ -960,8 +961,8 @@ theorem emitsEvent_mem_collect {f : MirFunc} {tbl : List SymBlockInv}
   rw [hr] at hbOk; simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte, Bool.and_eq_true] at hbOk
   obtain ⟨_, _, hmE, _, _⟩ := symExecStmts_correct f env t havoc (tbl.getD b {}).effCond hpc (f.blockAt b).term
     (f.blockAt b).stmts regs (tbl.getD b {}).regs phase (tbl.getD b {}).phaseSpec hm hps hbOk.1.1.1 hbOk.1.2
-  obtain ⟨sev, hsev, idxS, k, hks, hdiv, hw, hsp, hbid, hab, hidxOpt, hidxEv, hpce, hpse⟩ := hmE ev hevMem
-  refine ⟨havoc, sev, ?_, idxS, k, hks, hdiv, hw, hsp, hbid, hab, hidxOpt, hidxEv, hpce, hpse⟩
+  obtain ⟨sev, hsev, idxS, k, hks, hdiv, hw, hsp, hbid, hab, hasc, hidxOpt, hidxEv, hpce, hpse⟩ := hmE ev hevMem
+  refine ⟨havoc, sev, ?_, idxS, k, hks, hdiv, hw, hsp, hbid, hab, hasc, hidxOpt, hidxEv, hpce, hpse⟩
   unfold collectSymMemEvents
   rw [List.mem_flatMap]
   refine ⟨b, List.mem_range.mpr hb, ?_⟩

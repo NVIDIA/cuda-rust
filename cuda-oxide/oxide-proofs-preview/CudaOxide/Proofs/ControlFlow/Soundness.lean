@@ -397,6 +397,8 @@ def checkUniformBarriersWith (cfg : ControlFlowCfg) (inv : StateMap) : Bool :=
   ((syncBarrierBlocks cfg).all fun b =>
     decide (activeGuardAt cfg b = .tr) &&
     (isCyclicBlockBool cfg b || checkNoDivergentBypassWith cfg revCfg reach0 rets b)) &&
+  ((warpSyncBlocks cfg).all fun wBlk =>
+    (activeGuardAt cfg wBlk).isWarpConvergent cfg.blockDimX cfg.blockDimY) &&
   ((decide (cyclicBarrierBlocks cfg = []) || decide (cyclicBarrierLoopBodyStarts cfg ≠ [])) &&
    (cyclicBarrierLoopBodyStarts cfg).all fun (hdr, body) =>
     checkNoDivergentBypassWith cfg revCfg reach0 rets hdr &&
@@ -423,11 +425,12 @@ theorem uniform_barriers_cfg_of_stateMap {cfg : ControlFlowCfg} {inv : StateMap}
   rcases Bool.and_eq_true_iff.mp h012345 with ⟨h01234, hsinit⟩
   rcases Bool.and_eq_true_iff.mp h01234 with ⟨h0123, hdsmem⟩
   rcases Bool.and_eq_true_iff.mp h0123 with ⟨h012, hmbar⟩
-  rcases Bool.and_eq_true_iff.mp h012 with ⟨h01, hcyc⟩
+  rcases Bool.and_eq_true_iff.mp h012 with ⟨h01w, hcyc⟩
+  rcases Bool.and_eq_true_iff.mp h01w with ⟨h01, hwarp⟩
   rcases Bool.and_eq_true_iff.mp h01 with ⟨hcntFwd, hsync⟩
   rcases Bool.and_eq_true_iff.mp hcntFwd with ⟨hcnt, hfwd0⟩
   rcases Bool.and_eq_true_iff.mp hcyc with ⟨hhasHdr, hloops⟩
-  refine ⟨of_decide_eq_true hcnt, ?_, ⟨?_, ?_⟩, ?_, ?_, ?_, hmbarCnt, ?_⟩
+  refine ⟨of_decide_eq_true hcnt, ?_, ?_, ⟨?_, ?_⟩, ?_, ?_, ?_, hmbarCnt, ?_⟩
   · intro b hb
     have hb_ok := List.all_eq_true.mp hsync b hb
     rcases Bool.and_eq_true_iff.mp hb_ok with ⟨htr, hacyc⟩
@@ -436,6 +439,8 @@ theorem uniform_barriers_cfg_of_stateMap {cfg : ControlFlowCfg} {inv : StateMap}
     rcases Bool.or_eq_true_iff.mp hacyc with hcyc_true | hndb
     · rw [hnotcyc] at hcyc_true; contradiction
     · exact noDivergentBypass_of_checkWith hfwd0 hndb
+  · intro wBlk hwBlk
+    exact List.all_eq_true.mp hwarp wBlk hwBlk
   · intro hne
     rcases Bool.or_eq_true_iff.mp hhasHdr with hemp | hnonemp
     · exact False.elim (hne (of_decide_eq_true hemp))

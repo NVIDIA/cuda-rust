@@ -284,6 +284,8 @@ pub enum CfgOpItem {
     TmemFenceBeforeSync,
     /// `tcgen05_fence_after_thread_sync()` ordering `tcgen05` after thread synchronization.
     TmemFenceAfterSync,
+    /// Full-warp (`0xFFFF_FFFF`) synchronous warp collective (`vote.sync`, `redux.sync`, `match.sync`, `bar.warp.sync`).
+    WarpSyncFull,
 }
 
 /// One basic block transcribed into `CudaOxide.Mir.ControlFlow.CfgBlock`.

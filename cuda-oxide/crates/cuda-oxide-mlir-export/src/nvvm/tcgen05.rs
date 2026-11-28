@@ -40,6 +40,25 @@ pub fn register_nvvm_tcgen05_pack(
     registry.register_attribute::<Tcgen05MmaBBufferAttr>(DropAttribute)?;
     registry.register_attribute::<Tcgen05MmaBUsageAttr>(DropAttribute)?;
     registry.register_operation::<Tcgen05MmaOp>(MmaTranslation)?;
+    // The raw `tcgen05_mma_f16` intrinsic is the dense shared-A FP16 MMA with a discarded collector.
+    registry.register_operation::<Tcgen05MmaF16Op>(RawMmaF16Translation {
+        marker: "v1:i0351",
+        group: 1,
+        verify: |ctx, source| {
+            Tcgen05MmaF16Op::new(source)
+                .verify(ctx)
+                .map_err(|error| error.to_string())
+        },
+    })?;
+    registry.register_operation::<Tcgen05MmaF16Cg2Op>(RawMmaF16Translation {
+        marker: "v1:i0362",
+        group: 2,
+        verify: |ctx, source| {
+            Tcgen05MmaF16Cg2Op::new(source)
+                .verify(ctx)
+                .map_err(|error| error.to_string())
+        },
+    })?;
     registry.register_operation::<CvtaGenericToSharedOffsetOp>(SharedOffsetTranslation(false))?;
     registry
         .register_operation::<CvtaGenericToClusterSharedOffsetOp>(SharedOffsetTranslation(true))?;
@@ -65,6 +84,21 @@ pub fn register_nvvm_tcgen05_pack(
     primitive!(Tcgen05DeallocCg2Op, "v1:i0360", Primitive::Dealloc, 2, 2);
     primitive!(Tcgen05CommitOp, "v1:i0348", Primitive::Commit, 1, 1);
     primitive!(Tcgen05CommitCg2Op, "v1:i0363", Primitive::Commit, 2, 1);
+    // The `.shared::cluster` commit takes one shared mbarrier address, like the plain form.
+    primitive!(
+        Tcgen05CommitSharedClusterOp,
+        "v1:i0349",
+        Primitive::Commit,
+        1,
+        1
+    );
+    primitive!(
+        Tcgen05CommitSharedClusterCg2Op,
+        "v1:i0364",
+        Primitive::Commit,
+        2,
+        1
+    );
     primitive!(
         Tcgen05CommitMulticastOp,
         "v1:i0760",
@@ -437,6 +471,52 @@ impl OperationTranslation for MmaTranslation {
         );
         operations.push(target);
         Ok(operations)
+    }
+}
+
+/// Translate the raw `tcgen05_mma_f16` intrinsic into `nvvm.tcgen05.mma`.
+///
+/// Its five operands are those of the dense shared-A form: TMEM destination, descriptor A, descriptor B,
+/// instruction descriptor and enable-D. It carries no selectors, so the kind is FP16 and the collector is
+/// discarded.
+struct RawMmaF16Translation {
+    /// Canonical catalog identity required before emitting this intrinsic.
+    marker: &'static str,
+    /// CTA group of the instruction.
+    group: u32,
+    /// Check the source operation's operand contract.
+    verify: VerifyOperation,
+}
+
+impl OperationTranslation for RawMmaF16Translation {
+    fn translate(
+        &self,
+        ctx: &Context,
+        source: Ptr<Operation>,
+        mut input: OperationInput,
+        session: &mut TranslationSession<'_>,
+    ) -> Result<Vec<MlirOperation>, String> {
+        (self.verify)(ctx, source)?;
+        require_input(&mut input, self.marker, 5, 0)?;
+        let (cast, tmem) = tmem_pointer(session, input.operands[0].clone(), &input.location)?;
+        input.operands[0] = tmem;
+        let mut target = operation("nvvm.tcgen05.mma", input.operands, vec![], &input.location)?;
+        target.properties.insert(
+            "kind".into(),
+            MlirAttribute::dialect("#nvvm.tcgen05_mma_kind<f16>")?,
+        );
+        target
+            .properties
+            .insert("ctaGroup".into(), cta_group_value(self.group)?);
+        target.properties.insert(
+            "collectorOp".into(),
+            MlirAttribute::dialect("#nvvm.tcgen05_mma_collectorop<discard>")?,
+        );
+        target.properties.insert(
+            "operandSegmentSizes".into(),
+            MlirAttribute::DenseI32Array(vec![1, 1, 1, 1, 1, 0, 0]),
+        );
+        Ok(vec![cast, target])
     }
 }
 
@@ -976,6 +1056,87 @@ mod tests {
             text.find("\"llvm.addrspacecast\"").unwrap() < text.find("\"llvm.ptrtoint\"").unwrap()
         );
         assert!(!text.contains("cuda_oxide_intrinsic_marker"));
+    }
+
+    /// Check the raw `tcgen05_mma_f16` intrinsic becomes the dense shared-A FP16 MMA and keeps its identity.
+    #[test]
+    fn raw_f16_mma_becomes_the_dense_shared_a_mma() {
+        let (mut ctx, module, first) = fixture();
+        let block = first.deref(&ctx).get_parent_block().unwrap();
+        let a = block.deref(&ctx).arguments().collect::<Vec<_>>();
+        let raw = Operation::new(
+            &mut ctx,
+            Tcgen05MmaF16Cg2Op::get_concrete_op_info(),
+            vec![],
+            vec![a[2], a[3], a[4], a[5], a[7]],
+            vec![],
+            0,
+        );
+        raw.deref_mut(&ctx).attributes.set(
+            "cuda_oxide_intrinsic_marker".try_into().unwrap(),
+            StringAttr::new("v1:i0362".into()),
+        );
+        raw.insert_before(&ctx, first);
+        let text = translate(&ctx, &module).unwrap();
+        assert_eq!(text.matches("\"nvvm.tcgen05.mma\"").count(), 3, "{text}");
+        assert_eq!(
+            text.matches("#nvvm.tcgen05_mma_collectorop<discard>")
+                .count(),
+            1,
+            "{text}"
+        );
+        assert_eq!(
+            text.matches("(!llvm.ptr<6>, i64, i64, i32, i1) -> ()")
+                .count(),
+            3,
+            "{text}"
+        );
+        assert!(!text.contains("cta_1"), "{text}");
+
+        raw.deref_mut(&ctx).attributes.set(
+            "cuda_oxide_intrinsic_marker".try_into().unwrap(),
+            StringAttr::new("v1:i0351".into()),
+        );
+        assert!(
+            translate(&ctx, &module)
+                .unwrap_err()
+                .contains("expected intrinsic marker v1:i0362")
+        );
+    }
+
+    /// Check the `.shared::cluster` commit maps to the same commit as the plain form and keeps its identity.
+    #[test]
+    fn shared_cluster_commit_becomes_the_plain_commit() {
+        let (mut ctx, module, first) = fixture();
+        let block = first.deref(&ctx).get_parent_block().unwrap();
+        let a = block.deref(&ctx).arguments().collect::<Vec<_>>();
+        let commit = Operation::new(
+            &mut ctx,
+            Tcgen05CommitSharedClusterCg2Op::get_concrete_op_info(),
+            vec![],
+            vec![a[0]],
+            vec![],
+            0,
+        );
+        commit.deref_mut(&ctx).attributes.set(
+            "cuda_oxide_intrinsic_marker".try_into().unwrap(),
+            StringAttr::new("v1:i0364".into()),
+        );
+        commit.insert_before(&ctx, first);
+        let text = translate(&ctx, &module).unwrap();
+        // The fixture already holds one multicast commit.
+        assert_eq!(text.matches("\"nvvm.tcgen05.commit\"").count(), 2, "{text}");
+        assert!(!text.contains("cta_1"), "{text}");
+
+        commit.deref_mut(&ctx).attributes.set(
+            "cuda_oxide_intrinsic_marker".try_into().unwrap(),
+            StringAttr::new("v1:i0349".into()),
+        );
+        assert!(
+            translate(&ctx, &module)
+                .unwrap_err()
+                .contains("expected intrinsic marker v1:i0364")
+        );
     }
 
     /// Reject MMA variants whose source selector contracts have no reviewed mapping.

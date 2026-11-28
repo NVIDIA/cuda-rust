@@ -53,7 +53,9 @@ CuTe profile remains available. Profile identity participates in build caching.
 
 Real Rust fixtures also exercise checked arithmetic, padded tuple carriers,
 Direct/Single enum storage, static shared globals and Rust pointer-address
-semantics. Explicit NVVM shared offsets preserve AS3/AS7; Rust address casts
+semantics. Of the niche enum layouts only the null-pointer `Option<&T>` shape
+is accepted (one generic-space pointer, null meaning `None`); every other
+niche encoding fails closed. Explicit NVVM shared offsets preserve AS3/AS7; Rust address casts
 convert named pointers to generic addresses first. See the
 [cutlass-primitives README](../../cute-rs-preview/cutlass-primitives/README.md).
 

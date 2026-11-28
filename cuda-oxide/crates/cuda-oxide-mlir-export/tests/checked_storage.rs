@@ -158,6 +158,87 @@ fn direct_enum_uses_physical_offsets_for_tag_and_active_payload() {
     );
     assert!(text.contains("!llvm.struct<(array<16 x i8>, array<0 x i64>)>"));
 }
+/// Check the null-pointer `Option<&T>` niche layout: `None` is a null carrier, the discriminant is a
+/// null test, and the payload is the carrier itself.
+#[test]
+fn option_reference_enum_uses_a_null_carrier_and_a_null_test() {
+    let mut ctx = Context::new();
+    dialect_mir::register(&mut ctx);
+    let disc: TypeHandle = IntegerType::get(&ctx, 64, Signedness::Signed).into();
+    let byte: TypeHandle = IntegerType::get(&ctx, 8, Signedness::Unsigned).into();
+    let pointer: TypeHandle = MirPtrType::get(&mut ctx, byte, true, 0).into();
+    let e: TypeHandle = MirEnumType::get_with_encoding(
+        &mut ctx,
+        "Option".into(),
+        disc,
+        vec![0, 1],
+        vec![
+            EnumVariant::new_with_layout("None".into(), vec![], vec![], vec![]),
+            EnumVariant::new_with_layout("Some".into(), vec![pointer], vec![0], vec![8]),
+        ],
+        EnumEncoding {
+            total_size: 8,
+            abi_align: 8,
+            layout_kind: EnumLayoutKind::Niche,
+            carrier_kind: EnumCarrierKind::Pointer,
+            carrier_width: 64,
+            niche_start: 0,
+            niche_variant_start: 0,
+            niche_variant_end: 0,
+            untagged_variant: 1,
+            variant_inhabited: vec![1, 1],
+            ..Default::default()
+        },
+    )
+    .into();
+    let (m, b) = function(&mut ctx, vec![pointer], vec![pointer]);
+    let arg = b.deref(&ctx).get_argument(0);
+    let none = append::<MirConstructEnumOp>(&mut ctx, b, vec![e], vec![]);
+    MirConstructEnumOp::new(none).set_attr_construct_enum_variant_index(&ctx, VariantIndexAttr(0));
+    let none = none.deref(&ctx).get_result(0);
+    append::<MirGetDiscriminantOp>(&mut ctx, b, vec![disc], vec![none]);
+    let some = append::<MirConstructEnumOp>(&mut ctx, b, vec![e], vec![arg]);
+    MirConstructEnumOp::new(some).set_attr_construct_enum_variant_index(&ctx, VariantIndexAttr(1));
+    let some = some.deref(&ctx).get_result(0);
+    append::<MirGetDiscriminantOp>(&mut ctx, b, vec![disc], vec![some]);
+    let p = append::<MirEnumPayloadOp>(&mut ctx, b, vec![pointer], vec![some]);
+    let p = MirEnumPayloadOp::new(p);
+    p.set_attr_payload_variant_index(&ctx, VariantIndexAttr(1));
+    p.set_attr_payload_field_index(&ctx, FieldIndexAttr(0));
+    let v = p.get_operation().deref(&ctx).get_result(0);
+    append::<MirReturnOp>(&mut ctx, b, vec![], vec![v]);
+    let text = render(&ctx, &m).unwrap();
+    assert!(
+        text.contains("!llvm.struct<(array<8 x i8>, array<0 x i64>)>"),
+        "{text}"
+    );
+    // `None` stores one null carrier. `Some` stores the reference itself.
+    assert_eq!(
+        text.matches(": (i64, !llvm.ptr) -> ()").count(),
+        1,
+        "{text}"
+    );
+    assert_eq!(
+        text.matches(": (!llvm.ptr, !llvm.ptr) -> ()").count(),
+        1,
+        "{text}"
+    );
+    // Each discriminant read compares the carrier with null and selects a declared discriminant.
+    assert_eq!(text.matches("\"arith.cmpi\"").count(), 2, "{text}");
+    assert_eq!(text.matches("predicate = 0 : i64").count(), 2, "{text}");
+    assert_eq!(
+        text.matches(": (i1, i64, i64) -> (i64)").count(),
+        2,
+        "{text}"
+    );
+    assert_eq!(text.matches("value = 1 : i64").count(), 2, "{text}");
+    // The payload is read back as the pointer, with no tag access.
+    let pointer_loads = text
+        .lines()
+        .filter(|l| l.contains("\"llvm.load\"") && l.ends_with("-> (!llvm.ptr)"))
+        .count();
+    assert_eq!(pointer_loads, 1, "{text}");
+}
 /// Build repeated shared declarations, optionally introducing a named storage-contract conflict.
 fn shared_case(conflict: &str) -> Result<String, String> {
     let mut ctx = Context::new();

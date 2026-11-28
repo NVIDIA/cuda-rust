@@ -617,6 +617,60 @@ fn sm120_tma_rejects_nonzero_multicast_mask_or_cache_hint() {
     }
 }
 
+/// Check the multicast TMA load keeps its CTA mask and does not become a CTA-only load.
+#[test]
+fn multicast_tma_keeps_its_cta_mask() {
+    let mut f = Fixture::new();
+    let mask = f.constant(16, 3);
+    let hint = f.constant(64, 0);
+    f.append::<CpAsyncBulkTensorG2sTile2dMulticastOp>(
+        "v1:i0330",
+        vec![f.arg(1), f.arg(2), f.arg(3), f.arg(4), f.arg(5), mask, hint],
+        vec![],
+    );
+    f.finish();
+    let text = f.translate().unwrap();
+    assert!(
+        text.contains("\"nvvm.cp.async.bulk.tensor.shared.cluster.global\""),
+        "{text}"
+    );
+    assert!(
+        text.contains("operandSegmentSizes = array<i32: 1, 1, 2, 1, 0, 1, 0, 0>"),
+        "{text}"
+    );
+    assert!(!text.contains("isCTAOnly"), "{text}");
+}
+
+/// Reject a cache hint and a foreign catalog identity on the multicast TMA load.
+#[test]
+fn multicast_tma_rejects_cache_hint_and_foreign_identity() {
+    let mut f = Fixture::new();
+    let mask = f.constant(16, 3);
+    let hint = f.constant(64, 1);
+    f.append::<CpAsyncBulkTensorG2sTile2dMulticastOp>(
+        "v1:i0330",
+        vec![f.arg(1), f.arg(2), f.arg(3), f.arg(4), f.arg(5), mask, hint],
+        vec![],
+    );
+    f.finish();
+    assert!(f.translate().unwrap_err().contains("zero cache hint"));
+
+    let mut f = Fixture::new();
+    let mask = f.constant(16, 3);
+    let hint = f.constant(64, 0);
+    f.append::<CpAsyncBulkTensorG2sTile2dMulticastOp>(
+        "v1:i0329",
+        vec![f.arg(1), f.arg(2), f.arg(3), f.arg(4), f.arg(5), mask, hint],
+        vec![],
+    );
+    f.finish();
+    assert!(
+        f.translate()
+            .unwrap_err()
+            .contains("expected intrinsic marker v1:i0330")
+    );
+}
+
 /// Reject SM100-only tensor-memory instructions during source architecture validation.
 #[test]
 fn sm120_rejects_tcgen05_before_translation() {

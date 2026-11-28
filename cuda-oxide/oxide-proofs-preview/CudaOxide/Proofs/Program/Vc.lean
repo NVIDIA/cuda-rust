@@ -21,21 +21,22 @@ theorem foldr_and_of_mem {α : Type} {P : α → Prop} :
   | _ :: _, ⟨hp, _⟩, _, List.Mem.head _ => hp
   | _ :: tl, ⟨_, htl⟩, x, List.Mem.tail _ hm => foldr_and_of_mem tl htl x hm
 
-/-- Remove exact duplicate symbolic events before generating VC obligations. -/
-def dedupEvents {α : Type} [DecidableEq α] : List α → List α
+/-- Remove exact duplicate symbolic events before generating VC obligations
+    (using non-dependent `BEq` so `whnf` never constructs `DecidableEq` proof terms). -/
+def dedupEvents {α : Type} [BEq α] : List α → List α
   | [] => []
   | x :: xs =>
       let rest := dedupEvents xs
-      if decide (x ∈ rest) then rest else x :: rest
+      if rest.contains x then rest else x :: rest
 
-theorem mem_dedupEvents {α : Type} [DecidableEq α] {x : α} :
+theorem mem_dedupEvents {α : Type} [BEq α] [LawfulBEq α] {x : α} :
     ∀ {xs : List α}, x ∈ xs → x ∈ dedupEvents xs
   | [], h => nomatch h
   | y :: tl, h => by
       dsimp only [dedupEvents]
       rcases List.mem_cons.mp h with rfl | htl
       · split
-        · rename_i hin; exact of_decide_eq_true hin
+        · rename_i hin; exact List.contains_iff_mem.mp hin
         · exact List.Mem.head _
       · have ih := mem_dedupEvents htl
         split
@@ -502,7 +503,7 @@ theorem vcNoOobGlobal_of_table {f : MirFunc} {tbl : List SymBlockInv}
     MirNoOobGlobal f paramId := by
   intro env t ev hIn hTh hemits hsp hbid                    -- Step 1: Pick any GPU thread `t` and global access `ev`
   obtain ⟨havoc, sev, hsev, idxS, k, hks, hdiv, _, hssp, hsbid, _, hopt, hidxEv, hpc, _⟩ :=
-    emitsEvent_mem_collect hvalid hIn hemits                -- Step 2: Map concrete `ev` to its symbolic event `sev`
+    emitsEvent_mem_collect hvalid hIn hTh hemits            -- Step 2: Map concrete `ev` to its symbolic event `sev`
   have hfMem : sev ∈ sevs := by                             -- Step 3: Show `sev` belongs to the filtered `paramId` slice list
     rw [← hevs]; apply mem_dedupEvents; rw [← hmem, List.mem_filter]; exact ⟨hsev, by simp [hssp, hsp, hsbid, hbid]⟩
   have hp := foldr_and_of_mem _ (foldr_holds_to_eval sevs (hvc env t havoc hIn hTh)) sev hfMem hpc -- Step 4: Extract `omega`'s VC proof for `sev`
@@ -524,7 +525,7 @@ theorem vcNoOobShared_of_table {f : MirFunc} {tbl : List SymBlockInv}
     MirNoOobShared f sharedId := by
   intro env t ev hIn hTh hemits hsp hbid                    -- Step 1: Pick any CTA thread `t` and shared access `ev`
   obtain ⟨havoc, sev, hsev, idxS, k, hks, hdiv, _, hssp, hsbid, _, hopt, hidxEv, hpc, _⟩ :=
-    emitsEvent_mem_collect hvalid hIn hemits                -- Step 2: Map concrete `ev` to its symbolic event `sev`
+    emitsEvent_mem_collect hvalid hIn hTh hemits            -- Step 2: Map concrete `ev` to its symbolic event `sev`
   have hfMem : sev ∈ sevs := by                             -- Step 3: Show `sev` belongs to `SharedArray` `sharedId`'s list
     rw [← hevs]; apply mem_dedupEvents; rw [← hmem, List.mem_filter]; exact ⟨hsev, by simp [hssp, hsp, hsbid, hbid]⟩
   have hp := foldr_and_of_mem _ (foldr_holds_to_eval sevs (hvc env t havoc hIn hTh)) sev hfMem hpc -- Step 4: Extract `omega`'s VC proof for `sev`
@@ -552,9 +553,9 @@ theorem vcDisjointWrites_of_table {f : MirFunc} {tbl : List SymBlockInv}
     MirDisjointWrites f paramId := by
   intro env t₁ t₂ ev₁ ev₂ hIn hT1 hT2 hem1 hem2 hsp1 hsp2 hb1 hb2 hw hidx -- Step 1: Pick two threads `t₁, t₂` colliding on `ev₁.index = ev₂.index`
   obtain ⟨h₁, s1, hs1, i1, k1, hk1, hd1, hw1, hssp1, hsbid1, _, ho1, hi1, hpc1, _⟩ :=
-    emitsEvent_mem_collect hvalid hIn hem1                  -- Step 2a: Map `ev₁` to symbolic event `s1`
+    emitsEvent_mem_collect hvalid hIn hT1 hem1              -- Step 2a: Map `ev₁` to symbolic event `s1`
   obtain ⟨h₂, s2, hs2, i2, k2, hk2, hd2, hw2, hssp2, hsbid2, _, ho2, hi2, hpc2, _⟩ :=
-    emitsEvent_mem_collect hvalid hIn hem2                  -- Step 2b: Map `ev₂` to symbolic event `s2`
+    emitsEvent_mem_collect hvalid hIn hT2 hem2              -- Step 2b: Map `ev₂` to symbolic event `s2`
   rw [hmem] at hs1 hs2
   have hm1 : s1 ∈ memEvs.filter (fun s => s.space == .global && s.bufId == paramId) := by
     rw [List.mem_filter]; exact ⟨hs1, by simp [hssp1, hsp1, hsbid1, hb1]⟩
@@ -825,9 +826,9 @@ theorem vcNoSharedRace_of_table {f : MirFunc} {cfg : ControlFlowCfg} {tbl : List
   refine ⟨hunif, ?_⟩                                        -- Supply `UniformBarriers cfg` for phase alignment
   intro env t₁ t₂ ev₁ ev₂ hIn hT1 hT2 hbx hby hem1 hem2 hsp1 hsp2 hb1 hb2 hph hnotOrd hw hidx
   obtain ⟨h₁, s1, hs1, i1, k1, hk1, hd1, hw1, hssp1, hsbid1, hab1, ho1, hi1, hpc1, hps1⟩ :=
-    emitsEvent_mem_collect hvalid hIn hem1
+    emitsEvent_mem_collect hvalid hIn hT1 hem1
   obtain ⟨h₂, s2, hs2, i2, k2, hk2, hd2, hw2, hssp2, hsbid2, hab2, ho2, hi2, hpc2, hps2⟩ :=
-    emitsEvent_mem_collect hvalid hIn hem2
+    emitsEvent_mem_collect hvalid hIn hT2 hem2
   by_cases hdisj : s1.phaseSpec.disjoint s2.phaseSpec = true
   · exact False.elim (phaseSpec_disjoint_sound hdisj hps1 hps2 hph)
   · by_cases haord : symAsyncOrdered f s1 s2 = true
@@ -900,7 +901,7 @@ theorem vcAssertRedundant_of_table {f : MirFunc} {tbl : List SymBlockInv}
          (aev.condOpt.getD (.lit false)).holds env t havoc) ∧ acc) True) :
     MirAssertRedundant f assertId := by
   intro env t b phase regs hIn hTh hreach pfx sfx cond hstmts -- Step 1: Pick any reachable block `b` containing `assertCond assertId cond`
-  obtain ⟨hb, hr, havoc, hpc, hps, hm⟩ := symReachable_sound hvalid hIn hreach -- Step 2: Obtain block `b`'s symbolic invariant match
+  obtain ⟨hb, hr, havoc, hpc, hps, hm⟩ := symReachable_sound hvalid hIn hTh hreach -- Step 2: Obtain block `b`'s symbolic invariant match
   have hvf := hvalid
   unfold validSymFunc at hvf
   simp only [Bool.and_eq_true, decide_eq_true_eq] at hvf
@@ -955,7 +956,7 @@ theorem vcNoOobTmem_of_table {f : MirFunc} {tbl : List SymBlockInv}
     MirNoOobTmem f := by
   intro env t tev hIn hTh hemits                            -- Step 1: Pick any CTA thread `t` and `TMEM` access `tev`
   obtain ⟨havoc, stev, hstev, relS, hac, hhl, hwc, hwr, hro, hre, hpc⟩ :=
-    emitsTmemEvent_mem_collect hvalid hIn hemits            -- Step 2: Map `tev` to its symbolic `SymTmemEvent` `stev`
+    emitsTmemEvent_mem_collect hvalid hIn hTh hemits        -- Step 2: Map `tev` to its symbolic `SymTmemEvent` `stev`
   rw [htmem, hevs] at hstev
   have hp := foldr_and_of_mem _ (foldr_holds_to_eval tevs (hvc env t havoc hIn hTh)) stev hstev hpc -- Step 3: Extract `omega`'s VC proof
   rw [hro] at hp; dsimp only [Option.getD] at hp            -- Step 4: Unwrap `stev.relAddrOpt = some relS`
@@ -1082,7 +1083,7 @@ theorem vcNoOobClusterRank_of_table {f : MirFunc} {tbl : List SymBlockInv}
          symRankInBounds rev env t havoc f.clusterDimX) ∧ acc) True) :
     MirNoOobClusterRank f := by
   intro env t b phase regs hIn hTh hreach pfx sfx rankVar r hstmts hr -- Step 1: Pick any reachable `clusterRankCheck rankVar`
-  obtain ⟨hb, hrch, havoc, hpc, _, hm⟩ := symReachable_sound hvalid hIn hreach -- Step 2: Obtain block `b`'s symbolic invariant match
+  obtain ⟨hb, hrch, havoc, hpc, _, hm⟩ := symReachable_sound hvalid hIn hTh hreach -- Step 2: Obtain block `b`'s symbolic invariant match
   obtain ⟨rev, hrevMem, hpce, hrEq⟩ := symRankEventsOfStmts_correct f env t havoc
     (tbl.getD b {}).effCond (f.blockAt b).term (f.blockAt b).stmts pfx sfx regs (tbl.getD b {}).regs phase rankVar r hm hstmts hr
   have hfMem : rev ∈ revs := by                             -- Step 3: Show `rev` belongs to `symRankEvents`

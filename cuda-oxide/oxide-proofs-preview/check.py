@@ -31,6 +31,8 @@ REJECTED = (
 # Refused by the CTA state machine: `decide` evaluates `checkUniformBarriersWith` to `false`.
 REJECTED_BARRIERS = (
     ("RejectedTmaReadAfterSync.lean", "TMA destination read after sync_threads without an mbarrier wait"),
+    ("RejectedDivergentEarlyReturn.lean", "thread-divergent early return before sync_threads"),
+    ("RejectedConditionalUniformInit.lean", "conditional uniform diamond leaving shared memory uninitialized"),
 )
 
 

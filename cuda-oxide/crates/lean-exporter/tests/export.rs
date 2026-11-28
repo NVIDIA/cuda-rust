@@ -3895,3 +3895,107 @@ mir.func @scale_quad: builtin.function <(mir.slice <builtin.fp32 ,mutable:false,
             .expect_err("Lean 4 must reject inclusive `idx <= n` under `out.len() >= n`");
     }
 }
+
+#[test]
+fn verifies_cta_uniform_early_return_and_strided_bool_loops_and_rejects_divergent_returns() {
+    let valid_mir = r#"
+mir.func @strided_reduce_early_ret: builtin.function <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>, builtin.integer ui32, mir.slice <builtin.fp32 ,mutable:true,kind:UniqueRef>) -> ()>
+  [contract_requires_len_ge: builtin.string "0>=2", gpu_kernel: builtin.string "true", launch_contract_domain: builtin.integer <1: ui32>, reqntid_x: builtin.integer <256: ui32>, reqntid_y: builtin.integer <1: ui32>, reqntid_z: builtin.integer <1: ui32>, verify_disjoint_writes: builtin.string "2", verify_no_data_race: builtin.string "0", verify_no_oob_idx: builtin.string "0,2", verify_no_oob_shared: builtin.string "0", verify_uniform_barriers: builtin.string "true"]
+{
+  ^entry(x: mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>, m: builtin.integer ui32, y: mir.slice <builtin.fp32 ,mutable:true,kind:UniqueRef>):
+    bx32 = nvvm.read_ptx_sreg_ctaid_x () [] []: <() -> (builtin.integer ui32)>;
+    skip_blk = mir.ge (bx32, m) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer i1)>;
+    mir.cond_br (skip_blk) [^exit, ^init] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+  ^init():
+    tx32 = nvvm.read_ptx_sreg_tid_x () [] []: <() -> (builtin.integer ui32)>;
+    tid = mir.cast (tx32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+    k = mir.extract_field (x) [] [index: mir.field_index 1]: <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>) -> (builtin.integer ui64)>;
+    t_bool = mir.constant () [] [value: builtin.integer <1: i1>]: <() -> (builtin.integer i1)>;
+    mir.goto (tid, t_bool) [^loop_hdr] []: <(builtin.integer ui64, builtin.integer i1) -> ()>
+
+  ^loop_hdr(it: builtin.integer ui64, flag: builtin.integer i1):
+    c768 = mir.constant () [] [value: builtin.integer <768: ui64>]: <() -> (builtin.integer ui64)>;
+    it_end = mir.add (it, c768) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+    in_loop = mir.lt (it_end, k) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+    mir.cond_br (in_loop) [^loop_body, ^post_loop] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+  ^loop_body():
+    x_ptr = mir.extract_field (x) [] [index: mir.field_index 0]: <(mir.slice <builtin.fp32 ,mutable:false,kind:SharedRef>) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>)>;
+    p0 = mir.ptr_offset (x_ptr, it) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>)>;
+    _v0 = mir.load (p0) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>) -> (builtin.fp32)>;
+    p3 = mir.ptr_offset (x_ptr, it_end) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>)>;
+    _v3 = mir.load (p3) [] []: <(mir.ptr <builtin.fp32 ,mutable:false,addrspace:0,kind:Erased>) -> (builtin.fp32)>;
+    c1024 = mir.constant () [] [value: builtin.integer <1024: ui64>]: <() -> (builtin.integer ui64)>;
+    it_next = mir.add (it, c1024) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+    f_next = mir.not (flag) [] []: <(builtin.integer i1) -> (builtin.integer i1)>;
+    mir.goto (it_next, f_next) [^loop_hdr] []: <(builtin.integer ui64, builtin.integer i1) -> ()>
+
+  ^post_loop():
+    lane = nvvm.read_ptx_sreg_laneid () [] []: <() -> (builtin.integer ui32)>;
+    z32 = mir.constant () [] [value: builtin.integer <0: ui32>]: <() -> (builtin.integer ui32)>;
+    is_l0 = mir.eq (lane, z32) [] []: <(builtin.integer ui32, builtin.integer ui32) -> (builtin.integer i1)>;
+    mir.cond_br (is_l0) [^stage, ^sync] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+  ^stage():
+    c32 = mir.constant () [] [value: builtin.integer <32: ui64>]: <() -> (builtin.integer ui64)>;
+    w_idx = mir.div (tid, c32) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+    ws_base = mir.shared_alloc () [] [elem_type: builtin.type builtin.fp32, size: builtin.integer <8: i64>, alloc_key: builtin.string "WSUM", source_name: builtin.string "k::WSUM"]: <() -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>)>;
+    ws_slot = mir.ptr_offset (ws_base, w_idx) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>)>;
+    zf = mir.float_constant () [] [float_value: builtin.single 0]: <() -> (builtin.fp32)>;
+    mir.store (ws_slot, zf) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>, builtin.fp32) -> ()>;
+    mir.goto () [^sync] []: <() -> ()>
+
+  ^sync():
+    nvvm.barrier0 () [] []: <() -> ()>;
+    ws_r = mir.shared_alloc () [] [elem_type: builtin.type builtin.fp32, size: builtin.integer <8: i64>, alloc_key: builtin.string "WSUM", source_name: builtin.string "k::WSUM"]: <() -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>)>;
+    z64 = mir.constant () [] [value: builtin.integer <0: ui64>]: <() -> (builtin.integer ui64)>;
+    ws0 = mir.ptr_offset (ws_r, z64) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>)>;
+    s_val = mir.load (ws0) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:3,kind:Erased>) -> (builtin.fp32)>;
+    bx64 = mir.cast (bx32) [] [cast_kind: mir.cast_kind IntToInt]: <(builtin.integer ui32) -> (builtin.integer ui64)>;
+    c256 = mir.constant () [] [value: builtin.integer <256: ui64>]: <() -> (builtin.integer ui64)>;
+    b_off = mir.mul (bx64, c256) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+    gid = mir.add (b_off, tid) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer ui64)>;
+    y_len = mir.extract_field (y) [] [index: mir.field_index 1]: <(mir.slice <builtin.fp32 ,mutable:true,kind:UniqueRef>) -> (builtin.integer ui64)>;
+    in_y = mir.lt (gid, y_len) [] []: <(builtin.integer ui64, builtin.integer ui64) -> (builtin.integer i1)>;
+    mir.cond_br (in_y) [^write_y, ^exit] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>
+
+  ^write_y():
+    y_ptr = mir.extract_field (y) [] [index: mir.field_index 0]: <(mir.slice <builtin.fp32 ,mutable:true,kind:UniqueRef>) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>)>;
+    y_elem = mir.ptr_offset (y_ptr, gid) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>, builtin.integer ui64) -> (mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>)>;
+    mir.store (y_elem, s_val) [] []: <(mir.ptr <builtin.fp32 ,mutable:true,addrspace:0,kind:UniqueRef>, builtin.fp32) -> ()>;
+    mir.goto () [^exit] []: <() -> ()>
+
+  ^exit():
+    mir.return () [] []: <() -> ()>
+}
+"#;
+    let valid_lean = export_named_source(valid_mir, "strided_reduce_early_ret")
+        .expect("transcribes strided_reduce_early_ret");
+    if let Some(lean_dir) = lean_package_dir_if_available() {
+        lean_exporter::runner::check_generated_lean(&valid_lean, &lean_dir)
+            .expect("Lean 4 must accept CTA-uniform early return + strided bool loop");
+
+        // Negative 1: thread-divergent early return (`tid_x >= m`) before `sync_threads()` must fail:
+        let div_ret_mir = valid_mir.replacen(
+            "skip_blk = mir.ge (bx32, m)",
+            "tx_early = nvvm.read_ptx_sreg_tid_x () [] []: <() -> (builtin.integer ui32)>;\n    skip_blk = mir.ge (tx_early, m)",
+            1,
+        );
+        let div_ret_lean = export_named_source(&div_ret_mir, "strided_reduce_early_ret")
+            .expect("transcribes div_ret");
+        lean_exporter::runner::check_generated_lean(&div_ret_lean, &lean_dir)
+            .expect_err("Lean 4 must reject thread-divergent early return before sync_threads");
+
+        // Negative 2: mid-loop data-dependent early return before `sync_threads()` must fail:
+        let mid_loop_ret_mir = valid_mir.replacen(
+            "    mir.goto (it_next, f_next) [^loop_hdr]",
+            "    mir.cond_br (f_next) [^exit, ^cont_loop] [builtin_operand_segment_sizes: builtin.operand_segment_sizes [1, 0, 0]]: <(builtin.integer i1) -> ()>\n\n  ^cont_loop():\n    mir.goto (it_next, f_next) [^loop_hdr]",
+            1,
+        );
+        let mid_ret_lean = export_named_source(&mid_loop_ret_mir, "strided_reduce_early_ret")
+            .expect("transcribes mid_loop_ret");
+        lean_exporter::runner::check_generated_lean(&mid_ret_lean, &lean_dir)
+            .expect_err("Lean 4 must reject divergent mid-loop early return before sync_threads");
+    }
+}

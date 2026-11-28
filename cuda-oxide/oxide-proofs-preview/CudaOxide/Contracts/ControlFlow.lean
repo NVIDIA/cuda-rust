@@ -94,6 +94,16 @@ def NoUnbackpressuredLoop (cfg : ControlFlowCfg) : Prop :=
     (prod, cons, bp) ∈ loopBackpressurePairs cfg →          -- IF `cons` reads a buffer/TMEM written by cyclic `prod`,
     ¬ PathAvoiding cfg bp cons prod                         -- THEN NO CFG path `cons ->* prod` bypasses `bp`.
 
+/-- Every reachable non-CTA-uniform split block `u` (`0 ->* u` and `u ->* target`)
+    has no path `u ->* ret` to any `return` block bypassing `target`. -/
+def NoDivergentBypass (cfg : ControlFlowCfg) (target : Nat) : Prop :=
+  ∀ u : Nat,
+    PathAvoiding cfg [] 0 u →                               -- For any reachable block `u` (`0 ->* u`),
+    isCtaUniformSplit cfg u = false →                       --   whose outgoing split is NOT CTA-uniform,
+    PathAvoiding cfg [] u target →                          --   and from which `target` is reachable (`u ->* target`):
+    ∀ ret : Nat, ret ∈ returnBlocks cfg →                   --   for every `return` block `ret`,
+      ¬ PathAvoiding cfg [target] u ret                     --   NO path `u ->* ret` bypasses `target`.
+
 /-- Structural CFG obligations for `uniform_barriers` on a refined `ControlFlowCfg`:
     at least one barrier synchronizes the kernel, every `sync_threads()` and signaled
     `mbarrier` wait executes in thread-uniform control flow across all paths from entry `0`
@@ -102,22 +112,19 @@ def UniformBarriersCfg (cfg : ControlFlowCfg) : Prop :=
   0 < countEffectiveBarriers cfg ∧                          -- At least one barrier synchronizes the phases, AND
   (∀ b : Nat, b ∈ syncBarrierBlocks cfg →                   -- For EVERY block `b` containing `sync_threads()`:
     activeGuardAt cfg b = .tr ∧                             --   (1) `b` sits outside thread-divergent `if` guards,
-    (isCyclicBlockBool cfg b = false →                      --   (2) if `b` is acyclic, no path `0 ->* ret`
-      ∀ ret : Nat, ret ∈ returnBlocks cfg →                 --       bypasses `b`, AND
-        ¬ PathAvoiding cfg [b] 0 ret)) ∧
+    (isCyclicBlockBool cfg b = false →                      --   (2) if `b` is acyclic, no thread-divergent split
+      NoDivergentBypass cfg b)) ∧                           --       bypasses `b` to `return`, AND
   ((cyclicBarrierBlocks cfg ≠ [] →                          --   (3) if cyclic barriers exist, an enclosing loop
     cyclicBarrierLoopBodyStarts cfg ≠ []) ∧                 --       header dominates them, AND
    ∀ hdr body : Nat,                                        --       from every loop body start `(hdr, body)`:
     (hdr, body) ∈ cyclicBarrierLoopBodyStarts cfg →
-    (∀ ret : Nat, ret ∈ returnBlocks cfg →                  --       • entry `0` cannot bypass `hdr` to `return`,
-      ¬ PathAvoiding cfg [hdr] 0 ret) ∧
+    NoDivergentBypass cfg hdr ∧                             --       • no thread-divergent split bypasses `hdr` to `return`,
     (∀ cb : Nat, cb ∈ cyclicBarrierBlocks cfg →             --       • no loop iteration `body ->* hdr` skips any
       ¬ PathAvoiding cfg [cb] body hdr) ∧                   --         cyclic barrier `cb`, AND
     (∀ ret : Nat, ret ∈ returnBlocks cfg →                  --       • no mid-loop exit `body ->* ret` bypasses
       ¬ PathAvoiding cfg [hdr] body ret)) ∧                 --         the loop header `hdr`, AND
-  (∀ rBlk : Nat, rBlk ∈ signaledMbarReadyBlocks cfg →       --   (4) every signaled `mbarrier` ready-block intercepts
-    ∀ ret : Nat, ret ∈ returnBlocks cfg →                   --       all paths from entry `0` to `return`, AND
-      ¬ PathAvoiding cfg [rBlk] 0 ret) ∧
+  (∀ rBlk : Nat, rBlk ∈ signaledMbarReadyBlocks cfg →       --   (4) no thread-divergent split preceding a signaled
+    NoDivergentBypass cfg rBlk) ∧                           --       `mbarrier` ready-block `rBlk` bypasses `rBlk` to `return`, AND
   (∀ dBlk : Nat, dBlk ∈ unsyncedDsmemBlocks cfg →           --   (5) every cross-CTA DSMEM access executes `cluster_sync()`
     ∀ ret : Nat, ret ∈ returnBlocks cfg →                   --       on all paths before any CTA exits (`mir.return`), AND
       ¬ PathAvoiding cfg ((clusterSyncBlocks cfg).filter (· != dBlk)) dBlk ret) ∧

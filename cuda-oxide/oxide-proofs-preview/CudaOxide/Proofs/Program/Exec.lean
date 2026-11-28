@@ -322,7 +322,19 @@ structure SymMemEvent where
   pathCond : SymBool
   /-- Symbolic barrier phase active at this access site. -/
   phaseSpec : PhaseSpec
-  deriving Repr, DecidableEq, Lean.ToExpr
+  deriving Repr, BEq, DecidableEq, Lean.ToExpr
+
+instance : LawfulBEq SymMemEvent where
+  rfl := by
+    intro a; cases a
+    change instBEqSymMemEvent.beq _ _ = true
+    simp [instBEqSymMemEvent.beq]
+  eq_of_beq := by
+    intro a b h; cases a; cases b
+    change instBEqSymMemEvent.beq _ _ = true at h
+    simp only [instBEqSymMemEvent.beq, Bool.and_eq_true, beq_iff_eq] at h
+    rcases h with ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9⟩
+    subst h1; subst h2; subst h3; subst h4; subst h5; subst h6; subst h7; subst h8; subst h9; rfl
 
 /-- Evaluate an optional symbolic `(barId, slotSym)` handle to `Option (Nat × Nat)`. -/
 def evalSyncBar (env : InputEnv) (t : ThreadCtx) (havoc : Nat → Nat) :
